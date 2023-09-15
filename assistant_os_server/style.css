@@ -79,14 +79,17 @@ body ::selection {
     width: 100vw;
     display: none;
     flex-direction: column;
-    background-color: black;
     text-align: center;
     color: white;
     justify-content: center;
     align-content: space-evenly;
     flex-wrap: wrap;
     align-items: center;
-    animation: boot 5s linear;
+    animation: boot 5s;
+    background-color: black;
+    background: linear-gradient(to bottom right, #4140b6, #29005b, #a80fa8, #eb4836, #fead59);
+    opacity: 1;
+
 }
 
 
@@ -165,6 +168,7 @@ main {
     padding-left: 2vw;
     padding-right: 2vw;
     padding-bottom: 10vh;
+    animation: appConteinerBoot 4s;
 
 }
 
@@ -307,7 +311,7 @@ main {
 /* Tooltip */
 
 
-.tooltip{
+.tooltip {
     position: relative;
 }
 
@@ -449,16 +453,15 @@ main {
 @keyframes boot {
     0% {
         display: flex;
-        opacity: 1;
-    }
-
-    50% {
-        display: flex;
+        background-color: rgb(0, 0, 0);
         opacity: 1;
     }
 
     100% {
+        background-color: rgb(0, 0, 0);
         opacity: 0;
     }
 
 }
+
+

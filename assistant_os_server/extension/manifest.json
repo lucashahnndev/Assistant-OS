@@ -1,0 +1,25 @@
+{
+    "manifest_version": 3,
+    "name": "Assiatant OS",
+    "version": "1.0",
+    "description": "Modifica o menu de contexto das páginas.",
+    "permissions": [
+        "contextMenus"
+    ],
+    "background": {
+        "service_worker": "background.js"
+    },
+    "icons": {
+        "48": "icon.png"
+    },
+    "permissions": [
+        "activeTab",
+        "contextMenus"
+    ],
+    "action": {
+        "default_popup": "popup.html",
+        "default_icon": {
+            "48": "icon.png"
+        }
+    }
+}

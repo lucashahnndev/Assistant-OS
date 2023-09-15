@@ -92,11 +92,11 @@
             "icon_path": "apps_logo/facebook.png"
         },
         {
-            "name": "Menssenger.png",
+            "name": "Messenger.png",
             "id": 14,
-            "url": "https://www.menssenger.com/",
+            "url": "https://www.messenger.com/",
             "search_type": "",
-            "icon_path": "apps_logo/menssenger.png"
+            "icon_path": "apps_logo/messenger.png"
         },
         {
             "name": "Instagram",

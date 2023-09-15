@@ -146,6 +146,7 @@ server_thread.start()
 
 
 os.popen('start chrome --start-fullscreen --app="http://localhost:8007/cover.html"')
+time.sleep(0.5)
 open_os_page()
 
 

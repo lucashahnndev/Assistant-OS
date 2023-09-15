@@ -32,6 +32,6 @@ function set_wallpapper() {
 
 }
 
-setInterval(() => { set_wallpapper() }, 10000)
+setInterval(() => { set_wallpapper() }, 100000)
 
 set_wallpapper()
