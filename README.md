@@ -73,3 +73,7 @@ Você pode contribuir para o desenvolvimento da Assistant OS reportando bugs, su
 ## Licença
 
 Este projeto está sob a Licença BSD 3-cláusula "New". Consulte o arquivo `LICENSE` para obter mais informações.
+
+## Imagens
+Todas as imagens da pasta wallpaper foram obtidas em  [www.pexels.com]([URL do Link](https://www.pexels.com/pt-br/)https://www.pexels.com/pt-br/)
+
