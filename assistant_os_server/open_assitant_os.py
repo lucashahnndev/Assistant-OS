@@ -154,9 +154,10 @@ open_os_page()
 f11_thread = threading.Thread(target=cancel_the_event_f11)
 f11_thread.start() """
 
-win_thread = threading.Thread(target=cancel_the_event_win)
+""" win_thread = threading.Thread(target=cancel_the_event_win)
 win_thread.start()
 
 
 fullscreem_thread = threading.Thread(target=is_screen_fullscreen)
 fullscreem_thread.start()
+ """

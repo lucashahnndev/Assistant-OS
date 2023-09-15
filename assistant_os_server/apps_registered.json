@@ -4,106 +4,141 @@
             "name": "Netflix",
             "id": 1,
             "url": "https://www.netflix.com/br/",
-            "search_type": "",
+            "search_type": "search?q=",
             "icon_path": "apps_logo/netflix.png"
         },
         {
             "name": "Disney Plus",
             "id": 2,
             "url": "https://www.disneyplus.com/",
-            "search_type": "",
+            "search_type": "search?q=",
             "icon_path": "apps_logo/disneyplus.png"
         },
         {
             "name": "Star Plus",
             "id": 3,
             "url": "https://www.starplus.com/",
-            "search_type": "",
+            "search_type": "search?q=",
             "icon_path": "apps_logo/starplus.png"
         },
         {
             "name": "Prime Video",
             "id": 4,
             "url": "https://www.primevideo.com/",
-            "search_type": "",
+            "search_type": "search?q=",
             "icon_path": "apps_logo/primevideo.png"
         },
         {
             "name": "HBO Max",
             "id": 5,
             "url": "https://play.hbomax.com",
-            "search_type": "",
+            "search_type": "search?q=",
             "icon_path": "apps_logo/hbomax.png"
         },
         {
             "name": "Pluto TV",
             "id": 6,
             "url": "https://pluto.tv/",
-            "search_type": "",
+            "search_type": "search?q=",
             "icon_path": "apps_logo/plutotv.png"
         },
         {
             "name": "Youtube",
             "id": 7,
             "url": "https://www.youtube.com/",
-            "search_type": "",
+            "search_type": "search?q=",
             "icon_path": "apps_logo/youtube.png"
         },
         {
             "name": "Youtube kids",
             "id": 8,
             "url": "https://www.youtubekids.com/",
-            "search_type": "",
+            "search_type": "search?q=",
             "icon_path": "apps_logo/youtubekids.png"
         },
         {
             "name": "Youtube Music",
             "id": 9,
             "url": "https://music.youtube.com/",
-            "search_type": "",
+            "search_type": "search?q=",
             "icon_path": "apps_logo/youtubemusic.png"
         },
         {
             "name": "Globo Play",
             "id": 10,
             "url": "https://globoplay.globo.com/",
-            "search_type": "",
+            "search_type": "search?q=",
             "icon_path": "apps_logo/globoplay.png"
         },
         {
             "name": "Lionsgate Plus",
             "id": 11,
             "url": "https://www.lionsgateplus.com/",
-            "search_type": "",
+            "search_type": "search?q=",
             "icon_path": "apps_logo/lionsgateplus.png"
         },
         {
             "name": "Spotify",
             "id": 12,
             "url": "https://open.spotify.com/",
-            "search_type": "",
+            "search_type": "search?q=",
             "icon_path": "apps_logo/spotify.png"
+        },
+        {
+            "name": "SoudCloud",
+            "id": 13,
+            "url": "https://soundcloud.com/discover",
+            "search_type": "search?q=",
+            "icon_path": "apps_logo/soundcloud.png"
         },
         {
             "name": "Facebook",
             "id": 13,
             "url": "https://www.facebook.com/",
-            "search_type": "",
+            "search_type": "search?q=",
             "icon_path": "apps_logo/facebook.png"
         },
         {
             "name": "Messenger.png",
             "id": 14,
             "url": "https://www.messenger.com/",
-            "search_type": "",
+            "search_type": "search?q=",
             "icon_path": "apps_logo/messenger.png"
         },
         {
             "name": "Instagram",
             "id": 15,
             "url": "https://www.instagram.com/",
-            "search_type": "",
+            "search_type": "search?q=",
             "icon_path": "apps_logo/instagram.png"
+        },
+        {
+            "name": "Google chrome",
+            "id": 16,
+            "url": "https://www.google.com/",
+            "search_type": "search?q=",
+            "icon_path": "apps_logo/googlechrome.png"
+        },
+        {
+            "name": "Bing",
+            "id": 17,
+            "url": "https://www.bing.com/",
+            "search_type": "search?q=",
+            "icon_path": "apps_logo/bing.png"
+        },
+        {
+            "name": "Firefox",
+            "id": 17,
+            "url": "https://www.bing.com/",
+            "search_type": "search?q=",
+            "icon_path": "apps_logo/bing.png"
+        },
+        {
+            "name": "chatgpt",
+            "id": 18,
+            "url": "https://chat.openai.com/",
+            "search_type": "search?q=",
+            "icon_path": "apps_logo/chatgpt.png"
         }
     ]
 }

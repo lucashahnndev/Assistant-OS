@@ -23,7 +23,7 @@ function deviceIsMobile() {
 function set_wallpapper() {
     if (deviceIsMobile() != true) {
         main.style = `
-        background-image: url("image/wallpaper/wallpaper (${getRandomInt(0, 46)}).webp");
+        background-image: url("image/wallpaper/wallpaper (${getRandomInt(1, 36)}).webp");
         background-repeat: no-repeat;
         background-position: center;
         background-size: 100%;
