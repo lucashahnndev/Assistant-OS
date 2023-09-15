@@ -2,6 +2,10 @@
 
 Assistant OS é uma assistente pessoal baseada em Python que utiliza reconhecimento de voz e gestos para interação. O projeto foi desenvolvido para o sistema operacional Windows e possui funcionalidades como meteorologia, curiosidades, abertura de programas e streams, agenda, tarefas, entre outros.
 
+![Capa ](https://github.com/lucashahnndev/Assistant-OS/blob/main/assistant_os_server/image/cover.png)
+![home print](https://github.com/lucashahnndev/Assistant-OS/blob/main/assistant_os_server/image/home%20print.png)
+
+
 ## Arquitetura de diretórios
 
 A Assistant OS segue a seguinte estrutura de diretórios:
@@ -70,3 +74,7 @@ Você pode contribuir para o desenvolvimento da Assistant OS reportando bugs, su
 ## Licença
 
 Este projeto está sob a Licença BSD 3-cláusula "New". Consulte o arquivo `LICENSE` para obter mais informações.
+
+## Imagens
+Todas as imagens da pasta wallpaper foram obtidas em  [www.pexels.com](https://www.pexels.com/pt-br/)
+
