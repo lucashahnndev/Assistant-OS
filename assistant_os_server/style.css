@@ -1,0 +1,464 @@
+@import url('https://fonts.googleapis.com/css?family=Fira+Code:300,regular,500,600,700%7CMaterial+Icons:regular');
+
+
+:root {
+    --app_border_radius: 2rem;
+    --app_decription: white;
+}
+
+/* Estilo para a barra de rolagem */
+::-webkit-scrollbar {
+    width: 10px;
+    /* Largura da barra de rolagem */
+}
+
+/* Estilo para o rastreador (a parte arrastável da barra de rolagem) */
+::-webkit-scrollbar-thumb {
+    background-color: #888;
+    /* Cor do rastreador */
+    border-radius: 5px;
+    /* Cantos arredondados do rastreador */
+}
+
+/* Estilo para a área de rolagem */
+::-webkit-scrollbar-track {
+    background-color: #f1f1f100;
+    /* Cor de fundo da área de rolagem */
+}
+
+body {
+    margin: 0;
+    font-family: Ppneuemachina, Arial, sans-serif;
+    accent-color: var(--accentColor);
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    /* iPhone OS, Safari */
+    -webkit-user-select: none;
+    /* Chrome, Safari 3 */
+    -khtml-user-select: none;
+    /* Safari 2 */
+    -moz-user-select: none;
+    /* Firefox */
+    -ms-user-select: none;
+    /* IE10+ */
+    user-select: none;
+    /* Possível implementação no futuro */
+    /* cursor: default; */
+    -webkit-tap-highlight-color: transparent;
+    accent-color: v#a80fa8;
+    ;
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    align-content: center;
+    flex-direction: column;
+    align-items: center;
+    height: 100vh;
+    background-color: rgb(12, 0, 44);
+    background: linear-gradient(to bottom right, #4140b6, #29005b, #a80fa8, #eb4836, #fead59);
+}
+
+body * {
+    box-sizing: bord;
+}
+
+body ::selection {
+    color: white;
+    background-color: #a80fa8;
+
+}
+
+
+
+.cover {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 999 !important;
+    height: 100vh;
+    width: 100vw;
+    display: none;
+    flex-direction: column;
+    background-color: black;
+    text-align: center;
+    color: white;
+    justify-content: center;
+    align-content: space-evenly;
+    flex-wrap: wrap;
+    align-items: center;
+    animation: boot 5s linear;
+}
+
+
+.cover img {
+    height: 60vh;
+    width: 60vh;
+}
+
+.cover h1 {
+    color: white;
+}
+
+
+
+main {
+    margin: 0;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+}
+
+
+/* Status Bar */
+.status_bar {
+    height: 5vh;
+    width: 100vw;
+    background-color: rgba(0, 0, 0, 0.836);
+    color: white;
+    display: flex;
+    flex-direction: row;
+    text-align: center;
+
+}
+
+.status_bar .logo {
+    height: 70%;
+    cursor: pointer;
+}
+
+.status_bar .notification_icons {
+    width: 70%;
+}
+
+.status_bar {
+    height: 5vh;
+    width: 96vw;
+    padding-left: 2vw;
+    padding-right: 2vw;
+    background-color: rgba(0, 0, 0, 0.836);
+    color: white;
+    display: flex;
+    flex-direction: row;
+    text-align: center;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    font-size: 1rem;
+    align-content: center;
+}
+
+
+/* Apps */
+.apps_conteiner {
+    width: 96vw;
+    height: 95vh;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    word-wrap: normal;
+    align-items: flex-start;
+    justify-content: space-around;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 1rem;
+    padding-left: 2vw;
+    padding-right: 2vw;
+    padding-bottom: 10vh;
+
+}
+
+.app {
+    position: relative;
+    overflow: hidden;
+    cursor: pointer;
+    width: 13vw;
+    margin: 1rem;
+}
+
+.app img {
+    width: 100%;
+    position: relative;
+    border-radius: var(--app_border_radius);
+    flex-wrap: nowrap;
+    pointer-events: none;
+}
+
+.app_decription {
+    color: var(--app_decription);
+    font-weight: 800;
+    text-align: center;
+    width: 100%;
+    margin: 0;
+}
+
+.app:focus,
+.app:active {
+    border: 4px solid lime;
+    border-radius: var(--app_border_radius);
+}
+
+.fc-direction-ltr {
+    direction: ltr;
+    text-align: left;
+    position: absolute;
+    left: 60%;
+    z-index: 9;
+    background: rgba(0, 0, 0, 0.836);
+    top: 5%;
+    padding: 1rem;
+    width: 40vw;
+    height: 80vh;
+}
+
+/* Assistant */
+
+.assistant-interaction {
+    position: fixed;
+    bottom: 0;
+    width: 96vw;
+    padding-left: 2vw;
+    padding-right: 2vw;
+    height: 30vh;
+    z-index: 9;
+    background-color: rgba(0, 0, 0, 0.836);
+    color: white;
+    display: none;
+    flex-direction: row;
+    justify-content: space-between;
+    font-weight: 800;
+}
+
+.assistant-interaction div {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-evenly;
+}
+
+.assistant-interaction .logo {
+    height: 100%;
+    pointer-events: none;
+
+}
+
+.assistant-interaction img {
+    height: 60%;
+    pointer-events: none;
+}
+
+.assistant-interaction .speak_status {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-evenly;
+    font-weight: 800;
+}
+
+
+.assistant-interaction .close {
+    position: absolute;
+    top: 10%;
+    right: 2%;
+    cursor: pointer;
+    border-radius: 50%;
+    height: 1rem;
+    width: 1rem;
+    text-align: center;
+}
+
+.assistant-interaction .close:hover {
+    background-color: white;
+    color: black;
+
+}
+
+
+/* opening_app */
+
+.opening_app_conteiner {
+    position: fixed;
+    width: 100vw;
+    height: 100vh;
+    z-index: 99;
+    display: none;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    background-color: rgba(0, 0, 0, 0.836);
+
+}
+
+.opening_app {
+    width: 10vw;
+    height: 10vw;
+    margin: auto;
+    animation: open_app 0.5s;
+
+}
+
+.opening_app img {
+    width: 100%;
+    border-radius: var(--app_border_radius);
+    pointer-events: none;
+}
+
+
+
+/* Tooltip */
+
+
+.tooltip{
+    position: relative;
+}
+
+.tooltip:hover::before,
+.tooltip:focus::before {
+    position: absolute;
+    opacity: 1;
+    visibility: visible;
+    z-index: 9999 !important;
+}
+
+.tooltip::before {
+    content: attr(title);
+    position: absolute;
+    bottom: auto;
+    transform: translateX(-50%);
+    padding: 0.5rem;
+    background-color: #333;
+    color: #fff;
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+    opacity: 0;
+    font-weight: 800;
+    visibility: hidden;
+    transition: opacity 0.2s ease-in-out, visibility 0.3s ease-in-out;
+    z-index: 9999 !important;
+}
+
+
+.app:hover::before,
+.app:focus::before {
+    position: absolute;
+    opacity: 1;
+    visibility: visible;
+    z-index: 9999 !important;
+}
+
+.app::before {
+    content: attr(title);
+    position: absolute;
+    bottom: auto;
+    left: 40%;
+    transform: translateX(-50%);
+    padding: 0.5rem;
+    background-color: #333;
+    color: #fff;
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+    opacity: 0;
+    font-weight: 800;
+    visibility: hidden;
+    transition: opacity 0.2s ease-in-out, visibility 0.3s ease-in-out;
+    z-index: 9999 !important;
+}
+
+/* custom-context-menu */
+#custom-context-menu {
+    display: none;
+    position: fixed;
+    width: auto;
+    z-index: 1000;
+
+    overflow: hidden;
+    padding: 0rem;
+    border-radius: 0.4rem;
+    cursor: pointer;
+    text-align: center;
+    flex-direction: column;
+    justify-content: space-around;
+    align-items: center;
+    background-color: rgba(0, 0, 0, 0.836);
+    border: 1px solid rgba(0, 0, 0, 0.836);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.836);
+    border: 1px solid grey !important;
+    font-size: 0.8rem;
+    color: white;
+}
+
+#custom-context-menu>div {
+    flex-direction: column;
+}
+
+#custom-context-menu>div>.option {
+    display: flex;
+    flex-direction: row;
+    min-width: auto;
+    max-width: 100%;
+    justify-content: space-between;
+    padding: 0.5rem;
+
+}
+
+#custom-context-menu>div>.option:hover {
+    background-color: gray;
+}
+
+#custom-context-menu>div>.option>div {
+    margin-left: 0.5rem;
+    margin-right: 0.5rem;
+}
+
+#custom-context-menu>div>.option>.desc {
+    font-weight: 100;
+    color: var(--textColorPanel);
+}
+
+#custom-context-menu>div>.divider {
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+    border-bottom: 0.5px solid white;
+}
+
+
+/* Animations */
+@keyframes zoonImg {
+    0% {
+        background-size: 100%
+    }
+
+    50% {
+        background-size: 150%
+    }
+
+    1000% {
+        background-size: 100%
+    }
+
+}
+
+@keyframes open_app {
+    100% {
+        top: -100vw;
+        height: 60vw;
+        width: 60vw;
+    }
+}
+
+@keyframes boot {
+    0% {
+        display: flex;
+        opacity: 1;
+    }
+
+    50% {
+        display: flex;
+        opacity: 1;
+    }
+
+    100% {
+        opacity: 0;
+    }
+
+}

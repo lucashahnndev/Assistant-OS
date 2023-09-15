@@ -1,0 +1,17 @@
+intents:
+  - name: open_youtube
+    phrases:
+      - "Abra o {generica} {objeto} no YouTube"
+      - "Quero assistir {algo} no YouTube"
+  - name: open_map
+    phrases:
+      - "Abra o mapa"
+      - "Abra o mapa de {lugar}"
+  - name: search
+    phrases:
+      - "Pesquise por {termo}"
+      - "Procure por {termo} na internet"
+  - name: adjust_volume
+    phrases:
+      - "Aumente o volume"
+      - "Diminua o volume"

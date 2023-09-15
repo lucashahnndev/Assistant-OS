@@ -1,0 +1,88 @@
+version: "2.0"
+nlu:
+  - intent: maps
+    examples: |
+      - pesquisar {objectOfInterest} no maps
+      - no maps pesquise {objectOfInterest} 
+      - no maps pesquisa {objectOfInterest} 
+      - no maps pesquisar {objectOfInterest} 
+      - abrir {objectOfInterest} no maps
+      - abrir o {objectOfInterest} no maps
+      - abrir {objectOfInterest} no site maps
+      - abrir {objectOfInterest} no  maps
+      - abrir {objectOfInterest}  maps
+      - abra {objectOfInterest} no maps
+      - abra o {objectOfInterest} no maps
+      - abra {objectOfInterest} no site maps
+      - abra {objectOfInterest} no  maps
+      - abra {objectOfInterest}  maps
+      - abra maps
+      - abre {objectOfInterest} no maps
+      - abre o {objectOfInterest} no maps
+      - abre {objectOfInterest} no site maps
+      - abre {objectOfInterest} no  maps
+      - abre {objectOfInterest}  maps
+      - abre maps
+      - ir para maps
+      - abrir site maps
+      - abrir o site maps
+      - abrir site do maps
+      - abrir o site do maps
+      - pesquise no maps
+      - pesquisar {objectOfInterest} no google maps
+      - no google maps pesquise {objectOfInterest} 
+      - no google maps pesquisa {objectOfInterest} 
+      - no google maps pesquisar {objectOfInterest} 
+      - abrir {objectOfInterest} no google maps
+      - abrir o {objectOfInterest} no google maps
+      - abrir {objectOfInterest} no site google maps
+      - abrir {objectOfInterest} no  google maps
+      - abrir {objectOfInterest}  google maps
+      - abra {objectOfInterest} no google maps
+      - abra o {objectOfInterest} no google maps
+      - abra {objectOfInterest} no site google maps
+      - abra {objectOfInterest} no  google maps
+      - abra {objectOfInterest}  google maps
+      - abra google maps
+      - abre {objectOfInterest} no google maps
+      - abre o {objectOfInterest} no google maps
+      - abre {objectOfInterest} no site google maps
+      - abre {objectOfInterest} no  google maps
+      - abre {objectOfInterest}  google maps
+      - abre google maps
+      - ir para google maps
+      - abrir site google maps
+      - abrir o site google maps
+      - abrir site do google maps
+      - abrir o site do google maps
+      - pesquise no google maps
+      - pesquisar {objectOfInterest} no mapas
+      - no mapas pesquise {objectOfInterest} 
+      - no mapas pesquisa {objectOfInterest} 
+      - no mapas pesquisar {objectOfInterest} 
+      - abrir {objectOfInterest} no mapas
+      - abrir o {objectOfInterest} no mapas
+      - abrir {objectOfInterest} no site mapas
+      - abrir {objectOfInterest} no  mapas
+      - abrir {objectOfInterest}  mapas
+      - abra {objectOfInterest} no mapas
+      - abra o {objectOfInterest} no mapas
+      - abra {objectOfInterest} no site mapas
+      - abra {objectOfInterest} no  mapas
+      - abra {objectOfInterest}  mapas
+      - abra mapas
+      - abre {objectOfInterest} no mapas
+      - abre o {objectOfInterest} no mapas
+      - abre {objectOfInterest} no site mapas
+      - abre {objectOfInterest} no  mapas
+      - abre {objectOfInterest}  mapas
+      - abre mapas
+      - ir para mapas
+      - abrir site mapas
+      - abrir o site mapas
+      - abrir site do mapas
+      - abrir o site do mapas
+      - pesquise no mapas
+
+    entities:
+      - objectOfInterest

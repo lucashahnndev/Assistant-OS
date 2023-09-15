@@ -1,0 +1,7 @@
+from command.open_program import if_its_a_command_open_program
+from command.find_program import find_program
+from command.search import if_its_a_command_search
+from command.key_command import if_its_a_key_command
+from command.play_in_youtube import if_its_a_command_play_in_youtube
+from command.play_in_youtube_music import if_its_a_command_play_in_youtube_music
+from command.search_in_maps import if_its_a_command_search_in_maps

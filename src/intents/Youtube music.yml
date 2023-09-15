@@ -1,0 +1,134 @@
+version: "2.0"
+nlu:
+  - intent: youtube music
+    examples: |
+      - pesquisar {objectOfInterest} no youtube music
+      - reproduzir {objectOfInterest} no youtube music
+      - no youtube music reproduzir {objectOfInterest}
+      - no youtube music reproduzir o {mediaType} do {objectOfInterest}
+      - no youtube music reproduzir o {mediaType} da {objectOfInterest}
+      - no youtube music reproduzir o {mediaType} de {objectOfInterest}
+      - no youtube music reproduzir {mediaType} do {objectOfInterest}
+      - no youtube music reproduzir {mediaType} da {objectOfInterest}
+      - no youtube music reproduzir {mediaType} de {objectOfInterest}
+      - no youtube music reproduza o {mediaType} {objectOfInterest}
+      - no youtube music reproduza o {mediaType} da {objectOfInterest}
+      - no youtube music reproduza o {mediaType} do {objectOfInterest}
+      - no youtube music reproduza o {mediaType} de {objectOfInterest}
+      - no youtube music reproduza {mediaType} {objectOfInterest}
+      - reproduza o {mediaType} {objectOfInterest} no youtube music
+      - reproduza o {mediaType} da {objectOfInterest} no youtube music
+      - reproduza o {mediaType} do {objectOfInterest} no youtube music
+      - reproduza o {mediaType} de {objectOfInterest} no youtube music
+      - reproduza {mediaType} {objectOfInterest} no youtube music
+      - reproduza {objectOfInterest} no youtube music
+      - abrir {objectOfInterest} no youtube music
+      - abrir o {objectOfInterest} no youtube music
+      - abrir o {mediaType} do {objectOfInterest} no youtube music
+      - abrir o {mediaType} da {objectOfInterest} no youtube music
+      - abrir o {mediaType} de {objectOfInterest} no youtube music
+      - abrir {mediaType} do {objectOfInterest} no youtube music
+      - abrir {mediaType} da {objectOfInterest} no youtube music
+      - abrir {mediaType} de {objectOfInterest} no youtube music
+      - abrir o {mediaType} {objectOfInterest} no youtube music
+      - abrir {mediaType} {objectOfInterest} no youtube music
+      - abrir {objectOfInterest} no site youtube music
+      - abrir o {objectOfInterest} no site youtube music
+      - abrir o {mediaType} do {objectOfInterest} no site youtube music
+      - abrir o {mediaType} da {objectOfInterest} no site youtube music
+      - abrir o {mediaType} de {objectOfInterest} no site youtube music
+      - abrir {mediaType} do {objectOfInterest} no site youtube music
+      - abrir {mediaType} da {objectOfInterest} no site youtube music
+      - abrir youtube musica
+      - ir para youtube musica
+      - abrir site youtube musica
+      - reproduza no youtube musica
+      - abrir site do youtube musica
+      - pesquisar {objectOfInterest} no youtube musica
+      - reproduzir {objectOfInterest} no youtube musica
+      - no youtube musica reproduzir {objectOfInterest}
+      - no youtube musica reproduzir o {mediaType} do {objectOfInterest}
+      - no youtube musica reproduzir o {mediaType} da {objectOfInterest}
+      - no youtube musica reproduzir o {mediaType} de {objectOfInterest}
+      - no youtube musica reproduzir {mediaType} do {objectOfInterest}
+      - no youtube musica reproduzir {mediaType} da {objectOfInterest}
+      - no youtube musica reproduzir {mediaType} de {objectOfInterest}
+      - no youtube musica reproduza o {mediaType} {objectOfInterest}
+      - no youtube musica reproduza o {mediaType} da {objectOfInterest}
+      - no youtube musica reproduza o {mediaType} do {objectOfInterest}
+      - no youtube musica reproduza o {mediaType} de {objectOfInterest}
+      - no youtube musica reproduza {mediaType} {objectOfInterest}
+      - reproduza o {mediaType} {objectOfInterest} no youtube musica
+      - reproduza o {mediaType} da {objectOfInterest} no youtube musica
+      - reproduza o {mediaType} do {objectOfInterest} no youtube musica
+      - reproduza o {mediaType} de {objectOfInterest} no youtube musica
+      - reproduza {mediaType} {objectOfInterest} no youtube musica
+      - reproduza {objectOfInterest} no youtube musica
+      - abrir {objectOfInterest} no youtube musica
+      - abrir o {objectOfInterest} no youtube musica
+      - abrir o {mediaType} do {objectOfInterest} no youtube music
+      - abrir o {mediaType} da {objectOfInterest} no youtube music
+      - abrir o {mediaType} de {objectOfInterest} no youtube music
+      - abrir {mediaType} do {objectOfInterest} no youtube music
+      - abrir {mediaType} da {objectOfInterest} no youtube music
+      - abrir {mediaType} de {objectOfInterest} no youtube music
+      - abrir o {mediaType} {objectOfInterest} no youtube music
+      - abrir {mediaType} {objectOfInterest} no youtube musica
+      - abrir {objectOfInterest} no site youtube musica
+      - abrir o {objectOfInterest} no site youtube musica
+      - abrir o {mediaType} do {objectOfInterest} no site youtube musica
+      - abrir o {mediaType} da {objectOfInterest} no site youtube musica
+      - abrir o {mediaType} de {objectOfInterest} no site youtube musica
+      - abrir {mediaType} do {objectOfInterest} no site youtube musica
+      - abrir {mediaType} da {objectOfInterest} no site youtube musica
+      - abrir youtube musiqui
+      - ir para youtube musiqui
+      - abrir site youtube musiqui
+      - reproduza no youtube musiqui
+      - abrir site do youtube musiqui
+      - pesquisar {objectOfInterest} no youtube musiqui
+      - reproduzir {objectOfInterest} no youtube musiqui
+      - no youtube musiqui reproduzir {objectOfInterest}
+      - no youtube musiqui reproduzir o {mediaType} do {objectOfInterest}
+      - no youtube musiqui reproduzir o {mediaType} da {objectOfInterest}
+      - no youtube musiqui reproduzir o {mediaType} de {objectOfInterest}
+      - no youtube musiqui reproduzir {mediaType} do {objectOfInterest}
+      - no youtube musiqui reproduzir {mediaType} da {objectOfInterest}
+      - no youtube musiqui reproduzir {mediaType} de {objectOfInterest}
+      - no youtube musiqui reproduza o {mediaType} {objectOfInterest}
+      - no youtube musiqui reproduza o {mediaType} da {objectOfInterest}
+      - no youtube musiqui reproduza o {mediaType} do {objectOfInterest}
+      - no youtube musiqui reproduza o {mediaType} de {objectOfInterest}
+      - no youtube musiqui reproduza {mediaType} {objectOfInterest}
+      - reproduza o {mediaType} {objectOfInterest} no youtube musiqui
+      - reproduza o {mediaType} da {objectOfInterest} no youtube musiqui
+      - reproduza o {mediaType} do {objectOfInterest} no youtube musiqui
+      - reproduza o {mediaType} de {objectOfInterest} no youtube musiqui
+      - reproduza {mediaType} {objectOfInterest} no youtube musiqui
+      - reproduza {objectOfInterest} no youtube musiqui
+      - abrir {objectOfInterest} no youtube musiqui
+      - abrir o {objectOfInterest} no youtube musiqui
+      - abrir o {mediaType} do {objectOfInterest} no youtube musiqui
+      - abrir o {mediaType} da {objectOfInterest} no youtube musiqui
+      - abrir o {mediaType} de {objectOfInterest} no youtube musiqui
+      - abrir {mediaType} do {objectOfInterest} no youtube musiqui
+      - abrir {mediaType} da {objectOfInterest} no youtube musiqui
+      - abrir {mediaType} de {objectOfInterest} no youtube musiqui
+      - abrir o {mediaType} {objectOfInterest} no youtube musiqui
+      - abrir {mediaType} {objectOfInterest} no youtube musiqui
+      - abrir {objectOfInterest} no site youtube musiqui
+      - abrir o {objectOfInterest} no site youtube musiqui
+      - abrir o {mediaType} do {objectOfInterest} no site youtube musiqui
+      - abrir o {mediaType} da {objectOfInterest} no site youtube musiqui
+      - abrir o {mediaType} de {objectOfInterest} no site youtube musiqui
+      - abrir {mediaType} do {objectOfInterest} no site youtube musiqui
+      - abrir {mediaType} da {objectOfInterest} no site youtube musiqui
+      - abrir youtube music
+      - ir para youtube music
+      - abrir site youtube music
+      - reproduza no youtube music
+      - abrir site do youtube music
+
+    entities:
+      - objectOfInterest
+      - mediaType

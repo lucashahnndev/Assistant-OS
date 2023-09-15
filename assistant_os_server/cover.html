@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html oncontextmenu="showContextMenu(event)" lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Assitant OS</title>
+    <link rel="shortcut icon" href="image/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div id="custom-context-menu">
+
+        <div onclick="to_back()">
+            <div class="option">
+                <div>
+                    Voltar
+                </div>
+                <div class="desc">Alt+Seta para a esquerda</div>
+            </div>
+            <div class="divider"></div>
+        </div>
+        <div onclick="to_next()">
+            <div class="option">
+                <div>
+                    Avançar
+                </div>
+                <div class="desc">Alt+Seta para a direita</div>
+            </div>
+            <div class="divider"></div>
+        </div>
+        <div onclick="reload()">
+            <div class="option">
+                <div>
+                    Recarregar
+                </div>
+                <div class="desc">Ctrl+R</div>
+            </div>
+            <div class="divider"></div>
+        </div>
+        <div onclick="pasteAction()">
+            <div class="option">
+                <div>
+                    Colar
+                </div>
+                <div class="desc">Ctrl+V</div>
+            </div>
+            <div class="divider"></div>
+        </div>
+
+        <div onclick="selectAllAction()">
+            <div class="option">
+                <div>
+                    Selecionar Tudo
+                </div>
+                <div class="desc">Ctrl+A</div>
+            </div>
+            <div class="divider"></div>
+        </div>
+
+        <div onclick="copyAction()">
+            <div class="option">
+                <div>
+                    Copiar
+                </div>
+                <div class="desc">Ctrl+C</div>
+            </div>
+            <div class="divider"></div>
+        </div>
+
+        <div onclick="cutAction()">
+            <div class="option">
+                <div>
+                    Recortar
+                </div>
+                <div class="desc">Ctrl+X</div>
+            </div>
+            <div class="divider"></div>
+        </div>
+
+        <div onclick="emojiAction()">
+            <div class="option">
+                <div>Emojis</div>
+                <div class="desc" class="desc">Win+.</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="emoji-Picker-conteiner"></div>
+    <div class="cover">
+        <img src="image/logo.png" alt="Assistant Logo">
+        <h1>Assistant OS</h1>
+        Developed by Lucas Brinker Hahnn
+    </div>
+</body>
+<script>document.querySelector('.cover').style.display = 'flex'</script>
+
+<script defer src="https://cdn.jsdelivr.net/npm/emoji-mart@latest/dist/browser.js"></script>
+<script defer src="context_menu.js"></script>
+
+
+</html>

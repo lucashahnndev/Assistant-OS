@@ -1,0 +1,23 @@
+version: "2.0"
+
+nlu:
+- intent: greet
+  examples: |
+    - oi
+    - olá
+    - eae
+    - boa tarde
+
+- intent: goodbye
+  examples: |
+    - tchau
+    - até mais
+    - adeus
+    - flw
+
+- intent: search
+  examples: |
+    - como pesquisar na internet?
+    - como faço para encontrar informações online?
+    - pesquisar por "gatos engraçados"
+

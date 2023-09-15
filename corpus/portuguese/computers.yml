@@ -1,0 +1,48 @@
+categories:
+  - computers
+conversations:
+  - - O que é um computador?
+    - Um computador é um dispositivo eletrônico que recebe informações em formato digital e executa uma série de operações com base em instruções predeterminadas para fornecer alguma saída.
+    - O que você está usando para falar comigo é um computador.
+    - Um dispositivo eletrônico capaz de realizar cálculos em altíssima velocidade e com altíssima precisão.
+    - Um dispositivo que mapeia um conjunto de números para outro conjunto de números.
+  - - O que é um supercomputador?
+    - Computadores que podem realizar um grande número de cálculos em alta velocidade e precisão são chamados de supercomputadores.
+    - Um supercomputador é um computador que opera em várias ordens de grandeza maior velocidade e capacidade do que os computadores comuns de uso geral, como o que você está falando comigo.
+    - Você sabe, o grande ferro!
+  - - Quem inventou os computadores?
+    - É um pouco ambíguo, mas o cientista britânico Charles Babbage é considerado o pai dos computadores.
+    - Pode-se argumentar que John von Neumann inventou os computadores como os conhecemos, porque ele inventou a arquitetura Princeton, na qual instruções e dados compartilham o mesmo campo de memória, mas são diferenciados pelo contexto.
+  - - Qual foi o primeiro computador
+    - É difícil dizer, mas o ENIAC é considerado o primeiro computador 'real'. Foi desenvolvido na Universidade da Pensilvânia em 1946.
+    - Pode-se dizer que o primeiro computador primitivo foi o Jacquard Loom, que era um tear programável que usava cartões perfurados para armazenar os padrões que fazia. Isso o tornou um dispositivo mecânico reprogramável.
+  - - O que é um microprocessador?
+    - Um circuito integrado que implementa as funções de uma unidade central de processamento de um computador.
+    - Um circuito muito pequeno que armazena instruções e realiza cálculos para o computador.
+    - O coração do computador, para simplificar.
+    - O cérebro de um computador, para simplificar.
+    - Um componente eletrônico em que todas as peças fazem parte de um chip de silício contíguo, em vez de componentes discretos montados em uma placa de circuito maior.
+  - - O que é um sistema operacional?
+    - O software que coordena entre o hardware e outras partes do computador para executar outro software é chamado de sistema operacional ou SO.
+    - Windows, MacOS, Linux, UNIX... todos eles são tipos de SOs.
+    - Android e iOS são sistemas operacionais para dispositivos móveis.
+    - Software que implementa as funções básicas de um computador, como acesso à memória, processos e acesso periférico.
+  - - Qual é o melhor Windows ou macOS?
+    - Depende de qual máquina você está usando para falar comigo!
+    - Prefiro não ferir seus sentimentos.
+    - Linux, sempre Linux!
+    - O que você está tentando realizar. O sistema operacional deve apoiar seus objetivos.
+  - - Cite alguma empresa de informática
+    - Você quer dizer hardware ou software?
+    - A Apple faz hardware e software para rodar nele. A Microsft fabrica apenas sistemas operacionais. A HP fabrica apenas computadores. Estes são apenas alguns nomes entre várias centenas de outros.
+  - - Quem usa supercomputadores?
+    - Qualquer pessoa que queira trabalhar com grandes números rapidamente com alta precisão.
+    - Qualquer pessoa que precise trabalhar com conjuntos de dados muito, muito grandes em períodos de tempo muito mais curtos do que é viável com sistemas de computador mais comuns.
+    - Os supercomputadores são geralmente usados ​​por cientistas e pesquisadores.
+    - Aposto que o departamento MET os usa.
+    - Você pode definitivamente encontrar alguns deles na NASA.
+  - - Como funciona um computador?
+    - Os computadores são muito burros. Eles apenas executam instruções dadas por humanos.
+    - Os computadores fazem tudo o que lhes é pedido executando um grande número de operações matemáticas básicas muito rapidamente em sequência.
+    - Os computadores realizam um número muito grande de cálculos para obter o resultado.
+    - Assim como tudo, tudo se resume a matemática!

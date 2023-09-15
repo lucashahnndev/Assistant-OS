@@ -1,0 +1,55 @@
+version: "2.0"
+nlu:
+  - intent: youtube
+    examples: |
+      - pesquisar {objectOfInterest} no youtube
+      - no youtube {objectOfInterest} pesquise
+      - no youtube {objectOfInterest} pesquisa
+      - reproduzir {objectOfInterest} no youtube
+      - no youtube reproduzir {objectOfInterest}
+      - no youtube reproduzir o {mediaType} do {objectOfInterest}
+      - no youtube reproduzir o {mediaType} da {objectOfInterest}
+      - no youtube reproduzir o {mediaType} de {objectOfInterest}
+      - no youtube reproduzir {mediaType} do {objectOfInterest}
+      - no youtube reproduzir {mediaType} da {objectOfInterest}
+      - no youtube reproduzir {mediaType} de {objectOfInterest}
+      - no youtube reproduza o {mediaType} {objectOfInterest}
+      - no youtube reproduza o {mediaType} da {objectOfInterest}
+      - no youtube reproduza o {mediaType} do {objectOfInterest}
+      - no youtube reproduza o {mediaType} de {objectOfInterest}
+      - no youtube reproduza {mediaType} {objectOfInterest}
+      - reproduza o {mediaType} {objectOfInterest} no youtube
+      - reproduza o {mediaType} da {objectOfInterest} no youtube
+      - reproduza o {mediaType} do {objectOfInterest} no youtube
+      - reproduza o {mediaType} de {objectOfInterest} no youtube
+      - reproduza {mediaType} {objectOfInterest} no youtube
+      - reproduza {objectOfInterest} no youtube
+      - abrir {objectOfInterest} no youtube
+      - abrir o {objectOfInterest} no youtube
+      - abrir o {mediaType} do {objectOfInterest} no youtube
+      - abrir o {mediaType} da {objectOfInterest} no youtube
+      - abrir o {mediaType} de {objectOfInterest} no youtube
+      - abrir {mediaType} do {objectOfInterest} no youtube
+      - abrir {mediaType} da {objectOfInterest} no youtube
+      - abrir {mediaType} de {objectOfInterest} no youtube
+      - abrir o {mediaType} {objectOfInterest} no youtube
+      - abrir {mediaType} {objectOfInterest} no youtube
+      - abrir {objectOfInterest} no site youtube
+      - abrir o {objectOfInterest} no site youtube
+      - abrir o {mediaType} do {objectOfInterest} no site youtube
+      - abrir o {mediaType} da {objectOfInterest} no site youtube
+      - abrir o {mediaType} de {objectOfInterest} no site youtube
+      - abrir {mediaType} do {objectOfInterest} no site youtube
+      - abrir {mediaType} da {objectOfInterest} no site youtube
+      - abrir youtube
+      - ir para youtube
+      - abrir site youtube
+      - abrir o site youtube
+      - abrir site do youtube
+      - abrir o site do youtube
+      - reproduza no youtube
+
+
+    entities:
+      - objectOfInterest
+      - mediaType
