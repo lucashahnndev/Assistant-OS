@@ -1,0 +1,24 @@
+
+{
+    "Wheather": {
+        "apiKey": "https://api.openweathermap.org/data/2.5/weather?lang=pt_br&appid={YOUR API KEY}&lat={YOUR LATITUDE}&lon={YOUR LONGITUDE}",
+        "lat": "YOUR LATITUDE",
+        "lon": "YOUR LONGITUDE"
+    },
+    "chatterbot": {
+        "nameBot": "Assistant"
+    },
+    "telegram": {
+        "botkey": "YOUR BOT KEY"
+    },
+    "openai": {
+        "organization_id":"YOUR ORGANIZATION ID ",
+        "token": "YOUR API KEY"
+    },
+    "google_cloud": {
+        "token": "YOUR GOOGLE CLOUD TOKEN"
+    },
+    "google_maps": {
+        "token": "YOUR GOOGLE MAPS API KEY"
+    }
+}
