@@ -6,55 +6,17 @@ Assistant OS é uma assistente pessoal baseada em Python que utiliza reconhecime
 ![home print](https://github.com/lucashahnndev/Assistant-OS/blob/main/assistant_os_server/image/home%20print.png)
 
 
-## Arquitetura de diretórios
-
-A Assistant OS segue a seguinte estrutura de diretórios:
-
-```
-Assistant OS/
-├── audio/                  # Arquivos de áudio para a interação com a assistente
-│   ├── greeting.wav
-│   ├── command_received.wav
-│   ├── recognition_error.wav
-│   └── ...
-├── corpus/                   # corpus de treinamento
-|   ├── portuguese/          # Corpus em português
-|   |   └── ...
-|   └── ...
-├── data/                   # Dados necessários para o funcionamento da assistente
-|   ├── config.json         # Configurações da assistente
-│   ├── agenda.txt
-│   ├── curiosities.json
-│   └── ...
-├── model/                  # Modelos de reconhecimento de voz e gestos
-│   ├── gesture_detection.pkl
-│   └── speech_recognition.pkl
-├── src/                    # Código-fonte da Assistant OS
-│   ├── __init__.py
-│   ├── agenda.py
-│   ├── audio.py
-│   ├── commands.py
-│   ├── curiosities.py
-│   ├── gestures.py
-│   ├── main.py
-│   ├── recognizer.py
-│   ├── speech.py
-│   └── ...
-├── LICENSE
-├── README.md
-└── requirements.txt
-```
-
 ## Instalação
 
 1. Clone o repositório: `git clonehttps://github.com/lucashahnndev/Assistant OS.git`
 2. Instale as dependências: `pip install -r requirements.txt`
+3. Configure as credenciais em /data/config.json
 
 ## Utilização
 
 1. Abra o terminal na pasta do projeto
-2. Execute o arquivo `main.py`: `python main.py`
-3. Siga as instruções de voz e gestos para interagir com a Assistant OS
+2. Execute o arquivo `start.bat`
+3. Siga as instruções de voz para interagir com a Assistant OS
 
 ## Funcionalidades
 
