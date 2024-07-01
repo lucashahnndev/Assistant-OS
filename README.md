@@ -8,7 +8,7 @@ Assistant OS é uma assistente pessoal baseada em Python que utiliza reconhecime
 
 ## Instalação
 
-1. Clone o repositório: `git clone https://github.com/lucashahnndev/Assistant OS.git`
+1. Clone o repositório: `git clone https://github.com/lucashahnndev/Assistant-OS OS.git`
 2. Instale as dependências: `pip install -r requirements.txt`
 3. Configure as credenciais em /data/config.json
 
