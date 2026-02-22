@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arquitetura - Atlas Bot</title>
+    <link rel="stylesheet" href="styles.css">
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({ startOnLoad: true });
+    </script>
+</head>
+
+<body>
+    <div class="sidebar">
+        <a href="index.html" class="logo">Atlas Bot</a>
+        <ul class="nav-links">
+            <li><a href="index.html">Visão Geral</a></li>
+            <li><a href="installation.html">Instalação</a></li>
+            <li><a href="architecture.html" class="active">Arquitetura</a></li>
+            <li><a href="modules.html">Módulos</a></li>
+        </ul>
+    </div>
+
+    <div class="main-content">
+        <h1>Arquitetura do Sistema</h1>
+        <p>O Atlas Bot utiliza uma arquitetura híbrida <strong>Kernel-Driver</strong> + <strong>Agentic Cognitive
+                Loop</strong>.
+            Isso separa o controle de hardware (Drivers) do raciocínio complexo (Orchestrator).
+        </p>
+
+        <h2>Diagrama de Fluxo</h2>
+        <div class="mermaid">
+            graph TD
+            subgraph Drivers
+            A[VoiceDriver]
+            B[TelegramDriver]
+            C[BrowserDriver]
+            D[ServerDriver]
+            end
+
+            subgraph Core
+            K[Kernel (main.py)]
+            O[Agent Orchestrator]
+            end
+
+            subgraph Memory
+            S[Session (Short-Term)]
+            LTM[Vector DB (Long-Term)]
+            end
+
+            subgraph Services
+            LLM[LLM Manager]
+            TTS[TTS Manager]
+            end
+
+            A & B & C & D -->|Input Event| K
+            K -->|Context + Input| O
+
+            O <-->|Read/Write| S
+                O <-->|Query| LTM
+                    O -->|Inference| LLM
+
+                    O -->|Action| K
+                    K -->|Command| C
+                    K -->|Response| B & A
+        </div>
+
+        <h2>Componentes Principais</h2>
+
+        <h3>Kernel (src/main.py)</h3>
+        <p>O despachante central. Ele não "pensa", apenas roteia. Recebe inputs dos Drivers e os encaminha para o
+            Orchestrator.
+            Recebe ações do Orchestrator e as delega para os Drivers (ex: "Fale isso", "Abra aquilo").</p>
+
+        <h3>Agent Orchestrator (src/core/orchestrator.py)</h3>
+        <p><strong>O Cérebro.</strong> Substitui o antigo "Router". Utiliza um Loop de Raciocínio (ReAct) para:</p>
+        <ol>
+            <li>Analisar o input (Intenção).</li>
+            <li>Consultar memórias passadas.</li>
+            <li>Planejar passos (Plan).</li>
+            <li>Executar ferramentas (Skills).</li>
+        </ol>
+
+        <h3>Drivers (src/drivers/)</h3>
+        <p>Adaptadores de I/O:</p>
+        <ul>
+            <li><strong>VoiceDriver</strong>: Interface PyGame + STT/TTS local.</li>
+            <li><strong>TelegramDriver</strong>: Bot assíncrono para controle remoto.</li>
+            <li><strong>BrowserDriver</strong>: Automação web via Playwright (Headless/Headed).</li>
+            <li><strong>ServerDriver</strong>: (Experimental) API para controle externo.</li>
+        </ul>
+
+        <h3>Memory System (src/services/memory/)</h3>
+        <p>O Atlas possui persistência de contexto:</p>
+        <ul>
+            <li><strong>Session</strong>: Mantém o contexto da conversa atual.</li>
+            <li><strong>Long-Term</strong>: ChromaDB armazena embeddings para lembrar fatos e preferências.</li>
+        </ul>
+    </div>
+</body>
+
+</html>

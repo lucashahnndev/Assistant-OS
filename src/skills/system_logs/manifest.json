@@ -1,0 +1,16 @@
+{
+  "name": "System Logs",
+  "description": "Retrieve internal system logs to diagnose errors or monitor process flow.",
+  "actions": [
+    {
+      "name": "read_logs",
+      "description": "Reads the most recent entries from the `assistant.log` file. ",
+      "parameters": {
+        "properties": {},
+        "required": []
+      }
+    }
+  ],
+  "permissions": [],
+  "config_schema": {}
+}

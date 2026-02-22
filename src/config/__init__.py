@@ -1,1 +1,2 @@
-from config.main import BOT_NAME, OPENAI_API_KEY, OPENAI_ORGANIZATION_ID, GOOGLE_CLOUD_API_KEY, GOOGLE_MAPS_API_KEY
+from config.main import BOT_NAME
+from config.manager import ConfigManager

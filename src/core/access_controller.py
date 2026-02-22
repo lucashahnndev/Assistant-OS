@@ -1,0 +1,738 @@
+import os
+import json
+import logging
+from typing import Optional, Dict, List, Any
+import fnmatch
+from .identity import (
+    PrincipalContext,
+    UserEntity,
+    ChatEntity,
+    PermissionGroup,
+    AccessStatus,
+    AccessMode,
+    RiskLevel,
+)
+
+logger = logging.getLogger("AccessController")
+
+class IdentityService:
+    INTERFACE_ALIASES = {
+        "validator": "cli",
+        "terminal_bridge": "cli",
+    }
+
+    def __init__(self, data_dir: str):
+        self.identities_dir = os.path.join(data_dir, "identities")
+        self.users_dir = os.path.join(self.identities_dir, "users")
+        self.chats_dir = os.path.join(self.identities_dir, "chats")
+        self.config_file = os.path.join(self.identities_dir, "policy.json")
+        
+        os.makedirs(self.users_dir, exist_ok=True)
+        os.makedirs(self.chats_dir, exist_ok=True)
+        
+        self.policy = self._load_policy()
+
+    def normalize_interface_name(self, interface: Optional[str]) -> str:
+        raw = (interface or "").strip().lower()
+        if not raw:
+            return raw
+        return self.INTERFACE_ALIASES.get(raw, raw)
+
+    def _load_policy(self) -> Dict[str, Any]:
+        policy = {}
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, "r") as f:
+                    policy = json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to parse policy.json, using defaults: {e}")
+        if not policy:
+            policy = self._default_policy()
+        self._ensure_policy_shape(policy)
+        return policy
+
+    def _default_permission_groups(self) -> Dict[str, Dict[str, Any]]:
+        return {
+            "master": PermissionGroup(
+                id="master",
+                name="Master",
+                description="Acesso total. Novas skills entram automaticamente via wildcard.",
+                allow_actions=["*"],
+                is_system=True,
+            ).model_dump(),
+            "medium": PermissionGroup(
+                id="medium",
+                name="Medium",
+                description="Uso geral sem ações críticas de sistema.",
+                allow_actions=[
+                    "web.*",
+                    "wikipedia.*",
+                    "memory.*",
+                    "task.*",
+                    "weather.*",
+                    "maps.*",
+                    "youtube.*",
+                    "deezer.*",
+                    "spotify.*",
+                    "vision.*",
+                    "browser.automator.*",
+                    "system_logs.*",
+                    "system.apps.*",
+                    "system.control.info",
+                    "system.control.time",
+                    "system.control.status",
+                    "system.control.network.*",
+                    "system.control.process.list",
+                    "system.control.screenshot",
+                    "reflex.*",
+                ],
+                deny_actions=[
+                    "shell.*",
+                    "system.control.power",
+                    "system.control.process.kill",
+                    "system.control.fs.write",
+                    "system.control.fs.delete",
+                    "system.control.service.manage",
+                ],
+                is_system=True,
+            ).model_dump(),
+            "critical": PermissionGroup(
+                id="critical",
+                name="Critical",
+                description="Somente observabilidade e ações de baixo risco.",
+                allow_actions=[
+                    "web.search.discover",
+                    "wikipedia.search",
+                    "memory.recall",
+                    "task.notes",
+                    "task.specialist",
+                    "weather.control.get",
+                    "maps.search.search",
+                    "youtube.search.find",
+                    "deezer.search.search",
+                    "system_logs.*",
+                    "system.control.info",
+                    "system.control.time",
+                    "system.control.status",
+                    "system.control.network.status",
+                    "system.control.network.ping",
+                    "system.control.process.list",
+                    "system.control.screenshot",
+                    "vision.analyze",
+                    "vision.search_screen",
+                    "reflex.*",
+                ],
+                deny_actions=["shell.*", "system.control.*"],
+                is_system=True,
+            ).model_dump(),
+        }
+
+    def _default_policy(self) -> Dict[str, Any]:
+        return {
+            "interfaces": {
+                "telegram": {
+                    "dm_mode": "auto_approve",
+                    "group_mode": "approved_only",
+                    "default_user_group": "medium",
+                    "default_chat_group": "medium",
+                    "auto_approve_user_group": "medium",
+                    "auto_approve_chat_group": "medium",
+                    "allow_anyone_in_chats": [],
+                    "rate_limit_enabled": True,
+                    "max_msgs_per_min": 20
+                },
+                "web": {
+                    "dm_mode": "anyone",
+                    "group_mode": "anyone",
+                    "default_user_group": "master",
+                    "default_chat_group": "master",
+                    "auto_approve_user_group": "master",
+                    "auto_approve_chat_group": "master",
+                    "allow_anyone_in_chats": [],
+                    "rate_limit_enabled": False,
+                    "max_msgs_per_min": 60
+                },
+                "cli": {
+                    "dm_mode": "anyone",
+                    "group_mode": "anyone",
+                    "default_user_group": "master",
+                    "default_chat_group": "master",
+                    "auto_approve_user_group": "master",
+                    "auto_approve_chat_group": "master",
+                    "allow_anyone_in_chats": [],
+                    "rate_limit_enabled": False,
+                    "max_msgs_per_min": 100
+                }
+            },
+            "permission_groups": self._default_permission_groups(),
+            "global_admin_ids": []
+        }
+
+    def _ensure_policy_shape(self, policy: Dict[str, Any]):
+        defaults = self._default_policy()
+
+        if "interfaces" not in policy or not isinstance(policy["interfaces"], dict):
+            policy["interfaces"] = defaults["interfaces"]
+
+        interfaces = policy["interfaces"]
+        # Legacy migration: validator/terminal_bridge were renamed to cli.
+        legacy_entries = []
+        for legacy_name in ("validator", "terminal_bridge"):
+            data = interfaces.get(legacy_name)
+            if isinstance(data, dict):
+                legacy_entries.append(data)
+        if "cli" not in interfaces:
+            base_cli = dict(defaults["interfaces"]["cli"])
+            for legacy in legacy_entries:
+                base_cli.update(legacy)
+            interfaces["cli"] = base_cli
+        elif isinstance(interfaces.get("cli"), dict):
+            for legacy in legacy_entries:
+                for key, value in legacy.items():
+                    interfaces["cli"].setdefault(key, value)
+        interfaces.pop("validator", None)
+        interfaces.pop("terminal_bridge", None)
+
+        for interface_name, interface_defaults in defaults["interfaces"].items():
+            current = policy["interfaces"].setdefault(interface_name, {})
+            for key, value in interface_defaults.items():
+                current.setdefault(key, value)
+
+        if "permission_groups" not in policy or not isinstance(policy["permission_groups"], dict):
+            policy["permission_groups"] = {}
+
+        default_groups = self._default_permission_groups()
+        for gid, group_data in default_groups.items():
+            existing = policy["permission_groups"].get(gid, {})
+            merged = dict(group_data)
+            if isinstance(existing, dict):
+                merged.update(existing)
+            group_obj = PermissionGroup(**merged)
+            policy["permission_groups"][gid] = group_obj.model_dump()
+
+        policy.setdefault("global_admin_ids", [])
+
+    def save_policy(self):
+        with open(self.config_file, "w") as f:
+            json.dump(self.policy, f, indent=4)
+
+    def get_interface_config(self, interface: str) -> Dict[str, Any]:
+        interface_name = self.normalize_interface_name(interface)
+        return self.policy.get("interfaces", {}).get(interface_name, {
+            "dm_mode": "approved_only",
+            "group_mode": "approved_only",
+            "default_user_group": "medium",
+            "default_chat_group": "medium",
+            "auto_approve_user_group": "medium",
+            "auto_approve_chat_group": "medium",
+            "allow_anyone_in_chats": [],
+            "rate_limit_enabled": True,
+            "max_msgs_per_min": 10
+        })
+
+    def list_permission_groups(self) -> List[Dict[str, Any]]:
+        groups = self.policy.get("permission_groups", {})
+        return [dict(value) for _, value in sorted(groups.items(), key=lambda x: x[0])]
+
+    def get_permission_group(self, group_id: str) -> Optional[PermissionGroup]:
+        group_data = self.policy.get("permission_groups", {}).get(group_id)
+        if not group_data:
+            return None
+        try:
+            return PermissionGroup(**group_data)
+        except Exception as e:
+            logger.warning(f"Invalid permission group '{group_id}': {e}")
+            return None
+
+    def save_permission_group(self, group: PermissionGroup):
+        self.policy.setdefault("permission_groups", {})[group.id] = group.model_dump()
+        self.save_policy()
+
+    def delete_permission_group(self, group_id: str) -> bool:
+        group = self.get_permission_group(group_id)
+        if not group:
+            return False
+        if group.is_system and group.id == "master":
+            raise ValueError("Group 'master' cannot be deleted.")
+
+        # Avoid dangling references by re-pointing to a safe default.
+        fallback_group = "master"
+        for entity in self.list_entities("users"):
+            if entity.get("group_id") == group_id:
+                user = self.get_user(entity.get("interface"), entity.get("id"))
+                if user:
+                    user.group_id = fallback_group
+                    self.save_user(user)
+        for entity in self.list_entities("chats"):
+            if entity.get("group_id") == group_id:
+                chat = self.get_chat(entity.get("interface"), entity.get("id"))
+                if chat:
+                    chat.group_id = fallback_group
+                    self.save_chat(chat)
+
+        del self.policy["permission_groups"][group_id]
+        self.save_policy()
+        return True
+
+    def _resolve_default_group(
+        self,
+        *,
+        interface: str,
+        mode: str,
+        entity_type: str,
+    ) -> str:
+        conf = self.get_interface_config(interface)
+        interface_lower = interface.lower()
+        if entity_type == "chat":
+            default_key = "default_chat_group"
+            auto_key = "auto_approve_chat_group"
+        else:
+            default_key = "default_user_group"
+            auto_key = "auto_approve_user_group"
+
+        # Web portal main user should be master by default.
+        if interface_lower == "web":
+            return conf.get(auto_key) or conf.get(default_key) or "master"
+
+        if mode in ("auto_approve", "anyone"):
+            return conf.get(auto_key) or conf.get(default_key) or "medium"
+        return conf.get(default_key) or "medium"
+
+    def _ensure_valid_group(self, group_id: Optional[str], fallback: str) -> str:
+        groups = self.policy.get("permission_groups", {})
+        if group_id and group_id in groups:
+            return group_id
+        return fallback if fallback in groups else "master"
+
+    def ensure_user_group(self, user: UserEntity, interface: str, mode: Optional[str] = None) -> UserEntity:
+        conf = self.get_interface_config(interface)
+        dm_mode = mode or conf.get("dm_mode", "approved_only")
+        fallback = self._resolve_default_group(interface=interface, mode=dm_mode, entity_type="user")
+        target_group = self._ensure_valid_group(user.group_id, fallback)
+        if user.group_id != target_group:
+            user.group_id = target_group
+            self.save_user(user)
+        return user
+
+    def ensure_chat_group(self, chat: ChatEntity, interface: str, mode: Optional[str] = None) -> ChatEntity:
+        conf = self.get_interface_config(interface)
+        group_mode = mode or conf.get("group_mode", "approved_only")
+        fallback = self._resolve_default_group(interface=interface, mode=group_mode, entity_type="chat")
+        target_group = self._ensure_valid_group(chat.group_id, fallback)
+        if chat.group_id != target_group:
+            chat.group_id = target_group
+            self.save_chat(chat)
+        return chat
+
+    def get_user(self, interface: str, sender_id: str) -> Optional[UserEntity]:
+        interface_name = self.normalize_interface_name(interface)
+        path = os.path.join(self.users_dir, f"{interface_name}_{sender_id}.json")
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                return UserEntity(**json.load(f))
+        legacy_name = (interface or "").lower()
+        if legacy_name and legacy_name != interface_name:
+            legacy_path = os.path.join(self.users_dir, f"{legacy_name}_{sender_id}.json")
+            if os.path.exists(legacy_path):
+                with open(legacy_path, "r") as f:
+                    return UserEntity(**json.load(f))
+        return None
+
+    def create_user(self, context: PrincipalContext) -> UserEntity:
+        interface_name = self.normalize_interface_name(context.interface)
+        conf = self.get_interface_config(interface_name)
+        mode = conf.get("dm_mode", "approved_only")
+        
+        status = AccessStatus.PENDING
+        if mode == "auto_approve" or mode == "anyone":
+            status = AccessStatus.APPROVED
+
+        default_group = self._resolve_default_group(
+            interface=interface_name,
+            mode=mode,
+            entity_type="user",
+        )
+        group_id = self._ensure_valid_group(default_group, "master")
+            
+        user = UserEntity(
+            id=context.sender_id,
+            interface=interface_name,
+            display_name=context.sender_name,
+            status=status,
+            group_id=group_id,
+        )
+        self.save_user(user)
+        return user
+
+    def save_user(self, user: UserEntity):
+        user.interface = self.normalize_interface_name(user.interface)
+        path = os.path.join(self.users_dir, f"{user.interface}_{user.id}.json")
+        with open(path, "w") as f:
+            f.write(user.model_dump_json(indent=4))
+
+    def get_chat(self, interface: str, chat_id: str) -> Optional[ChatEntity]:
+        interface_name = self.normalize_interface_name(interface)
+        path = os.path.join(self.chats_dir, f"{interface_name}_{chat_id}.json")
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                return ChatEntity(**json.load(f))
+        legacy_name = (interface or "").lower()
+        if legacy_name and legacy_name != interface_name:
+            legacy_path = os.path.join(self.chats_dir, f"{legacy_name}_{chat_id}.json")
+            if os.path.exists(legacy_path):
+                with open(legacy_path, "r") as f:
+                    return ChatEntity(**json.load(f))
+        return None
+
+    def create_chat(self, context: PrincipalContext) -> ChatEntity:
+        interface_name = self.normalize_interface_name(context.interface)
+        conf = self.get_interface_config(interface_name)
+        mode = conf.get("group_mode", "approved_only")
+        
+        status = AccessStatus.PENDING
+        if mode == "auto_approve" or mode == "anyone":
+            status = AccessStatus.APPROVED
+
+        default_group = self._resolve_default_group(
+            interface=interface_name,
+            mode=mode,
+            entity_type="chat",
+        )
+        group_id = self._ensure_valid_group(default_group, "master")
+            
+        chat = ChatEntity(
+            id=context.chat_id,
+            interface=interface_name,
+            title=context.chat_name,
+            status=status,
+            group_id=group_id,
+        )
+        self.save_chat(chat)
+        return chat
+
+    def save_chat(self, chat: ChatEntity):
+        chat.interface = self.normalize_interface_name(chat.interface)
+        path = os.path.join(self.chats_dir, f"{chat.interface}_{chat.id}.json")
+        with open(path, "w") as f:
+            f.write(chat.model_dump_json(indent=4))
+
+    def list_entities(self, entity_type: str, interface: str = None, status: str = None) -> List[Dict]:
+        target_dir = self.users_dir if entity_type == "users" else self.chats_dir
+        results = []
+        groups = self.policy.get("permission_groups", {})
+        interface_filter = self.normalize_interface_name(interface) if interface else None
+        if not os.path.exists(target_dir):
+             return []
+             
+        for filename in os.listdir(target_dir):
+            if filename.endswith(".json"):
+                try:
+                    with open(os.path.join(target_dir, filename), "r") as f:
+                        data = json.load(f)
+                        stored_interface = self.normalize_interface_name(data.get("interface"))
+                        data["interface"] = stored_interface
+                        if interface_filter and stored_interface != interface_filter:
+                            continue
+                        if status and data.get("status") != status:
+                            continue
+                        group_id = data.get("group_id")
+                        group = groups.get(group_id, {})
+                        data["group_name"] = group.get("name", group_id or "")
+                        results.append(data)
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning(f"Failed to load identity file {filename}: {e}")
+                    # Optionally clean up empty files
+                    file_path = os.path.join(target_dir, filename)
+                    if os.path.getsize(file_path) == 0:
+                        logger.info(f"Removing empty identity file: {filename}")
+                        os.remove(file_path)
+        return results
+
+class AccessController:
+    def __init__(self, data_dir: str):
+        self.identity_service = IdentityService(data_dir)
+
+    @staticmethod
+    def _merge_unique(*lists: List[str]) -> List[str]:
+        merged: List[str] = []
+        for source in lists:
+            for item in source or []:
+                if item and item not in merged:
+                    merged.append(item)
+        return merged
+
+    def _resolve_context_entities(
+        self,
+        context: PrincipalContext,
+    ) -> tuple[UserEntity, Optional[ChatEntity], Dict[str, Any]]:
+        interface_name = self.identity_service.normalize_interface_name(context.interface)
+        normalized_context = context
+        if context.interface.lower() != interface_name:
+            normalized_context = context.model_copy(update={"interface": interface_name})
+
+        conf = self.identity_service.get_interface_config(interface_name)
+        user = self.identity_service.get_user(interface_name, normalized_context.sender_id)
+        if not user:
+            user = self.identity_service.create_user(normalized_context)
+            logger.info(f"New user registered: {user.display_name} ({user.id}) on {user.interface}")
+        else:
+            user = self.identity_service.ensure_user_group(user, interface_name, conf.get("dm_mode"))
+
+        chat = None
+        if normalized_context.is_group and normalized_context.chat_id:
+            chat = self.identity_service.get_chat(interface_name, normalized_context.chat_id)
+            if not chat:
+                chat = self.identity_service.create_chat(normalized_context)
+                logger.info(f"New chat registered: {chat.title} ({chat.id}) on {chat.interface}")
+            else:
+                chat = self.identity_service.ensure_chat_group(chat, interface_name, conf.get("group_mode"))
+
+        return user, chat, conf
+
+    def _collect_effective_rules(
+        self,
+        context: PrincipalContext,
+        user: UserEntity,
+        chat: Optional[ChatEntity],
+    ) -> Dict[str, List[str]]:
+        """
+        Builds effective allow/deny rule sets from:
+        group policy + user overrides (+ chat overrides on group messages).
+        """
+        if context.is_group and chat:
+            target_entity = chat
+        else:
+            target_entity = user
+
+        group_id = target_entity.group_id or user.group_id
+        group = self.identity_service.get_permission_group(group_id) if group_id else None
+
+        # Allow lists are evaluated by layer (group -> user -> entity) so that
+        # user/chat overrides can narrow permissions even if group has wildcard.
+        group_allow_actions = list(group.allow_actions if group else [])
+        group_allow_skills = list(group.allow_skills if group else [])
+        user_allow_actions = list(user.overrides.allow_actions)
+        user_allow_skills = list(user.overrides.allow_skills)
+
+        entity_allow_actions: List[str] = []
+        entity_allow_skills: List[str] = []
+        if context.is_group and chat:
+            entity_allow_actions = list(chat.overrides.allow_actions)
+            entity_allow_skills = list(chat.overrides.allow_skills)
+        deny_actions = self._merge_unique(
+            group.deny_actions if group else [],
+            user.overrides.deny_actions,
+            target_entity.overrides.deny_actions,
+        )
+        deny_skills = self._merge_unique(
+            group.deny_skills if group else [],
+            user.overrides.deny_skills,
+            target_entity.overrides.deny_skills,
+        )
+        return {
+            "group_id": [group_id] if group_id else [],
+            "group_allow_actions": group_allow_actions,
+            "group_allow_skills": group_allow_skills,
+            "user_allow_actions": user_allow_actions,
+            "user_allow_skills": user_allow_skills,
+            "entity_allow_actions": entity_allow_actions,
+            "entity_allow_skills": entity_allow_skills,
+            "deny_actions": deny_actions,
+            "deny_skills": deny_skills,
+        }
+
+    def _allow_layers_configured(self, rules: Dict[str, List[str]]) -> bool:
+        return bool(
+            rules.get("group_allow_actions")
+            or rules.get("group_allow_skills")
+            or rules.get("user_allow_actions")
+            or rules.get("user_allow_skills")
+            or rules.get("entity_allow_actions")
+            or rules.get("entity_allow_skills")
+        )
+
+    def _is_allowed_by_layers(self, action_id: str, rules: Dict[str, List[str]]) -> bool:
+        layers = [
+            (rules.get("group_allow_actions", []), rules.get("group_allow_skills", [])),
+            (rules.get("user_allow_actions", []), rules.get("user_allow_skills", [])),
+            (rules.get("entity_allow_actions", []), rules.get("entity_allow_skills", [])),
+        ]
+        for allow_actions, allow_skills in layers:
+            if not allow_actions and not allow_skills:
+                continue
+            if not (self._matches_any(action_id, allow_actions) or self._matches_any(action_id, allow_skills)):
+                return False
+        return True
+
+    def pre_llm_gate(self, context: PrincipalContext) -> tuple[bool, str]:
+        user, chat, conf = self._resolve_context_entities(context)
+
+        if user.status == AccessStatus.BLOCKED:
+            return False, "Sinto muito, seu acesso foi bloqueado pelo administrador."
+
+        # Group check
+        if context.is_group and context.chat_id:
+            if chat.status == AccessStatus.BLOCKED:
+                return False, "Este chat/grupo foi bloqueado pelo administrador."
+            
+            mode = conf.get("group_mode", "approved_only")
+            allow_anyone = conf.get("allow_anyone_in_chats", [])
+            
+            if mode == "approved_only" and chat.status == AccessStatus.PENDING:
+                if context.chat_id not in allow_anyone:
+                    return False, "Este grupo aguarda aprovação do administrador para interagir."
+
+        elif user.status == AccessStatus.PENDING:
+            mode = conf.get("dm_mode", "approved_only")
+            if mode == "approved_only":
+                logger.warning(f"Access DENIED: User {context.sender_id} is pending on interface {context.interface}")
+                return False, "Seu acesso está pendente de aprovação pelo administrador."
+
+        return True, ""
+
+    def pre_dispatch_gate(self, context: PrincipalContext, action: str, params: dict, skill_registry: Any = None, config_manager: Any = None) -> tuple[bool, str]:
+        logger.debug(f"Pre-dispatch gate check: {action} for {context.sender_id} on {context.interface}")
+        user, chat, conf = self._resolve_context_entities(context)
+
+        if user.status == AccessStatus.BLOCKED:
+            return False, "Seu acesso está bloqueado."
+
+        if skill_registry and config_manager:
+            if not self._is_action_enabled_by_config(action, skill_registry, config_manager):
+                return False, f"Ação '{action}' está desativada na configuração atual."
+
+        rules = self._collect_effective_rules(context, user, chat)
+
+        # Allow rules are restrictive by layer (group + overrides).
+        if self._allow_layers_configured(rules) and not self._is_allowed_by_layers(action, rules):
+            return False, f"Ação '{action}' não está permitida para seu usuário."
+
+        # Explicit Deny (group + overrides)
+        if self._matches_any(action, rules["deny_actions"]):
+            return False, f"Ação '{action}' negada explicitamente para você."
+        if self._matches_any(action, rules["deny_skills"]):
+            return False, f"Habilidade contendo '{action}' negada explicitamente para você."
+
+        # Anyone mode restriction: Only low risk actions allowed
+        mode = conf.get("group_mode" if context.is_group else "dm_mode", "approved_only")
+        
+        # If user is only allowed via 'anyone' mode (not manually approved)
+        needs_anyone_check = False
+        if mode == "anyone":
+            if user.status != AccessStatus.APPROVED: # This logic depends on how 'anyone' status is stored
+                needs_anyone_check = True
+            
+        if context.is_group:
+            if chat and chat.status != AccessStatus.APPROVED and context.chat_id in conf.get("allow_anyone_in_chats", []):
+                needs_anyone_check = True
+
+        if needs_anyone_check:
+            # We need skill registry to check risk level, or a hardcoded list for now
+            # For bootstrap, let's assume we need a reference to the registry or metadata
+            # I'll implement a simple check for now and refine later
+            if self._is_high_risk(action, skill_registry):
+                return False, "Este comando requer aprovação manual do administrador (High Risk)."
+
+        # Unapproved users should not execute high-risk actions even outside "anyone" mode.
+        if user.status != AccessStatus.APPROVED and self._is_high_risk(action, skill_registry):
+            return False, "Seu perfil ainda não está autorizado para ações de alto risco."
+
+        return True, ""
+
+    def get_allowed_actions(self, context: PrincipalContext, skill_registry: Any, config_manager: Any = None) -> List[str]:
+        """
+        Returns the list of actions the agent should see for this principal.
+        This is intended for prompt filtering (least-privilege context),
+        while pre_dispatch_gate remains the final execution authority.
+        """
+        if not context or not skill_registry:
+            return []
+
+        actions = skill_registry.list_actions()
+        user, chat, conf = self._resolve_context_entities(context)
+        mode = conf.get("group_mode" if context.is_group else "dm_mode", "approved_only")
+        rules = self._collect_effective_rules(context, user, chat)
+
+        # If allow lists are configured, they become restrictive by layer.
+        has_allow_lists = self._allow_layers_configured(rules)
+
+        filtered: List[str] = []
+        for action_id in actions:
+            # 1. Skill enablement from config (if available)
+            if config_manager and not self._is_action_enabled_by_config(action_id, skill_registry, config_manager):
+                continue
+
+            # 2. Explicit deny rules (group + overrides)
+            if self._matches_any(action_id, rules["deny_actions"]):
+                continue
+            if self._matches_any(action_id, rules["deny_skills"]):
+                continue
+
+            # 3. Optional explicit allow mode
+            if has_allow_lists:
+                if not self._is_allowed_by_layers(action_id, rules):
+                    continue
+
+            # 4. "anyone" mode receives low-risk subset by default
+            if mode == "anyone" and user.status != AccessStatus.APPROVED and self._is_high_risk(action_id, skill_registry):
+                continue
+
+            filtered.append(action_id)
+
+        return sorted(set(filtered))
+
+    def _is_action_enabled_by_config(self, action_id: str, skill_registry: Any, config_manager: Any) -> bool:
+        """
+        Best-effort mapping from action -> skill folder config key.
+        Example module path: skills.system_control.skill -> system_control
+        """
+        try:
+            skill = skill_registry.get_skill_for_action(action_id)
+            if not skill:
+                return False
+
+            module_name = getattr(skill, "__module__", "")
+            parts = module_name.split(".")
+            # skills.<folder>.skill
+            config_key = parts[1] if len(parts) >= 3 and parts[0] == "skills" else skill.name
+
+            skills_cfg = config_manager.get("skills", {}) if config_manager else {}
+            skill_cfg = skills_cfg.get(config_key, {})
+            return skill_cfg.get("enabled", True)
+        except Exception:
+            # Fail-open for prompt visibility; dispatch gate remains authoritative.
+            return True
+
+    def _matches_any(self, action_id: str, patterns: List[str]) -> bool:
+        for pattern in patterns or []:
+            if not pattern:
+                continue
+            # Accept both explicit IDs and wildcard/prefix patterns.
+            if fnmatch.fnmatch(action_id, pattern):
+                return True
+            if action_id.startswith(pattern.replace("*", "")):
+                return True
+        return False
+
+    def _is_high_risk(self, action: str, skill_registry: Any = None) -> bool:
+        # Prefer per-action metadata from contracts when available.
+        if skill_registry and hasattr(skill_registry, "get_action_metadata"):
+            try:
+                metadata = skill_registry.get_action_metadata(action)
+                if str(metadata.get("risk_level", "")).lower() == "high":
+                    return True
+            except Exception:
+                pass
+
+        # Fallback to prefix-based classification.
+        high_risk_prefixes = [
+            "shell.",
+            "power.",
+            "process.",
+            "fs.",
+            "system.control.power",
+            "system.control.process.",
+            "system.control.fs.",
+            "system.control.service.manage",
+        ]
+        return any(action.startswith(p) for p in high_risk_prefixes)

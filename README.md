@@ -1,42 +1,79 @@
-# Assistant OS
+# Assistant-OS (Atlas)
 
-Assistant OS é uma assistente pessoal baseada em Python que utiliza reconhecimento de voz. O projeto foi desenvolvido para o sistema operacional Windows e possui funcionalidades como meteorologia, curiosidades, abertura de programas e streams, agenda, tarefas, entre outros.
+Plataforma de agente modular com foco em:
+- orquestração de ações por skills;
+- controle de acesso granular por usuário/grupo;
+- múltiplos drivers (web, telegram, cli, voz);
+- memória operacional e execução em loop com guardrails.
 
-![Capa ](https://github.com/lucashahnndev/Assistant-OS/blob/main/assistant_os_server/image/cover.png)
-![home print](https://github.com/lucashahnndev/Assistant-OS/blob/main/assistant_os_server/image/home%20print.png)
+## Estado Atual (v2 base)
+- Arquitetura principal em `src/core`, `src/server`, `src/services`, `src/skills`.
+- Frontend React em `frontend/`.
+- Stack de skills de conhecimento com:
+  - `web.search.discover` (modo `links|knowledge|auto`);
+  - `wikipedia.search` (retorno estruturado para RAG).
 
+## Estrutura
+```text
+src/
+  core/        # orquestração, sessão, ACL, resolução de intenção
+  server/      # API FastAPI e rotas
+  drivers/     # integrações de interface/canal
+  services/    # serviços de suporte (LLM, memória, workspace, safety)
+  skills/      # plugins de ação (contrato + runtime)
+frontend/      # painel web React
+data/          # configuração, sessões, identidades e artefatos
+tests/         # suíte enxuta de testes automatizados
+scripts/       # utilitários operacionais (bridge/validação)
+```
 
-## Instalação
+## Setup Rápido
+1. Criar ambiente virtual:
+```bash
+python -m venv env
+```
 
-1. Clone o repositório: `git clone https://github.com/lucashahnndev/Assistant-OS OS.git`
-2. Instale as dependências: `pip install -r requirements.txt`
-3. Configure as credenciais em /data/config.json
+2. Instalar dependências:
+```bash
+./env/bin/pip install -r requirements.txt
+```
 
-## Utilização
+3. Ajustar configuração:
+- arquivo principal: `data/config.json`
+- exemplo base: `config.json.example`
 
-1. Abra o terminal na pasta do projeto
-2. Execute o arquivo `start.bat`
-3. Siga as instruções de voz para interagir com a Assistant OS
+## Execução
+### Backend API
+```bash
+PYTHONPATH=src ./env/bin/python -m uvicorn src.server.main:create_app --factory --host 0.0.0.0 --port 8000
+```
 
-## Funcionalidades
+### Frontend
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-A Assistant OS possui diversas funcionalidades, incluindo:
+## Testes
+A pasta `tests/` foi reduzida para uma suíte objetiva e mantida.
 
-- Meteorologia: Obtém informações sobre o tempo em uma determinada cidade
-- Curiosidades: Fornece curiosidades aleatórias sobre vários tópicos
-- Abrir programas: Abre programas instalados no computador
-- Abrir streams: Abre streams e possibilita controlá-los por meio de comandos de voz
-- Agenda: Armazena eventos e lembretes
-- Tarefas: Armazena tarefas e possibilita sua conclusão
+Executar:
+```bash
+PYTHONPATH=src ./env/bin/python -m pytest -q tests
+```
 
-## Contribuição
+Coberturas principais:
+- resolução de intenção;
+- guardrails de loop e normalização de ação;
+- permissões e escopo por usuário;
+- qualidade/contrato das skills;
+- integração de fluxo do orquestrador.
 
-Você pode contribuir para o desenvolvimento da Assistant OS reportando bugs, sugerindo novas funcionalidades ou enviando pull requests.
+## Scripts
+Scripts mantidos:
+- `scripts/test_bridge.py`: bridge CLI para testes manuais de fluxo.
+- `scripts/validate_agent.py`: suíte de validação manual guiada.
 
 ## Licença
-
-Este projeto está sob a Licença BSD 3-cláusula "New". Consulte o arquivo `LICENSE` para obter mais informações.
-
-## Imagens
-Todas as imagens da pasta wallpaper foram obtidas em  [www.pexels.com](https://www.pexels.com/pt-br/)
-
+BSD 3-Clause. Veja `LICENSE`.

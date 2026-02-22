@@ -1,0 +1,76 @@
+{
+    "name": "youtube.search",
+    "description": "Busca vídeos, playlists e canais no YouTube (API oficial com fallback web).",
+    "version": "1.0.0",
+    "actions": {
+        "find": {
+            "description": "Encontra conteúdo no YouTube e retorna metadados estruturados com melhor candidato.",
+            "params": {
+                "query": {
+                    "type": "string",
+                    "description": "Termo de busca"
+                },
+                "type": {
+                    "type": "string",
+                    "enum": [
+                        "video",
+                        "playlist",
+                        "channel"
+                    ],
+                    "default": "video"
+                },
+                "surface": {
+                    "type": "string",
+                    "enum": [
+                        "youtube",
+                        "music",
+                        "auto"
+                    ],
+                    "default": "auto"
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 5
+                }
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "results": {
+                        "type": "array"
+                    },
+                    "best": {
+                        "type": "object"
+                    },
+                    "provider": {
+                        "type": "string"
+                    },
+                    "confidenceScore": {
+                        "type": "number"
+                    }
+                }
+            }
+        }
+    },
+    "config": {
+        "apiKey": {
+            "type": "string",
+            "env": "GOOGLE_YOUTUBE_API_KEY"
+        },
+        "defaults": {
+            "surfaceMode": {
+                "type": "string",
+                "enum": [
+                    "youtube",
+                    "music",
+                    "auto"
+                ],
+                "default": "auto"
+            },
+            "limit": {
+                "type": "integer",
+                "default": 5
+            }
+        }
+    }
+}

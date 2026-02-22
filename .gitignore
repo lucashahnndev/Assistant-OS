@@ -152,5 +152,8 @@ cython_debug/
 #.idea/
 
 
-*/data/config.json
-data/config.json
+data/
+node_modules/
+*.log
+frontend/dist/
+frontend/node_modules/

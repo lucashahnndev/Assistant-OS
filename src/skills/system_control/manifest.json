@@ -1,0 +1,40 @@
+{
+  "name": "System Control",
+  "description": "Monitor and manage high-level system states and information.",
+  "actions": [
+    {
+      "name": "system_status",
+      "description": "Returns CPU usage, RAM/swap, disk usage, uptime, top 5 processes, and temperature (if available). ",
+      "parameters": {
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "hardware_info",
+      "description": "Returns CPU model, total RAM, disk information, GPU details, and network interfaces. ",
+      "parameters": {
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "os_info_extended",
+      "description": "Returns detailed distribution info, kernel version, hostname, current user, desktop environment, and timezone. ",
+      "parameters": {
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "save_snapshot_state",
+      "description": "Generates a comprehensive system snapshot bundle (status + hardware + OS + processes + basic network) saved to the project's work artifacts directory. ",
+      "parameters": {
+        "properties": {},
+        "required": []
+      }
+    }
+  ],
+  "permissions": [],
+  "config_schema": {}
+}

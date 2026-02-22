@@ -1,0 +1,45 @@
+{
+    "name": "Task",
+    "description": "Gerencia estado operacional da sessão: scratchpad de notas e especialista ativo.",
+    "actions": [
+        {
+            "id": "task.notes",
+            "handler": "notes",
+            "description": "Operações no bloco de notas da sessão (ler, anexar, atualizar e limpar).",
+            "parameters": {
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "enum": [
+                            "read",
+                            "append",
+                            "update",
+                            "clear"
+                        ]
+                    },
+                    "content": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "command"
+                ]
+            }
+        },
+        {
+            "id": "task.specialist",
+            "handler": "specialist",
+            "description": "Ativa/desativa especialista de execução para a sessão atual.",
+            "parameters": {
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "name"
+                ]
+            }
+        }
+    ]
+}

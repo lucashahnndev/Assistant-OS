@@ -1,0 +1,104 @@
+{
+    "name": "wikipedia",
+    "description": "Consulta a Wikipedia e retorna conteúdo estruturado para RAG.",
+    "version": "1.0.0",
+    "actions": {
+        "search": {
+            "description": "Busca artigos na Wikipedia por tema e devolve conteúdo textual em chunks para IA.",
+            "risk_level": "low",
+            "params": {
+                "query": {
+                    "type": "string",
+                    "description": "Tema a pesquisar na Wikipedia."
+                },
+                "language": {
+                    "type": "string",
+                    "default": "pt",
+                    "description": "Idioma da Wikipedia (ex.: pt, en, es)."
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 3,
+                    "description": "Quantidade máxima de artigos retornados (1-5)."
+                },
+                "max_chars_per_page": {
+                    "type": "integer",
+                    "default": 4500,
+                    "description": "Limite de caracteres de conteúdo por artigo."
+                },
+                "chunk_size": {
+                    "type": "integer",
+                    "default": 700,
+                    "description": "Tamanho de cada chunk textual."
+                },
+                "chunk_overlap": {
+                    "type": "integer",
+                    "default": 100,
+                    "description": "Sobreposição entre chunks."
+                }
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "ok": {
+                        "type": "boolean"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "provider": {
+                        "type": "string"
+                    },
+                    "query": {
+                        "type": "string"
+                    },
+                    "language": {
+                        "type": "string"
+                    },
+                    "count": {
+                        "type": "integer"
+                    },
+                    "results": {
+                        "type": "array"
+                    },
+                    "best": {
+                        "type": "object"
+                    },
+                    "chunks": {
+                        "type": "array"
+                    },
+                    "warnings": {
+                        "type": "array"
+                    },
+                    "text": {
+                        "type": "string"
+                    }
+                }
+            }
+        }
+    },
+    "config": {
+        "defaults": {
+            "language": {
+                "type": "string",
+                "default": "pt"
+            },
+            "limit": {
+                "type": "integer",
+                "default": 3
+            },
+            "max_chars_per_page": {
+                "type": "integer",
+                "default": 4500
+            },
+            "chunk_size": {
+                "type": "integer",
+                "default": 700
+            },
+            "chunk_overlap": {
+                "type": "integer",
+                "default": 100
+            }
+        }
+    }
+}

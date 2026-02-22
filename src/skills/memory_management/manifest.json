@@ -1,0 +1,43 @@
+{
+  "name": "Memory Management",
+  "description": "Manage long-term facts and conversation context.",
+  "actions": [
+    {
+      "name": "search_deep_memory",
+      "description": "Search for historical facts or user preferences stored in deep memory. ",
+      "parameters": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Keyword or phrase to search for."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "remember_fact",
+      "description": "Save an important piece of information for future sessions. ",
+      "parameters": {
+        "properties": {
+          "category": {
+            "type": "string, optional",
+            "description": "e.g., \"preference\", \"user_info\"."
+          },
+          "content": {
+            "type": "string",
+            "description": "The fact to remember."
+          }
+        },
+        "required": [
+          "category",
+          "content"
+        ]
+      }
+    }
+  ],
+  "permissions": [],
+  "config_schema": {}
+}
