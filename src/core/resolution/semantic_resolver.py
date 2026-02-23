@@ -31,6 +31,14 @@ class SemanticResolver(IntentResolver):
             ),
             (
                 re.compile(
+                    r"\b(reproduz|reproduzir|reproduza|reporduz|toca|tocar|play|ouvir)\b.*\b(musica|música|song|faixa|cantor|artista)\b",
+                    re.IGNORECASE,
+                ),
+                "youtube.search.find",
+                self._media_query_params,
+            ),
+            (
+                re.compile(
                     r"\b(reproduz|reproduzir|reporduz|toca|tocar|play|ouvir)\b.*\b(deezer)\b|\b(deezer)\b.*\b(reproduz|reproduzir|reporduz|toca|tocar|play|ouvir)\b",
                     re.IGNORECASE,
                 ),

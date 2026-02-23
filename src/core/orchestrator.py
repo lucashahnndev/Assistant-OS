@@ -1976,9 +1976,23 @@ class AgentOrchestrator:
         text = (user_input or "").lower()
         if not text:
             return False
-        play_cues = ("reproduz", "reproduzir", "reporduz", "toca", "tocar", "play", "ouvir", "abre", "abrir")
+        play_cues = (
+            "reproduz",
+            "reproduzir",
+            "reproduza",
+            "reporduz",
+            "toca",
+            "tocar",
+            "play",
+            "ouvir",
+            "abre",
+            "abrir",
+        )
         provider_cues = ("youtube", "youtbe", "ytoutbe", "yt music", "youtube music", "deezer", "spotify")
-        return any(c in text for c in play_cues) and any(p in text for p in provider_cues)
+        media_object_cues = ("musica", "música", "song", "faixa", "album", "álbum", "cantor", "artista")
+        return any(c in text for c in play_cues) and (
+            any(p in text for p in provider_cues) or any(m in text for m in media_object_cues)
+        )
 
     @staticmethod
     def _derive_media_search_action_and_query(user_input: str) -> tuple[Optional[str], str]:
@@ -1991,6 +2005,9 @@ class AgentOrchestrator:
         elif "spotify" in lower:
             action_id = "spotify.search.search"
         elif any(token in lower for token in ("youtube", "youtbe", "ytoutbe", "yt music", "youtube music")):
+            action_id = "youtube.search.find"
+        else:
+            # Default media surface for generic playback requests without provider.
             action_id = "youtube.search.find"
 
         cleaned = lower

@@ -482,6 +482,7 @@ class BrowserDriver(BaseDriver):
             logger.info("Humanized Browser Driver initialized.")
         except Exception as e:
             logger.error(f"Failed to initialize Humanized Browser: {e}", exc_info=True)
+            raise
 
     def _resolve_browser_use_token_budget(self, provider_name: str, provider_config: dict, vision_max_tokens: int) -> int:
         """
@@ -547,7 +548,7 @@ class BrowserDriver(BaseDriver):
             else:
                 await self._get_current_page()
             # Collaborative lightweight path: text LLM controls, vision only observes.
-            # Keeps payloads small and avoids expensive browser-use loops for media playback.
+            # For media tasks, this is the first attempt before full browser-use escalation.
             if media_task:
                 collaborative = await self._run_collaborative_media_task(task, session_id=session_id)
                 if collaborative.get("status") == "success":
@@ -557,8 +558,7 @@ class BrowserDriver(BaseDriver):
                     "Collaborative media task did not confirm playback (%s). Running one extra local verification pass.",
                     collaborative.get("status"),
                 )
-                # Media policy: avoid heavy browser-use context for vision loops.
-                # Keep fallback fully controlled (image + short prompts only).
+                # Keep one extra local deterministic attempt before full-agent escalation.
                 try:
                     page = self.page or await self._get_current_page()
                     if page:
@@ -568,13 +568,9 @@ class BrowserDriver(BaseDriver):
                             return "Tarefa concluída: Reprodução confirmada após verificação local adicional."
                 except Exception as e:
                     logger.debug(f"Extra local playback verification failed: {e}")
-
-                blocker = str(collaborative.get("blocker") or "playback_not_confirmed")
-                return (
-                    "FATAL TOOL ERROR na execução da tarefa: media automation incomplete "
-                    f"(blocker={blocker}). Política ativa: fallback browser-use desabilitado para mídia "
-                    "para evitar payload extenso; usando apenas visão enxuta (imagem + prompt curto). "
-                    "NÃO ALUCINE SUCESSO."
+                logger.info(
+                    "Collaborative media flow incomplete (blocker=%s). Escalating to full browser-use agent.",
+                    str(collaborative.get("blocker") or "playback_not_confirmed"),
                 )
 
             # 1. Setup Playback
@@ -704,9 +700,9 @@ class BrowserDriver(BaseDriver):
                 step_callback=step_callback,
                 # Reduce prompt footprint for free-tier vision models.
                 vision_detail_level="low",
-                llm_screenshot_size=(1024, 576),
-                max_clickable_elements_length=8000,
-                max_actions_per_step=3,
+                llm_screenshot_size=(768, 432),
+                max_clickable_elements_length=1800,
+                max_actions_per_step=2,
                 use_thinking=False,
                 message_compaction=True,
             )
