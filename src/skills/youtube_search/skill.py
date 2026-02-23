@@ -33,6 +33,14 @@ class YouTubeSearchSkill(SkillBase):
             n = default
         return max(1, min(n, 10))
 
+    @staticmethod
+    def _resolve_query(params: Dict[str, Any]) -> str:
+        for key in ("query", "search_query", "searchQuery", "q", "term", "text"):
+            value = params.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
     def _get_api_key(self) -> Optional[str]:
         api_key = self.config.get("apiKey")
         if not api_key or "ENV_" in api_key:
@@ -166,10 +174,18 @@ class YouTubeSearchSkill(SkillBase):
 
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         action = action_id.split(".")[-1]
-        query = params.get("query")
-        limit = self._clamp_limit(params.get("limit") or self.config.get("defaults", {}).get("limit", 5), default=5)
+        query = self._resolve_query(params)
+        limit = self._clamp_limit(
+            params.get("limit")
+            or params.get("max_results")
+            or params.get("maxResults")
+            or self.config.get("defaults", {}).get("limit", 5),
+            default=5,
+        )
         surface = params.get("surface") or self.config.get("defaults", {}).get("surfaceMode", "auto")
         search_type = params.get("type", "video")
+        if isinstance(search_type, str) and search_type.strip().lower() == "music":
+            search_type = "video"
 
         if not query:
             return {

@@ -90,7 +90,10 @@ def get_session(session_id: str, request: Request, user: User = Depends(get_curr
     if not session:
         # If it's a new lazy session search, avoid 500
         return {"id": session_id, "source": "web", "name": "", "history": [], "is_new": True}
-        
+
+    # Timeline source of truth must be chat.json (not session.json context snapshot).
+    history = orch.get_chat_history(session_id)
+
     return {
         "id": session.session_id,
         "session_id": session.session_id,
@@ -98,7 +101,7 @@ def get_session(session_id: str, request: Request, user: User = Depends(get_curr
         "interface": getattr(session, 'source', 'web'),
         "name": getattr(session, 'name', ''),
         "profile_picture": getattr(session, 'profile_picture', None),
-        "history": session.history[-15:] if len(session.history) > 15 else session.history,
+        "history": history[-15:] if len(history) > 15 else history,
         "context": session.context,
         "scratchpad": session.scratchpad
     }
@@ -165,8 +168,9 @@ def get_session_history(session_id: str, offset: int = 0, limit: int = 15, reque
     session = orch.get_session_robust(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-        
-    history = session.history
+
+    # Timeline source of truth must be chat.json (not session.json context snapshot).
+    history = orch.get_chat_history(session_id)
     total = len(history)
     
     # Calculate indices from the end
@@ -288,7 +292,7 @@ async def upload_profile_picture(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
         
-    upload_dir = os.path.join(kernel.orchestrator.sessions_dir, session_id, "media")
+    upload_dir = os.path.join(kernel.orchestrator.sessions_dir, session_id, "media", "profile_picture")
     os.makedirs(upload_dir, exist_ok=True)
     
     file_path = os.path.join(upload_dir, f"avatar_{file.filename}")
@@ -296,7 +300,7 @@ async def upload_profile_picture(
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
-    relative_path = f"media/avatar_{file.filename}"
+    relative_path = f"media/profile_picture/avatar_{file.filename}"
     session.profile_picture = relative_path
     orch._save_session(session)
     
@@ -337,7 +341,6 @@ async def upload_files(
     # Target directory: data/sessions/{session_id}/media/{file_type}
     # Standardized with AgentOrchestrator.standardize_attachments logic
     uploaded_info = []
-    attachments = []
     
     for file in files:
         # Determine type based on content type
@@ -356,17 +359,12 @@ async def upload_files(
             
         file_metadata = {
             "name": file.filename,
+            "filename": file.filename,  # Backward-compatible alias
             "path": file_path,
             "type": file_type,
             "mime": file.content_type or "application/octet-stream"
         }
-        attachments.append(file_metadata)
-        
-        uploaded_info.append({
-            "filename": file.filename,
-            "type": file_type,
-            "path": file_path
-        })
+        uploaded_info.append(file_metadata)
 
     # Metadata is returned to the frontend, which will send a UNIFIED message 
     # via WebSocket/API containing both text and these attachments.
@@ -387,6 +385,16 @@ def delete_session(session_id: str, request: Request, user: User = Depends(get_c
     
     orch.delete_session(session_id)
     return {"status": "deleted", "session_id": session_id}
+
+@router.get("/{session_id}/media")
+def get_session_media(session_id: str, request: Request, user: User = Depends(get_current_user)):
+    """
+    Returns media files and extracted links for a specific session.
+    """
+    kernel = get_kernel(request)
+    orch = kernel.orchestrator
+    
+    return orch.get_session_media(session_id)
 
 @router.get("/{session_id}/events")
 async def stream_session_events(session_id: str, request: Request, user: User = Depends(get_current_user)):

@@ -25,6 +25,14 @@ class DeezerSearchSkill(SkillBase):
             n = default
         return max(1, min(n, 10))
 
+    @staticmethod
+    def _resolve_query(params: Dict[str, Any]) -> str:
+        for key in ("query", "search_query", "searchQuery", "q", "term", "text"):
+            value = params.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
     def _calculate_confidence(self, query: str, item_name: str, artist_name: Optional[str] = None) -> float:
         query_lower = query.lower()
         item_lower = item_name.lower()
@@ -61,9 +69,12 @@ class DeezerSearchSkill(SkillBase):
 
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         action = action_id.split(".")[-1]
-        query = params.get("query")
-        search_type = params.get("type", "track")
-        limit = self._clamp_limit(params.get("limit") or self.config.get("defaults", {}).get("limit", 5), default=5)
+        query = self._resolve_query(params)
+        search_type = params.get("type") or params.get("search_type") or "track"
+        limit = self._clamp_limit(
+            params.get("limit") or params.get("max_results") or params.get("maxResults") or self.config.get("defaults", {}).get("limit", 5),
+            default=5,
+        )
         base_url = self.config.get("api", {}).get("baseUrl", "https://api.deezer.com")
 
         if not query:

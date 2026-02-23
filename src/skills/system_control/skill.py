@@ -384,7 +384,7 @@ class SystemSkill(SkillBase):
             )
 
         if local == "fs.list":
-            path = str(params.get("path") or ".")
+            path = str(params.get("path") or params.get("filepath") or ".")
             out = sd.fs_list(path)
             if isinstance(out, str) and self._is_error_text(out):
                 return self._result(
@@ -413,7 +413,7 @@ class SystemSkill(SkillBase):
             )
 
         if local == "fs.read":
-            path = str(params.get("path") or "").strip()
+            path = str(params.get("path") or params.get("filepath") or "").strip()
             if not path:
                 return self._result(
                     ok=False,
@@ -438,7 +438,7 @@ class SystemSkill(SkillBase):
             )
 
         if local == "fs.write":
-            path = str(params.get("path") or "").strip()
+            path = str(params.get("path") or params.get("filepath") or "").strip()
             if not path:
                 return self._result(
                     ok=False,
@@ -459,7 +459,7 @@ class SystemSkill(SkillBase):
             )
 
         if local == "fs.delete":
-            path = str(params.get("path") or "").strip()
+            path = str(params.get("path") or params.get("filepath") or "").strip()
             if not path:
                 return self._result(
                     ok=False,

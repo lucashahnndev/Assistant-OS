@@ -212,14 +212,12 @@ class Kernel:
                     # Status updates are now real-time. No rate-limiting needed 
                     # as these are the agent's intermediate "thoughts" or step feedback.
                     msg = event.get('message')
-                    # If it's the ServerDriver, we use is_chunk=True to append to the message
-                    if hasattr(driver, 'send_response'):
-                        import inspect
-                        sig = inspect.signature(driver.send_response)
-                        if 'is_chunk' in sig.parameters:
-                            driver.send_response(msg, target=session_id, is_chunk=True)
-                        else:
-                            driver.send_response(msg, target=session_id)
+                    if hasattr(driver, 'send_reasoning_chunk'):
+                        driver.send_reasoning_chunk(session_id, msg)
+                    elif hasattr(driver, 'send_status'):
+                        driver.send_status(session_id, 'thinking', msg)
+                    elif hasattr(driver, 'send_response'):
+                        driver.send_response(msg, target=session_id)
 
                 
                 elif event_type == "work_status_change":

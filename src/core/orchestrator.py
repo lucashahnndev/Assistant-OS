@@ -6,6 +6,7 @@ import re
 import time
 import datetime
 import platform
+import shutil
 from typing import Optional, List, Dict, Callable, Any
 from services.llm.manager import LLMManager
 from core.intent import AgentIntent
@@ -69,7 +70,7 @@ class AgentOrchestrator:
         self.access_controller = AccessController(self.config_manager.base_data_dir)
         self.location_service = LocationService()
         self.sessions = {} # Dict[str, Session]
-        self.session_locks = {} # Concurrency guards
+        self.session_locks = {} # Concurrency guards + persistence serialization (RLock per session)
         self.browser_driver = None
         self.system_driver = None
         # Persistence Path
@@ -196,6 +197,13 @@ class AgentOrchestrator:
         # For now, we just log it.
         pass
 
+    def _get_or_create_session_lock(self, session_id: str) -> threading.RLock:
+        lock = self.session_locks.get(session_id)
+        if lock is None:
+            lock = threading.RLock()
+            self.session_locks[session_id] = lock
+        return lock
+
 
 
     def get_session_robust(self, session_id: str) -> Optional[Session]:
@@ -276,9 +284,65 @@ class AgentOrchestrator:
         import mimetypes
         
         standardized = []
-        for file_path in attachments:
-            if not os.path.exists(file_path):
-                logger.warning(f"Attachment not found during standardization: {file_path}")
+
+        def _extract_path(entry: Any) -> str:
+            if isinstance(entry, str):
+                return entry
+            if isinstance(entry, dict):
+                for key in ("path", "file_path", "filename", "url", "name"):
+                    value = entry.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+            return ""
+
+        def _resolve_existing_path(raw_path: str) -> str:
+            value = (raw_path or "").strip().replace("\\", "/")
+            if not value:
+                return ""
+
+            candidates = []
+            if os.path.isabs(value):
+                candidates.append(value)
+            else:
+                session_dir = os.path.join(self.sessions_dir, session.session_id)
+                candidates.extend(
+                    [
+                        os.path.join(session_dir, value),
+                        os.path.join(session_dir, "media", value),
+                        os.path.join(session_dir, "media", "image", value),
+                        os.path.join(session_dir, "uploads", value),
+                        os.path.join(self.workspace_service.get_workspace_dir(), value),
+                    ]
+                )
+
+            base_name = os.path.basename(value)
+            if base_name:
+                session_dir = os.path.join(self.sessions_dir, session.session_id)
+                candidates.extend(
+                    [
+                        os.path.join(session_dir, "media", "image", base_name),
+                        os.path.join(session_dir, "media", "video", base_name),
+                        os.path.join(session_dir, "media", "audio", base_name),
+                        os.path.join(session_dir, "media", "file", base_name),
+                        os.path.join(session_dir, "uploads", base_name),
+                        os.path.join(self.workspace_service.get_workspace_dir(), base_name),
+                    ]
+                )
+
+            seen = set()
+            for candidate in candidates:
+                normalized = os.path.normpath(candidate)
+                if normalized in seen:
+                    continue
+                seen.add(normalized)
+                if os.path.isfile(normalized):
+                    return normalized
+            return value
+
+        for entry in attachments:
+            file_path = _resolve_existing_path(_extract_path(entry))
+            if not file_path or not os.path.isfile(file_path):
+                logger.warning(f"Attachment not found during standardization: {entry}")
                 continue
             
             orig_name = os.path.basename(file_path)
@@ -352,45 +416,322 @@ class AgentOrchestrator:
         if hasattr(self, 'index_manager'):
             self.index_manager.delete_session(session_id)
 
+    def get_session_media(self, session_id: str) -> Dict[str, List]:
+        """Scans the session media directory and message history for media files and links."""
+        session = self.get_session_robust(session_id)
+        if not session:
+            return {"files": [], "links": []}
+        
+        def _normalize_rel_path(path: str) -> str:
+            return (path or "").replace("\\", "/").lstrip("./")
+
+        profile_picture_path = _normalize_rel_path(getattr(session, "profile_picture", ""))
+        profile_picture_name = os.path.basename(profile_picture_path).lower() if profile_picture_path else ""
+
+        def _is_internal_trace_content(content: str) -> bool:
+            text = (content or "").strip()
+            if not text:
+                return True
+
+            upper_text = text.upper()
+            if upper_text.startswith("RESULT OF ACTION"):
+                return True
+            if upper_text.startswith("WARNING: YOU HAVE ATTEMPTED"):
+                return True
+
+            # Some internal thought payloads were historically persisted as JSON text.
+            if text.startswith("{") and text.endswith("}"):
+                try:
+                    payload = json.loads(text)
+                except Exception:
+                    payload = None
+                if isinstance(payload, dict) and any(k in payload for k in ("thought", "plan", "action", "params")):
+                    return True
+
+            return False
+
+        # Scan multiple possible locations for files
+        search_dirs = [
+            os.path.join(self.sessions_dir, session_id, "media"),
+            os.path.join(self.sessions_dir, session_id, "uploads")
+        ]
+        
+        files = []
+        import mimetypes
+        
+        for media_dir in search_dirs:
+            if os.path.exists(media_dir):
+                for root, _, filenames in os.walk(media_dir):
+                    for filename in filenames:
+                        file_path = os.path.join(root, filename)
+                        relative_path = os.path.relpath(file_path, os.path.join(self.sessions_dir, session_id))
+                        normalized_rel = _normalize_rel_path(relative_path)
+                        normalized_rel_lower = normalized_rel.lower()
+                        filename_lower = filename.lower()
+
+                        # Hide profile pictures from "Media" tab to avoid mixing chat media with avatars.
+                        if profile_picture_path and normalized_rel == profile_picture_path:
+                            continue
+                        if profile_picture_name and filename_lower == profile_picture_name:
+                            continue
+                        if filename_lower.startswith("avatar_"):
+                            continue
+                        if normalized_rel_lower.startswith("media/profile_picture/") or "/profile_picture/" in normalized_rel_lower:
+                            continue
+                        
+                        mime_type, _ = mimetypes.guess_type(file_path)
+                        mime_type = mime_type or "application/octet-stream"
+                        
+                        file_type = "file"
+                        if mime_type.startswith("image/"): file_type = "image"
+                        elif mime_type.startswith("video/"): file_type = "video"
+                        elif mime_type.startswith("audio/"): file_type = "audio"
+                        elif "pdf" in mime_type: file_type = "pdf"
+                        # Fallback for common extensions if mime fails
+                        ext = os.path.splitext(filename)[1].lower()
+                        if ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']: file_type = "image"
+                        elif ext in ['.mp4', '.mov', '.webm']: file_type = "video"
+                        elif ext in ['.mp3', '.wav', '.ogg']: file_type = "audio"
+                        elif ext in ['.pdf']: file_type = "pdf"
+                        elif ext in ['.doc', '.docx', '.xls', '.xlsx', '.csv', '.txt']: file_type = "doc"
+                        
+                        files.append({
+                            "name": filename,
+                            "path": relative_path,
+                            "type": file_type,
+                            "mime": mime_type,
+                            "size": os.path.getsize(file_path),
+                            "timestamp": os.path.getmtime(file_path)
+                        })
+
+        # Sort files by timestamp descending
+        files.sort(key=lambda x: x["timestamp"], reverse=True)
+
+        # Extract links from history
+        links = []
+        seen_links = set()
+        link_pattern = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[^\s]*'
+        for msg in session.history:
+            # Ignore internal reasoning/system traces to keep links tab user-facing.
+            msg_type = str(msg.get("type", "default") or "default").strip().lower()
+            if msg_type != "default":
+                continue
+            if msg.get("role") not in {"user", "assistant"}:
+                continue
+            content = msg.get("content", "")
+            if not isinstance(content, str) or not content:
+                continue
+            if _is_internal_trace_content(content):
+                continue
+            found_links = re.findall(link_pattern, content)
+            for url in found_links:
+                # Remove trailing punctuation often captured by regex
+                clean_url = url.rstrip('.,;:)!?"\'')
+                if not clean_url or clean_url in seen_links:
+                    continue
+                seen_links.add(clean_url)
+                links.append({
+                    "url": clean_url,
+                    "timestamp": msg.get("timestamp"),
+                    "role": msg.get("role"),
+                    "message_type": msg_type
+                })
+
+        return {"files": files, "links": links}
+
+    @staticmethod
+    def _atomic_write_json(file_path: str, payload: Any) -> None:
+        """Writes JSON atomically to avoid partial/truncated files under concurrent saves."""
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        tmp_path = f"{file_path}.tmp.{os.getpid()}.{threading.get_ident()}"
+        try:
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(payload, f, indent=4, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, file_path)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _recover_chat_messages_from_raw(raw_content: str) -> List[Dict]:
+        """
+        Best-effort parser for corrupted chat.json:
+        extracts every decodable JSON object that looks like a chat message.
+        """
+        if not isinstance(raw_content, str) or not raw_content.strip():
+            return []
+
+        recovered: List[Dict] = []
+        decoder = json.JSONDecoder()
+        idx = 0
+        size = len(raw_content)
+
+        while idx < size:
+            if raw_content[idx] != "{":
+                idx += 1
+                continue
+            try:
+                obj, end = decoder.raw_decode(raw_content, idx)
+            except json.JSONDecodeError:
+                idx += 1
+                continue
+
+            if isinstance(obj, dict) and "role" in obj and "content" in obj:
+                recovered.append(obj)
+            idx = end
+
+        return recovered
+
+    def _load_chat_history_resilient(self, chat_file_path: str, session_id: str) -> List[Dict]:
+        """Loads chat history with corruption recovery + self-heal write-back."""
+        if not os.path.exists(chat_file_path):
+            return []
+
+        try:
+            with open(chat_file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+            logger.warning(
+                f"Invalid chat.json format for session {session_id}: expected list, got {type(data).__name__}"
+            )
+        except Exception as e:
+            logger.error(f"Error reading chat.json for {session_id}: {e}")
+
+        # Recovery path for malformed/truncated JSON.
+        try:
+            with open(chat_file_path, 'r', encoding='utf-8') as f:
+                raw = f.read()
+        except Exception as e:
+            logger.error(f"Failed to read raw chat.json for recovery ({session_id}): {e}")
+            return []
+
+        recovered = self._recover_chat_messages_from_raw(raw)
+        if not recovered:
+            logger.error(f"Could not recover messages from corrupted chat.json for {session_id}.")
+            return []
+
+        backup_path = f"{chat_file_path}.corrupt-{int(time.time())}.bak"
+        try:
+            shutil.copy2(chat_file_path, backup_path)
+            logger.warning(
+                f"Recovered {len(recovered)} messages from corrupted chat.json for {session_id}. "
+                f"Backup saved to {backup_path}."
+            )
+        except Exception as e:
+            logger.warning(f"Recovered chat.json for {session_id}, but backup copy failed: {e}")
+
+        try:
+            self._atomic_write_json(chat_file_path, recovered)
+        except Exception as e:
+            logger.error(f"Failed to persist recovered chat.json for {session_id}: {e}")
+
+        return recovered
+
+    def get_chat_history(self, session_id: str) -> List[Dict]:
+        """Returns full chat history from chat.json (authoritative source for message timeline)."""
+        chat_file_path = os.path.join(self.sessions_dir, session_id, "chat.json")
+        if not os.path.exists(chat_file_path):
+            # Self-heal missing chat.json from session.json snapshot if available.
+            session_file_path = os.path.join(self.sessions_dir, session_id, "session.json")
+            try:
+                if os.path.exists(session_file_path):
+                    with open(session_file_path, 'r', encoding='utf-8') as f:
+                        session_data = json.load(f)
+                    fallback_history = session_data.get("history", [])
+                    if isinstance(fallback_history, list):
+                        self._atomic_write_json(chat_file_path, fallback_history)
+                        logger.warning(
+                            f"chat.json was missing for {session_id}; recreated from session.json snapshot "
+                            f"with {len(fallback_history)} messages."
+                        )
+                        return fallback_history
+            except Exception as e:
+                logger.error(f"Failed to recreate missing chat.json for {session_id} via get_chat_history: {e}")
+            return []
+
+        return self._load_chat_history_resilient(chat_file_path, session_id)
+
+    @staticmethod
+    def _history_message_key(msg: Dict) -> Optional[tuple]:
+        """Best-effort stable key for deduplicating timeline entries."""
+        if not isinstance(msg, dict):
+            return None
+
+        msg_id = msg.get("id")
+        if msg_id:
+            return ("id", str(msg_id))
+
+        return (
+            "sig",
+            str(msg.get("role", "")),
+            str(msg.get("type", "")),
+            str(msg.get("timestamp", "")),
+            str(msg.get("content", "")),
+        )
+
+    def _merge_chat_history_append_only(self, disk_history: List[Dict], memory_history: List[Dict]) -> List[Dict]:
+        """
+        Append-only merge for chat timeline:
+        - Never removes existing disk entries.
+        - Appends only new unique messages from in-memory history.
+        """
+        merged = list(disk_history or [])
+        seen = set()
+
+        for msg in merged:
+            key = self._history_message_key(msg)
+            if key is not None:
+                seen.add(key)
+
+        for msg in (memory_history or []):
+            key = self._history_message_key(msg)
+            if key is not None and key in seen:
+                continue
+            merged.append(msg)
+            if key is not None:
+                seen.add(key)
+
+        return merged
+
     def _save_session(self, session: Session):
         try:
-            sess_dir = os.path.join(self.sessions_dir, session.session_id)
-            os.makedirs(sess_dir, exist_ok=True)
-            
-            # Save full history to chat.json FIRST and defensibly
-            chat_file_path = os.path.join(sess_dir, "chat.json")
-            full_history = session.history or []
-            
-            # Defensive check: if chat.json exists and has MORE messages than our current object,
-            # it might mean the session was loaded as a metadata-only stub (session.json) 
-            # and we are about to overwrite the full history with a subset.
-            if os.path.exists(chat_file_path):
-                try:
-                    with open(chat_file_path, 'r', encoding='utf-8') as f:
-                        disk_history = json.load(f)
-                        if len(disk_history) > len(full_history) and not session.summary:
-                            logger.warning(f"Session {session.session_id} history in memory ({len(full_history)}) is smaller than on disk ({len(disk_history)}). Merging or preserving disk history.")
-                            # For now, we trust Session object if it was loaded via get_session_robust
-                            pass
-                except Exception as e:
-                    logger.error(f"Error checking chat.json during save: {e}")
+            lock = self._get_or_create_session_lock(session.session_id)
+            with lock:
+                sess_dir = os.path.join(self.sessions_dir, session.session_id)
+                os.makedirs(sess_dir, exist_ok=True)
+                
+                # chat.json is append-only timeline; session.history is mutable context for the AI.
+                chat_file_path = os.path.join(sess_dir, "chat.json")
+                context_history = session.history if isinstance(session.history, list) else []
+                disk_history: List[Dict] = self._load_chat_history_resilient(chat_file_path, session.session_id)
 
-            with open(chat_file_path, 'w', encoding='utf-8') as f:
-                json.dump(full_history, f, indent=4, ensure_ascii=False)
+                merged_chat_history = self._merge_chat_history_append_only(disk_history, context_history)
+                if len(disk_history) > len(context_history):
+                    logger.warning(
+                        f"Append-only protection active for {session.session_id}: "
+                        f"kept {len(disk_history)} disk messages while context has {len(context_history)}."
+                    )
 
-            # Save recent context to session.json (metadata + last 50 msgs)
-            file_path = os.path.join(sess_dir, "session.json")
-            session_data = session.to_dict()
-            
-            # Keep only the last 50 messages in session.json to keep it light
-            session_data["history"] = full_history[-50:] if len(full_history) > 50 else full_history
-            
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(session_data, f, indent=4, ensure_ascii=False)
-            
-            # Update Index
-            if hasattr(self, 'index_manager'):
-                self.index_manager.register_session(session)
+                self._atomic_write_json(chat_file_path, merged_chat_history)
+
+                # Save recent mutable AI context to session.json (metadata + last 50 context messages)
+                file_path = os.path.join(sess_dir, "session.json")
+                session_data = session.to_dict()
+                
+                # Keep only the last 50 messages in session.json to keep it light
+                session_data["history"] = context_history[-50:] if len(context_history) > 50 else context_history
+                
+                self._atomic_write_json(file_path, session_data)
+                
+                # Update Index
+                if hasattr(self, 'index_manager'):
+                    self.index_manager.register_session(session)
         except Exception as e:
             logger.error(f"Error saving session {session.session_id}: {e}")
 
@@ -400,17 +741,25 @@ class AgentOrchestrator:
             if os.path.exists(file_path):
                 with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    
-                # Load full history from chat.json if it exists
+
+                session_history = data.get("history", [])
+                if not isinstance(session_history, list):
+                    session_history = []
+
+                # Validate/repair chat timeline file if it exists (context still comes from session.json).
                 chat_file_path = os.path.join(self.sessions_dir, session_id, "chat.json")
                 if os.path.exists(chat_file_path):
+                    _ = self._load_chat_history_resilient(chat_file_path, session_id)
+                else:
+                    # Self-heal missing chat.json using session.json history snapshot.
                     try:
-                        with open(chat_file_path, 'r', encoding='utf-8') as f:
-                            full_history = json.load(f)
-                            data["history"] = full_history
+                        self._atomic_write_json(chat_file_path, session_history)
+                        logger.warning(f"chat.json was missing for {session_id}; recreated from session.json history.")
                     except Exception as e:
-                        logger.error(f"Error loading chat.json for {session_id}: {e}")
-                        
+                        logger.error(f"Failed to recreate missing chat.json for {session_id}: {e}")
+
+                # Context source of truth remains session.json.
+                data["history"] = session_history
                 return Session.from_dict(data)
         except Exception as e:
             logger.error(f"Error loading session {session_id}: {e}")
@@ -531,11 +880,8 @@ class AgentOrchestrator:
         # Get or Create Session
         session = self.get_session_robust(session_id)
         
-        # Get or Create Session Lock
-        if session_id not in self.session_locks:
-            self.session_locks[session_id] = threading.Lock()
-        
-        lock = self.session_locks[session_id]
+        # Get or create session lock (reentrant to safely nest persistence calls).
+        lock = self._get_or_create_session_lock(session_id)
         
         # Concurrency Guard
         # Increased timeout to 120s to accommodate long LLM turns/dashboard generation
@@ -607,7 +953,18 @@ class AgentOrchestrator:
             last_action_reason = None
             last_action_id = None
             last_action_output = None
+            last_action_structured: Optional[Dict[str, Any]] = None
+            last_generated_attachment_paths: List[str] = []
+            browser_open_recovery_attempts = 0
+            browser_control_recovery_attempts = 0
+            media_play_handoff_attempts = 0
+            media_request = self._is_media_play_request(user_input)
+            media_vision_fallback_attempts = 0
             final_response = "Desculpe, não consegui processar sua solicitação após o limite de passos."
+            final_structured_attachments = None
+            final_response_persisted = False
+            final_response_streamed = False
+            stream_completed = False
 
             try:
                 while loops < 15:
@@ -703,11 +1060,41 @@ class AgentOrchestrator:
                     if len(previous_actions) > 5: previous_actions.pop(0)
                     if len(previous_actions) >= 3 and all(s == current_signature for s in previous_actions[-3:]):
                         logger.warning(f"Loop detected (3 identical actions/params): {current_signature}. Breaking.")
-                        if callbacks and 'send_status' in callbacks:
-                            callbacks['send_status']('error', {'code': 'loop_break', 'message': 'Detectei repetitividade exata sem progresso. Por favor, tente reformular o pedido ou fornecer mais detalhes.', 'action': plan.action_id})
-                        
-                        final_response = "Detectei repetitividade exata sem progresso. Por favor, tente reformular o pedido ou fornecer mais detalhes."
-                        plan = ActionPlan(action_id='reply', args={}, response_text=final_response, source='internal')
+                        recovered_reply = self._reply_from_last_success(
+                            action_id=plan.action_id,
+                            structured_result=last_action_structured,
+                            raw_output=last_action_output,
+                        ) if last_action_status == "success" else None
+
+                        if recovered_reply:
+                            if callbacks and 'send_status' in callbacks:
+                                callbacks['send_status'](
+                                    'executing',
+                                    {
+                                        'code': 'loop_break_success',
+                                        'message': f"Ação repetida detectada em {plan.action_id}; consolidando resposta final com o último resultado válido.",
+                                        'action': plan.action_id
+                                    }
+                                )
+                            final_response = recovered_reply
+                        else:
+                            if callbacks and 'send_status' in callbacks:
+                                callbacks['send_status'](
+                                    'error',
+                                    {
+                                        'code': 'loop_break',
+                                        'message': 'Detectei repetitividade exata sem progresso. Por favor, tente reformular o pedido ou fornecer mais detalhes.',
+                                        'action': plan.action_id
+                                    }
+                                )
+                            final_response = "Detectei repetitividade exata sem progresso. Por favor, tente reformular o pedido ou fornecer mais detalhes."
+                        plan = ActionPlan(
+                            action_id='reply',
+                            args={},
+                            response_text=final_response,
+                            source='internal',
+                            attachments=(last_generated_attachment_paths or None),
+                        )
                     
                     # 2. Action Repetition (3 times in last 5 steps) - Soft Warning
                     action_history = [s[0] for s in previous_actions]
@@ -722,13 +1109,35 @@ class AgentOrchestrator:
                     # 3. Action Repetition (4 times in last 5 steps) - Hard Break
                     if action_history.count(plan.action_id) >= 4:
                          logger.warning(f"Action loop detected (Action '{plan.action_id}' repeated 4/5 times). Breaking.")
-                         
+                         recovered_reply = self._reply_from_last_success(
+                             action_id=plan.action_id,
+                             structured_result=last_action_structured,
+                             raw_output=last_action_output,
+                         ) if last_action_status == "success" else None
+
                          if callbacks and 'send_status' in callbacks:
-                             callbacks['send_status']('error', {'code': 'loop_break', 'message': f"Parece que estou travado tentando usar a ação '{plan.action_id}' repetidamente sem sucesso. Vou parar para evitar loop infinito.", 'action': plan.action_id})
-                             
-                         final_response = f"Parece que estou travado tentando usar a ação '{plan.action_id}' repetidamente sem sucesso. Vou parar para evitar loop infinito."
+                             callbacks['send_status'](
+                                 'error',
+                                 {
+                                     'code': 'loop_break',
+                                     'message': (
+                                         f"Parece que estou travado tentando usar a ação '{plan.action_id}' repetidamente."
+                                         if recovered_reply else
+                                         f"Parece que estou travado tentando usar a ação '{plan.action_id}' repetidamente sem sucesso. Vou parar para evitar loop infinito."
+                                     ),
+                                     'action': plan.action_id
+                                 }
+                             )
+
+                         final_response = recovered_reply or f"Parece que estou travado tentando usar a ação '{plan.action_id}' repetidamente sem sucesso. Vou parar para evitar loop infinito."
                          # For a hard break, we force a valid reply object for internal history consistency
-                         plan = ActionPlan(action_id='reply', args={}, response_text=final_response, source='internal')
+                         plan = ActionPlan(
+                             action_id='reply',
+                             args={},
+                             response_text=final_response,
+                             source='internal',
+                             attachments=(last_generated_attachment_paths or None),
+                         )
                          plan.thought = "Loop de ações detectado. Interrompendo para evitar gasto excessivo de tokens e tempo."
                     
                     # Add current turn to history for context
@@ -742,6 +1151,109 @@ class AgentOrchestrator:
                     history_entry = json.dumps(history_data, ensure_ascii=False)
                     session.add_message("assistant", history_entry, msg_type="reasoning")
 
+                    # Deterministic guard against "fake completion" in operational media requests.
+                    # If first plan is reply for a playback request, force an actionable search first.
+                    if (
+                        plan.action_id == 'reply'
+                        and plan.source != 'internal'
+                        and last_action_id is None
+                        and self._is_media_play_request(user_input)
+                    ):
+                        forced_action, forced_query = self._derive_media_search_action_and_query(user_input)
+                        if forced_action and forced_query:
+                            logger.info(
+                                "Reply-only plan overridden by deterministic media handoff | action=%s query=%s",
+                                forced_action,
+                                forced_query,
+                            )
+                            plan = ActionPlan(
+                                action_id=forced_action,
+                                args={"query": forced_query},
+                                confidence=1.0,
+                                source='internal',
+                                thought=(
+                                    "User requested playback. Forcing media search action "
+                                    "before accepting final textual reply."
+                                ),
+                            )
+
+                    # Deterministic guard for first-step browser open with plain-text query in media requests.
+                    # Prevents "open search page and stop" behavior and avoids unnecessary browser-use loops.
+                    if (
+                        plan.action_id == 'browser.automator.open'
+                        and plan.source != 'internal'
+                        and last_action_id is None
+                        and self._is_media_play_request(user_input)
+                    ):
+                        open_url = ""
+                        if isinstance(plan.args, dict):
+                            open_url = str(
+                                plan.args.get("url")
+                                or plan.args.get("link")
+                                or plan.args.get("uri")
+                                or ""
+                            ).strip()
+                        if not (open_url.startswith("http://") or open_url.startswith("https://")):
+                            forced_action, forced_query = self._derive_media_search_action_and_query(user_input)
+                            if forced_action and forced_query:
+                                logger.info(
+                                    "browser.automator.open (query-like) overridden by media search | action=%s query=%s",
+                                    forced_action,
+                                    forced_query,
+                                )
+                                plan = ActionPlan(
+                                    action_id=forced_action,
+                                    args={"query": forced_query},
+                                    confidence=1.0,
+                                    source='internal',
+                                    thought=(
+                                        "Playback request detected. Running deterministic media search "
+                                        "before any generic browser open step."
+                                    ),
+                                )
+
+                    # Strong first-step gate for playback requests: avoid drifting to unrelated actions
+                    # (e.g., web.search.discover) when deterministic media actions are available.
+                    if (
+                        plan.source != 'internal'
+                        and last_action_id is None
+                        and self._is_media_play_request(user_input)
+                    ):
+                        allowed_first_step = False
+                        if plan.action_id in {"youtube.search.find", "deezer.search.search", "spotify.search.search"}:
+                            allowed_first_step = True
+                        elif plan.action_id == "browser.automator.play_url":
+                            raw_url = ""
+                            if isinstance(plan.args, dict):
+                                raw_url = str(
+                                    plan.args.get("url")
+                                    or plan.args.get("link")
+                                    or plan.args.get("uri")
+                                    or ""
+                                ).strip()
+                            if raw_url.startswith("http://") or raw_url.startswith("https://"):
+                                allowed_first_step = True
+
+                        if not allowed_first_step:
+                            forced_action, forced_query = self._derive_media_search_action_and_query(user_input)
+                            if forced_action and forced_query:
+                                logger.info(
+                                    "First-step media gate overriding action '%s' -> '%s' (query=%s)",
+                                    plan.action_id,
+                                    forced_action,
+                                    forced_query,
+                                )
+                                plan = ActionPlan(
+                                    action_id=forced_action,
+                                    args={"query": forced_query},
+                                    confidence=1.0,
+                                    source='internal',
+                                    thought=(
+                                        "Playback request detected. Forcing deterministic media start "
+                                        "action to avoid non-productive first-step drift."
+                                    ),
+                                )
+
                     if plan.action_id == 'reply':
                         final_response = self._ground_reply_against_last_result(
                             response_text=plan.response_text or "",
@@ -752,16 +1264,24 @@ class AgentOrchestrator:
                         )
                         
                         # Process attachments
-                        structured_attachments = self._standardize_attachments(session, plan.attachments) if plan.attachments else None
+                        attachment_inputs = plan.attachments or last_generated_attachment_paths
+                        structured_attachments = self._standardize_attachments(session, attachment_inputs) if attachment_inputs else None
+
+                        if not final_response and structured_attachments:
+                            final_response = "Aqui está o arquivo solicitado."
                         
                         session.add_message("assistant", final_response, attachments=structured_attachments)
+                        final_structured_attachments = structured_attachments
+                        final_response_persisted = True
                         session.scratchpad = ""
                         session.plan = []
                         if callbacks and 'send_response' in callbacks:
                             callbacks['send_response'](final_response, is_chunk=True, attachments=structured_attachments)
+                            final_response_streamed = True
                                 
                         if callbacks and 'send_complete' in callbacks:
                             callbacks['send_complete']()
+                            stream_completed = True
                         break
 
                     if plan.action_id == 'error':
@@ -770,16 +1290,27 @@ class AgentOrchestrator:
                             
                         final_response = f"Desculpe, ocorreu um erro durante o processamento: {plan.thought}"
                         session.add_message("assistant", final_response)
+                        final_response_persisted = True
+                        if callbacks and 'send_response' in callbacks:
+                            callbacks['send_response'](final_response, is_chunk=True)
+                            final_response_streamed = True
                         
                         if callbacks and 'send_complete' in callbacks:
                             callbacks['send_complete']()
+                            stream_completed = True
                         break
                     
-                    # Acknowledge the intention if a response_text is provided with an action
-                    if plan.response_text:
-                        session.add_message("assistant", plan.response_text)
-                        if callbacks and 'send_response' in callbacks:
-                            callbacks['send_response'](plan.response_text, is_chunk=True)
+                    # Do not persist/send non-final response_text for action plans.
+                    # Intermediate text belongs to status/reasoning, not final chat timeline.
+                    if plan.response_text and callbacks and 'send_status' in callbacks:
+                        callbacks['send_status'](
+                            'executing',
+                            {
+                                'code': 'ack',
+                                'message': str(plan.response_text)[:220],
+                                'action': plan.action_id
+                            }
+                        )
 
                     # HITL Check
                     if self.safety_service.is_sensitive(plan.action_id, plan.args, self.skill_registry):
@@ -788,6 +1319,7 @@ class AgentOrchestrator:
                         session.add_message("assistant", approval_msg)
                         if callbacks and 'send_complete' in callbacks:
                             callbacks['send_complete']()
+                            stream_completed = True
                         return approval_msg
 
                     # Execute via SkillRegistry
@@ -808,6 +1340,7 @@ class AgentOrchestrator:
                         "callbacks": callbacks,
                         "browser_driver": self.browser_driver,
                         "session_id": session_id,
+                        "user_input": user_input,
                     }
                     
                     # Access Control: Pre-Dispatch Gate
@@ -831,10 +1364,13 @@ class AgentOrchestrator:
                     raw_result = self._serialize_action_result(result)
                     truncated_result = raw_result[:2000] + "..." if len(raw_result) > 2000 else raw_result
                     result_status, result_reason = self._assess_action_result(result, raw_result)
+                    structured_result = self._extract_structured_result(result, raw_result)
                     last_action_status = result_status
                     last_action_reason = result_reason
                     last_action_id = plan.action_id
                     last_action_output = truncated_result
+                    last_action_structured = structured_result
+                    last_generated_attachment_paths = self._extract_attachment_paths_from_result(structured_result)
 
                     if result_status == "failure":
                         failure_signature = (plan.action_id, param_str, self._signature_from_result(raw_result))
@@ -873,6 +1409,219 @@ class AgentOrchestrator:
                     # Log the observation for diagnostic visibility (Professional CLI/assistant.log)
                     logger.info(observation)
 
+                    # Fast-path for vision outputs: avoid unnecessary re-reasoning loops.
+                    # Vision skills already return user-facing text in "text".
+                    if result_status == "success" and plan.action_id.startswith("vision."):
+                        recovered_reply = self._reply_from_last_success(
+                            action_id=plan.action_id,
+                            structured_result=last_action_structured,
+                            raw_output=last_action_output,
+                        )
+                        if recovered_reply:
+                            final_response = recovered_reply
+                            final_structured_attachments = self._standardize_attachments(
+                                session,
+                                last_generated_attachment_paths,
+                            ) if last_generated_attachment_paths else None
+                            session.add_message("assistant", final_response, attachments=final_structured_attachments)
+                            final_response_persisted = True
+                            session.scratchpad = ""
+                            session.plan = []
+                            if callbacks and 'send_response' in callbacks:
+                                callbacks['send_response'](
+                                    final_response,
+                                    is_chunk=True,
+                                    attachments=final_structured_attachments,
+                                )
+                                final_response_streamed = True
+                                if callbacks and 'send_complete' in callbacks:
+                                    callbacks['send_complete']()
+                                    stream_completed = True
+                                break
+
+                    # Deterministic media handoff: for "play/reproduzir" intents, do not wait for the LLM
+                    # to decide the open/play step after a successful search.
+                    if (
+                        result_status == "success"
+                        and plan.action_id in {"youtube.search.find", "deezer.search.search", "spotify.search.search"}
+                        and isinstance(last_action_structured, dict)
+                        and media_play_handoff_attempts < 2
+                    ):
+                        request_text = (user_input or "").lower()
+                        wants_play = any(
+                            cue in request_text
+                            for cue in ("reproduz", "reproduzir", "reporduz", "toca", "tocar", "play", "ouvir")
+                        )
+                        best = last_action_structured.get("best") if isinstance(last_action_structured.get("best"), dict) else None
+                        best_url = (best.get("url") if best else None) or last_action_structured.get("url")
+                        if wants_play and isinstance(best_url, str) and best_url.strip():
+                            media_play_handoff_attempts += 1
+                            logger.info(
+                                "Auto handoff to browser.automator.play_url using best search result: %s",
+                                best_url,
+                            )
+                            plan = ActionPlan(
+                                action_id="browser.automator.play_url",
+                                args={"url": best_url.strip()},
+                                confidence=1.0,
+                                source="internal",
+                                thought="Search succeeded and user requested playback. Handing off directly to browser playback.",
+                            )
+                            continue
+
+                    # Fast-path for media open flows when playback is explicitly confirmed.
+                    if result_status == "success" and plan.action_id in {"browser.automator.open", "browser.automator.play_url"}:
+                        if isinstance(last_action_structured, dict) and last_action_structured.get("playback_confirmed") is True:
+                            recovered_reply = self._reply_from_last_success(
+                                action_id=plan.action_id,
+                                structured_result=last_action_structured,
+                                raw_output=last_action_output,
+                            )
+                            if recovered_reply:
+                                final_response = recovered_reply
+                                session.add_message("assistant", final_response)
+                                final_response_persisted = True
+                                session.scratchpad = ""
+                                session.plan = []
+                                if callbacks and 'send_response' in callbacks:
+                                    callbacks['send_response'](final_response, is_chunk=True)
+                                    final_response_streamed = True
+                                if callbacks and 'send_complete' in callbacks:
+                                    callbacks['send_complete']()
+                                    stream_completed = True
+                                break
+
+                    # Strict completion gate for playback requests:
+                    # only consider completed when browser/system exposes active playback.
+                    if (
+                        media_request
+                        and plan.action_id in {"browser.automator.play_url", "browser.automator.control"}
+                        and isinstance(last_action_structured, dict)
+                    ):
+                        if last_action_structured.get("playback_confirmed") is True:
+                            final_response = "Reprodução iniciada e confirmada no player do navegador."
+                            session.add_message("assistant", final_response)
+                            final_response_persisted = True
+                            if callbacks and 'send_response' in callbacks:
+                                callbacks['send_response'](final_response, is_chunk=True)
+                                final_response_streamed = True
+                            if callbacks and 'send_complete' in callbacks:
+                                callbacks['send_complete']()
+                                stream_completed = True
+                            break
+
+                    # General completion-oriented recovery:
+                    # when "open" reports partial completion, continue autonomously on the current page
+                    # instead of stopping at "page opened".
+                    if plan.action_id in {"browser.automator.open", "browser.automator.play_url"} and isinstance(last_action_structured, dict):
+                        open_status = str(last_action_structured.get("status") or "").strip().lower()
+                        playback_confirmed = last_action_structured.get("playback_confirmed")
+                        is_partial = open_status == "partial" or playback_confirmed is False
+                        if is_partial and browser_open_recovery_attempts < 2:
+                            browser_open_recovery_attempts += 1
+                            open_url = str(last_action_structured.get("url") or "").lower()
+                            if "youtube.com" in open_url or "deezer.com" in open_url or "spotify.com" in open_url:
+                                logger.info(
+                                    "Open returned partial completion for media URL. Triggering browser.automator.control (play) attempt %s.",
+                                    browser_open_recovery_attempts,
+                                )
+                                plan = ActionPlan(
+                                    action_id="browser.automator.control",
+                                    args={"action": "play"},
+                                    confidence=1.0,
+                                    source="internal",
+                                    thought="Partial playback after open. Trying deterministic media play control before vision-based automation.",
+                                )
+                                continue
+                            logger.info(
+                                "Open returned partial completion. Triggering autonomous continuation attempt %s.",
+                                browser_open_recovery_attempts,
+                            )
+                            continuation_task = (
+                                f"You already opened the target page. Continue until the user request is actually completed: "
+                                f"'{user_input}'. "
+                                "On the current page, handle consent/cookie banners if present, click the primary action button "
+                                "(play/start/confirm as appropriate), and verify outcome using visible page state. "
+                                "If completion is blocked, stop and return a concise blocker explanation."
+                            )
+                            plan = ActionPlan(
+                                action_id="browser.automator.automate",
+                                args={"task": continuation_task},
+                                confidence=1.0,
+                                source="internal",
+                                thought="Detected partial completion after opening page. Continuing autonomous execution to finish the task.",
+                            )
+                            media_vision_fallback_attempts += 1
+                            continue
+
+                    # If deterministic play control still can't confirm playback,
+                    # escalate to vision automation on the same active tab.
+                    if plan.action_id == "browser.automator.control" and isinstance(last_action_structured, dict):
+                        control_action = str(last_action_structured.get("control_action") or "").lower()
+                        control_status = str(last_action_structured.get("status") or "").lower()
+                        playback_confirmed = last_action_structured.get("playback_confirmed")
+                        needs_recovery = (
+                            control_action == "play"
+                            and (
+                                control_status in {"error", "partial"}
+                                or playback_confirmed is False
+                            )
+                        )
+                        if needs_recovery and browser_control_recovery_attempts < 1:
+                            browser_control_recovery_attempts += 1
+                            logger.info(
+                                "Play control could not confirm playback. Escalating to browser.automator.automate (attempt %s).",
+                                browser_control_recovery_attempts,
+                            )
+                            continuation_task = (
+                                f"You are already on the correct media page. Finish the user request: '{user_input}'. "
+                                "Do not open a new tab. Reuse the current page, handle consent/cookie overlays, "
+                                "click the visible play/start control, and verify playback using on-page media state. "
+                                "If blocked, explain clearly what you see on screen and capture a screenshot path."
+                            )
+                            plan = ActionPlan(
+                                action_id="browser.automator.automate",
+                                args={"task": continuation_task},
+                                confidence=1.0,
+                                source="internal",
+                                thought="Deterministic play control did not verify playback. Escalating to vision automation on current tab.",
+                            )
+                            media_vision_fallback_attempts += 1
+                            continue
+
+                    # Stop retry storm for media requests after vision fallback failure.
+                    if (
+                        media_request
+                        and plan.action_id in {"browser.automator.automate", "browser.automator.internal_search"}
+                        and result_status == "failure"
+                    ):
+                        failure_text = (last_action_output or "").lower()
+                        quota_hit = any(
+                            marker in failure_text
+                            for marker in (
+                                "402",
+                                "prompt tokens limit exceeded",
+                                "requires more credits",
+                                "resource_exhausted",
+                                "falta de créditos",
+                            )
+                        )
+                        if quota_hit or media_vision_fallback_attempts >= 1:
+                            final_response = (
+                                "Não foi possível concluir a reprodução automaticamente. "
+                                "O player não foi confirmado em execução e a automação visual falhou por limite/cota do provedor. "
+                                "A tarefa foi encerrada sem sucesso para evitar loops."
+                            )
+                            session.add_message("assistant", final_response)
+                            final_response_persisted = True
+                            if callbacks and 'send_response' in callbacks:
+                                callbacks['send_response'](final_response, is_chunk=True)
+                                final_response_streamed = True
+                            if callbacks and 'send_complete' in callbacks:
+                                callbacks['send_complete']()
+                                stream_completed = True
+                            break
+
                     # Hard guard for repeated identical failures.
                     if repeated_failure_count >= 3:
                         logger.warning(
@@ -883,10 +1632,13 @@ class AgentOrchestrator:
                             "Preciso que você refine o objetivo ou autorize uma estratégia diferente."
                         )
                         session.add_message("assistant", final_response)
+                        final_response_persisted = True
                         if callbacks and 'send_response' in callbacks:
                             callbacks['send_response'](final_response, is_chunk=True)
+                            final_response_streamed = True
                         if callbacks and 'send_complete' in callbacks:
                             callbacks['send_complete']()
+                            stream_completed = True
                         break
                     
                     # Reset plan for next iteration to allow re-reasoning
@@ -898,6 +1650,7 @@ class AgentOrchestrator:
                     final_response = "Concluí as operações internas, mas não gerei uma resposta final. Tudo parece estar em ordem."
                     if callbacks and 'send_response' in callbacks:
                         callbacks['send_response'](final_response, is_chunk=True)
+                        final_response_streamed = True
 
             except Exception as e:
                 logger.error(f"Error in reasoning loop: {e}")
@@ -906,8 +1659,24 @@ class AgentOrchestrator:
                     callbacks['send_status']('error', {'code': 'system_error', 'message': f"Desculpe, tive um problema técnico ao processar sua solicitação: {str(e)}"})
                     
                 final_response = f"Desculpe, tive um problema técnico ao processar sua solicitação: {str(e)}"
-                if callbacks and 'send_complete' in callbacks:
-                    callbacks['send_complete']()
+
+            # Guarantee final response lifecycle (persist -> stream -> complete) in all loop exit paths.
+            if final_response and not final_response_persisted and not session.pending_action:
+                session.add_message("assistant", final_response, attachments=final_structured_attachments)
+                final_response_persisted = True
+
+            if callbacks and 'send_response' in callbacks and final_response and not final_response_streamed and not session.pending_action:
+                callbacks['send_response'](final_response, is_chunk=True, attachments=final_structured_attachments)
+                final_response_streamed = True
+
+            if callbacks and 'send_complete' in callbacks and not stream_completed and not session.pending_action:
+                callbacks['send_complete']()
+                stream_completed = True
+
+            # Persist final assistant output before optional history pruning/consolidation.
+            # This guarantees reload consistency even if session context is compressed.
+            if final_response_persisted:
+                self._save_session(session)
 
             # 5. Check for Memory Consolidation (Token-based)
             # Threshold check: > 3500 tokens
@@ -1073,6 +1842,100 @@ class AgentOrchestrator:
         return cleaned[:240]
 
     @staticmethod
+    def _reply_from_last_success(
+        *,
+        action_id: Optional[str],
+        structured_result: Optional[Dict[str, Any]],
+        raw_output: Optional[str],
+    ) -> Optional[str]:
+        """
+        Builds a user-facing reply from the latest successful tool output.
+        Used when loop guard triggers after repeated successful actions.
+        """
+        payload = structured_result if isinstance(structured_result, dict) else {}
+
+        text = payload.get("text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+
+        results = payload.get("results")
+        if isinstance(results, list) and results:
+            lines = ["Encontrei estes resultados:"]
+            for idx, item in enumerate(results[:8], start=1):
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title") or item.get("name") or item.get("label") or "Resultado")
+                url = str(item.get("url") or item.get("link") or "").strip()
+                channel = str(item.get("channel") or item.get("artist") or "").strip()
+                line = f"{idx}. {title}"
+                if channel:
+                    line += f" ({channel})"
+                if url:
+                    line += f"\n{url}"
+                lines.append(line)
+            if len(lines) > 1:
+                return "\n\n".join(lines)
+
+        best = payload.get("best")
+        if isinstance(best, dict):
+            best_url = str(best.get("url") or "").strip()
+            best_title = str(best.get("title") or best.get("name") or "").strip()
+            if best_url or best_title:
+                if best_url and best_title:
+                    return f"Melhor resultado encontrado: {best_title}\n{best_url}"
+                return f"Melhor resultado encontrado:\n{best_url or best_title}"
+
+        # Last resort: avoid dumping huge JSON to user.
+        raw = (raw_output or "").strip()
+        if raw and not raw.startswith("{"):
+            excerpt = raw if len(raw) <= 700 else raw[:700] + "..."
+            return excerpt
+
+        action = action_id or "a ação solicitada"
+        return f"Concluí {action} com sucesso, mas não consegui consolidar automaticamente a resposta final."
+
+    @staticmethod
+    def _extract_attachment_paths_from_result(structured_result: Optional[Dict[str, Any]]) -> List[str]:
+        if not isinstance(structured_result, dict):
+            return []
+
+        candidates: List[str] = []
+
+        direct_path = structured_result.get("path")
+        if isinstance(direct_path, str) and direct_path.strip():
+            candidates.append(direct_path.strip())
+
+        file_obj = structured_result.get("file")
+        if isinstance(file_obj, dict):
+            for key in ("path", "file_path", "url", "name"):
+                value = file_obj.get(key)
+                if isinstance(value, str) and value.strip():
+                    candidates.append(value.strip())
+
+        files = structured_result.get("files")
+        if isinstance(files, list):
+            for item in files:
+                if isinstance(item, str) and item.strip():
+                    candidates.append(item.strip())
+                elif isinstance(item, dict):
+                    for key in ("path", "file_path", "url", "name"):
+                        value = item.get(key)
+                        if isinstance(value, str) and value.strip():
+                            candidates.append(value.strip())
+                            break
+
+        unique_existing: List[str] = []
+        seen = set()
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if os.path.isfile(candidate):
+                unique_existing.append(candidate)
+
+        return unique_existing
+
+    @staticmethod
     def _looks_like_success_claim(text: str) -> bool:
         t = (text or "").lower()
         success_markers = (
@@ -1107,6 +1970,44 @@ class AgentOrchestrator:
             "could not",
         )
         return any(marker in t for marker in failure_markers)
+
+    @staticmethod
+    def _is_media_play_request(user_input: str) -> bool:
+        text = (user_input or "").lower()
+        if not text:
+            return False
+        play_cues = ("reproduz", "reproduzir", "reporduz", "toca", "tocar", "play", "ouvir", "abre", "abrir")
+        provider_cues = ("youtube", "youtbe", "ytoutbe", "yt music", "youtube music", "deezer", "spotify")
+        return any(c in text for c in play_cues) and any(p in text for p in provider_cues)
+
+    @staticmethod
+    def _derive_media_search_action_and_query(user_input: str) -> tuple[Optional[str], str]:
+        text = (user_input or "").strip()
+        lower = text.lower()
+
+        action_id: Optional[str] = None
+        if "deezer" in lower:
+            action_id = "deezer.search.search"
+        elif "spotify" in lower:
+            action_id = "spotify.search.search"
+        elif any(token in lower for token in ("youtube", "youtbe", "ytoutbe", "yt music", "youtube music")):
+            action_id = "youtube.search.find"
+
+        cleaned = lower
+        patterns = [
+            r"\b(reproduz|reproduzir|reporduz|toca|tocar|play|ouvir|abre|abrir)\b",
+            r"\b(no|na|do|da|de|em|para|a|o|uma|um)\b",
+            r"\b(youtube music|ytoutbe music|yt music|youtube|youtbe|ytoutbe|deezer|spotify)\b",
+            r"\b(musica|música|music)\b",
+            r"\s+",
+        ]
+        for p in patterns[:-1]:
+            cleaned = re.sub(p, " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(patterns[-1], " ", cleaned).strip(" \"'")
+        if not cleaned:
+            cleaned = text.strip()
+
+        return action_id, cleaned
 
     @classmethod
     def _ground_reply_against_last_result(

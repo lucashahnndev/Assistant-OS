@@ -303,11 +303,16 @@ class TelegramDriver(BaseDriver):
                 # Fetch profile picture if missing
                 session = self.kernel.orchestrator.get_session_robust(session_id)
                 if session and not getattr(session, 'profile_picture', None):
-                    session_media_dir = os.path.join(self.kernel.orchestrator.sessions_dir, session_id, "media")
+                    session_media_dir = os.path.join(
+                        self.kernel.orchestrator.sessions_dir,
+                        session_id,
+                        "media",
+                        "profile_picture",
+                    )
                     os.makedirs(session_media_dir, exist_ok=True)
                     target_path = os.path.join(session_media_dir, f"avatar_{user_id}.jpg")
                     if self.bot.download_user_profile_photo(user_id, target_path):
-                        session.profile_picture = f"media/avatar_{user_id}.jpg"
+                        session.profile_picture = f"media/profile_picture/avatar_{user_id}.jpg"
                         self.kernel.orchestrator._save_session(session)
                         
                         # Notify index manager to update its cache

@@ -30,6 +30,14 @@ class WikipediaSearchSkill(SkillBase):
         return re.sub(r"\s+", " ", str(value or "")).strip()
 
     @staticmethod
+    def _resolve_query(params: Dict[str, Any]) -> str:
+        for key in ("query", "search_query", "searchQuery", "q", "term", "text"):
+            value = params.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    @staticmethod
     def _clamp_limit(value: Any, default: int = 3) -> int:
         try:
             n = int(value)
@@ -248,13 +256,13 @@ class WikipediaSearchSkill(SkillBase):
         action = action_id.split(".")[-1]
         if action != "search":
             return self._result_error(
-                query=self._sanitize_text(params.get("query")),
+                query=self._sanitize_text(self._resolve_query(params)),
                 language="pt",
                 error="UNKNOWN_ACTION",
                 message=f"Ação desconhecida para wikipedia_search: {action_id}",
             )
 
-        query = self._sanitize_text(params.get("query"))
+        query = self._sanitize_text(self._resolve_query(params))
         if not query:
             return self._result_error(
                 query="",
@@ -264,7 +272,10 @@ class WikipediaSearchSkill(SkillBase):
             )
 
         language, explicit_language = self._resolve_language(params)
-        limit = self._clamp_limit(params.get("limit") or self.config.get("defaults", {}).get("limit", 3), default=3)
+        limit = self._clamp_limit(
+            params.get("limit") or params.get("max_results") or params.get("maxResults") or self.config.get("defaults", {}).get("limit", 3),
+            default=3,
+        )
         max_chars_per_page = self._clamp_chars(
             params.get("max_chars_per_page") or self.config.get("defaults", {}).get("max_chars_per_page", 4500),
             default=4500,

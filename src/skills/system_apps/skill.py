@@ -150,7 +150,11 @@ class SystemAppsSkill(SkillBase):
             return False
 
     def _resolve_target(self, params: Dict[str, Any]) -> str:
-        return str(params.get("program_name") or params.get("query") or "").strip()
+        for key in ("program_name", "query", "search_query", "searchQuery", "q", "target", "app", "application", "name"):
+            value = params.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
 
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         action = action_id.split(".")[-1]

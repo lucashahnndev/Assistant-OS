@@ -1,24 +1,223 @@
-
 {
-    "Wheather": {
-        "apiKey": "https://api.openweathermap.org/data/2.5/weather?lang=pt_br&appid={YOUR API KEY}&lat={YOUR LATITUDE}&lon={YOUR LONGITUDE}",
-        "lat": "YOUR LATITUDE",
-        "lon": "YOUR LONGITUDE"
+    "logging": {
+        "level": "INFO",
+        "separate_files": true,
+        "services": {
+            "llm": "DEBUG",
+            "telegram": "INFO",
+            "web": "INFO",
+            "api": "INFO",
+            "skills": "INFO",
+            "interface": "INFO"
+        }
     },
-    "chatterbot": {
-        "nameBot": "Assistant"
+    "playback": {
+        "enabled": true,
+        "persist": true,
+        "ttl_hours": 24,
+        "max_total_mb": 512,
+        "persist_on_success": true,
+        "persist_on_error": true
     },
-    "telegram": {
-        "botkey": "YOUR BOT KEY"
+    "interfaces": {
+        "voice": {
+            "enabled": false,
+            "wake_word": "atlas"
+        },
+        "telegram": {
+            "enabled": true,
+            "token": "6510046132:AAHPhIIiTPmFcnzPueNhb9hEN4ygz4gc36Q",
+            "allowed_users": []
+        },
+        "server": {
+            "enabled": true,
+            "host": "0.0.0.0",
+            "port": 8000,
+            "cors_origins": [
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+                "http://192.168.0.9:5173",
+                ""
+            ]
+        }
     },
-    "openai": {
-        "organization_id":"YOUR ORGANIZATION ID ",
-        "token": "YOUR API KEY"
+    "frontend": {
+        "host": "localhost",
+        "port": 5173,
+        "public_mode": true
     },
-    "google_cloud": {
-        "token": "YOUR GOOGLE CLOUD TOKEN"
+    "cortex": {
+        "chat": {
+            "provider": "openrouter",
+            "providers": {
+                "google": {
+                    "api_key": "AIzaSyCDy8pulx_DXA0E3NYyRIVSmWkmIOPZrts",
+                    "model": "gemini-2.0-flash"
+                },
+                "openrouter": {
+                    "api_key": "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",
+                    "model": "arcee-ai/trinity-large-preview:free"
+                },
+                "openai": {
+                    "api_key": "ENV_OPENAI_API_KEY",
+                    "organization_id": "ENV_OPENAI_ORG_ID",
+                    "model": "gpt-4o-mini"
+                },
+                "ollama": {
+                    "model": "llama3",
+                    "url": "http://localhost:11434/api/chat"
+                }
+            }
+        },
+        "vision": {
+            "provider": "openrouter",
+            "providers": {
+                "google": {
+                    "api_key": "AIzaSyCDy8pulx_DXA0E3NYyRIVSmWkmIOPZrts",
+                    "model": "gemini-2.0-flash-lite"
+                },
+                "openrouter": {
+                    "api_key": "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",
+                    "model": "qwen/qwen3-vl-235b-a22b-thinking",
+                    "max_tokens": 256
+                }
+            }
+        },
+        "audio": {
+            "stt": {
+                "provider": "google",
+                "providers": {
+                    "google": {
+                        "language": "pt-BR"
+                    },
+                    "vosk": {
+                        "model_path": "model/vosk-model-small-pt-0.3"
+                    },
+                    "openai": {
+                        "api_key": "ENV_OPENAI_API_KEY",
+                        "organization_id": "ENV_OPENAI_ORG_ID"
+                    }
+                }
+            },
+            "tts": {
+                "provider": "edge_tts",
+                "providers": {
+                    "system": {
+                        "rate": 150,
+                        "volume": 1
+                    },
+                    "google_cloud": {
+                        "api_key": "AIzaSyBCKjgNX4JeUGw7BC8rLet219A0zHIsRgQ"
+                    },
+                    "edge_tts": {
+                        "voice": "pt-BR-FranciscaNeural"
+                    }
+                }
+            }
+        }
     },
-    "google_maps": {
-        "token": "YOUR GOOGLE MAPS API KEY"
+    "agent": {
+        "agent_name": "Atlas",
+        "personality": "Voc\u00ea \u00e9 um assistente proativo, t\u00e9cnico e focado em resolver problemas com precis\u00e3o. Sua comunica\u00e7\u00e3o \u00e9 clara, amig\u00e1vel e profissional."
+    },
+    "location": {
+        "mode": "auto",
+        "default": {
+            "city": "Canoas",
+            "state": "RS",
+            "country": "Brazil",
+            "lat": "-29.928474",
+            "lon": "-51.190630"
+        }
+    },
+    "intent_resolution": {
+        "mode": "llm_first",
+        "semantic_fallback": true,
+        "semantic_first_threshold": 0.92,
+        "llm_confidence_threshold": 0.65
+    },
+    "skills": {
+        "system_logs": {
+            "enabled": true
+        },
+        "vision": {
+            "enabled": true
+        },
+        "browser_automator": {
+            "enabled": true,
+            "profilePath": "data/browser/profile",
+            "headless": false,
+            "cdp_url": null,
+            "viewport": {
+                "width": 1280,
+                "height": 720
+            },
+            "timeoutMs": 30000
+        },
+        "spotify_search": {
+            "enabled": false,
+            "auth": {
+                "clientId": "ENV_SPOTIFY_CLIENT_ID",
+                "client_secret": "ENV_SPOTIFY_CLIENT_SECRET"
+            },
+            "defaults": {
+                "market": "BR",
+                "limit": 5
+            }
+        },
+        "deezer_search": {
+            "enabled": true,
+            "api": {
+                "baseUrl": "https://api.deezer.com"
+            },
+            "defaults": {
+                "limit": 5
+            }
+        },
+        "youtube_search": {
+            "enabled": true,
+            "apiKey": "AIzaSyBCKjgNX4JeUGw7BC8rLet219A0zHIsRgQ",
+            "defaults": {
+                "surfaceMode": "auto",
+                "limit": 5
+            }
+        },
+        "maps_search": {
+            "enabled": true,
+            "apiKey": "AIzaSyBz6jMURlxl3GlAhL26tj5MHeiMStnWTWA",
+            "defaults": {
+                "region": "BR",
+                "language": "pt-BR"
+            }
+        },
+        "web_search": {
+            "enabled": true,
+            "provider": "duckduckgo"
+        },
+        "system_control": {
+            "enabled": true
+        },
+        "task_management": {
+            "enabled": true
+        },
+        "memory_management": {
+            "enabled": true
+        },
+        "weather_control": {
+            "enabled": true,
+            "api_key": "013898ae8e6f8629c29c0936c54f4441"
+        },
+        "system_apps": {
+            "enabled": true
+        },
+        "shell_control": {
+            "enabled": true
+        },
+        "reflex_skill": {
+            "enabled": true
+        },
+        "wikipedia_search": {
+            "enabled": true
+        }
     }
 }

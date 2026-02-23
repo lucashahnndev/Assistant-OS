@@ -37,6 +37,14 @@ class SpotifySearchSkill(SkillBase):
             n = default
         return max(1, min(n, 10))
 
+    @staticmethod
+    def _resolve_query(params: Dict[str, Any]) -> str:
+        for key in ("query", "search_query", "searchQuery", "q", "term", "text"):
+            value = params.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
     def _get_auth_config(self) -> Dict[str, str]:
         auth = self.config.get("auth", {})
         client_id = auth.get("clientId") or os.getenv("SPOTIFY_CLIENT_ID")
@@ -154,9 +162,12 @@ class SpotifySearchSkill(SkillBase):
 
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         action = action_id.split(".")[-1]
-        query = params.get("query")
-        search_type = params.get("type", "track")
-        limit = self._clamp_limit(params.get("limit") or self.config.get("defaults", {}).get("limit", 5), default=5)
+        query = self._resolve_query(params)
+        search_type = params.get("type") or params.get("search_type") or "track"
+        limit = self._clamp_limit(
+            params.get("limit") or params.get("max_results") or params.get("maxResults") or self.config.get("defaults", {}).get("limit", 5),
+            default=5,
+        )
         market = params.get("market") or self.config.get("defaults", {}).get("market", "BR")
 
         if not query:

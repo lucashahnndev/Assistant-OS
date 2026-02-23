@@ -82,6 +82,14 @@ class WebSearchSkill(SkillBase):
         return re.sub(r"\s+", " ", str(text or "")).strip()
 
     @staticmethod
+    def _resolve_query(params: Dict[str, Any]) -> str:
+        for key in ("query", "search_query", "searchQuery", "q", "term", "text"):
+            value = params.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    @staticmethod
     def _truncate(text: str, max_chars: int) -> str:
         if len(text) <= max_chars:
             return text
@@ -311,8 +319,11 @@ class WebSearchSkill(SkillBase):
 
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         action = action_id.split(".")[-1]
-        query = params.get("query")
-        limit = self._clamp_limit(params.get("limit") or self.config.get("defaults", {}).get("limit", 5), default=5)
+        query = self._resolve_query(params)
+        limit = self._clamp_limit(
+            params.get("limit") or params.get("max_results") or params.get("maxResults") or self.config.get("defaults", {}).get("limit", 5),
+            default=5,
+        )
         requested_mode = params.get("mode") or self.config.get("defaults", {}).get("mode", "links")
         mode = self._resolve_mode(requested_mode, str(query or ""))
         knowledge_limit = self._clamp_knowledge_limit(

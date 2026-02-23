@@ -118,6 +118,22 @@ class MapsSearchSkill(SkillBase):
     def _sanitize_text(value: Any) -> str:
         return str(value or "").strip()
 
+    @staticmethod
+    def _resolve_query(params: Dict[str, Any]) -> str:
+        for key in ("query", "search_query", "searchQuery", "q", "term", "text"):
+            value = params.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    @staticmethod
+    def _resolve_city(params: Dict[str, Any]) -> str:
+        for key in ("city", "location", "place", "where"):
+            value = params.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
     def _compose_query(self, query: str, category: str, city: str, keywords: str) -> str:
         query = self._sanitize_text(query)
         category = self._sanitize_text(category)
@@ -292,8 +308,8 @@ class MapsSearchSkill(SkillBase):
                 error="UNKNOWN_ACTION",
             )
 
-        query = self._sanitize_text(params.get("query"))
-        city = self._sanitize_text(params.get("city"))
+        query = self._sanitize_text(self._resolve_query(params))
+        city = self._sanitize_text(self._resolve_city(params))
         category = self._sanitize_text(params.get("category") or params.get("place_type"))
         keywords_raw = params.get("keywords")
         if isinstance(keywords_raw, list):
@@ -314,7 +330,7 @@ class MapsSearchSkill(SkillBase):
         near = self._sanitize_text(params.get("near"))
         radius = self._to_int(params.get("radius"), default=5000, min_value=500, max_value=50000)
         place_type = self._sanitize_text(params.get("type"))
-        limit = self._to_int(params.get("limit"), default=8, min_value=1, max_value=20)
+        limit = self._to_int(params.get("limit") or params.get("max_results") or params.get("maxResults"), default=8, min_value=1, max_value=20)
         min_rating = self._to_float(params.get("min_rating"), default=0.0, min_value=0.0, max_value=5.0)
         sort_by = self._sanitize_text(params.get("sort_by")).lower() or "relevance"
 

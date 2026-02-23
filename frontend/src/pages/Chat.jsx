@@ -232,27 +232,47 @@ const CodeBlock = ({ node, inline, className, children, ...props }) => {
 };
 
 const getFileUrl = (item, sessionId) => {
+    if (!item) return null;
     if (item.url) return item.url;
-    if (!item.path) return null;
+    if (!sessionId) return null;
 
-    // Standardized path extraction for our proxy route
-    if (item.path.includes('/media/')) {
-        const parts = item.path.split('/media/');
+    const rawPath = item.path || item.file_path || item.filename || item.name;
+    if (!rawPath) return null;
+    const normalizedPath = String(rawPath).replace(/\\/g, '/');
+
+    // If the path already carries a session id on disk (e.g. .../data/sessions/{sid}/media/...),
+    // preserve that source session instead of forcing the currently opened one.
+    const diskSessionMatch = normalizedPath.match(/\/sessions\/([^/]+)\/(media|uploads)\/(.+)$/);
+    if (diskSessionMatch) {
+        const [, sourceSessionId, bucket, rest] = diskSessionMatch;
+        return `/api/sessions/${sourceSessionId}/files/${bucket}/${rest}`;
+    }
+
+    if (normalizedPath.startsWith('/api/sessions/') && normalizedPath.includes('/files/')) {
+        return normalizedPath;
+    }
+
+    if (normalizedPath.includes('/media/')) {
+        const parts = normalizedPath.split('/media/');
         return `/api/sessions/${sessionId}/files/media/${parts[parts.length - 1]}`;
     }
+    if (normalizedPath.startsWith('media/')) {
+        return `/api/sessions/${sessionId}/files/${normalizedPath}`;
+    }
 
-    // Legacy /uploads/ support
-    if (item.path.includes('/uploads/')) {
-        const parts = item.path.split('/uploads/');
+    if (normalizedPath.includes('/uploads/')) {
+        const parts = normalizedPath.split('/uploads/');
         return `/api/sessions/${sessionId}/files/uploads/${parts[parts.length - 1]}`;
     }
-
-    // Fallback for direct data/ paths
-    if (item.path.includes('data/')) {
-        return `/api/static/${item.path.split('data/')[1]}`;
+    if (normalizedPath.startsWith('uploads/')) {
+        return `/api/sessions/${sessionId}/files/${normalizedPath}`;
     }
 
-    return null;
+    if (normalizedPath.includes('data/')) {
+        return `/api/static/${normalizedPath.split('data/')[1]}`;
+    }
+
+    return `/api/sessions/${sessionId}/files/${normalizedPath.replace(/^\/+/, '')}`;
 };
 
 const formatTime = (ts) => {
@@ -283,10 +303,131 @@ const formatDate = (ts) => {
     }
 };
 
+const tryParseIntentPayload = (content) => {
+    if (typeof content !== 'string') return null;
+    const text = content.trim();
+    if (!text.startsWith('{') || !text.endsWith('}')) return null;
+
+    try {
+        const parsed = JSON.parse(text);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+        const keys = ['thought', 'plan', 'action', 'params'];
+        const hasIntentKey = keys.some((k) => Object.prototype.hasOwnProperty.call(parsed, k));
+        return hasIntentKey ? parsed : null;
+    } catch {
+        return null;
+    }
+};
+
+const looksLikeInternalMonologue = (content) => {
+    if (typeof content !== 'string') return false;
+    const text = content.trim().toLowerCase();
+    if (!text) return false;
+
+    // High-confidence monologue starts only.
+    if (
+        text.startsWith('o usuário') ||
+        text.startsWith('o usuario') ||
+        text.startsWith('the user') ||
+        text.startsWith('vou usar') ||
+        text.startsWith('i will use')
+    ) {
+        return true;
+    }
+
+    // Avoid false positives on long, user-facing answers (e.g. vision descriptions with logs/markdown).
+    if (text.length > 420) return false;
+
+    // Strict planning cues: require clear action-planning language, not generic words.
+    const strictCues = [
+        'vou usar a ação',
+        'vou usar a acao',
+        'i will use the action',
+        'my plan is',
+        'plano:',
+        '"action":',
+        '"params":',
+        'retornando resultados'
+    ];
+    return strictCues.some((cue) => text.includes(cue));
+};
+
+const normalizeHistoryMessageType = (msg) => {
+    const explicitType = String(msg?.type || 'default').toLowerCase();
+    if (explicitType !== 'default') return explicitType;
+    if (msg?.role === 'assistant') {
+        if (tryParseIntentPayload(msg?.content)) return 'reasoning';
+        if (looksLikeInternalMonologue(msg?.content)) return 'reasoning';
+    }
+    return explicitType;
+};
+
+const extractReasoningLine = (msg) => {
+    const payload = tryParseIntentPayload(msg?.content);
+    if (payload) {
+        const thought = typeof payload.thought === 'string' ? payload.thought.trim() : '';
+        if (thought) return thought;
+        const action = typeof payload.action === 'string' ? payload.action.trim() : '';
+        if (action && action !== 'reply') return `Planned action: ${action}`;
+    }
+    if (looksLikeInternalMonologue(msg?.content)) {
+        return String(msg.content || '').trim();
+    }
+    return null;
+};
+
+const groupHistoryWithReasoning = (rawHistory = []) => {
+    const processedHistory = [];
+    let currentReasoning = [];
+
+    rawHistory.forEach((msg) => {
+        const normalizedType = normalizeHistoryMessageType(msg);
+        if (normalizedType === 'reasoning') {
+            const reasoningLine = extractReasoningLine(msg) || (typeof msg.content === 'string' ? msg.content.trim() : '');
+            if (reasoningLine) currentReasoning.push(reasoningLine);
+            return;
+        }
+
+        if (msg.role === 'assistant' && currentReasoning.length > 0) {
+            processedHistory.push({
+                ...msg,
+                reasoningLines: currentReasoning
+            });
+            currentReasoning = [];
+            return;
+        }
+
+        if (currentReasoning.length > 0) {
+            processedHistory.push({
+                role: 'assistant',
+                content: '',
+                reasoningLines: currentReasoning,
+                isComplete: true
+            });
+            currentReasoning = [];
+        }
+
+        processedHistory.push(msg);
+    });
+
+    if (currentReasoning.length > 0) {
+        processedHistory.push({
+            role: 'assistant',
+            content: '',
+            reasoningLines: currentReasoning,
+            isComplete: true
+        });
+    }
+
+    return processedHistory;
+};
+
 const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agentName }) => {
     const [isCognitiveCollapsed, setIsCognitiveCollapsed] = useState(true);
     const [isExpanded, setIsExpanded] = useState(false);
     const isUser = msg.role === 'user';
+    const hasReasoning = !isUser && msg.reasoningLines && msg.reasoningLines.length > 0;
+    const showInlineThoughtToggle = hasReasoning && !isStreaming && isCognitiveCollapsed;
 
     useEffect(() => {
         if (msg.isComplete) {
@@ -303,11 +444,45 @@ const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agent
         }}>
             <div className={`msg-bubble ${isUser ? 'msg-user' : 'msg-assistant'}`} style={{
                 width: isUser ? 'auto' : '100%',
-                maxWidth: isUser ? '85%' : '100%'
+                maxWidth: isUser ? '85%' : 'min(92%, 56rem)',
+                overflowWrap: 'anywhere',
+                wordBreak: 'break-word'
             }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', paddingBottom: '8px', borderBottom: isUser ? '1px solid rgba(255,255,255,0.1)' : '1px solid var(--card-border)' }}>
-                    <p style={{ fontSize: '11px', fontWeight: 'bold', color: isUser ? '#fff' : 'var(--text-primary)' }}>{isUser ? 'Você' : agentName}</p>
-                    {msg.timestamp && <p style={{ fontSize: '10px', color: isUser ? 'rgba(255,255,255,0.7)' : 'var(--text-muted)' }}>{formatTime(msg.timestamp)}</p>}
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '8px',
+                    marginBottom: '8px',
+                    paddingBottom: '8px',
+                    borderBottom: isUser ? '1px solid rgba(255,255,255,0.1)' : '1px solid var(--card-border)'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                        <p style={{ fontSize: '11px', fontWeight: 'bold', color: isUser ? '#fff' : 'var(--text-primary)' }}>{isUser ? 'Você' : agentName}</p>
+                        {msg.timestamp && <p style={{ fontSize: '10px', color: isUser ? 'rgba(255,255,255,0.7)' : 'var(--text-muted)' }}>{formatTime(msg.timestamp)}</p>}
+                    </div>
+
+                    {showInlineThoughtToggle && (
+                        <button
+                            onClick={() => setIsCognitiveCollapsed(false)}
+                            title="Expand Thought"
+                            style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                cursor: 'pointer',
+                                padding: '4px 10px',
+                                background: 'var(--bg-color)',
+                                border: '1px solid var(--card-border)',
+                                borderRadius: '12px',
+                                boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+                                flexShrink: 0
+                            }}
+                        >
+                            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} />
+                            <span style={{ fontSize: '9px', fontWeight: '800', color: 'var(--text-primary)', opacity: 0.7, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Thought</span>
+                        </button>
+                    )}
                 </div>
                 {isUser && msg.isSending && (
                     <div style={{ position: 'absolute', right: '-25px', top: '50%', transform: 'translateY(-50%)' }}>
@@ -322,13 +497,8 @@ const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agent
                     </div>
                 )}
 
-                {!isUser && msg.reasoningLines && msg.reasoningLines.length > 0 && (
-                    !isStreaming && isCognitiveCollapsed ? (
-                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer', padding: '4px 10px', background: 'var(--bg-color)', border: '1px solid var(--card-border)', borderRadius: '12px', marginBottom: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }} onClick={() => setIsCognitiveCollapsed(false)} title="Expand Thought">
-                            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} />
-                            <span style={{ fontSize: '9px', fontWeight: '800', color: 'var(--text-primary)', opacity: 0.7, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Thought</span>
-                        </div>
-                    ) : (
+                {hasReasoning && (
+                    !isStreaming && isCognitiveCollapsed ? null : (
                         <div style={{
                             marginBottom: 'var(--space-4)',
                             border: '1px solid var(--card-border)',
@@ -420,23 +590,54 @@ const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agent
                 <div style={{ position: 'relative' }}>
                     <MessageAttachments msg={msg} sessionId={sessionId} onExpand={onExpand} />
                     {msg.content ? (
-                        <div className="markdown-content">
-                            <ReactMarkdown
-                                remarkPlugins={[remarkGfm, remarkBreaks]}
-                                rehypePlugins={[rehypeRaw]}
-                                components={{
-                                    code: CodeBlock,
-                                    p: ({ node, children, ...props }) => <div style={{ marginBottom: '12px' }} {...props}>{children}</div>,
-                                    ul: ({ node, ...props }) => <ul style={{ paddingLeft: '24px', marginBottom: '16px' }} {...props} />,
-                                    ol: ({ node, ...props }) => <ol style={{ paddingLeft: '24px', marginBottom: '16px', listStyleType: 'decimal' }} {...props} />,
-                                    li: ({ node, ...props }) => <li style={{ marginBottom: '8px' }} {...props} />,
-                                    strong: ({ node, ...props }) => <strong style={{ color: isUser ? '#fff' : 'var(--accent-color)', fontWeight: '800' }} {...props} />,
-                                    a: ({ node, ...props }) => <a style={{ color: isUser ? '#fff' : 'var(--accent-color)', textDecoration: 'underline', fontWeight: 'bold' }} target="_blank" rel="noreferrer" {...props} />
-                                }}
-                            >
-                                {msg.content}
-                            </ReactMarkdown>
-                        </div>
+                        <>
+                            <div className="markdown-content" style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
+                                <ReactMarkdown
+                                    remarkPlugins={[remarkGfm, remarkBreaks]}
+                                    rehypePlugins={[rehypeRaw]}
+                                    components={{
+                                        code: CodeBlock,
+                                        p: ({ node, children, ...props }) => <div style={{ marginBottom: '12px' }} {...props}>{children}</div>,
+                                        ul: ({ node, ...props }) => <ul style={{ paddingLeft: '24px', marginBottom: '16px' }} {...props} />,
+                                        ol: ({ node, ...props }) => <ol style={{ paddingLeft: '24px', marginBottom: '16px', listStyleType: 'decimal' }} {...props} />,
+                                        li: ({ node, ...props }) => <li style={{ marginBottom: '8px' }} {...props} />,
+                                        strong: ({ node, ...props }) => <strong style={{ color: isUser ? '#fff' : 'var(--accent-color)', fontWeight: '800' }} {...props} />,
+                                        a: ({ node, ...props }) => <a style={{ color: isUser ? '#fff' : 'var(--accent-color)', textDecoration: 'underline', fontWeight: 'bold' }} target="_blank" rel="noreferrer" {...props} />
+                                    }}
+                                >
+                                    {msg.content}
+                                </ReactMarkdown>
+                            </div>
+                            {!isUser && isStreaming && (
+                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '8px', opacity: 0.75 }}>
+                                    <span style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--accent-color)' }}>
+                                        Digitando
+                                    </span>
+                                    {[0, 1, 2].map(i => (
+                                        <span
+                                            key={`typing-dot-${i}`}
+                                            style={{
+                                                width: '4px',
+                                                height: '4px',
+                                                borderRadius: '50%',
+                                                background: 'var(--accent-color)',
+                                                animation: `fadeIn 1s infinite ${i * 0.15}s`
+                                            }}
+                                        />
+                                    ))}
+                                    <span
+                                        style={{
+                                            display: 'inline-block',
+                                            width: '8px',
+                                            height: '12px',
+                                            marginLeft: '2px',
+                                            borderRight: '2px solid var(--accent-color)',
+                                            animation: 'pulse 1s infinite'
+                                        }}
+                                    />
+                                </div>
+                            )}
+                        </>
                     ) : (
                         !isUser && isStreaming && <div style={{ display: 'flex', gap: '6px', padding: '8px 0' }}>
                             {[0, 1, 2].map(i => (
@@ -595,7 +796,7 @@ const AttachmentList = ({ items, sessionId, onExpand }) => {
                     <div className="doc-info">
                         {/* Only show filename basename for better UX */}
                         <span className="doc-name">{item.name?.split('/').pop() || 'Arquivo'}</span>
-                        <span className="doc-meta">{item.mime?.split('/')[1]?.toUpperCase() || 'FILE'}</span>
+                        <span className="doc-meta">{item.mime ? (item.mime.split('/')[1]?.toUpperCase() || 'FILE') : (item.name?.split('.').pop()?.toUpperCase() || 'FILE')}</span>
                     </div>
                 </div>
             ))}
@@ -662,6 +863,10 @@ const Chat = () => {
     const [mobileView, setMobileView] = useState('sessions'); // 'sessions' | 'chat'
     const [showScrollButton, setShowScrollButton] = useState(false);
     const [showActionsMenu, setShowActionsMenu] = useState(false);
+    const [showChatProfile, setShowChatProfile] = useState(false);
+    const [sessionMedia, setSessionMedia] = useState({ files: [], links: [] });
+    const [loadingMedia, setLoadingMedia] = useState(false);
+    const [chatPaneWidth, setChatPaneWidth] = useState(0);
 
     const scrollRef = useRef(null);
     const inputRef = useRef(null);
@@ -669,10 +874,22 @@ const Chat = () => {
     const avatarUploadRef = useRef(null);
     const attachButtonRef = useRef(null);
     const attachMenuRef = useRef(null);
+    const chatPaneRef = useRef(null);
     const wsRef = useRef(null);
     const thoughtTimeoutRef = useRef(null);
+    const completeFlushTimeoutRef = useRef(null);
     const skipResetRef = useRef(false); // Flag to skip state clearing during lazy session creation
     const prevLastMsgIdRef = useRef(null); // Tracks last message to intelligently auto-scroll
+    const pendingReasoningRef = useRef([]); // Accumulates reasoning lines until the next assistant final message
+
+    const pushPendingReasoning = (line) => {
+        const normalized = String(line || '').trim();
+        if (!normalized) return;
+
+        const existing = pendingReasoningRef.current || [];
+        if (existing[existing.length - 1] === normalized) return;
+        pendingReasoningRef.current = [...existing, normalized];
+    };
 
     useEffect(() => {
         localStorage.setItem('assistant_chat_sessions_collapsed', isSessionsCollapsed);
@@ -700,12 +917,39 @@ const Chat = () => {
         }
     }, [selectedId, isMobile]);
 
-    // Auto-scroll logic: only if near bottom or if it's a NEW message
+    useEffect(() => {
+        const pane = chatPaneRef.current;
+        if (!pane) return;
+
+        const updatePaneWidth = () => setChatPaneWidth(pane.clientWidth || 0);
+        updatePaneWidth();
+
+        if (typeof ResizeObserver !== 'undefined') {
+            const observer = new ResizeObserver((entries) => {
+                const entry = entries[0];
+                if (!entry) return;
+                setChatPaneWidth(entry.contentRect.width || 0);
+            });
+            observer.observe(pane);
+            return () => observer.disconnect();
+        }
+
+        window.addEventListener('resize', updatePaneWidth);
+        return () => window.removeEventListener('resize', updatePaneWidth);
+    }, []);
+
+    // Auto-scroll logic: only for live flow, never while paginating older history
     const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
     const lastMsgId = lastMsg?.id || lastMsg?.content;
 
     useEffect(() => {
         if (scrollRef.current) {
+            if (isFetchingHistory) {
+                // Keep anchor restoration from fetchMoreHistory in control.
+                prevLastMsgIdRef.current = lastMsgId;
+                return;
+            }
+
             const container = scrollRef.current;
             const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
 
@@ -717,7 +961,7 @@ const Chat = () => {
 
             prevLastMsgIdRef.current = lastMsgId;
         }
-    }, [messages, lastMsgId, lastMsg?.role]);
+    }, [messages, lastMsgId, lastMsg?.role, isFetchingHistory]);
 
     // Initial Load
     useEffect(() => {
@@ -772,6 +1016,7 @@ const Chat = () => {
             setThought('');
             setPendingFiles([]);
         }
+        pendingReasoningRef.current = [];
 
         // Cleanup previous
         if (wsRef.current) {
@@ -814,9 +1059,15 @@ const Chat = () => {
 
 
                 if (data.type === 'reasoning_chunk') {
+                    pushPendingReasoning(data.content);
                     setStreamingMessage(prev => ({
                         ...(prev || { content: '', reasoningLines: [], role: 'assistant', statusPhase: 'thinking' }),
-                        reasoningLines: [...(prev?.reasoningLines || []), data.content]
+                        reasoningLines: (() => {
+                            const next = [...(prev?.reasoningLines || [])];
+                            const line = String(data.content || '').trim();
+                            if (line && next[next.length - 1] !== line) next.push(line);
+                            return next;
+                        })()
                     }));
                 }
 
@@ -830,20 +1081,38 @@ const Chat = () => {
                 if (data.type === 'complete') {
                     setStreamingMessage(prev => {
                         if (!prev) return null;
-                        const completeMsg = { ...prev, isComplete: true, timestamp: Date.now() / 1000 };
-                        // Flush to messages history with deduplication
-                        setMessages(history => {
-                            // If backend already pushed this via message_added, don't duplicate
-                            const alreadyExists = history.some(m =>
-                                m.role === completeMsg.role &&
-                                m.id &&
-                                (m.content === completeMsg.content || (completeMsg.content.length > 0 && m.content.startsWith(completeMsg.content.slice(0, 100))))
-                            );
-                            if (alreadyExists) return history;
-                            return [...history, completeMsg];
-                        });
-                        return null; // Clear streaming state
+                        // Do not flush here to avoid duplicated assistant bubbles.
+                        // Authoritative history sync comes from `message_added`.
+                        const pendingReasoning = pendingReasoningRef.current || [];
+                        return {
+                            ...prev,
+                            reasoningLines: (prev?.reasoningLines?.length ? prev.reasoningLines : pendingReasoning),
+                            isComplete: true,
+                            statusPhase: 'complete'
+                        };
                     });
+                    if (completeFlushTimeoutRef.current) {
+                        clearTimeout(completeFlushTimeoutRef.current);
+                    }
+                    completeFlushTimeoutRef.current = setTimeout(() => {
+                        setStreamingMessage(current => {
+                            if (!current || !String(current.content || '').trim()) return current;
+                            const localFinal = {
+                                ...current,
+                                id: `local-stream-${Date.now()}`,
+                                timestamp: new Date().toISOString(),
+                                role: 'assistant',
+                                isComplete: true
+                            };
+                            setMessages(prev => {
+                                const alreadyExists = prev.some(
+                                    m => m.role === 'assistant' && String(m.content || '').trim() === String(localFinal.content || '').trim()
+                                );
+                                return alreadyExists ? prev : [...prev, localFinal];
+                            });
+                            return null;
+                        });
+                    }, 1200);
                 }
 
                 if (data.type === 'session_updated') {
@@ -903,37 +1172,82 @@ const Chat = () => {
 
                     // If it's the current session, ensure the message is synced in history
                     if (data.session_id === selectedId) {
+                        const incoming = data.message || {};
+                        const incomingRole = incoming.role;
+                        const incomingType = normalizeHistoryMessageType(incoming);
+
+                        // Realtime UX: internal reasoning/system traces should feed Thought stream,
+                        // not be rendered as standalone chat bubbles.
+                        if (incomingType !== 'default') {
+                            if (incomingType === 'reasoning') {
+                                const reasoningLine = extractReasoningLine(incoming) || (typeof incoming.content === 'string' ? incoming.content.trim() : '');
+                                if (reasoningLine) {
+                                    pushPendingReasoning(reasoningLine);
+                                }
+                                setStreamingMessage(prev => ({
+                                    ...(prev || { content: '', reasoningLines: [], role: 'assistant', statusPhase: 'thinking' }),
+                                    reasoningLines: (() => {
+                                        const next = [...(prev?.reasoningLines || [])];
+                                        if (reasoningLine && next[next.length - 1] !== reasoningLine) next.push(reasoningLine);
+                                        return next;
+                                    })()
+                                }));
+                            }
+                            return;
+                        }
+
+                        if (incomingRole === 'system') {
+                            return;
+                        }
+
+                        const incomingForHistory = (() => {
+                            if (incomingRole !== 'assistant') return incoming;
+                            const pendingReasoning = pendingReasoningRef.current || [];
+                            if (pendingReasoning.length === 0) return incoming;
+                            return {
+                                ...incoming,
+                                reasoningLines: [...pendingReasoning]
+                            };
+                        })();
+
+                        if (incomingRole === 'assistant') {
+                            if (completeFlushTimeoutRef.current) {
+                                clearTimeout(completeFlushTimeoutRef.current);
+                                completeFlushTimeoutRef.current = null;
+                            }
+                            pendingReasoningRef.current = [];
+                            setStreamingMessage(null);
+                        }
+
                         setMessages(prev => {
                             // 1. Precise Dedup: Check if ID already exists
-                            if (prev.some(m => m.id === data.message.id)) return prev;
+                            if (incomingForHistory.id && prev.some(m => m.id === incomingForHistory.id)) return prev;
 
                             // 2. Fuzzy Dedup/Sync: Try to find a local message (no ID) that matches this one
                             const localMatchIdx = prev.findLastIndex(m =>
                                 !m.id &&
-                                m.role === data.message.role &&
-                                (m.content === data.message.content || (m.content.length > 0 && data.message.content.startsWith(m.content.slice(0, 100))))
+                                m.role === incomingRole &&
+                                (m.content === incomingForHistory.content || (m.content.length > 0 && String(incomingForHistory.content || '').startsWith(m.content.slice(0, 100))))
                             );
 
                             if (localMatchIdx !== -1) {
                                 const next = [...prev];
-                                next[localMatchIdx] = data.message; // Replace with server version (has ID and final timestamp)
-                                if (data.role === 'assistant') setStreamingMessage(null);
+                                next[localMatchIdx] = incomingForHistory; // Replace with server version (has ID and final timestamp)
                                 return next;
                             }
 
                             // 3. Fallback: If it's the user's latest message with a spinner, replace it
-                            if (data.role === 'user') {
+                            if (incomingRole === 'user') {
                                 const lastUserIdx = prev.findLastIndex(m => m.role === 'user' && m.isSending);
                                 if (lastUserIdx !== -1) {
                                     const next = [...prev];
-                                    next[lastUserIdx] = data.message;
+                                    next[lastUserIdx] = incomingForHistory;
                                     return next;
                                 }
                             }
 
                             // 4. Default: Just add it (e.g. system notification or background message)
-                            if (data.role === 'assistant') setStreamingMessage(null);
-                            return [...prev, data.message];
+                            return [...prev, incomingForHistory];
                         });
                     }
                 }
@@ -951,19 +1265,13 @@ const Chat = () => {
         markSessionRead(selectedId);
 
         return () => {
+            if (completeFlushTimeoutRef.current) {
+                clearTimeout(completeFlushTimeoutRef.current);
+                completeFlushTimeoutRef.current = null;
+            }
             if (wsRef.current) wsRef.current.close();
         };
     }, [selectedId]);
-
-    // Auto-scroll
-    useEffect(() => {
-        if (scrollRef.current) {
-            scrollRef.current.scrollTo({
-                top: scrollRef.current.scrollHeight,
-                behavior: 'smooth'
-            });
-        }
-    }, [messages]);
 
     const fetchSessions = async () => {
         try {
@@ -1043,43 +1351,8 @@ const Chat = () => {
                 setHasMoreHistory(data.history?.length === 15);
                 setHistoryOffset(15);
 
-                // Group reasoning messages into their subsequent assistant responses
                 const rawHistory = data.history || [];
-                const processedHistory = [];
-                let currentReasoning = [];
-
-                rawHistory.forEach(msg => {
-                    if (msg.type === 'reasoning') {
-                        currentReasoning.push(msg.content);
-                    } else if (msg.role === 'assistant' && currentReasoning.length > 0) {
-                        processedHistory.push({
-                            ...msg,
-                            reasoningLines: currentReasoning
-                        });
-                        currentReasoning = [];
-                    } else {
-                        if (currentReasoning.length > 0) {
-                            processedHistory.push({
-                                role: 'assistant',
-                                content: '',
-                                reasoningLines: currentReasoning,
-                                isComplete: true
-                            });
-                            currentReasoning = [];
-                        }
-                        processedHistory.push(msg);
-                    }
-                });
-
-                // Handle trailing reasoning if any
-                if (currentReasoning.length > 0) {
-                    processedHistory.push({
-                        role: 'assistant',
-                        content: '',
-                        reasoningLines: currentReasoning,
-                        isComplete: true
-                    });
-                }
+                const processedHistory = groupHistoryWithReasoning(rawHistory);
 
                 setMessages(processedHistory);
                 setCurrentSession(data);
@@ -1094,6 +1367,198 @@ const Chat = () => {
         } catch (err) { console.error(err); }
     };
 
+    const fetchSessionMedia = async (id) => {
+        if (!id) return;
+        setLoadingMedia(true);
+        try {
+            const response = await api.get(`/sessions/${id}/media`);
+            setSessionMedia(response || { files: [], links: [] });
+        } catch (error) {
+            console.error("Error fetching session media:", error);
+        } finally {
+            setLoadingMedia(false);
+        }
+    };
+
+    useEffect(() => {
+        if (showChatProfile && selectedId) {
+            fetchSessionMedia(selectedId);
+        }
+    }, [showChatProfile, selectedId]);
+
+    const ChatProfile = ({ desktopFullWidth = false }) => {
+        const [activeTab, setActiveTab] = useState('media'); // 'media' | 'docs' | 'links'
+
+        const normalizeAssetPath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
+        const profilePicturePath = normalizeAssetPath(currentSession?.profile_picture || '');
+        const profilePictureName = profilePicturePath ? profilePicturePath.split('/').pop() : '';
+
+        const isProfileAsset = (file) => {
+            const filePath = normalizeAssetPath(file?.path || file?.file_path || '');
+            const fileName = normalizeAssetPath(file?.name || file?.filename || '').split('/').pop();
+
+            if (!filePath && !fileName) return false;
+            if (profilePicturePath && filePath === profilePicturePath) return true;
+            if (profilePictureName && fileName === profilePictureName) return true;
+            if (fileName.startsWith('avatar_')) return true;
+            if (filePath.startsWith('media/profile_picture/') || filePath.includes('/profile_picture/')) return true;
+            return false;
+        };
+
+        const files = (sessionMedia?.files || []).filter(f => !isProfileAsset(f));
+        const photos = files.filter(f => f.type === 'image');
+        const docs = files.filter(f => f.type !== 'image');
+
+        const isInternalLink = (link) => {
+            const messageType = String(link?.message_type || link?.type || '').toLowerCase();
+            if (messageType && messageType !== 'default') return true;
+            if (link?.is_internal === true) return true;
+            const source = String(link?.source || '').toLowerCase();
+            if (source.includes('reasoning') || source.includes('thought') || source.includes('internal')) return true;
+            return false;
+        };
+
+        const links = (sessionMedia?.links || []).filter(l => !isInternalLink(l));
+        const desktopSplitProfileWidth = chatPaneWidth > 0
+            ? Math.min(Math.max(Math.round(chatPaneWidth * 0.5), 440), 900)
+            : 540;
+
+        return (
+            <div className="glass animate-slide-in-right" style={{
+                width: (isMobile || desktopFullWidth) ? '100%' : `${desktopSplitProfileWidth}px`,
+                height: isMobile ? '100svh' : '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                background: 'var(--card-bg)',
+                borderLeft: (isMobile || desktopFullWidth) ? 'none' : '1px solid var(--card-border)',
+                borderRadius: isMobile ? '0' : (desktopFullWidth ? '0' : '0 var(--radius-lg) var(--radius-lg) 0'),
+                zIndex: 2500,
+                position: isMobile ? 'fixed' : 'relative',
+                right: 0,
+                top: 0,
+                left: isMobile ? 0 : 'auto',
+                boxShadow: (isMobile || desktopFullWidth) ? 'none' : '-10px 0 30px rgba(0,0,0,0.2)'
+            }}>
+                <div style={{ padding: isMobile ? '12px 12px 0' : '10px 12px 0', display: 'flex', alignItems: 'center' }}>
+                    <button className="btn-ghost" onClick={() => setShowChatProfile(false)} style={{ padding: '8px' }}>
+                        <X size={20} />
+                    </button>
+                </div>
+
+                <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '12px 20px 24px' : '8px 24px 24px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '20px' }}>
+                        <div style={{ position: 'relative', marginBottom: '16px' }}>
+                            <SessionAvatar session={currentSession} size={112} showBadge={false} onClick={() => avatarUploadRef.current?.click()} />
+                            <div style={{ position: 'absolute', bottom: 0, right: 0, background: 'var(--accent-color)', color: '#fff', padding: '6px', borderRadius: '50%', border: '2px solid var(--card-bg)', cursor: 'pointer' }} onClick={() => avatarUploadRef.current?.click()}>
+                                <Edit size={14} />
+                            </div>
+                        </div>
+                        <h2 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '4px', textAlign: 'center' }}>{currentSession?.name || 'Session'}</h2>
+                        <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{currentSession?.interface?.toUpperCase() || currentSession?.source?.toUpperCase() || 'CHAT'} · {(currentSession?.session_id || selectedId || '').substring(0, 8)}</p>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', borderBottom: '1px solid var(--card-border)', paddingBottom: '12px' }}>
+                        {['media', 'docs', 'links'].map(tab => (
+                            <button
+                                key={tab}
+                                onClick={() => setActiveTab(tab)}
+                                style={{
+                                    flex: 1,
+                                    padding: '8px',
+                                    fontSize: '12px',
+                                    fontWeight: 'bold',
+                                    borderRadius: '8px',
+                                    background: activeTab === tab ? 'var(--accent-glow)' : 'transparent',
+                                    color: activeTab === tab ? 'var(--accent-color)' : 'var(--text-muted)',
+                                    textTransform: 'uppercase',
+                                    transition: '0.2s'
+                                }}
+                            >
+                                {tab === 'media' ? 'Fotos' : tab === 'docs' ? 'Arquivos' : 'Links'}
+                            </button>
+                        ))}
+                    </div>
+
+                    {loadingMedia ? (
+                        <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+                            <RefreshCw className="animate-spin text-muted" size={24} />
+                        </div>
+                    ) : (
+                        <div style={{ minHeight: '200px' }}>
+                            {activeTab === 'media' && (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                                    {photos.length > 0 ? photos.map((f, i) => (
+                                        <div key={i} className="aspect-square cursor-pointer overflow-hidden rounded-lg border border-white/5 hover:border-accent" onClick={() => setPreviewFile({ ...f, previewUrl: `/api/sessions/${selectedId}/files/${f.path}` })}>
+                                            <img src={`/api/sessions/${selectedId}/files/${f.path}`} alt={f.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                        </div>
+                                    )) : (
+                                        <div style={{ gridColumn: 'span 3', textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>Nenhuma foto.</div>
+                                    )}
+                                </div>
+                            )}
+
+                            {activeTab === 'docs' && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    {docs.length > 0 ? docs.map((f, i) => (
+                                        <div key={i} className="doc-item" onClick={() => setPreviewFile({ ...f, previewUrl: `/api/sessions/${selectedId}/files/${f.path}` })}>
+                                            <FilePreviewIcon type={f.type} />
+                                            <div className="doc-info" style={{ flex: 1, minWidth: 0 }}>
+                                                <span className="doc-name" style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                                                <span className="doc-meta">{(f.size / 1024).toFixed(1)} KB · {f.mime ? (f.mime.split('/')[1]?.toUpperCase() || 'FILE') : 'FILE'}</span>
+                                            </div>
+                                            <Download size={16} className="text-muted" />
+                                        </div>
+                                    )) : (
+                                        <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>Nenhum documento.</div>
+                                    )}
+                                </div>
+                            )}
+
+                            {activeTab === 'links' && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                    {links.length > 0 ? links.map((l, i) => (
+                                        <a key={i} href={l.url} target="_blank" rel="noreferrer" style={{
+                                            display: 'flex',
+                                            alignItems: 'flex-start',
+                                            gap: '12px',
+                                            padding: '12px',
+                                            background: 'rgba(255,255,255,0.03)',
+                                            borderRadius: '12px',
+                                            textDecoration: 'none',
+                                            border: '1px solid var(--card-border)',
+                                            transition: '0.2s'
+                                        }} className="hover:bg-white/5 group">
+                                            <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'var(--accent-glow)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                                <Globe size={16} className="text-accent" />
+                                            </div>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <span style={{ fontSize: '13px', color: 'var(--text-main)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: '600' }}>{l.url}</span>
+                                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{formatDate(l.timestamp)} · {l.role === 'user' ? 'Você' : 'Assistente'}</span>
+                                            </div>
+                                            <ChevronRight size={14} className="text-muted group-hover:text-accent" />
+                                        </a>
+                                    )) : (
+                                        <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>Nenhum link.</div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    <div style={{ marginTop: '32px', borderTop: '1px solid var(--card-border)', paddingTop: '20px' }}>
+                        <button
+                            className="btn-ghost"
+                            onClick={(e) => { deleteSession(e, selectedId); setShowChatProfile(false); }}
+                            style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '12px', padding: '12px', color: 'var(--error)', borderRadius: '12px', fontSize: '14px', justifyContent: 'flex-start' }}
+                        >
+                            <Trash2 size={18} /> Excluir Conversa
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     const fetchMoreHistory = async () => {
         if (!selectedId || isFetchingHistory || !hasMoreHistory) return;
 
@@ -1106,40 +1571,7 @@ const Chat = () => {
                 setHasMoreHistory(data.has_more);
 
                 const rawHistory = data.history;
-                const processedHistory = [];
-                let currentReasoning = [];
-
-                rawHistory.forEach(msg => {
-                    if (msg.type === 'reasoning') {
-                        currentReasoning.push(msg.content);
-                    } else if (msg.role === 'assistant' && currentReasoning.length > 0) {
-                        processedHistory.push({
-                            ...msg,
-                            reasoningLines: currentReasoning
-                        });
-                        currentReasoning = [];
-                    } else {
-                        if (currentReasoning.length > 0) {
-                            processedHistory.push({
-                                role: 'assistant',
-                                content: '',
-                                reasoningLines: currentReasoning,
-                                isComplete: true
-                            });
-                            currentReasoning = [];
-                        }
-                        processedHistory.push(msg);
-                    }
-                });
-
-                if (currentReasoning.length > 0) {
-                    processedHistory.push({
-                        role: 'assistant',
-                        content: '',
-                        reasoningLines: currentReasoning,
-                        isComplete: true
-                    });
-                }
+                const processedHistory = groupHistoryWithReasoning(rawHistory);
 
                 // Save current scroll metrics before state update
                 const container = scrollRef.current;
@@ -1173,12 +1605,25 @@ const Chat = () => {
         }
     };
 
+    // If initial/history chunk is too short to create scroll, prefetch older pages automatically.
+    useEffect(() => {
+        if (!selectedId || !hasMoreHistory || isFetchingHistory) return;
+        const container = scrollRef.current;
+        if (!container) return;
+
+        const noScrollableOverflow = container.scrollHeight <= (container.clientHeight + 24);
+        if (noScrollableOverflow) {
+            fetchMoreHistory();
+        }
+    }, [selectedId, hasMoreHistory, isFetchingHistory, historyOffset, messages.length]);
+
     // Handle infinite scroll + scroll to bottom button
     const handleScroll = (e) => {
         const target = e.target;
 
-        // Infinite scroll (top)
-        if (target.scrollTop === 0) {
+        // Infinite scroll (top) with threshold to avoid strict equality issues.
+        const isNearTop = target.scrollTop <= 60;
+        if (isNearTop && hasMoreHistory && !isFetchingHistory) {
             fetchMoreHistory();
         }
 
@@ -1269,6 +1714,7 @@ const Chat = () => {
         }
 
         // Optimistic "Thinking" state for current agent
+        pendingReasoningRef.current = [];
         setStreamingMessage({
             role: 'assistant',
             content: '',
@@ -1492,12 +1938,8 @@ const Chat = () => {
         );
     };
 
-
-
-
-
-
-
+    const DESKTOP_PROFILE_SPLIT_MIN_WIDTH = 1150;
+    const shouldUseFullProfileDesktop = !isMobile && showChatProfile && chatPaneWidth > 0 && chatPaneWidth < DESKTOP_PROFILE_SPLIT_MIN_WIDTH;
 
     return (
         <div className={`animate-fade-in flex-1 ${isMobile ? 'mobile-nav-active' : ''}`} style={{ display: 'flex', flex: 1, minHeight: 0, gap: isMobile ? '0' : '16px', overflow: 'hidden' }}>
@@ -1622,7 +2064,7 @@ const Chat = () => {
                 </div>
 
                 {/* Chat Area (Mobile View Pane 2) */}
-                <div className={`${isMobile ? 'mobile-view-pane' : ''} glass`} style={{
+                <div ref={chatPaneRef} className={`${isMobile ? 'mobile-view-pane' : ''} glass`} style={{
                     flex: isMobile ? 'none' : 1,
                     display: 'flex',
                     flexDirection: 'column',
@@ -1631,325 +2073,314 @@ const Chat = () => {
                     borderRadius: isMobile ? '0' : '16px'
                 }}>
                     <PreviewModal />
-                    {/* Header */}
-                    <div style={{ padding: isMobile ? '6px 12px' : '8px 16px', borderBottom: '1px solid var(--card-border)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        {isMobile && (
-                            <button className="btn-ghost" onClick={() => setMobileView('sessions')} style={{ padding: '0.4rem', marginLeft: '-0.4rem' }}>
-                                <ChevronLeft size={20} />
-                            </button>
-                        )}
-                        {selectedId && currentSession ? (
-                            <SessionAvatar
-                                session={currentSession}
-                                size={isMobile ? 28 : 32}
-                                showBadge={false}
-                                onClick={currentSession.source === 'web' || currentSession.interface === 'web' ? () => avatarUploadRef.current?.click() : undefined}
-                            />
-                        ) : (
-                            <div className="flex-center" style={{ width: isMobile ? '28px' : '32px', height: isMobile ? '28px' : '32px', background: isConnected ? 'var(--success)' : 'var(--text-muted)', color: '#fff', borderRadius: '50%' }}>
-                                <Bot size={isMobile ? 16 : 18} />
-                            </div>
-                        )}
-                        <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                            {isEditingName ? (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                                    <input
-                                        autoFocus
-                                        value={editNameValue}
-                                        onChange={(e) => setEditNameValue(e.target.value)}
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter') handleRenameSession();
-                                            if (e.key === 'Escape') setIsEditingName(false);
-                                        }}
-                                        onBlur={handleRenameSession}
-                                        style={{
-                                            background: 'rgba(255,255,255,0.05)',
-                                            border: '1px solid var(--accent-color)',
-                                            borderRadius: '6px',
-                                            padding: '2px 6px',
-                                            color: '#fff',
-                                            fontSize: isMobile ? '13px' : '14px',
-                                            fontWeight: 'bold',
-                                            outline: 'none',
-                                            width: '100%'
-                                        }}
-                                    />
-                                </div>
-                            ) : (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                    <h3
-                                        style={{ fontSize: isMobile ? '13px' : '14px', fontWeight: 'bold', margin: 0, cursor: selectedId ? 'pointer' : 'default', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}
-                                        onClick={() => { if (selectedId) { setIsEditingName(true); setEditNameValue(currentSession?.name || ''); } }}
-                                    >
-                                        {selectedId ? (currentSession?.name || `Session: ${selectedId.substring(0, 8)}...`) : 'Select a session'}
-                                    </h3>
-                                    {(!isMobile && selectedId) && <Edit size={12} style={{ opacity: 0.5, transition: '0.2s', cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); setIsEditingName(true); setEditNameValue(currentSession?.name || ''); }} className="hover:opacity-100" />}
-                                    <div
-                                        title={isConnected ? 'Connected' : 'Disconnected'}
-                                        style={{
-                                            width: '8px',
-                                            height: '8px',
-                                            borderRadius: '50%',
-                                            marginLeft: '4px',
-                                            backgroundColor: isConnected ? 'var(--success)' : 'var(--text-muted)',
-                                            boxShadow: isConnected ? '0 0 6px var(--success-glow, rgba(16, 185, 129, 0.4))' : 'none',
-                                            flexShrink: 0
-                                        }}
-                                    />
-                                </div>
-                            )}
-                        </div>
 
-                        {selectedId && (
-                            <div style={{ position: 'relative' }}>
-                                <button
-                                    className="btn-ghost"
-                                    onClick={() => setShowActionsMenu(!showActionsMenu)}
-                                    style={{ padding: '8px' }}
-                                >
-                                    <MoreHorizontal size={20} />
-                                </button>
-                                {showActionsMenu && (
-                                    <div className="glass" style={{
-                                        position: 'absolute',
-                                        top: '100%',
-                                        right: 0,
-                                        marginTop: '8px',
-                                        padding: '8px',
-                                        zIndex: 1000,
-                                        minWidth: '160px',
-                                        display: 'flex',
-                                        flexDirection: 'column',
-                                        gap: '4px',
-                                        background: 'var(--card-bg)',
-                                        boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
-                                    }}>
+                    {/* Main Chat Body (Messages + Profile on Desktop) */}
+                    <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+                        {!shouldUseFullProfileDesktop && (
+                            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                            {/* Header */}
+                            <div style={{ padding: isMobile ? '6px 12px' : '8px 16px', borderBottom: '1px solid var(--card-border)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                {isMobile && (
+                                    <button className="btn-ghost" onClick={() => setMobileView('sessions')} style={{ padding: '0.4rem', marginLeft: '-0.4rem' }}>
+                                        <ChevronLeft size={20} />
+                                    </button>
+                                )}
+                                {selectedId && currentSession ? (
+                                    <SessionAvatar
+                                        session={currentSession}
+                                        size={isMobile ? 28 : 32}
+                                        showBadge={false}
+                                        onClick={() => setShowChatProfile(true)}
+                                    />
+                                ) : (
+                                    <div className="flex-center" style={{ width: isMobile ? '28px' : '32px', height: isMobile ? '28px' : '32px', background: isConnected ? 'var(--success)' : 'var(--text-muted)', color: '#fff', borderRadius: '50%' }}>
+                                        <Bot size={isMobile ? 16 : 18} />
+                                    </div>
+                                )}
+                                <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                                    {isEditingName ? (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                                            <input
+                                                autoFocus
+                                                value={editNameValue}
+                                                onChange={(e) => setEditNameValue(e.target.value)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') handleRenameSession();
+                                                    if (e.key === 'Escape') setIsEditingName(false);
+                                                }}
+                                                onBlur={handleRenameSession}
+                                                style={{
+                                                    background: 'rgba(255,255,255,0.05)',
+                                                    border: '1px solid var(--accent-color)',
+                                                    borderRadius: '6px',
+                                                    padding: '2px 6px',
+                                                    color: '#fff',
+                                                    fontSize: isMobile ? '13px' : '14px',
+                                                    fontWeight: 'bold',
+                                                    outline: 'none',
+                                                    width: '100%'
+                                                }}
+                                            />
+                                        </div>
+                                    ) : (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                            <h3
+                                                style={{ fontSize: isMobile ? '13px' : '14px', fontWeight: 'bold', margin: 0, cursor: selectedId ? 'pointer' : 'default', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}
+                                                onClick={() => { if (selectedId) setShowChatProfile(true); }}
+                                            >
+                                                {selectedId ? (currentSession?.name || `Session: ${selectedId.substring(0, 8)}...`) : 'Select a session'}
+                                            </h3>
+                                            {(!isMobile && selectedId) && <ChevronRight size={14} style={{ opacity: 0.5, transition: '0.2s', cursor: 'pointer' }} onClick={() => setShowChatProfile(true)} className="hover:opacity-100" />}
+                                            <div
+                                                title={isConnected ? 'Connected' : 'Disconnected'}
+                                                style={{
+                                                    width: '8px',
+                                                    height: '8px',
+                                                    borderRadius: '50%',
+                                                    marginLeft: '4px',
+                                                    backgroundColor: isConnected ? 'var(--success)' : 'var(--text-muted)',
+                                                    boxShadow: isConnected ? '0 0 6px var(--success-glow, rgba(16, 185, 129, 0.4))' : 'none',
+                                                    flexShrink: 0
+                                                }}
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+
+                                {selectedId && (
+                                    <div style={{ position: 'relative' }}>
                                         <button
                                             className="btn-ghost"
-                                            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', fontSize: '13px', justifyContent: 'flex-start', color: 'var(--error)' }}
-                                            onClick={(e) => {
-                                                deleteSession(e, selectedId);
-                                                setShowActionsMenu(false);
-                                            }}
+                                            onClick={() => setShowActionsMenu(!showActionsMenu)}
+                                            style={{ padding: '8px' }}
                                         >
-                                            <Trash2 size={16} /> Excluir Sessão
+                                            <MoreHorizontal size={20} />
                                         </button>
-                                        <button
-                                            className="btn-ghost"
-                                            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', fontSize: '13px', justifyContent: 'flex-start' }}
-                                            onClick={() => {
-                                                setIsEditingName(true);
-                                                setEditNameValue(currentSession?.name || '');
-                                                setShowActionsMenu(false);
-                                            }}
-                                        >
-                                            <Edit size={16} /> Renomear
-                                        </button>
+                                        {showActionsMenu && (
+                                            <div className="glass" style={{
+                                                position: 'absolute',
+                                                top: '100%',
+                                                right: 0,
+                                                marginTop: '8px',
+                                                padding: '8px',
+                                                zIndex: 1000,
+                                                minWidth: '160px',
+                                                display: 'flex',
+                                                flexDirection: 'column',
+                                                gap: '4px',
+                                                background: 'var(--card-bg)',
+                                                boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
+                                            }}>
+                                                <button
+                                                    className="btn-ghost"
+                                                    style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', fontSize: '13px', justifyContent: 'flex-start', color: 'var(--error)' }}
+                                                    onClick={(e) => {
+                                                        deleteSession(e, selectedId);
+                                                        setShowActionsMenu(false);
+                                                    }}
+                                                >
+                                                    <Trash2 size={16} /> Excluir Sessão
+                                                </button>
+                                                <button
+                                                    className="btn-ghost"
+                                                    style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', fontSize: '13px', justifyContent: 'flex-start' }}
+                                                    onClick={() => {
+                                                        setIsEditingName(true);
+                                                        setEditNameValue(currentSession?.name || '');
+                                                        setShowActionsMenu(false);
+                                                    }}
+                                                >
+                                                    <Edit size={16} /> Renomear
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>
-                        )}
-                    </div>
 
-
-                    {/* Messages Container */}
-                    <div className="flex-1 overflow-hidden flex flex-col relative">
-                        {/* Playback Overlay (Live) */}
-                        {latestPlaybackEvent && latestPlaybackEvent.type !== 'playback.end' && (
-                            <div style={{
-                                position: 'absolute',
-                                top: '10px',
-                                right: isMobile ? '10px' : '24px',
-                                width: isMobile ? 'calc(100% - 20px)' : '320px',
-                                zIndex: 100,
-                                pointerEvents: 'auto'
-                            }}>
-                                <PlaybackCard
-                                    runId={latestPlaybackEvent.run_id}
-                                    sessionId={selectedId}
-                                    liveEvent={latestPlaybackEvent}
-                                />
-                            </div>
-                        )}
-
-                        <MessageList
-                            messages={messages}
-                            sessionId={selectedId}
-                            streamingMessage={streamingMessage}
-                            onExpand={setPreviewFile}
-                            scrollRef={scrollRef}
-                            agentName={agentName}
-                            onScroll={handleScroll}
-                        />
-
-                        {/* WhatsApp-like scroll to bottom button */}
-                        {showScrollButton && (
-                            <button
-                                onClick={scrollToBottom}
-                                className="glass flex-center"
-                                style={{
-                                    position: 'absolute',
-                                    bottom: '20px',
-                                    right: '20px',
-                                    width: '40px',
-                                    height: '40px',
-                                    borderRadius: '50%',
-                                    zIndex: 50,
-                                    color: 'var(--accent-color)',
-                                    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-                                    animation: 'fadeIn 0.2s ease'
-                                }}
-                            >
-                                <ChevronDown size={24} />
-                            </button>
-                        )}
-                    </div>
-
-                    {/* Input Area */}
-                    <div style={{
-                        padding: isMobile ? '4px 10px calc(12px + env(safe-area-inset-bottom))' : '8px 24px 4px',
-                        borderTop: '1px solid var(--card-border)',
-                        background: 'var(--bg-color)',
-                        position: 'relative',
-                        zIndex: 10
-                    }}>
-                        {pendingFiles.length > 0 && (
-                            <div className="previews-container animate-fade-in" style={{
-                                marginBottom: '12px',
-                                padding: '8px',
-                                background: 'rgba(255,255,255,0.02)',
-                                borderRadius: '12px',
-                                border: '1px solid var(--card-border)'
-                            }}>
-                                {pendingFiles.map((file, idx) => (
-                                    <div key={idx} className="preview-item" onClick={() => setPreviewFile(file)}>
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); removePendingFile(idx); }}
-                                            className="preview-remove"
-                                        >
-                                            <X size={10} />
-                                        </button>
-                                        {file.type === 'image' && <img src={file.previewUrl} alt="preview" />}
-                                        {file.type === 'video' && <video src={file.previewUrl} />}
-                                        {(file.type !== 'image' && file.type !== 'video') && <FilePreviewIcon type={file.type} />}
-                                        <div className="file-name-tag">{truncateFileName(file.name)}</div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-
-                        {showAttachMenu && <AttachmentMenu />}
-                        <div style={{
-                            position: 'relative',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            background: 'var(--card-bg)',
-                            border: '1px solid var(--card-border)',
-                            borderRadius: isMobile ? '24px' : '16px',
-                            boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
-                            overflow: 'hidden',
-                            transition: 'var(--transition)'
-                        }} className="input-container-complex">
-                            <textarea
-                                ref={inputRef}
-                                rows="1"
-                                placeholder={(isConnected || !selectedId) ? (uploading ? "Sincronizando..." : "Mensagem...") : "Conectando..."}
-                                value={input}
-                                onChange={(e) => setInput(e.target.value)}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                        if (e.ctrlKey) {
-                                            e.preventDefault();
-                                            const start = e.target.selectionStart;
-                                            const end = e.target.selectionEnd;
-                                            const val = e.target.value;
-                                            setInput(val.substring(0, start) + "\n" + val.substring(end));
-                                            setTimeout(() => {
-                                                e.target.selectionStart = e.target.selectionEnd = start + 1;
-                                                e.target.style.height = 'auto';
-                                                e.target.style.height = `${e.target.scrollHeight}px`;
-                                            }, 0);
-                                        } else if (!e.shiftKey) {
-                                            e.preventDefault();
-                                            handleSend(e);
-                                        }
-                                    }
-                                }}
-                                disabled={!isConnected && selectedId || isSending || uploading}
-                                className="custom-scrollbar"
-                                style={{
-                                    width: '100%',
-                                    padding: isMobile ? '12px 48px 12px 48px' : '16px 60px 16px 60px',
-                                    background: 'transparent',
-                                    border: 'none',
-                                    color: 'var(--text-main)',
-                                    fontSize: isMobile ? '14px' : '15px',
-                                    resize: 'none',
-                                    minHeight: isMobile ? '44px' : '56px',
-                                    maxHeight: '200px',
-                                    overflowY: 'auto',
-                                    lineHeight: '1.4',
-                                    outline: 'none',
-                                    whiteSpace: 'pre-wrap'
-                                }}
-                            />
-                            <button
-                                ref={attachButtonRef}
-                                type="button"
-                                disabled={uploading}
-                                onClick={() => setShowAttachMenu(!showAttachMenu)}
-                                className="flex-center"
-                                style={{
-                                    position: 'absolute', left: isMobile ? '8px' : '12px', bottom: isMobile ? '6px' : '10px',
-                                    width: isMobile ? '32px' : '36px', height: isMobile ? '32px' : '36px', borderRadius: '50%',
-                                    color: uploading ? 'var(--warning)' : 'var(--text-muted)',
-                                    background: 'rgba(255,255,255,0.05)',
-                                    border: 'none',
-                                    transition: 'var(--transition)',
-                                    zIndex: 5
-                                }}
-                            >
-                                {uploading ? <Cpu size={18} className="animate-spin" /> : <Paperclip size={isMobile ? 18 : 22} />}
-                            </button>
-                            <button
-                                onClick={handleSend}
-                                disabled={(!input.trim() && pendingFiles.length === 0) || isSending || uploading}
-                                className="flex-center"
-                                style={{
-                                    position: 'absolute', right: isMobile ? '8px' : '12px', bottom: isMobile ? '6px' : '10px',
-                                    width: isMobile ? '32px' : '36px', height: isMobile ? '32px' : '36px', borderRadius: '50%',
-                                    background: (input.trim() || pendingFiles.length > 0) && !isSending && !uploading ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
-                                    color: '#fff',
-                                    transition: 'var(--transition)',
-                                    border: 'none',
-                                    cursor: (input.trim() || pendingFiles.length > 0) && !isSending && !uploading ? 'pointer' : 'default',
-                                    zIndex: 5
-                                }}
-                            >
-                                {isSending || uploading ? <Cpu size={16} className="animate-spin" /> : <Send size={isMobile ? 16 : 18} />}
-                            </button>
-                        </div>
-                        {!isMobile && (
-                            <div style={{ marginTop: '0px', display: 'flex', justifyContent: 'center' }}>
-                                <div style={{
-                                    padding: '0 24px',
-                                    textAlign: 'center',
-                                    flexShrink: 0
-                                }}>
+                            {/* Messages Container */}
+                            <div className="flex-1 overflow-hidden flex flex-col relative">
+                                {/* Playback Overlay (Live) */}
+                                {latestPlaybackEvent && latestPlaybackEvent.type !== 'playback.end' && (
                                     <div style={{
-                                        display: 'inline-flex',
-                                        fontSize: '11px',
-                                        color: 'var(--text-muted)',
-                                        gap: '4px',
-                                        alignItems: 'center',
-                                        opacity: 0.8
+                                        position: 'absolute',
+                                        top: '10px',
+                                        right: isMobile ? '10px' : '24px',
+                                        width: isMobile ? 'calc(100% - 20px)' : '320px',
+                                        zIndex: 100,
+                                        pointerEvents: 'auto'
                                     }}>
-                                        Pressione <strong>Enter</strong> para enviar, <strong>Ctrl + Enter</strong> para nova linha.
+                                        <PlaybackCard
+                                            runId={latestPlaybackEvent.run_id}
+                                            sessionId={selectedId}
+                                            liveEvent={latestPlaybackEvent}
+                                        />
                                     </div>
+                                )}
+
+                                <MessageList
+                                    messages={messages}
+                                    sessionId={selectedId}
+                                    streamingMessage={streamingMessage}
+                                    onExpand={setPreviewFile}
+                                    scrollRef={scrollRef}
+                                    agentName={agentName}
+                                    onScroll={handleScroll}
+                                />
+
+                                {/* WhatsApp-like scroll to bottom button */}
+                                {showScrollButton && (
+                                    <button
+                                        onClick={scrollToBottom}
+                                        className="glass flex-center"
+                                        style={{
+                                            position: 'absolute',
+                                            bottom: '20px',
+                                            right: '20px',
+                                            width: '40px',
+                                            height: '40px',
+                                            borderRadius: '50%',
+                                            zIndex: 50,
+                                            color: 'var(--accent-color)',
+                                            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                                            animation: 'fadeIn 0.2s ease'
+                                        }}
+                                    >
+                                        <ChevronDown size={24} />
+                                    </button>
+                                )}
+                            </div>
+
+                            {/* Input Area */}
+                            <div style={{
+                                padding: isMobile ? '2px 8px calc(8px + env(safe-area-inset-bottom))' : '4px 14px 4px',
+                                borderTop: '1px solid var(--card-border)',
+                                background: 'var(--bg-color)',
+                                position: 'relative',
+                                zIndex: 10
+                            }}>
+                                {pendingFiles.length > 0 && (
+                                    <div className="previews-container animate-fade-in" style={{
+                                        marginBottom: '8px',
+                                        padding: '6px',
+                                        background: 'rgba(255,255,255,0.02)',
+                                        borderRadius: '12px',
+                                        border: '1px solid var(--card-border)'
+                                    }}>
+                                        {pendingFiles.map((file, idx) => (
+                                            <div key={idx} className="preview-item" onClick={() => setPreviewFile(file)}>
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); removePendingFile(idx); }}
+                                                    className="preview-remove"
+                                                >
+                                                    <X size={10} />
+                                                </button>
+                                                {file.type === 'image' && <img src={file.previewUrl} alt="preview" />}
+                                                {file.type === 'video' && <video src={file.previewUrl} />}
+                                                {(file.type !== 'image' && file.type !== 'video') && <FilePreviewIcon type={file.type} />}
+                                                <div className="file-name-tag">{truncateFileName(file.name)}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {showAttachMenu && <AttachmentMenu />}
+                                <div style={{
+                                    position: 'relative',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    background: 'var(--card-bg)',
+                                    border: '1px solid var(--card-border)',
+                                    borderRadius: isMobile ? '24px' : '16px',
+                                    boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
+                                    overflow: 'hidden',
+                                    transition: 'var(--transition)'
+                                }} className="input-container-complex">
+                                    <textarea
+                                        ref={inputRef}
+                                        rows="1"
+                                        placeholder={(isConnected || !selectedId) ? (uploading ? "Sincronizando..." : "Mensagem...") : "Conectando..."}
+                                        value={input}
+                                        onChange={(e) => setInput(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                if (e.ctrlKey) {
+                                                    e.preventDefault();
+                                                    const start = e.target.selectionStart;
+                                                    const end = e.target.selectionEnd;
+                                                    const val = e.target.value;
+                                                    setInput(val.substring(0, start) + "\n" + val.substring(end));
+                                                    setTimeout(() => {
+                                                        e.target.selectionStart = e.target.selectionEnd = start + 1;
+                                                        e.target.style.height = 'auto';
+                                                        e.target.style.height = `${e.target.scrollHeight}px`;
+                                                    }, 0);
+                                                } else if (!e.shiftKey) {
+                                                    e.preventDefault();
+                                                    handleSend(e);
+                                                }
+                                            }
+                                        }}
+                                        disabled={!isConnected && selectedId || isSending || uploading}
+                                        className="custom-scrollbar"
+                                        style={{
+                                            width: '100%',
+                                            padding: isMobile ? '10px 44px 10px 44px' : '12px 56px 12px 56px',
+                                            background: 'transparent',
+                                            border: 'none',
+                                            color: 'var(--text-main)',
+                                            fontSize: isMobile ? '14px' : '15px',
+                                            resize: 'none',
+                                            minHeight: isMobile ? '40px' : '48px',
+                                            maxHeight: '200px',
+                                            overflowY: 'auto',
+                                            lineHeight: '1.4',
+                                            outline: 'none',
+                                            whiteSpace: 'pre-wrap'
+                                        }}
+                                    />
+                                    <button
+                                        ref={attachButtonRef}
+                                        type="button"
+                                        disabled={uploading}
+                                        onClick={() => setShowAttachMenu(!showAttachMenu)}
+                                        className="flex-center"
+                                        style={{
+                                            position: 'absolute', left: isMobile ? '8px' : '12px', bottom: isMobile ? '4px' : '6px',
+                                            width: isMobile ? '32px' : '36px', height: isMobile ? '32px' : '36px', borderRadius: '50%',
+                                            color: uploading ? 'var(--warning)' : 'var(--text-muted)',
+                                            background: 'rgba(255,255,255,0.05)',
+                                            border: 'none',
+                                            transition: 'var(--transition)',
+                                            zIndex: 5
+                                        }}
+                                    >
+                                        {uploading ? <Cpu size={18} className="animate-spin" /> : <Paperclip size={isMobile ? 18 : 22} />}
+                                    </button>
+                                    <button
+                                        onClick={handleSend}
+                                        disabled={(!input.trim() && pendingFiles.length === 0) || isSending || uploading}
+                                        className="flex-center"
+                                        style={{
+                                            position: 'absolute', right: isMobile ? '8px' : '12px', bottom: isMobile ? '4px' : '6px',
+                                            width: isMobile ? '32px' : '36px', height: isMobile ? '32px' : '36px', borderRadius: '50%',
+                                            background: (input.trim() || pendingFiles.length > 0) && !isSending && !uploading ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
+                                            color: '#fff',
+                                            transition: 'var(--transition)',
+                                            border: 'none',
+                                            cursor: (input.trim() || pendingFiles.length > 0) && !isSending && !uploading ? 'pointer' : 'default',
+                                            zIndex: 5
+                                        }}
+                                    >
+                                        {isSending || uploading ? <Cpu size={16} className="animate-spin" /> : <Send size={isMobile ? 16 : 18} />}
+                                    </button>
                                 </div>
                             </div>
+                            </div>
                         )}
+                        {!isMobile && showChatProfile && <ChatProfile desktopFullWidth={shouldUseFullProfileDesktop} />}
                     </div>
+                    {isMobile && showChatProfile && <ChatProfile />}
                 </div>
             </div>
         </div>

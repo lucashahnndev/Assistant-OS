@@ -22,13 +22,15 @@ class LLMResolver(IntentResolver):
         # Get history from context or session
         history = context.get("history") or session.get_context_for_llm(limit_msgs=5)
         attachments = context.get("attachments")
+        local_context = dict(context)
+        local_context["user_input"] = user_input
         
         try:
             intent = self.llm_manager.generate_intent(user_input, history, system_prompt, attachments=attachments)
             if not intent:
                 return None
             
-            confidence, notes = self._estimate_confidence(intent, context)
+            confidence, notes = self._estimate_confidence(intent, local_context)
             
             if confidence < self.threshold:
                 logger.warning(
@@ -81,9 +83,46 @@ class LLMResolver(IntentResolver):
             if intent.response_text:
                 score += 0.35
                 notes.append("reply_with_text")
+                # Downgrade operational "progress stub" replies for action-oriented prompts.
+                text = str(intent.response_text or "").strip().lower()
+                user_input = str(context.get("user_input") or "").strip().lower()
+                progress_prefixes = (
+                    "pesquisando",
+                    "procurando",
+                    "buscando",
+                    "abrindo",
+                    "executando",
+                    "aguarde",
+                    "um momento",
+                )
+                command_cues = (
+                    "abre",
+                    "abrir",
+                    "toca",
+                    "tocar",
+                    "play",
+                    "reproduz",
+                    "reproduzir",
+                    "busca",
+                    "buscar",
+                    "pesquisa",
+                    "musica",
+                    "música",
+                    "deezer",
+                    "spotify",
+                    "youtube",
+                )
+                if text.startswith(progress_prefixes) and any(c in user_input for c in command_cues):
+                    score -= 0.45
+                    notes.append("reply_progress_stub_for_operational_request")
             else:
-                score -= 0.20
-                notes.append("reply_without_text")
+                has_attachments = isinstance(getattr(intent, "attachments", None), list) and len(intent.attachments) > 0
+                if has_attachments:
+                    score += 0.28
+                    notes.append("reply_with_attachments_no_text")
+                else:
+                    score -= 0.20
+                    notes.append("reply_without_text")
         else:
             allowed_actions = context.get("allowed_actions")
             registry = context.get("skill_registry") or self.skill_registry

@@ -20,6 +20,23 @@ class SemanticResolver(IntentResolver):
             (re.compile(r"\b(wikipedia|wikip[eé]dia|wiki)\b", re.IGNORECASE), "wikipedia.search", self._wikipedia_params),
             (re.compile(r"\b(pesquise|pesquisar|procure|buscar|search|look up)\b", re.IGNORECASE), "web.search.discover", self._query_param),
             (re.compile(r"\b(clima|tempo hoje|previs[aã]o do tempo|weather)\b", re.IGNORECASE), "weather.control.get", self._weather_params),
+            # Media playback (robust against typos, useful when JSON intent is malformed)
+            (
+                re.compile(
+                    r"\b(reproduz|reproduzir|reporduz|toca|tocar|play|ouvir)\b.*\b(youtube music|ytoutbe music|yt music|youtube)\b|\b(youtube music|ytoutbe music|yt music|youtube)\b.*\b(reproduz|reproduzir|reporduz|toca|tocar|play|ouvir)\b",
+                    re.IGNORECASE,
+                ),
+                "youtube.search.find",
+                self._media_query_params,
+            ),
+            (
+                re.compile(
+                    r"\b(reproduz|reproduzir|reporduz|toca|tocar|play|ouvir)\b.*\b(deezer)\b|\b(deezer)\b.*\b(reproduz|reproduzir|reporduz|toca|tocar|play|ouvir)\b",
+                    re.IGNORECASE,
+                ),
+                "deezer.search.search",
+                self._media_query_params,
+            ),
             (re.compile(r"\b(youtube)\b.*\b(busca|buscar|search|procure|encontre)\b|\b(busca|buscar|search|procure|encontre)\b.*\b(youtube)\b", re.IGNORECASE), "youtube.search.find", self._query_param),
             (re.compile(r"\b(mapa|maps|perto de|endere[cç]o|rota)\b", re.IGNORECASE), "maps.search.search", self._query_param),
             # Memory
@@ -159,3 +176,16 @@ class SemanticResolver(IntentResolver):
     def _memory_store_params(user_input: str) -> Dict[str, Any]:
         text = user_input.strip()
         return {"category": "general", "content": text}
+
+    @staticmethod
+    def _media_query_params(user_input: str) -> Dict[str, Any]:
+        text = (user_input or "").strip().lower()
+        # Strip control verbs and media platform hints; keep likely song/artist terms.
+        text = re.sub(r"\b(reproduz|reproduzir|reporduz|toca|tocar|play|ouvir|abre|abrir)\b", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"\b(no|na|do|da|de|em|para|a|o|uma|um)\b", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"\b(youtube music|ytoutbe music|yt music|youtube|deezer|spotify)\b", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"\b(musica|música|music)\b", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s+", " ", text).strip(" \"'")
+        if not text:
+            text = user_input.strip()
+        return {"query": text}

@@ -31,11 +31,118 @@ class VisionSkill(SkillBase):
     def _normalize_llm_output(result: Any, default_text: str) -> Dict[str, Any]:
         if isinstance(result, dict):
             normalized = dict(result)
-            normalized.setdefault("ok", True)
-            normalized.setdefault("status", "success")
+            text_value = str(normalized.get("text") or normalized.get("response") or "")
+            lowered = text_value.strip().lower()
+            has_error_text = (
+                lowered.startswith("erro")
+                or lowered.startswith("error")
+                or "error code:" in lowered
+                or "requires more credits" in lowered
+            )
+            normalized.setdefault("ok", not has_error_text)
+            normalized.setdefault("status", "error" if has_error_text else "success")
             normalized.setdefault("text", normalized.get("response") or default_text)
             return normalized
-        return {"ok": True, "status": "success", "text": str(result) if result is not None else default_text, "result": result}
+        text = str(result) if result is not None else default_text
+        lowered = text.strip().lower()
+        has_error_text = (
+            lowered.startswith("erro")
+            or lowered.startswith("error")
+            or "error code:" in lowered
+            or "requires more credits" in lowered
+        )
+        return {
+            "ok": not has_error_text,
+            "status": "error" if has_error_text else "success",
+            "text": text,
+            "result": result,
+            **({"error": "VISION_ANALYSIS_FAILED"} if has_error_text else {}),
+        }
+
+    @staticmethod
+    def _extract_image_path(params: Dict[str, Any]) -> str | None:
+        for key in ("image_path", "file_path", "filename", "attachment_path", "path", "file"):
+            value = params.get(key)
+            if value:
+                path_value = value
+                break
+        else:
+            return None
+
+        if isinstance(path_value, list) and path_value:
+            path_value = path_value[0]
+
+        if isinstance(path_value, dict):
+            for key in ("path", "image_path", "file_path", "filename", "attachment_path", "file"):
+                nested_value = path_value.get(key)
+                if nested_value:
+                    path_value = nested_value
+                    break
+
+        if path_value is None:
+            return None
+
+        path_text = str(path_value).strip()
+        return path_text or None
+
+    def _resolve_image_path(self, raw_path: str, context: Dict[str, Any]) -> str:
+        path = (raw_path or "").strip()
+        if not path:
+            return path
+
+        normalized_input = path.replace("\\", "/")
+
+        # Accept UI proxy paths such as /api/sessions/{id}/files/media/image/file.png
+        if "/api/sessions/" in normalized_input and "/files/" in normalized_input:
+            normalized_input = normalized_input.split("/files/", 1)[1]
+
+        ws_service = getattr(self.kernel, "workspace_service", None)
+        sid = context.get("session_id")
+
+        candidates: List[str] = []
+
+        def add_candidate(candidate: str):
+            if candidate:
+                candidates.append(os.path.normpath(candidate))
+
+        if os.path.isabs(normalized_input):
+            add_candidate(normalized_input)
+        else:
+            if sid and ws_service:
+                session_dir = ws_service.get_session_dir(sid)
+                if normalized_input.startswith(("media/", "uploads/", "images/")):
+                    add_candidate(os.path.join(session_dir, normalized_input))
+                else:
+                    add_candidate(os.path.join(session_dir, "media", "image", normalized_input))
+                    add_candidate(os.path.join(session_dir, "media", normalized_input))
+                    add_candidate(os.path.join(session_dir, "uploads", normalized_input))
+                    add_candidate(os.path.join(session_dir, normalized_input))
+
+            if ws_service:
+                workspace_dir = ws_service.get_workspace_dir()
+                add_candidate(os.path.join(workspace_dir, normalized_input))
+                add_candidate(os.path.join(workspace_dir, os.path.basename(normalized_input)))
+
+        if sid and ws_service:
+            session_dir = ws_service.get_session_dir(sid)
+            base_name = os.path.basename(normalized_input)
+            add_candidate(os.path.join(session_dir, "media", "image", base_name))
+            add_candidate(os.path.join(session_dir, "media", base_name))
+            add_candidate(os.path.join(session_dir, "uploads", base_name))
+
+        deduped: List[str] = []
+        seen = set()
+        for candidate in candidates:
+            key = os.path.abspath(candidate)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(candidate)
+
+        for candidate in deduped:
+            if os.path.isfile(candidate):
+                return candidate
+
+        return normalized_input
 
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         action = action_id.split(".")[-1]
@@ -57,59 +164,20 @@ class VisionSkill(SkillBase):
             )
 
         if action == "analyze":
-            path = params.get("image_path") or params.get("file_path")
+            path = self._extract_image_path(params)
             prompt = params.get("prompt", "Descreva esta imagem em detalhes.")
 
             if not path:
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Missing required parameter 'image_path' (or alias 'file_path').",
+                    text="Missing required parameter 'image_path' (or alias 'file_path', 'filename', 'attachment_path').",
                     error="MISSING_IMAGE_PATH",
                 )
 
-            # Resolve relative paths
-            if not os.path.isabs(path):
-                # Priority: Session context
-                sid = context.get("session_id")
-                if sid:
-                    ws_service = getattr(self.kernel, "workspace_service", None)
-                    if ws_service:
-                        # 1. Try session media/image folder (Standardized)
-                        session_media = os.path.join(ws_service.get_session_dir(sid), "media", "image")
-                        session_path = os.path.join(session_media, path)
-                        
-                        if os.path.exists(session_path):
-                            path = session_path
-                        else:
-                            # Extra check for common subfolders
-                            found = False
-                            for subfolder in ["media", "images", "media/image", "uploads"]:
-                                p = os.path.join(ws_service.get_session_dir(sid), subfolder, path)
-                                if os.path.exists(p):
-                                    path = p
-                                    found = True
-                                    break
-                            
-                            if not found:
-                                # 3. Try shared workspace
-                                path = os.path.join(ws_service.get_workspace_dir(), path)
-                else:
-                    # Fallback to shared workspace
-                    ws_service = getattr(self.kernel, "workspace_service", None)
-                    if ws_service:
-                        path = os.path.join(ws_service.get_workspace_dir(), path)
+            path = self._resolve_image_path(path, context)
 
-            # Final sanity check
-            if not os.path.exists(path):
-                # One last attempt: absolute path might be in workspace
-                ws_service = getattr(self.kernel, "workspace_service", None)
-                if ws_service:
-                    alt_path = os.path.join(ws_service.get_workspace_dir(), os.path.basename(path))
-                    if os.path.exists(alt_path):
-                        path = alt_path
-
-            if not os.path.exists(path):
+            if not os.path.isfile(path):
                 return self._result(
                     ok=False,
                     status="error",

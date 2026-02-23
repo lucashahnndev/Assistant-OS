@@ -400,6 +400,67 @@ def test_vision_requires_image_path_with_structured_error():
     assert result["error"] == "MISSING_IMAGE_PATH"
 
 
+def test_vision_accepts_filename_alias(tmp_path):
+    image_path = tmp_path / "input.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    class DummyLLM:
+        def analyze_image(self, path, prompt):
+            return {"text": f"ok:{path}"}
+
+    kernel = SimpleNamespace(llm_manager=DummyLLM(), workspace_service=None, orchestrator=None)
+    skill = VisionSkill(kernel=kernel, config={})
+    result = skill.execute("vision.analyze", {"filename": str(image_path), "prompt": "teste"}, {})
+    assert result["ok"] is True
+    assert result["path"] == str(image_path)
+
+
+def test_vision_resolves_media_prefixed_relative_path(tmp_path):
+    session_dir = tmp_path / "sessao"
+    image_path = session_dir / "media" / "image" / "foto.png"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    class DummyWorkspaceService:
+        def __init__(self, base):
+            self.base = str(base)
+
+        def get_session_dir(self, _sid):
+            return str(session_dir)
+
+        def get_workspace_dir(self):
+            return self.base
+
+    class DummyLLM:
+        def analyze_image(self, path, prompt):
+            return {"text": f"ok:{path}"}
+
+    kernel = SimpleNamespace(
+        llm_manager=DummyLLM(),
+        workspace_service=DummyWorkspaceService(tmp_path),
+        orchestrator=None,
+    )
+    skill = VisionSkill(kernel=kernel, config={})
+    result = skill.execute(
+        "vision.analyze",
+        {"image_path": "media/image/foto.png", "prompt": "teste"},
+        {"session_id": "s-1"},
+    )
+    assert result["ok"] is True
+    assert result["path"] == str(image_path)
+
+
+def test_system_control_fs_read_accepts_filepath_alias():
+    class DummySystemDriver:
+        def fs_read(self, path, start, end):
+            return "conteudo"
+
+    skill = SystemSkill(kernel=SimpleNamespace(system_driver=DummySystemDriver()), config={})
+    result = skill.execute("system.control.fs.read", {"filepath": "/tmp/teste.txt"}, {})
+    assert result["ok"] is True
+    assert result["path"] == "/tmp/teste.txt"
+
+
 def test_contract_actions_match_loaded_registry():
     class DummyCfg:
         def get(self, key, default=None):

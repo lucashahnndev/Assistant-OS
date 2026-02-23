@@ -11,6 +11,14 @@
                 },
                 "query": {
                     "type": "string"
+                },
+                "device_id": {
+                    "type": "string",
+                    "default": "default"
+                },
+                "allow_agent_fallback": {
+                    "type": "boolean",
+                    "default": true
                 }
             }
         },
@@ -22,6 +30,10 @@
                 },
                 "query": {
                     "type": "string"
+                },
+                "device_id": {
+                    "type": "string",
+                    "default": "default"
                 }
             }
         },
@@ -38,6 +50,18 @@
             "params": {
                 "url": {
                     "type": "string"
+                },
+                "device_id": {
+                    "type": "string",
+                    "default": "default"
+                },
+                "force_new_media_tab": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "allow_agent_fallback": {
+                    "type": "boolean",
+                    "default": true
                 }
             }
         },
@@ -50,8 +74,13 @@
                         "play",
                         "pause",
                         "next",
-                        "mute"
+                        "mute",
+                        "status"
                     ]
+                },
+                "device_id": {
+                    "type": "string",
+                    "default": "default"
                 }
             }
         },

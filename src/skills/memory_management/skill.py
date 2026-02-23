@@ -13,6 +13,22 @@ class MemorySkill(SkillBase):
     @property
     def actions(self) -> List[str]: return ["recall", "store"]
 
+    @staticmethod
+    def _resolve_query(params: Dict[str, Any]) -> str:
+        for key in ("query", "search_query", "searchQuery", "q", "term", "text"):
+            value = params.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    @staticmethod
+    def _resolve_content(params: Dict[str, Any]) -> str:
+        for key in ("content", "text", "note", "value", "message"):
+            value = params.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         action = action_id.split(".")[-1]
         orch = getattr(self.kernel, "orchestrator", None) if self.kernel else None
@@ -27,7 +43,7 @@ class MemorySkill(SkillBase):
             }
 
         if action == "recall":
-            query = params.get("query", "")
+            query = self._resolve_query(params)
             results = ms.search_memory(query)
             count = len(results) if isinstance(results, list) else 0
             return {
@@ -40,7 +56,7 @@ class MemorySkill(SkillBase):
                 "text": f"Memória: {count} resultado(s) para '{query}'.",
             }
         elif action == "store":
-            content = params.get("content")
+            content = self._resolve_content(params)
             if not content:
                 return {
                     "ok": False,

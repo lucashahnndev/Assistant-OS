@@ -14,6 +14,8 @@ import {
     Shield,
     ChevronLeft,
     ChevronRight,
+    ChevronUp,
+    ChevronDown,
     PanelLeftOpen,
     PanelLeftClose,
     Menu,
@@ -29,12 +31,19 @@ const DashboardLayout = () => {
         return localStorage.getItem('sidebar-collapsed') === 'true';
     });
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+    const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(() => {
+        return localStorage.getItem('header-collapsed') === 'true';
+    });
     // Breakpoint: Mobile and Tablet (<= 1024px) use the drawer sidebar
     const [isBelowDesktop, setIsBelowDesktop] = useState(window.innerWidth <= 1024);
 
     useEffect(() => {
         localStorage.setItem('sidebar-collapsed', isCollapsed);
     }, [isCollapsed]);
+
+    useEffect(() => {
+        localStorage.setItem('header-collapsed', isHeaderCollapsed);
+    }, [isHeaderCollapsed]);
 
     useEffect(() => {
         const handleResize = () => {
@@ -79,73 +88,98 @@ const DashboardLayout = () => {
             overflow: 'hidden'
         }}>
             {/* Global Header */}
-            <header className="glass" style={{
-                height: 'var(--header-height)',
-                minHeight: 'var(--header-height)',
-                width: 'calc(100% - 2rem)',
-                margin: '1rem 1rem 0.5rem',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '0 1.5rem',
-                borderRadius: 'var(--radius-md)',
-                zIndex: 1000,
-                flexShrink: 0
-            }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }}>
-                    <button
-                        className="btn-ghost"
-                        onClick={() => {
-                            if (isBelowDesktop) {
-                                setIsDrawerOpen(true);
-                            } else {
-                                setIsCollapsed(!isCollapsed);
-                            }
-                        }}
-                        style={{ padding: '0.5rem', marginRight: '-0.5rem', color: 'var(--text-primary)' }}
-                        title={isBelowDesktop ? "Menu" : "Toggle Sidebar"}
-                    >
-                        <Menu size={20} />
-                    </button>
+            {!isHeaderCollapsed && (
+                <header className="glass" style={{
+                    height: 'var(--header-height)',
+                    minHeight: 'var(--header-height)',
+                    width: 'calc(100% - 2rem)',
+                    margin: '1rem 1rem 0.5rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '0 1.5rem',
+                    borderRadius: 'var(--radius-md)',
+                    zIndex: 1000,
+                    flexShrink: 0
+                }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }}>
-                        <div style={{
-                            width: '32px',
-                            height: '32px',
-                            background: 'var(--accent-color)',
-                            borderRadius: 'var(--radius-sm)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            color: 'white',
-                            fontWeight: '900',
-                            fontSize: '1.2rem'
-                        }}>
-                            {agentName.charAt(0).toUpperCase()}
-                        </div>
-                        {!isBelowDesktop && (
-                            <>
+                        <button
+                            className="btn-ghost"
+                            onClick={() => {
+                                if (isBelowDesktop) {
+                                    setIsDrawerOpen(true);
+                                } else {
+                                    setIsCollapsed(!isCollapsed);
+                                }
+                            }}
+                            style={{ padding: '0.5rem', marginRight: '-0.5rem', color: 'var(--text-primary)' }}
+                            title={isBelowDesktop ? "Menu" : "Toggle Sidebar"}
+                        >
+                            <Menu size={20} />
+                        </button>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }}>
+                            <div style={{
+                                width: '32px',
+                                height: '32px',
+                                background: 'var(--accent-color)',
+                                borderRadius: 'var(--radius-sm)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: 'white',
+                                fontWeight: '900',
+                                fontSize: '1.2rem'
+                            }}>
+                                {agentName.charAt(0).toUpperCase()}
+                            </div>
+                            {!isBelowDesktop && (
                                 <span style={{ fontWeight: '800', fontSize: '1.1rem', letterSpacing: '-0.02em', textTransform: 'uppercase' }}>{agentName}</span>
-                                <div style={{ width: '1px', height: '20px', background: 'var(--card-border)' }} />
-                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', background: 'var(--accent-glow)', padding: '2px 8px', borderRadius: 'var(--radius-xs)', fontWeight: '700' }}>RUNTIME</span>
-                            </>
-                        )}
-                    </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                    {!isBelowDesktop && (
-                        <div style={{ display: 'flex', gap: 'var(--space-2)', marginRight: 'var(--space-2)' }}>
-                            <button className="btn-ghost" style={{ padding: '0.5rem', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)' }} title="Future Mic Button">
-                                <Cpu size={18} />
-                            </button>
-                            <button className="btn-ghost" style={{ padding: '0.5rem', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)' }} title="Future Call Button">
-                                <Settings size={18} />
-                            </button>
+                            )}
                         </div>
-                    )}
-                    <ThemeToggle />
-                </div>
-            </header>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                        <ThemeToggle />
+                        <button
+                            className="btn-ghost"
+                            onClick={() => {
+                                setIsDrawerOpen(false);
+                                setIsHeaderCollapsed(true);
+                            }}
+                            style={{ padding: '0.45rem', color: 'var(--text-muted)' }}
+                            title="Recolher cabeçalho"
+                        >
+                            <ChevronUp size={18} />
+                        </button>
+                    </div>
+                </header>
+            )}
+
+            {isHeaderCollapsed && (
+                <button
+                    className="glass btn-ghost"
+                    onClick={() => setIsHeaderCollapsed(false)}
+                    title="Expandir cabeçalho"
+                    style={{
+                        position: 'fixed',
+                        top: isBelowDesktop ? '8px' : '10px',
+                        right: isBelowDesktop ? '8px' : '14px',
+                        zIndex: 2102,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: isBelowDesktop ? '8px' : '8px 12px',
+                        borderRadius: '999px',
+                        background: 'var(--card-bg)',
+                        border: '1px solid var(--card-border)',
+                        color: 'var(--text-primary)',
+                        boxShadow: '0 8px 20px rgba(0,0,0,0.35)'
+                    }}
+                >
+                    <ChevronDown size={16} />
+                    {!isBelowDesktop && <span style={{ fontSize: '12px', fontWeight: 700 }}>Header</span>}
+                </button>
+            )}
 
             <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
                 {/* Sidebar */}
