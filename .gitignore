@@ -159,3 +159,4 @@ frontend/dist/
 frontend/node_modules/
 docs/*
 tests/*
+*.pid

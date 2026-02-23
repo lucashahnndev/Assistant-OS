@@ -235,6 +235,28 @@ class BrowserAutomatorSkill(SkillBase):
                 return self._wrap_result(False, action, "Missing URL or query.", error="MISSING_URL")
             url = self._normalize_target(raw_target)
             if browser_driver:
+                if hasattr(browser_driver, "browser_agent"):
+                    task = (
+                        f"Open this URL on the current browser session: {url}. "
+                        "If a consent/cookie banner appears, handle it. "
+                        "Stop after confirming the page is loaded."
+                    )
+                    driver_result = self._browser_agent_driver(
+                        browser_driver,
+                        task,
+                        context.get("session_id"),
+                        device_id,
+                    )
+                    ok = not self._is_error_result(driver_result)
+                    return self._wrap_result(
+                        ok,
+                        action,
+                        str(driver_result),
+                        url=url,
+                        provider="browser_use_agent",
+                        device_id=device_id,
+                        raw_result=str(driver_result),
+                    )
                 # Media surfaces (Deezer/YouTube) often need autoplay/user-gesture handling.
                 if any(host in url for host in ("deezer.com/track/", "youtube.com/watch", "music.youtube.com/watch")):
                     driver_result = self._navigate_autoplay_driver(
@@ -309,6 +331,29 @@ class BrowserAutomatorSkill(SkillBase):
                 return self._wrap_result(False, action, "Missing URL for playback.", error="MISSING_URL")
             url = self._normalize_target(raw_target)
             if browser_driver:
+                if hasattr(browser_driver, "browser_agent"):
+                    task = (
+                        f"Open this media URL and start playback in the same tab: {url}. "
+                        "Handle consent/cookie overlays if needed. "
+                        "Confirm playback using on-page media state (playing or currentTime progressing). "
+                        "If not possible, return blocker clearly."
+                    )
+                    driver_result = self._browser_agent_driver(
+                        browser_driver,
+                        task,
+                        context.get("session_id"),
+                        device_id,
+                    )
+                    ok = not self._is_error_result(driver_result)
+                    return self._wrap_result(
+                        ok,
+                        action,
+                        str(driver_result),
+                        url=url,
+                        provider="browser_use_agent",
+                        device_id=device_id,
+                        raw_result=str(driver_result),
+                    )
                 driver_result = self._navigate_autoplay_driver(
                     browser_driver,
                     url,

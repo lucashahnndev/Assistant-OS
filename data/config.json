@@ -26,7 +26,7 @@
         },
         "telegram": {
             "enabled": true,
-            "token": "6510046132:AAHPhIIiTPmFcnzPueNhb9hEN4ygz4gc36Q",
+            "token": "ENV_TELEGRAM_KEY",
             "allowed_users": []
         },
         "server": {
@@ -51,11 +51,11 @@
             "provider": "openrouter",
             "providers": {
                 "google": {
-                    "api_key": "AIzaSyCDy8pulx_DXA0E3NYyRIVSmWkmIOPZrts",
+                    "api_key": "ENV_GEMINI_API_KEY",
                     "model": "gemini-2.0-flash"
                 },
                 "openrouter": {
-                    "api_key": "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",
+                    "api_key": "ENV_OPENROUTER_API_KEY",
                     "model": "arcee-ai/trinity-large-preview:free"
                 },
                 "openai": {
@@ -73,12 +73,12 @@
             "provider": "openrouter",
             "providers": {
                 "google": {
-                    "api_key": "AIzaSyCDy8pulx_DXA0E3NYyRIVSmWkmIOPZrts",
+                    "api_key": "ENV_GEMINI_API_KEY",
                     "model": "gemini-2.0-flash-lite"
                 },
                 "openrouter": {
-                    "api_key": "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",
-                    "model": "qwen/qwen3-vl-235b-a22b-thinking",
+                    "api_key": "ENV_OPENROUTER_API_KEY",
+                    "model": "qwen/qwen2.5-vl-32b-instruct:free",
                     "max_tokens": 256
                 }
             }
@@ -107,7 +107,7 @@
                         "volume": 1
                     },
                     "google_cloud": {
-                        "api_key": "AIzaSyBCKjgNX4JeUGw7BC8rLet219A0zHIsRgQ"
+                        "api_key": "ENV_GOOGLE_CLOUD_API_KEY"
                     },
                     "edge_tts": {
                         "voice": "pt-BR-FranciscaNeural"
@@ -176,7 +176,7 @@
         },
         "youtube_search": {
             "enabled": true,
-            "apiKey": "AIzaSyBCKjgNX4JeUGw7BC8rLet219A0zHIsRgQ",
+            "apiKey": "ENV_GOOGLE_CLOUD_API_KEY",
             "defaults": {
                 "surfaceMode": "auto",
                 "limit": 5
@@ -184,7 +184,7 @@
         },
         "maps_search": {
             "enabled": true,
-            "apiKey": "AIzaSyBz6jMURlxl3GlAhL26tj5MHeiMStnWTWA",
+            "apiKey": "ENV_GOOGLE_MAPS_API_KEY",
             "defaults": {
                 "region": "BR",
                 "language": "pt-BR"
@@ -205,7 +205,7 @@
         },
         "weather_control": {
             "enabled": true,
-            "api_key": "013898ae8e6f8629c29c0936c54f4441"
+            "api_key": "ENV_WEATHER_API_KEY"
         },
         "system_apps": {
             "enabled": true

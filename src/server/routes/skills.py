@@ -214,9 +214,17 @@ def update_skill_config(skill_id: str, patch_data: dict, request: Request, user:
     if not config_manager:
         raise HTTPException(status_code=500, detail="Config manager not available")
     
-    # 1. Get current config
-    skills_config = config_manager.get("skills", {})
-    skill_config = skills_config.get(skill_id, {}).copy()
+    # 1. Load RAW config from disk (do not use substituted config_data for persistence)
+    raw_config = {}
+    try:
+        if os.path.exists(config_manager.config_file):
+            with open(config_manager.config_file, "r", encoding="utf-8") as f:
+                raw_config = json.load(f) or {}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read raw config: {e}")
+
+    raw_skills_config = raw_config.get("skills", {})
+    skill_config = raw_skills_config.get(skill_id, {}).copy()
     
     # 2. Apply patch (preserving special types if needed, but JSON is simple)
     # Don't allow overwriting secrets with mask
@@ -245,15 +253,15 @@ def update_skill_config(skill_id: str, patch_data: dict, request: Request, user:
     if errors:
         raise HTTPException(status_code=400, detail={"errors": errors, "missing": missing})
 
-    # 4. Persistence via ConfigManager
-    if "skills" not in config_manager.config_data:
-        config_manager.config_data["skills"] = {}
-    config_manager.config_data["skills"][skill_id] = skill_config
-    
+    # 4. Persistence via RAW config (preserves ENV_* placeholders)
+    if "skills" not in raw_config:
+        raw_config["skills"] = {}
+    raw_config["skills"][skill_id] = skill_config
+
     # Save to disk
     try:
-        with open(config_manager.config_file, 'w') as f:
-            json.dump(config_manager.config_data, f, indent=4)
+        with open(config_manager.config_file, "w", encoding="utf-8") as f:
+            json.dump(raw_config, f, indent=4)
         config_manager.load() # Refresh
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save config: {e}")

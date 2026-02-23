@@ -7,6 +7,7 @@ import datetime
 import os
 import json
 import tempfile
+import io
 from utils.event_bus import global_event_bus
 from .base_driver import BaseDriver
 from .browser_tab_registry import TabRegistry
@@ -482,6 +483,50 @@ class BrowserDriver(BaseDriver):
         except Exception as e:
             logger.error(f"Failed to initialize Humanized Browser: {e}", exc_info=True)
 
+    def _resolve_browser_use_token_budget(self, provider_name: str, provider_config: dict, vision_max_tokens: int) -> int:
+        """
+        Resolves an effective browser-use max token budget.
+        Policy:
+        - If an inherited/kernel-like limit exists, force browser-use below it.
+        - Otherwise keep the current bounded token budget.
+        """
+        inherited_limit = None
+        try:
+            # "Fake inherited from kernel" (pre-kernel wiring): optional fields in config.
+            browser_cfg = self.kernel.config_manager.get_skill_config("browser_automator") if self.kernel else {}
+            if isinstance(browser_cfg, dict):
+                inherited_limit = browser_cfg.get("inherited_token_limit") or browser_cfg.get("kernel_token_limit")
+        except Exception:
+            inherited_limit = None
+
+        # Optional fallback path if config evolves before kernel wiring.
+        if inherited_limit is None:
+            try:
+                limits_cfg = self.kernel.config_manager.get("cortex", {}).get("limits", {}) if self.kernel else {}
+                inherited_limit = limits_cfg.get("model_max_tokens")
+            except Exception:
+                inherited_limit = None
+
+        try:
+            inherited_limit = int(inherited_limit) if inherited_limit is not None else None
+        except Exception:
+            inherited_limit = None
+
+        effective = int(vision_max_tokens)
+        if inherited_limit and inherited_limit > 64:
+            # Force browser-use below inherited cap.
+            forced = int(inherited_limit * 0.75)
+            forced = min(forced, inherited_limit - 1)
+            effective = min(effective, forced)
+            logger.info(
+                "Applying inherited token cap for browser-use | provider=%s inherited=%s effective=%s",
+                provider_name,
+                inherited_limit,
+                effective,
+            )
+
+        return max(64, effective)
+
     def browser_agent(self, task, session_id=None, device_id: str = "default"):
         """Runs an autonomous task using browser-use Agent."""
         if not self.loop or not self.running:
@@ -509,8 +554,27 @@ class BrowserDriver(BaseDriver):
                     self._mark_media_verified(source="collaborative_media")
                     return f"Tarefa concluída: {collaborative.get('message')}"
                 logger.info(
-                    "Collaborative media task did not confirm playback (%s). Falling back to browser-use.",
+                    "Collaborative media task did not confirm playback (%s). Running one extra local verification pass.",
                     collaborative.get("status"),
+                )
+                # Media policy: avoid heavy browser-use context for vision loops.
+                # Keep fallback fully controlled (image + short prompts only).
+                try:
+                    page = self.page or await self._get_current_page()
+                    if page:
+                        extra_attempt = await self._attempt_playback_start(page=page, attempts=2, settle_s=0.8)
+                        if bool(extra_attempt.get("playback_confirmed")):
+                            self._mark_media_verified(page=page, source="deterministic_post_collab")
+                            return "Tarefa concluída: Reprodução confirmada após verificação local adicional."
+                except Exception as e:
+                    logger.debug(f"Extra local playback verification failed: {e}")
+
+                blocker = str(collaborative.get("blocker") or "playback_not_confirmed")
+                return (
+                    "FATAL TOOL ERROR na execução da tarefa: media automation incomplete "
+                    f"(blocker={blocker}). Política ativa: fallback browser-use desabilitado para mídia "
+                    "para evitar payload extenso; usando apenas visão enxuta (imagem + prompt curto). "
+                    "NÃO ALUCINE SUCESSO."
                 )
 
             # 1. Setup Playback
@@ -555,6 +619,7 @@ class BrowserDriver(BaseDriver):
                 vision_max_tokens = 512
             # Keep conservative bounds for browser automation calls on free/low-credit plans.
             vision_max_tokens = max(128, min(vision_max_tokens, 1024))
+            vision_max_tokens = self._resolve_browser_use_token_budget(provider_name, provider_config, vision_max_tokens)
 
             logger.info(
                 f"Using vision model '{model_name}' (provider: {provider_name}) "
@@ -1405,8 +1470,20 @@ class BrowserDriver(BaseDriver):
             image_bytes = await page.screenshot()
             if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
                 return None
-            with open(path, "wb") as f:
-                f.write(image_bytes)
+            # Vision-lite: aggressively shrink payload to reduce token/cost pressure.
+            try:
+                from PIL import Image
+                with Image.open(io.BytesIO(image_bytes)) as img:
+                    img = img.convert("RGB")
+                    max_w = 896
+                    max_h = 504
+                    if img.width > max_w or img.height > max_h:
+                        img.thumbnail((max_w, max_h))
+                    img.save(path, format="JPEG", quality=52, optimize=True)
+            except Exception:
+                # Fallback to raw bytes if Pillow processing fails.
+                with open(path, "wb") as f:
+                    f.write(image_bytes)
             return path
         except Exception as e:
             logger.warning(f"Collaborative screenshot failed: {e}")
