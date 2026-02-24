@@ -1,0 +1,135 @@
+{
+    "name": "browser.automator",
+    "description": "Controla navegação e automação web: abrir páginas, interagir com busca interna, controlar mídia e executar tarefas guiadas.",
+    "version": "1.0.0",
+    "actions": {
+        "open": {
+            "description": "Abre URL ou consulta textual no navegador. Para consultas, converte automaticamente em busca web.",
+            "params": {
+                "url": {
+                    "type": "string"
+                },
+                "query": {
+                    "type": "string"
+                },
+                "device_id": {
+                    "type": "string",
+                    "default": "default"
+                },
+                "allow_agent_fallback": {
+                    "type": "boolean",
+                    "default": true
+                }
+            }
+        },
+        "navigate": {
+            "description": "Ação principal de navegação (equivalente a open).",
+            "params": {
+                "url": {
+                    "type": "string"
+                },
+                "query": {
+                    "type": "string"
+                },
+                "device_id": {
+                    "type": "string",
+                    "default": "default"
+                }
+            }
+        },
+        "internal_search": {
+            "description": "Busca conteúdo dentro da página já aberta (usa interação na própria UI do site).",
+            "params": {
+                "query": {
+                    "type": "string"
+                }
+            }
+        },
+        "play_url": {
+            "description": "Abre URL de mídia e tenta iniciar reprodução automática quando possível.",
+            "params": {
+                "url": {
+                    "type": "string"
+                },
+                "device_id": {
+                    "type": "string",
+                    "default": "default"
+                },
+                "force_new_media_tab": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "allow_agent_fallback": {
+                    "type": "boolean",
+                    "default": true
+                }
+            }
+        },
+        "control": {
+            "description": "Controla mídia da aba ativa (play/pause/next/mute).",
+            "params": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "play",
+                        "pause",
+                        "next",
+                        "mute",
+                        "status"
+                    ]
+                },
+                "device_id": {
+                    "type": "string",
+                    "default": "default"
+                }
+            }
+        },
+        "automate": {
+            "description": "Executa tarefa web completa via agente de automação (fluxo multi-etapas).",
+            "params": {
+                "task": {
+                    "type": "string"
+                }
+            }
+        }
+    },
+    "config": {
+        "profilePath": {
+            "type": "string",
+            "description": "Caminho para o perfil do navegador (ex: custom_data/profile).",
+            "env": "BROWSER_PROFILE_PATH"
+        },
+        "userDataDir": {
+            "type": "string",
+            "description": "Caminho absoluto para diretório de dados do usuário."
+        },
+        "headless": {
+            "type": "boolean",
+            "description": "Inicia o navegador em modo oculto (sem GUI).",
+            "default": false
+        },
+        "cdp_url": {
+            "type": "string",
+            "description": "URL de depuração remota (CDP) para conectar a uma instância existente.",
+            "default": null
+        },
+        "viewport": {
+            "type": "object",
+            "properties": {
+                "width": {
+                    "type": "integer",
+                    "default": 1280
+                },
+                "height": {
+                    "type": "integer",
+                    "default": 720
+                }
+            }
+        },
+        "timeoutMs": {
+            "type": "integer",
+            "description": "Tempo limite global para operações do navegador (ms).",
+            "default": 30000
+        }
+    }
+}

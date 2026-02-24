@@ -1,0 +1,40 @@
+{
+  "name": "Deep Memory",
+  "description": "Compatibility skill to store and recall long-term memory explicitly.",
+  "actions": [
+    {
+      "id": "deep.memory.recall_memory",
+      "handler": "recall_memory",
+      "description": "Search long-term memory by semantic query.",
+      "parameters": {
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "id": "deep.memory.store_memory",
+      "handler": "store_memory",
+      "description": "Store a long-term memory fact.",
+      "parameters": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "default": "general"
+          }
+        },
+        "required": [
+          "content"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "name": "System Applications",
+  "description": "Manage local applications and system window states.",
+  "actions": [
+    {
+      "name": "open_program",
+      "description": "Launch a local application or a web app shortcut. ",
+      "parameters": {
+        "properties": {
+          "program_name": {
+            "type": "string",
+            "description": "Name of the binary or application (e.g., \"spotify\", \"vscode\", \"terminal\")."
+          }
+        },
+        "required": [
+          "program_name"
+        ]
+      }
+    },
+    {
+      "name": "key_command",
+      "description": "Direct window controls via automated key presses. ",
+      "parameters": {
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "find_program",
+      "description": "Checks if a program is installed by searching for the best match. ",
+      "parameters": {
+        "properties": {
+          "program_name": {
+            "type": "string",
+            "description": "The name to search for."
+          }
+        },
+        "required": [
+          "program_name"
+        ]
+      }
+    },
+    {
+      "name": "close_program",
+      "description": "Attempts to close the current active window. ",
+      "parameters": {
+        "properties": {},
+        "required": []
+      }
+    }
+  ],
+  "permissions": [],
+  "config_schema": {}
+}

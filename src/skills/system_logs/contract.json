@@ -1,0 +1,39 @@
+{
+    "name": "system_logs",
+    "description": "Consulta e leitura de logs técnicos do sistema, API, skills e interfaces.",
+    "version": "1.0.0",
+    "actions": [
+        {
+            "id": "system_logs.list",
+            "name": "list",
+            "description": "Lista categorias de logs disponíveis e seus arquivos."
+        },
+        {
+            "id": "system_logs.read",
+            "name": "read",
+            "description": "Lê as últimas N linhas de um arquivo de log específico.",
+            "parameters": {
+                "properties": {
+                    "file": {
+                        "type": "string",
+                        "description": "Log filename to read (e.g., llm.log, telegram.log, assistant.log)."
+                    },
+                    "lines": {
+                        "type": "integer",
+                        "description": "Number of lines to read (default: 20, max: 100).",
+                        "default": 20
+                    }
+                }
+            }
+        }
+    ],
+    "context_map": {
+        "assistant.log": "Unified log containing all system activity. Use for general debugging.",
+        "llm.log": "Natural language processing logs. Use for AI response errors or prompt issues.",
+        "telegram.log": "External chat driver logs. Use for Telegram connection or message delivery issues.",
+        "web.log": "Frontend and WebSocket driver logs. Use for web UI connectivity issues.",
+        "api.log": "Portal server routes and endpoint logs. Use for API errors (auth, database).",
+        "skills.log": "Modular skill execution logs. Use when a specific command/skill fails to execute.",
+        "interface.log": "Hardward/Driver interface logs (Voice, System control)."
+    }
+}

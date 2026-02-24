@@ -1,1 +1,0 @@
-from open_internet_service.main import open_internet_app

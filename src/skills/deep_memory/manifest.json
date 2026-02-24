@@ -1,0 +1,39 @@
+{
+  "name": "Deep Memory",
+  "description": "Compatibility layer for explicit long-term memory actions.",
+  "actions": [
+    {
+      "name": "deep.memory.recall_memory",
+      "description": "Search long-term memory by semantic query.",
+      "parameters": {
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "deep.memory.store_memory",
+      "description": "Store a long-term memory fact.",
+      "parameters": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ]
+      }
+    }
+  ],
+  "permissions": [],
+  "config_schema": {}
+}

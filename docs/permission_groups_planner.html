@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Atlas Bot - Planner de Permissões por Grupo</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        :root {
+            --line: #dbe5f0;
+            --ok: #065f46;
+            --warn: #92400e;
+            --ink: #0f172a;
+            --muted: #64748b;
+            --panel: #ffffff;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.35rem 0.75rem;
+            border-radius: 999px;
+            font-weight: 700;
+            font-size: 0.78rem;
+            border: 1px solid #bfdbfe;
+            background: #eff6ff;
+            color: #1d4ed8;
+            margin-bottom: 1rem;
+        }
+
+        .hero {
+            background: linear-gradient(135deg, #f8fafc 0%, #eef4ff 100%);
+            border: 1px solid var(--line);
+            border-radius: 1rem;
+            padding: 1.2rem;
+            margin-bottom: 1rem;
+        }
+
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 1rem;
+            padding: 1.1rem 1.2rem;
+            margin-bottom: 1rem;
+        }
+
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            gap: 0.8rem;
+            margin-bottom: 1rem;
+        }
+
+        .kpi {
+            border: 1px solid var(--line);
+            border-radius: 0.85rem;
+            padding: 0.8rem 0.95rem;
+            background: #fff;
+        }
+
+        .kpi strong {
+            display: block;
+            font-size: 1.2rem;
+            color: var(--ink);
+        }
+
+        .kpi span {
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
+        .pill {
+            display: inline-block;
+            padding: 0.2rem 0.55rem;
+            border-radius: 999px;
+            font-size: 0.76rem;
+            font-weight: 700;
+            margin-right: 0.35rem;
+            border: 1px solid transparent;
+        }
+
+        .pill.done {
+            color: #065f46;
+            background: #d1fae5;
+            border-color: #a7f3d0;
+        }
+
+        .pill.progress {
+            color: #92400e;
+            background: #fef3c7;
+            border-color: #fde68a;
+        }
+
+        .phase-table {
+            width: 100%;
+            border-collapse: collapse;
+            border: 1px solid var(--line);
+            border-radius: 0.8rem;
+            overflow: hidden;
+        }
+
+        .phase-table th,
+        .phase-table td {
+            border-bottom: 1px solid var(--line);
+            padding: 0.65rem 0.7rem;
+            text-align: left;
+            vertical-align: top;
+        }
+
+        .phase-table th {
+            background: #f8fafc;
+            color: #334155;
+            font-weight: 700;
+            font-size: 0.92rem;
+        }
+
+        .phase-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .code-ref {
+            font-family: "JetBrains Mono", monospace;
+            font-size: 0.84rem;
+            background: #f1f5f9;
+            border: 1px solid var(--line);
+            border-radius: 0.35rem;
+            padding: 0.08rem 0.35rem;
+            white-space: nowrap;
+        }
+
+        .diag-wrap {
+            border: 1px solid var(--line);
+            border-radius: 1rem;
+            background: #fbfdff;
+            padding: 0.85rem;
+            overflow-x: auto;
+        }
+
+        .diag {
+            min-width: 760px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="sidebar">
+        <a href="index.html" class="logo">Atlas Bot</a>
+        <ul class="nav-links">
+            <li><a href="index.html">Visão Geral</a></li>
+            <li><a href="installation.html">Instalação</a></li>
+            <li><a href="architecture.html">Arquitetura</a></li>
+            <li><a href="modules.html">Módulos</a></li>
+            <li><a href="agent_refactor_plan.html">Plano Núcleo Agêntico</a></li>
+            <li><a href="permission_groups_planner.html" class="active">Planner Permissões</a></li>
+        </ul>
+    </div>
+
+    <div class="main-content">
+        <span class="badge">Planner Técnico</span>
+        <h1>Plano de Implementação: Permissões por Grupo</h1>
+
+        <div class="hero">
+            <p>
+                Evolução do modelo de autorização para grupos customizáveis, com vínculo por usuário/chat e
+                possibilidade de override pontual. O objetivo é reduzir matriz skill-a-skill por entidade, sem perder
+                granularidade.
+            </p>
+        </div>
+
+        <div class="kpi-grid">
+            <div class="kpi">
+                <strong>5</strong>
+                <span>Fases planejadas</span>
+            </div>
+            <div class="kpi">
+                <strong>4/5</strong>
+                <span>Fases concluídas</span>
+            </div>
+            <div class="kpi">
+                <strong>master</strong>
+                <span>Grupo total com wildcard</span>
+            </div>
+            <div class="kpi">
+                <strong>React UI</strong>
+                <span>Sem quebra de layout base</span>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Status Atual</h2>
+            <p><span class="pill done">Concluído</span>Modelagem de <span class="code-ref">PermissionGroup</span> +
+                <span class="code-ref">group_id</span> para usuário/chat.
+            </p>
+            <p><span class="pill done">Concluído</span>Gate de execução e catálogo visível por regras efetivas de grupo
+                e overrides.</p>
+            <p><span class="pill done">Concluído</span>API admin de grupos (CRUD) + atribuição por usuário/chat +
+                defaults por interface.</p>
+            <p><span class="pill done">Concluído</span>UI web com aba de grupos, selects de grupo e edição sem mudar
+                identidade visual.</p>
+            <p><span class="pill progress">Pendente</span>Rodada manual final no fluxo web real após reset de
+                identidades.</p>
+        </div>
+
+        <h2>Fluxo Alvo (Ilustrativo)</h2>
+        <div class="diag-wrap">
+            <svg class="diag" viewBox="0 0 980 270" xmlns="http://www.w3.org/2000/svg" role="img"
+                aria-label="Fluxo de autorização por grupo">
+                <defs>
+                    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+                        <path d="M0,0 L8,3 L0,6 Z" fill="#64748b" />
+                    </marker>
+                </defs>
+
+                <rect x="20" y="50" width="170" height="48" rx="8" fill="#ffffff" stroke="#cbd5e1" />
+                <text x="34" y="79" font-size="13" fill="#0f172a">PrincipalContext</text>
+
+                <rect x="220" y="50" width="200" height="48" rx="8" fill="#ecfeff" stroke="#99f6e4" />
+                <text x="235" y="79" font-size="12" fill="#115e59">IdentityService</text>
+
+                <rect x="450" y="50" width="240" height="48" rx="8" fill="#eff6ff" stroke="#bfdbfe" />
+                <text x="463" y="69" font-size="12" fill="#1d4ed8">Rules = Group + User Override</text>
+                <text x="463" y="85" font-size="12" fill="#1d4ed8">(+ Chat Override em contexto de grupo)</text>
+
+                <rect x="720" y="50" width="240" height="48" rx="8" fill="#f0fdf4" stroke="#bbf7d0" />
+                <text x="734" y="69" font-size="12" fill="#166534">get_allowed_actions / dispatch gate</text>
+                <text x="734" y="85" font-size="12" fill="#166534">restrição por camada + deny explícito</text>
+
+                <line x1="190" y1="74" x2="218" y2="74" stroke="#64748b" stroke-width="1.6" marker-end="url(#arrow)" />
+                <line x1="420" y1="74" x2="448" y2="74" stroke="#64748b" stroke-width="1.6" marker-end="url(#arrow)" />
+                <line x1="690" y1="74" x2="718" y2="74" stroke="#64748b" stroke-width="1.6" marker-end="url(#arrow)" />
+
+                <rect x="20" y="130" width="940" height="108" rx="10" fill="#fff7ed" stroke="#fed7aa" />
+                <text x="36" y="156" font-size="12.5" fill="#9a3412">Propriedades importantes:</text>
+                <text x="36" y="176" font-size="12" fill="#9a3412">• Grupo define baseline de permissões.</text>
+                <text x="36" y="194" font-size="12" fill="#9a3412">• Allow-list de override restringe mesmo com wildcard no grupo (evita bypass).</text>
+                <text x="36" y="212" font-size="12" fill="#9a3412">• Novas skills entram no grupo master automaticamente via <tspan font-family="monospace">*</tspan>.</text>
+                <text x="36" y="230" font-size="12" fill="#9a3412">• UI administra grupos e vínculos sem editar usuário skill-a-skill.</text>
+            </svg>
+        </div>
+
+        <h2>Fases do Plano</h2>
+        <table class="phase-table">
+            <thead>
+                <tr>
+                    <th>Fase</th>
+                    <th>Objetivo</th>
+                    <th>Entrega</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>F1</strong> Modelagem</td>
+                    <td>Entidades e política com grupos.</td>
+                    <td><span class="code-ref">PermissionGroup</span>, <span class="code-ref">group_id</span> em user/chat.</td>
+                    <td><span class="pill done">Concluído</span></td>
+                </tr>
+                <tr>
+                    <td><strong>F2</strong> Enforcement</td>
+                    <td>Aplicar regras no runtime.</td>
+                    <td>Prompt scope + dispatch gate por grupo/override.</td>
+                    <td><span class="pill done">Concluído</span></td>
+                </tr>
+                <tr>
+                    <td><strong>F3</strong> API Admin</td>
+                    <td>Administração de grupos e vínculos.</td>
+                    <td>CRUD grupos + bind usuário/chat + config por interface.</td>
+                    <td><span class="pill done">Concluído</span></td>
+                </tr>
+                <tr>
+                    <td><strong>F4</strong> UI Web</td>
+                    <td>Operação no painel atual sem regressão visual.</td>
+                    <td>Aba Groups + selectors em config/users/chats + modal de edição.</td>
+                    <td><span class="pill done">Concluído</span></td>
+                </tr>
+                <tr>
+                    <td><strong>F5</strong> Validação Operacional</td>
+                    <td>Confirmação final em fluxo real web.</td>
+                    <td>Rodada manual pós-reset de identidades.</td>
+                    <td><span class="pill progress">Pendente</span></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</body>
+
+</html>

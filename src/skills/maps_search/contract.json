@@ -1,0 +1,133 @@
+{
+    "name": "maps.search",
+    "description": "Busca locais no Google Maps com suporte a cidade, categorias e modo diversificado de resultados.",
+    "version": "1.0.0",
+    "actions": {
+        "search": {
+            "description": "Pesquisa lugares por texto/categoria/cidade, com filtros e opção de variações automáticas para ampliar resultados.",
+            "params": {
+                "query": {
+                    "type": "string",
+                    "description": "Consulta livre (ex.: 'restaurantes japoneses'). Se city for informado, a skill complementa automaticamente."
+                },
+                "city": {
+                    "type": "string",
+                    "description": "Cidade alvo da busca (ex.: 'Curitiba')."
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Categoria de local para compor a consulta (ex.: restaurante, farmácia, hotel)."
+                },
+                "keywords": {
+                    "type": "string",
+                    "description": "Palavras-chave extras (ex.: 'vegano', '24h', 'com estacionamento')."
+                },
+                "near": {
+                    "type": "string",
+                    "description": "Ponto para bias geográfico. Aceita 'lat,lng' ou texto geocodificável."
+                },
+                "radius": {
+                    "type": "integer",
+                    "description": "Raio em metros para busca com localização.",
+                    "default": 5000
+                },
+                "type": {
+                    "type": "string",
+                    "description": "Tipo oficial do Places API (ex.: restaurant, hospital)."
+                },
+                "place_type": {
+                    "type": "string",
+                    "description": "Alias de category para compor consulta semântica."
+                },
+                "open_now": {
+                    "type": "boolean",
+                    "description": "Quando true, prioriza locais abertos no momento.",
+                    "default": false
+                },
+                "min_rating": {
+                    "type": "number",
+                    "description": "Nota mínima (0 a 5).",
+                    "default": 0
+                },
+                "sort_by": {
+                    "type": "string",
+                    "enum": [
+                        "relevance",
+                        "rating"
+                    ],
+                    "description": "Critério de ordenação.",
+                    "default": "relevance"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Quantidade máxima de resultados finais.",
+                    "default": 8
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": [
+                        "standard",
+                        "diverse"
+                    ],
+                    "description": "No modo 'diverse' executa variações de consulta para ampliar cobertura.",
+                    "default": "standard"
+                },
+                "diversify": {
+                    "type": "boolean",
+                    "description": "Alias rápido para ativar mode='diverse'.",
+                    "default": false
+                },
+                "max_variants": {
+                    "type": "integer",
+                    "description": "Número máximo de variações de consulta no modo diversificado.",
+                    "default": 3
+                }
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "ok": {
+                        "type": "boolean"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "text": {
+                        "type": "string"
+                    },
+                    "places": {
+                        "type": "array"
+                    },
+                    "best": {
+                        "type": "object"
+                    },
+                    "count": {
+                        "type": "integer"
+                    },
+                    "provider": {
+                        "type": "string"
+                    },
+                    "queries_executed": {
+                        "type": "array"
+                    }
+                }
+            }
+        }
+    },
+    "config": {
+        "apiKey": {
+            "type": "string",
+            "env": "GOOGLE_MAPS_API_KEY"
+        },
+        "defaults": {
+            "region": {
+                "type": "string",
+                "default": "BR"
+            },
+            "language": {
+                "type": "string",
+                "default": "pt-BR"
+            }
+        }
+    }
+}

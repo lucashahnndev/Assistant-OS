@@ -1,0 +1,121 @@
+{
+    "name": "web.search",
+    "description": "Busca informações na web com modo de links ou extração de conhecimento estruturado para contexto da IA.",
+    "version": "1.0.0",
+    "actions": {
+        "discover": {
+            "description": "Pesquisa web por tema e devolve links relevantes. Também pode extrair conteúdo textual em formato RAG.",
+            "risk_level": "low",
+            "params": {
+                "query": {
+                    "type": "string",
+                    "description": "Termo de busca"
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 5
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": [
+                        "links",
+                        "knowledge",
+                        "auto"
+                    ],
+                    "default": "links",
+                    "description": "links: retorna resumo+URLs. knowledge: extrai conteúdo textual dos principais links. auto: escolhe knowledge apenas para perguntas factuais."
+                },
+                "knowledge_limit": {
+                    "type": "integer",
+                    "default": 2,
+                    "description": "Quantidade de links (top resultados) usados na extração de conteúdo em modo knowledge."
+                },
+                "max_chars_per_doc": {
+                    "type": "integer",
+                    "default": 2500,
+                    "description": "Limite de caracteres extraídos por documento."
+                },
+                "chunk_size": {
+                    "type": "integer",
+                    "default": 700,
+                    "description": "Tamanho de cada chunk textual para RAG."
+                },
+                "chunk_overlap": {
+                    "type": "integer",
+                    "default": 100,
+                    "description": "Sobreposição entre chunks para preservar contexto."
+                }
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "ok": {
+                        "type": "boolean"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "results": {
+                        "type": "array"
+                    },
+                    "best": {
+                        "type": "object"
+                    },
+                    "count": {
+                        "type": "integer"
+                    },
+                    "mode": {
+                        "type": "string"
+                    },
+                    "knowledge_docs": {
+                        "type": "array"
+                    },
+                    "chunks": {
+                        "type": "array"
+                    },
+                    "warnings": {
+                        "type": "array"
+                    },
+                    "text": {
+                        "type": "string"
+                    },
+                    "provider": {
+                        "type": "string"
+                    }
+                }
+            }
+        }
+    },
+    "config": {
+        "provider": {
+            "type": "string",
+            "default": "duckduckgo"
+        },
+        "defaults": {
+            "limit": {
+                "type": "integer",
+                "default": 5
+            },
+            "mode": {
+                "type": "string",
+                "default": "links"
+            },
+            "knowledge_limit": {
+                "type": "integer",
+                "default": 2
+            },
+            "max_chars_per_doc": {
+                "type": "integer",
+                "default": 2500
+            },
+            "chunk_size": {
+                "type": "integer",
+                "default": 700
+            },
+            "chunk_overlap": {
+                "type": "integer",
+                "default": 100
+            }
+        }
+    }
+}

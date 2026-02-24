@@ -152,5 +152,15 @@ cython_debug/
 #.idea/
 
 
-*/data/config.json
+data/
+data/*
+node_modules/
+*.log
+frontend/dist/
+frontend/node_modules/
+docs/*
+!docs/worker_task_contract.md
+tests/*
+*.pid
+# Explicit local runtime config
 data/config.json

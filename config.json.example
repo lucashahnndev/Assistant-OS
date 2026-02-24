@@ -1,0 +1,271 @@
+{
+    "logging": {
+        "level": "INFO",
+        "separate_files": true,
+        "services": {
+            "llm": "DEBUG",
+            "telegram": "INFO",
+            "web": "INFO",
+            "api": "INFO",
+            "skills": "INFO",
+            "interface": "INFO"
+        }
+    },
+    "playback": {
+        "enabled": true,
+        "persist": true,
+        "ttl_hours": 24,
+        "max_total_mb": 512,
+        "persist_on_success": true,
+        "persist_on_error": true
+    },
+    "interfaces": {
+        "voice": {
+            "enabled": false,
+            "wake_word": "atlas"
+        },
+        "telegram": {
+            "enabled": true,
+            "token": "ENV_TELEGRAM_KEY",
+            "allowed_users": []
+        },
+        "server": {
+            "enabled": true,
+            "host": "0.0.0.0",
+            "port": 8000,
+            "cors_origins": [
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+                "http://192.168.0.9:5173",
+                ""
+            ]
+        }
+    },
+    "frontend": {
+        "host": "localhost",
+        "port": 5173,
+        "public_mode": true
+    },
+    "i18n": {
+        "default_locale": "en",
+        "supported_locales": [
+            "en",
+            "pt-BR"
+        ],
+        "fallback_locale": "en"
+    },
+    "conversation_coaching": {
+        "enabled": true,
+        "max_response_chars_for_followup": 1200,
+        "tone": "consultative"
+    },
+    "approval_notifications": {
+        "idle_notify_after_sec": 120,
+        "digest_cooldown_sec": 120
+    },
+    "planner": {
+        "base_max_steps": 15,
+        "hard_max_steps": 60,
+        "replan_budget": 4
+    },
+    "work_execution": {
+        "preempt_on_new_input": false,
+        "default_scope": "global"
+    },
+    "work_feedback": {
+        "progress_updates_enabled": true,
+        "progress_update_every_loops": 6,
+        "progress_min_interval_sec": 12,
+        "max_progress_notes": 4
+    },
+    "cortex": {
+        "chat": {
+            "provider": "openrouter",
+            "providers": {
+                "google": {
+                    "api_key": "ENV_GEMINI_API_KEY",
+                    "model": "gemini-2.0-flash"
+                },
+                "openrouter": {
+                    "api_key": "ENV_OPENROUTER_API_KEY",
+                    "model": "arcee-ai/trinity-large-preview:free"
+                },
+                "openai": {
+                    "api_key": "ENV_OPENAI_API_KEY",
+                    "organization_id": "ENV_OPENAI_ORG_ID",
+                    "model": "gpt-4o-mini"
+                },
+                "huggingface": {
+                    "api_key": "ENV_HUGGINGFACE_API_KEY",
+                    "model": "HuggingFaceTB/SmolLM3-3B",
+                    "base_url": "https://router.huggingface.co/v1",
+                    "timeout": 90,
+                    "max_tokens": 512
+                },
+                "ollama": {
+                    "model": "llama3",
+                    "url": "http://localhost:11434/api/chat"
+                }
+            }
+        },
+        "vision": {
+            "provider": "openrouter",
+            "providers": {
+                "google": {
+                    "api_key": "ENV_GEMINI_API_KEY",
+                    "model": "gemini-2.0-flash-lite"
+                },
+                "openrouter": {
+                    "api_key": "ENV_OPENROUTER_API_KEY",
+                    "model": "qwen/qwen3-vl-235b-a22b-thinking"
+                },
+                "huggingface": {
+                    "api_key": "ENV_HUGGINGFACE_API_KEY",
+                    "model": "Qwen/Qwen2.5-VL-7B-Instruct",
+                    "base_url": "https://router.huggingface.co/v1",
+                    "timeout": 90,
+                    "max_tokens": 512
+                }
+            }
+        },
+        "audio": {
+            "stt": {
+                "provider": "google",
+                "providers": {
+                    "google": {
+                        "language": "pt-BR"
+                    },
+                    "vosk": {
+                        "model_path": "model/vosk-model-small-pt-0.3"
+                    },
+                    "openai": {
+                        "api_key": "ENV_OPENAI_API_KEY",
+                        "organization_id": "ENV_OPENAI_ORG_ID"
+                    }
+                }
+            },
+            "tts": {
+                "provider": "edge_tts",
+                "providers": {
+                    "system": {
+                        "rate": 150,
+                        "volume": 1
+                    },
+                    "google_cloud": {
+                        "api_key": "ENV_GOOGLE_CLOUD_API_KEY"
+                    },
+                    "edge_tts": {
+                        "voice": "pt-BR-FranciscaNeural"
+                    }
+                }
+            }
+        }
+    },
+    "agent": {
+        "agent_name": "Atlas",
+        "personality": "You are a proactive, technical assistant focused on solving problems with precision. Your communication is clear, friendly, and professional."
+    },
+    "location": {
+        "mode": "auto",
+        "default": {
+            "city": "Canoas",
+            "state": "RS",
+            "country": "Brazil",
+            "lat": "-29.928474",
+            "lon": "-51.190630"
+        }
+    },
+    "intent_resolution": {
+        "mode": "llm_first",
+        "semantic_fallback": true,
+        "semantic_first_threshold": 0.92,
+        "llm_confidence_threshold": 0.65
+    },
+    "skills": {
+        "system_logs": {
+            "enabled": true
+        },
+        "vision": {
+            "enabled": true
+        },
+        "browser_automator": {
+            "enabled": true,
+            "profilePath": "data/browser/profile",
+            "headless": false,
+            "cdp_url": null,
+            "keep_alive": true,
+            "media_app_mode": true,
+            "replace_media_tab_on_provider_change": true,
+            "dom_only_fallback_enabled": true,
+            "dom_only_strategy": "llm",
+            "dom_only_force": false,
+            "viewport": {
+                "width": 1280,
+                "height": 720
+            },
+            "timeoutMs": 30000
+        },
+        "spotify_search": {
+            "enabled": false,
+            "auth": {
+                "clientId": "ENV_SPOTIFY_CLIENT_ID",
+                "client_secret": "ENV_SPOTIFY_CLIENT_SECRET"
+            },
+            "defaults": {
+                "market": "BR",
+                "limit": 5
+            }
+        },
+        "deezer_search": {
+            "enabled": true,
+            "api": {
+                "baseUrl": "https://api.deezer.com"
+            },
+            "defaults": {
+                "limit": 5
+            }
+        },
+        "youtube_search": {
+            "enabled": true,
+            "apiKey": "ENV_GOOGLE_CLOUD_API_KEY",
+            "defaults": {
+                "surfaceMode": "auto",
+                "limit": 5
+            }
+        },
+        "maps_search": {
+            "enabled": true,
+            "apiKey": "ENV_GOOGLE_MAPS_API_KEY",
+            "defaults": {
+                "region": "BR",
+                "language": "en-US"
+            }
+        },
+        "web_search": {
+            "enabled": true,
+            "provider": "duckduckgo"
+        },
+        "system_control": {
+            "enabled": true
+        },
+        "task_management": {
+            "enabled": true
+        },
+        "memory_management": {
+            "enabled": true
+        },
+        "weather_control": {
+            "enabled": true,
+            "api_key": "ENV_WEATHER_API_KEY"
+        },
+        "system_apps": {
+            "enabled": true
+        },
+        "shell_control": {
+            "enabled": true
+        },
+        "reflex_skill": {
+            "enabled": true
+        }
+    }
+}

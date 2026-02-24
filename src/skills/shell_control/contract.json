@@ -1,0 +1,29 @@
+{
+    "name": "Shell Control",
+    "description": "Executa comandos no shell do sistema com timeout e retorno estruturado de stdout/stderr.",
+    "actions": [
+        {
+            "id": "shell.control.execute",
+            "name": "execute",
+            "description": "Executa comando no terminal (alto risco) e devolve saída completa para diagnóstico/automação.",
+            "risk_level": "high",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "O comando bash/shell a ser executado"
+                    },
+                    "timeout_sec": {
+                        "type": "integer",
+                        "description": "Timeout em segundos para o comando (5-120).",
+                        "default": 30
+                    }
+                },
+                "required": [
+                    "command"
+                ]
+            }
+        }
+    ]
+}
