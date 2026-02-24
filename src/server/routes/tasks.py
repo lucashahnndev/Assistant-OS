@@ -2,6 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional, Any
 import logging
+import datetime
+from core.identity import PrincipalContext
+from ..auth import get_current_user
+from ..core.models import User
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 logger = logging.getLogger("TasksRoute")
@@ -10,6 +14,8 @@ logger = logging.getLogger("TasksRoute")
 class TaskCreate(BaseModel):
     name: str
     context: str
+    owner_session_id: Optional[str] = None
+    owner_sender_id: Optional[str] = None
 
 class NoteCreate(BaseModel):
     note: str
@@ -23,26 +29,62 @@ class TriggerCreate(BaseModel):
 class TriggerUpdate(BaseModel):
     enabled: bool
 
+class WorkCommand(BaseModel):
+    command: str
+    payload: Optional[dict] = {}
+    source_session_id: Optional[str] = None
+    requester_session_id: Optional[str] = None
+
+class WorkNote(BaseModel):
+    note: str
+    requester_session_id: Optional[str] = None
+
 # --- Helpers ---
 def get_scheduler(request: Request):
     if not request.app.state.kernel:
         raise HTTPException(status_code=500, detail="Kernel not initialized")
     return request.app.state.kernel.scheduler
 
+def _build_web_principal(user: User, requester_session_id: Optional[str] = None) -> PrincipalContext:
+    sender_id = f"user_{user.id}"
+    return PrincipalContext(
+        interface="web",
+        sender_id=sender_id,
+        sender_name=user.username,
+        session_id=(requester_session_id or sender_id),
+    )
+
+def _is_admin(user: User) -> bool:
+    return str(getattr(user, "role", "")).lower() == "admin"
+
+def _assert_work_access(request: Request, user: User, work_snapshot: dict, operation: str, requester_session_id: Optional[str] = None):
+    if _is_admin(user):
+        return
+    ac = request.app.state.kernel.orchestrator.access_controller
+    principal = _build_web_principal(user, requester_session_id=requester_session_id)
+    if not ac.can_access_work(principal, work_snapshot, operation=operation):
+        raise HTTPException(status_code=403, detail="You are not allowed to access this worker.")
+
 # --- Task Definitions ---
 @router.get("/definitions")
-def list_task_definitions(request: Request):
+def list_task_definitions(request: Request, user: User = Depends(get_current_user)):
     """List all task blueprints"""
     return get_scheduler(request).list_tasks()
 
 @router.post("/definitions")
-def create_task_definition(task: TaskCreate, request: Request):
+def create_task_definition(task: TaskCreate, request: Request, user: User = Depends(get_current_user)):
     """Create a new task blueprint"""
-    new_task = get_scheduler(request).create_task(task.name, task.context)
+    default_sender = f"user_{user.id}"
+    new_task = get_scheduler(request).create_task(
+        task.name,
+        task.context,
+        owner_session_id=task.owner_session_id,
+        owner_sender_id=(task.owner_sender_id or default_sender),
+    )
     return new_task.to_dict()
 
 @router.get("/definitions/{task_id}")
-def get_task_details(task_id: str, request: Request):
+def get_task_details(task_id: str, request: Request, user: User = Depends(get_current_user)):
     """Get specific task details"""
     task = get_scheduler(request).get_task(task_id)
     if not task:
@@ -50,26 +92,26 @@ def get_task_details(task_id: str, request: Request):
     return task
 
 @router.delete("/definitions/{task_id}")
-def delete_task_definition(task_id: str, request: Request):
+def delete_task_definition(task_id: str, request: Request, user: User = Depends(get_current_user)):
     """Delete a task and its triggers"""
     get_scheduler(request).delete_task(task_id)
     return {"status": "deleted", "task_id": task_id}
 
 # --- Task Notes ---
 @router.post("/definitions/{task_id}/notes")
-def add_task_note(task_id: str, note: NoteCreate, request: Request):
+def add_task_note(task_id: str, note: NoteCreate, request: Request, user: User = Depends(get_current_user)):
     """Add a note to a task"""
     get_scheduler(request).add_task_note(task_id, note.note)
     return {"status": "note_added"}
 
 # --- Scheule Triggers ---
 @router.get("/definitions/{task_id}/triggers")
-def list_task_triggers(task_id: str, request: Request):
+def list_task_triggers(task_id: str, request: Request, user: User = Depends(get_current_user)):
     """List triggers for a specific task"""
     return get_scheduler(request).list_triggers(task_id)
 
 @router.post("/triggers")
-def create_trigger(trigger: TriggerCreate, request: Request):
+def create_trigger(trigger: TriggerCreate, request: Request, user: User = Depends(get_current_user)):
     """Add a schedule trigger to a task"""
     try:
         new_trigger = get_scheduler(request).add_trigger(
@@ -83,26 +125,26 @@ def create_trigger(trigger: TriggerCreate, request: Request):
         raise HTTPException(status_code=404, detail=str(e))
 
 @router.delete("/triggers/{trigger_id}")
-def delete_trigger(trigger_id: str, request: Request):
+def delete_trigger(trigger_id: str, request: Request, user: User = Depends(get_current_user)):
     """Delete a trigger"""
     get_scheduler(request).delete_trigger(trigger_id)
     return {"status": "deleted", "trigger_id": trigger_id}
 
 @router.post("/triggers/{trigger_id}/toggle")
-def toggle_trigger(trigger_id: str, update: TriggerUpdate, request: Request):
+def toggle_trigger(trigger_id: str, update: TriggerUpdate, request: Request, user: User = Depends(get_current_user)):
     """Enable/Disable a trigger"""
     get_scheduler(request).toggle_trigger(trigger_id, update.enabled)
     return {"status": "updated", "trigger_id": trigger_id, "enabled": update.enabled}
 
 # --- Execution / History ---
 @router.post("/definitions/{task_id}/run")
-def run_task_manually(task_id: str, request: Request):
+def run_task_manually(task_id: str, request: Request, user: User = Depends(get_current_user)):
     """Manually trigger a task execution"""
     get_scheduler(request).trigger_execution(task_id, trigger_id=None)
     return {"status": "triggered", "task_id": task_id}
 
 @router.get("/definitions/{task_id}/executions")
-def list_task_history(task_id: str, request: Request):
+def list_task_history(task_id: str, request: Request, user: User = Depends(get_current_user)):
     """List execution history for a task"""
     # Sort by start_time desc
     history = get_scheduler(request).list_executions(task_id)
@@ -110,7 +152,7 @@ def list_task_history(task_id: str, request: Request):
     return history
 
 @router.get("/executions/{execution_id}/logs")
-def get_execution_logs(execution_id: str, request: Request):
+def get_execution_logs(execution_id: str, request: Request, user: User = Depends(get_current_user)):
     """Get logs for a specific execution"""
     # This is inefficient for large logs, but sufficient for now.
     # Ideally should support pagination or streaming.
@@ -159,14 +201,212 @@ def get_execution_logs(execution_id: str, request: Request):
         return {"logs": f"Error reading logs: {str(e)}"}
 
 @router.post("/executions/{execution_id}/cancel")
-def cancel_execution(execution_id: str, request: Request):
+def cancel_execution(execution_id: str, request: Request, user: User = Depends(get_current_user)):
     """Cancel a running execution"""
     get_scheduler(request).cancel_execution(execution_id)
     return {"status": "cancellation_requested", "execution_id": execution_id}
 
-# --- Legacy / Active Works (Optional compatibility) ---
-# Keeping this if the frontend dashboard still uses it for "Running Agents"
+# --- Works Monitoring (Unified view for ad-hoc + scheduled executions) ---
+@router.get("/works")
+def list_works(
+    request: Request,
+    include_completed: bool = False,
+    session_id: Optional[str] = None,
+    owner_session_id: Optional[str] = None,
+    favorite_session_id: Optional[str] = None,
+    limit: int = 200,
+    requester_session_id: Optional[str] = None,
+    user: User = Depends(get_current_user),
+):
+    scheduler = get_scheduler(request)
+    rows = scheduler.list_works(
+        include_completed=include_completed,
+        session_id=session_id,
+        owner_session_id=owner_session_id,
+        favorite_session_id=favorite_session_id,
+        limit=limit,
+        include_context=True,
+    )
+    if _is_admin(user):
+        return rows
+    ac = request.app.state.kernel.orchestrator.access_controller
+    principal = _build_web_principal(user, requester_session_id=requester_session_id)
+    return [row for row in rows if ac.can_access_work(principal, row, operation="view")]
+
+@router.get("/works/{work_id}")
+def get_work(work_id: str, request: Request, requester_session_id: Optional[str] = None, user: User = Depends(get_current_user)):
+    scheduler = get_scheduler(request)
+    row = scheduler.get_work_snapshot(work_id, include_context=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Work not found")
+    _assert_work_access(request, user, row, operation="view", requester_session_id=requester_session_id)
+    return row
+
+@router.post("/works/{work_id}/commands")
+def send_work_command(work_id: str, body: WorkCommand, request: Request, user: User = Depends(get_current_user)):
+    scheduler = get_scheduler(request)
+    row = scheduler.get_work_snapshot(work_id, include_context=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Work not found")
+    _assert_work_access(request, user, row, operation="control", requester_session_id=body.requester_session_id)
+
+    source = body.source_session_id or body.requester_session_id or f"user_{user.id}"
+    ok = scheduler.push_work_command(
+        work_id=work_id,
+        command=body.command,
+        payload=body.payload or {},
+        source_session_id=source,
+    )
+    return {"status": "accepted", "work_id": work_id, "command": body.command}
+
+@router.post("/works/{work_id}/pause")
+def pause_work(work_id: str, request: Request, requester_session_id: Optional[str] = None, user: User = Depends(get_current_user)):
+    scheduler = get_scheduler(request)
+    row = scheduler.get_work_snapshot(work_id, include_context=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Work not found")
+    _assert_work_access(request, user, row, operation="control", requester_session_id=requester_session_id)
+    scheduler.push_work_command(
+        work_id=work_id,
+        command="pause",
+        payload={"reason": "Paused from web"},
+        source_session_id=requester_session_id or f"user_{user.id}",
+    )
+    return {"status": "accepted", "work_id": work_id, "command": "pause"}
+
+@router.post("/works/{work_id}/resume")
+def resume_work(work_id: str, request: Request, requester_session_id: Optional[str] = None, user: User = Depends(get_current_user)):
+    scheduler = get_scheduler(request)
+    row = scheduler.get_work_snapshot(work_id, include_context=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Work not found")
+    _assert_work_access(request, user, row, operation="control", requester_session_id=requester_session_id)
+    scheduler.push_work_command(
+        work_id=work_id,
+        command="resume",
+        payload={"reason": "Resumed from web"},
+        source_session_id=requester_session_id or f"user_{user.id}",
+    )
+    return {"status": "accepted", "work_id": work_id, "command": "resume"}
+
+@router.post("/works/{work_id}/queue_message")
+def queue_work_message(work_id: str, body: WorkNote, request: Request, user: User = Depends(get_current_user)):
+    scheduler = get_scheduler(request)
+    row = scheduler.get_work_snapshot(work_id, include_context=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Work not found")
+    _assert_work_access(request, user, row, operation="control", requester_session_id=body.requester_session_id)
+    scheduler.push_work_command(
+        work_id=work_id,
+        command="inject_message",
+        payload={"message": body.note},
+        source_session_id=body.requester_session_id or f"user_{user.id}",
+    )
+    return {"status": "accepted", "work_id": work_id, "command": "inject_message"}
+
+@router.post("/works/{work_id}/direct_message")
+def direct_work_message(work_id: str, body: WorkNote, request: Request, user: User = Depends(get_current_user)):
+    scheduler = get_scheduler(request)
+    row = scheduler.get_work_snapshot(work_id, include_context=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Work not found")
+    _assert_work_access(request, user, row, operation="control", requester_session_id=body.requester_session_id)
+    source = body.requester_session_id or f"user_{user.id}"
+    scheduler.push_work_command(work_id=work_id, command="pause", payload={"reason": "Direct message mode"}, source_session_id=source)
+    scheduler.push_work_command(work_id=work_id, command="inject_message", payload={"message": body.note}, source_session_id=source)
+    return {"status": "accepted", "work_id": work_id, "command": "pause+inject_message"}
+
+@router.post("/works/{work_id}/notes")
+def append_work_note(work_id: str, body: WorkNote, request: Request, user: User = Depends(get_current_user)):
+    scheduler = get_scheduler(request)
+    row = scheduler.get_work_snapshot(work_id, include_context=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Work not found")
+    _assert_work_access(request, user, row, operation="control", requester_session_id=body.requester_session_id)
+    ctx = scheduler.get_work_context(work_id) if hasattr(scheduler, "get_work_context") else {}
+    notes = []
+    if isinstance(ctx.get("notes"), list):
+        notes = list(ctx.get("notes"))
+    notes.append({"ts": datetime.datetime.now().isoformat(), "author": f"user_{user.id}", "text": body.note})
+    scheduler.update_work_context(work_id, {"notes": notes[-300:]})
+    return {"status": "saved", "work_id": work_id, "notes_count": len(notes)}
+
+@router.get("/works/{work_id}/events")
+def get_work_events(
+    work_id: str,
+    request: Request,
+    limit: int = 200,
+    requester_session_id: Optional[str] = None,
+    user: User = Depends(get_current_user),
+):
+    scheduler = get_scheduler(request)
+    row = scheduler.get_work_snapshot(work_id, include_context=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Work not found")
+    _assert_work_access(request, user, row, operation="view", requester_session_id=requester_session_id)
+    events = scheduler.read_work_events(work_id, limit=max(1, min(2000, int(limit))))
+    return {"work_id": work_id, "events": events, "count": len(events)}
+
+@router.get("/works/{work_id}/overwatch")
+def get_work_overwatch(
+    work_id: str,
+    request: Request,
+    events_limit: int = 200,
+    requester_session_id: Optional[str] = None,
+    user: User = Depends(get_current_user),
+):
+    scheduler = get_scheduler(request)
+    row = scheduler.get_work_snapshot(work_id, include_context=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Work not found")
+    _assert_work_access(request, user, row, operation="view", requester_session_id=requester_session_id)
+
+    ctx = row.get("context") if isinstance(row.get("context"), dict) else {}
+    data = ctx.get("data") if isinstance(ctx.get("data"), dict) else {}
+    summary = ctx.get("summary") if isinstance(ctx.get("summary"), dict) else {}
+    planner = ctx.get("planner") if isinstance(ctx.get("planner"), dict) else {}
+    task_id = data.get("task_id")
+    executions = scheduler.list_executions(task_id) if task_id else []
+    triggers = scheduler.list_triggers(task_id) if task_id else []
+    events = scheduler.read_work_events(work_id, limit=max(1, min(2000, int(events_limit))))
+    recent_executions = sorted(
+        executions,
+        key=lambda row: str(row.get("start_time") or ""),
+        reverse=True,
+    )[:20]
+
+    return {
+        "work": row,
+        "summary": summary,
+        "planner": planner,
+        "skills_used": data.get("skills_used", []),
+        "actions_used": data.get("actions_used", []),
+        "media_used": data.get("media_used", []),
+        "queued_messages": data.get("queued_messages", []),
+        "origin": {
+            "session_id": row.get("session_id"),
+            "owner_session_id": row.get("owner_session_id"),
+            "favorite_session_id": row.get("favorite_session_id"),
+            "owner_sender_id": row.get("owner_sender_id"),
+            "favorite_sender_id": row.get("favorite_sender_id"),
+        },
+        "task": {
+            "task_id": task_id,
+            "execution_count": len(executions),
+            "trigger_count": len(triggers),
+            "triggers": triggers[:20],
+        },
+        "recent_executions": recent_executions,
+        "events": events,
+    }
+
 @router.get("/active")
-def list_active_works(request: Request):
-    """List currently active kernel processes (Agents)"""
-    return get_scheduler(request).list_active_works()
+def list_active_works(request: Request, requester_session_id: Optional[str] = None, user: User = Depends(get_current_user)):
+    """List active works."""
+    scheduler = get_scheduler(request)
+    rows = scheduler.list_works(include_completed=False, include_context=True)
+    if _is_admin(user):
+        return rows
+    ac = request.app.state.kernel.orchestrator.access_controller
+    principal = _build_web_principal(user, requester_session_id=requester_session_id)
+    return [row for row in rows if ac.can_access_work(principal, row, operation="view")]

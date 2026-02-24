@@ -20,8 +20,8 @@ class VoiceDriver(BaseDriver):
         self.running = False
         self.skip_activation = False
         self.activation_confirm = [
-            'Sim, como posso ajudar?', 'Sim, o que deseja?', 
-            'Sim, o que posso fazer por você?', 'Olá, como posso ajudar?'
+            'Yes, how can I help?', 'Yes, what do you need?', 
+            'Yes, what can I do for you?', 'Hello, how can I help?'
         ]
 
     def _initialize_components(self):
@@ -48,7 +48,7 @@ class VoiceDriver(BaseDriver):
         self.assistant = Assistant(
             voice_recognition_engineering=stt_provider,
             text_to_speech_engineering='google_cloud', # Legacy param, unused by us now
-            name=interface_config.get('wake_word', 'Assistente'),
+            name=interface_config.get('wake_word', 'Assistant'),
             tts_engine_=assistant_voice
         )
         
@@ -145,7 +145,7 @@ class VoiceDriver(BaseDriver):
 
             except Exception as e:
                 self.logger.error(f"Voice Loop Error: {e}")
-                self.send_response('Desculpe, houve um erro, tente novamente.')
+                self.send_response('Sorry, there was an error. Please try again.')
 
     def send_file(self, target, file_path, caption=None):
         """

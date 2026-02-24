@@ -116,7 +116,7 @@ class OpenAIChatProvider(ILLMProvider):
                 messages=messages,
                 temperature=0.3
             )
-            return response.choices[0].message.content.strip() if response.choices else "Erro: Resposta vazia da OpenAI."
+            return response.choices[0].message.content.strip() if response.choices else "Error: Resposta vazia da OpenAI."
         except Exception as e:
             logger.error(f"OpenAI generate_text error: {e}")
             return f"Erro na geração de texto: {e}"

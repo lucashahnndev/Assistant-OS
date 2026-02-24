@@ -150,7 +150,9 @@ def test_task_notes_uses_session_id_for_scratchpad_scope():
 
     result = skill.execute("task.notes", {"command": "read"}, {"session": session})
 
-    assert result == "notes-content"
+    assert isinstance(result, dict)
+    assert result.get("ok") is True
+    assert result.get("content") == "notes-content"
     assert skill.kernel.orchestrator.scratchpad_service.last_session_id == "session-xyz"
 
 

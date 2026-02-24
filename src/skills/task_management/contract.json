@@ -1,11 +1,11 @@
 {
     "name": "Task",
-    "description": "Gerencia estado operacional da sessão: scratchpad de notas e especialista ativo.",
+    "description": "Manages session operational state and scheduler operations (task definitions, triggers, and runs).",
     "actions": [
         {
             "id": "task.notes",
             "handler": "notes",
-            "description": "Operações no bloco de notas da sessão (ler, anexar, atualizar e limpar).",
+            "description": "Session scratchpad operations (read, append, update, clear).",
             "parameters": {
                 "properties": {
                     "command": {
@@ -29,7 +29,7 @@
         {
             "id": "task.specialist",
             "handler": "specialist",
-            "description": "Ativa/desativa especialista de execução para a sessão atual.",
+            "description": "Activates/deactivates the execution specialist for the current session.",
             "parameters": {
                 "properties": {
                     "name": {
@@ -39,6 +39,125 @@
                 "required": [
                     "name"
                 ]
+            }
+        },
+        {
+            "id": "task.scheduler.create",
+            "handler": "scheduler.create",
+            "description": "Creates a scheduler task definition (like Tasks page create).",
+            "parameters": {
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "context": {
+                        "type": "string"
+                    },
+                    "owner_session_id": {
+                        "type": "string"
+                    },
+                    "owner_sender_id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "name",
+                    "context"
+                ]
+            }
+        },
+        {
+            "id": "task.scheduler.add_trigger",
+            "handler": "scheduler.add_trigger",
+            "description": "Adds a trigger to an existing scheduler task definition.",
+            "parameters": {
+                "properties": {
+                    "task_id": {
+                        "type": "string"
+                    },
+                    "schedule_type": {
+                        "type": "string",
+                        "enum": [
+                            "interval",
+                            "cron",
+                            "date"
+                        ]
+                    },
+                    "schedule_value": {
+                        "type": "string"
+                    },
+                    "holiday_rules": {
+                        "type": "object"
+                    }
+                },
+                "required": [
+                    "task_id",
+                    "schedule_type",
+                    "schedule_value"
+                ]
+            }
+        },
+        {
+            "id": "task.scheduler.list",
+            "handler": "scheduler.list",
+            "description": "Lists scheduler task definitions or gets one by task_id.",
+            "parameters": {
+                "properties": {
+                    "task_id": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "id": "task.scheduler.list_triggers",
+            "handler": "scheduler.list_triggers",
+            "description": "Lists triggers globally or for a specific task_id.",
+            "parameters": {
+                "properties": {
+                    "task_id": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "id": "task.scheduler.run",
+            "handler": "scheduler.run",
+            "description": "Triggers immediate execution for a scheduler task definition.",
+            "parameters": {
+                "properties": {
+                    "task_id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "task_id"
+                ]
+            }
+        },
+        {
+            "id": "task.scheduler.list_works",
+            "handler": "scheduler.list_works",
+            "description": "Lists worker instances (active or completed) globally, with optional owner/favorite/session filters.",
+            "parameters": {
+                "properties": {
+                    "include_completed": {
+                        "type": "boolean"
+                    },
+                    "owner_session_id": {
+                        "type": "string"
+                    },
+                    "favorite_session_id": {
+                        "type": "string"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    },
+                    "limit": {
+                        "type": "integer"
+                    }
+                }
             }
         }
     ]

@@ -130,7 +130,7 @@ class GeminiProvider(ILLMProvider):
                 contents=[prompt],
                 config=config
             )
-            return response.text.strip() if response.text else "Erro: Resposta vazia do Gemini."
+            return response.text.strip() if response.text else "Error: Resposta vazia do Gemini."
         except Exception as e:
             logger.error(f"Gemini generate_text error: {e}")
             return f"Erro na geração de texto: {e}"
@@ -140,7 +140,7 @@ class GeminiProvider(ILLMProvider):
         Directly analyzes an image using Gemini.
         """
         if not os.path.exists(image_path):
-            return f"Erro: Arquivo não encontrado: {image_path}"
+            return f"Error: Arquivo não encontrado: {image_path}"
             
         try:
             import mimetypes

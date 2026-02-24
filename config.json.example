@@ -46,6 +46,38 @@
         "port": 5173,
         "public_mode": true
     },
+    "i18n": {
+        "default_locale": "en",
+        "supported_locales": [
+            "en",
+            "pt-BR"
+        ],
+        "fallback_locale": "en"
+    },
+    "conversation_coaching": {
+        "enabled": true,
+        "max_response_chars_for_followup": 1200,
+        "tone": "consultative"
+    },
+    "approval_notifications": {
+        "idle_notify_after_sec": 120,
+        "digest_cooldown_sec": 120
+    },
+    "planner": {
+        "base_max_steps": 15,
+        "hard_max_steps": 60,
+        "replan_budget": 4
+    },
+    "work_execution": {
+        "preempt_on_new_input": false,
+        "default_scope": "global"
+    },
+    "work_feedback": {
+        "progress_updates_enabled": true,
+        "progress_update_every_loops": 6,
+        "progress_min_interval_sec": 12,
+        "max_progress_notes": 4
+    },
     "cortex": {
         "chat": {
             "provider": "openrouter",
@@ -63,6 +95,13 @@
                     "organization_id": "ENV_OPENAI_ORG_ID",
                     "model": "gpt-4o-mini"
                 },
+                "huggingface": {
+                    "api_key": "ENV_HUGGINGFACE_API_KEY",
+                    "model": "HuggingFaceTB/SmolLM3-3B",
+                    "base_url": "https://router.huggingface.co/v1",
+                    "timeout": 90,
+                    "max_tokens": 512
+                },
                 "ollama": {
                     "model": "llama3",
                     "url": "http://localhost:11434/api/chat"
@@ -79,6 +118,13 @@
                 "openrouter": {
                     "api_key": "ENV_OPENROUTER_API_KEY",
                     "model": "qwen/qwen3-vl-235b-a22b-thinking"
+                },
+                "huggingface": {
+                    "api_key": "ENV_HUGGINGFACE_API_KEY",
+                    "model": "Qwen/Qwen2.5-VL-7B-Instruct",
+                    "base_url": "https://router.huggingface.co/v1",
+                    "timeout": 90,
+                    "max_tokens": 512
                 }
             }
         },
@@ -117,7 +163,7 @@
     },
     "agent": {
         "agent_name": "Atlas",
-        "personality": "Voc\u00ea \u00e9 um assistente proativo, t\u00e9cnico e focado em resolver problemas com precis\u00e3o. Sua comunica\u00e7\u00e3o \u00e9 clara, amig\u00e1vel e profissional."
+        "personality": "You are a proactive, technical assistant focused on solving problems with precision. Your communication is clear, friendly, and professional."
     },
     "location": {
         "mode": "auto",
@@ -147,6 +193,12 @@
             "profilePath": "data/browser/profile",
             "headless": false,
             "cdp_url": null,
+            "keep_alive": true,
+            "media_app_mode": true,
+            "replace_media_tab_on_provider_change": true,
+            "dom_only_fallback_enabled": true,
+            "dom_only_strategy": "llm",
+            "dom_only_force": false,
             "viewport": {
                 "width": 1280,
                 "height": 720
@@ -186,7 +238,7 @@
             "apiKey": "ENV_GOOGLE_MAPS_API_KEY",
             "defaults": {
                 "region": "BR",
-                "language": "pt-BR"
+                "language": "en-US"
             }
         },
         "web_search": {

@@ -26,10 +26,9 @@ class Worker(threading.Thread):
     def run(self):
         logger.info(f"Worker {self.work_id} (Exec: {self.execution_id}) started execution.")
         
+        self.scheduler.update_work_status(self.work_id, WorkStatus.RUNNING)
         if self.execution_id:
             self.scheduler.update_execution_status(self.execution_id, "running")
-        else:
-            self.scheduler.update_work_status(self.work_id, WorkStatus.RUNNING)
         
         try:
             # We inject a progress callback into the task_fn if it supports it
@@ -41,21 +40,24 @@ class Worker(threading.Thread):
                     self.scheduler.add_progress(self.work_id, msg)
             
             def is_cancelled():
-                if self.execution_id:
-                     # TODO: Implement cancellation for executions
-                     return False
                 work = self.scheduler.get_work(self.work_id)
                 return work.cancel_requested if work else False
             
             # Add or override callbacks
             self.kwargs['on_partial_response'] = progress_callback
             self.kwargs['cancel_check'] = is_cancelled
+            self.kwargs['work_id'] = self.work_id
             
             # Execute the actual processing
             result = self.task_fn(*self.args, **self.kwargs)
             
             # Check for cancellation right after execution (cooperative)
             if self.execution_id:
+                 work = self.scheduler.get_work(self.work_id)
+                 if work and work.cancel_requested:
+                     self.scheduler.update_work_status(self.work_id, WorkStatus.CANCELLED)
+                 else:
+                     self.scheduler.update_work_status(self.work_id, WorkStatus.SUCCEEDED, result=result)
                  self.scheduler.update_execution_status(self.execution_id, "succeeded", result=result)
                  logger.info(f"Worker {self.work_id} Finished (Success).")
             else:
@@ -89,6 +91,7 @@ class Worker(threading.Thread):
                     logger.error(f"Failed to inject worker error into session: {ex}")
 
             if self.execution_id:
+                self.scheduler.update_work_status(self.work_id, WorkStatus.FAILED, error=error_msg)
                 self.scheduler.update_execution_status(self.execution_id, "failed", error=error_msg)
             else:
                 self.scheduler.update_work_status(self.work_id, WorkStatus.FAILED, error=error_msg)

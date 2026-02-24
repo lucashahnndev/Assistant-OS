@@ -58,6 +58,8 @@ class IdentityService:
                 name="Master",
                 description="Acesso total. Novas skills entram automaticamente via wildcard.",
                 allow_actions=["*"],
+                worker_view_scope="global",
+                worker_control_scope="global",
                 is_system=True,
             ).model_dump(),
             "medium": PermissionGroup(
@@ -94,6 +96,8 @@ class IdentityService:
                     "system.control.fs.delete",
                     "system.control.service.manage",
                 ],
+                worker_view_scope="owner_identity",
+                worker_control_scope="owner_identity",
                 is_system=True,
             ).model_dump(),
             "critical": PermissionGroup(
@@ -123,6 +127,8 @@ class IdentityService:
                     "reflex.*",
                 ],
                 deny_actions=["shell.*", "system.control.*"],
+                worker_view_scope="self_session",
+                worker_control_scope="self_session",
                 is_system=True,
             ).model_dump(),
         }
@@ -680,6 +686,56 @@ class AccessController:
             filtered.append(action_id)
 
         return sorted(set(filtered))
+
+    def get_worker_policy(self, context: PrincipalContext) -> Dict[str, str]:
+        """
+        Returns worker visibility/control scopes for a principal context.
+        Scopes: self_session | owner_session | owner_identity | global
+        """
+        user, chat, _ = self._resolve_context_entities(context)
+        target_entity = chat if (context.is_group and chat) else user
+        group_id = target_entity.group_id or user.group_id
+        group = self.identity_service.get_permission_group(group_id) if group_id else None
+
+        view_scope = str(getattr(group, "worker_view_scope", "owner_identity") or "owner_identity").strip().lower()
+        control_scope = str(getattr(group, "worker_control_scope", "owner_identity") or "owner_identity").strip().lower()
+
+        valid = {"self_session", "owner_session", "owner_identity", "global"}
+        if view_scope not in valid:
+            view_scope = "owner_identity"
+        if control_scope not in valid:
+            control_scope = "owner_identity"
+        return {"view_scope": view_scope, "control_scope": control_scope}
+
+    def can_access_work(self, context: PrincipalContext, work_snapshot: Dict[str, Any], operation: str = "view") -> bool:
+        """
+        Checks whether principal can view/control a work item based on identity group policy.
+        """
+        policy = self.get_worker_policy(context)
+        scope = policy["control_scope"] if operation == "control" else policy["view_scope"]
+
+        requester_session = str(context.session_id or "").strip()
+        requester_sender = str(context.sender_id or "").strip()
+        work_session = str(work_snapshot.get("session_id") or "").strip()
+        owner_session = str(work_snapshot.get("owner_session_id") or "").strip()
+        favorite_session = str(work_snapshot.get("favorite_session_id") or "").strip()
+        owner_sender = str(work_snapshot.get("owner_sender_id") or "").strip()
+        favorite_sender = str(work_snapshot.get("favorite_sender_id") or "").strip()
+
+        if scope == "global":
+            return True
+        if scope == "self_session":
+            return requester_session and requester_session == work_session
+        if scope == "owner_session":
+            return requester_session and requester_session in {work_session, owner_session, favorite_session}
+        if scope == "owner_identity":
+            if requester_sender and requester_sender in {owner_sender, favorite_sender}:
+                return True
+            # Compatibility fallback when sender identity was not persisted on older works.
+            if not owner_sender and not favorite_sender:
+                return requester_session and requester_session in {work_session, owner_session, favorite_session}
+            return False
+        return False
 
     def _is_action_enabled_by_config(self, action_id: str, skill_registry: Any, config_manager: Any) -> bool:
         """

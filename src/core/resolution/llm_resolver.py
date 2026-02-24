@@ -87,6 +87,12 @@ class LLMResolver(IntentResolver):
                 text = str(intent.response_text or "").strip().lower()
                 user_input = str(context.get("user_input") or "").strip().lower()
                 progress_prefixes = (
+                    "searching",
+                    "looking for",
+                    "opening",
+                    "running",
+                    "please wait",
+                    "one moment",
                     "pesquisando",
                     "procurando",
                     "buscando",
@@ -96,6 +102,11 @@ class LLMResolver(IntentResolver):
                     "um momento",
                 )
                 command_cues = (
+                    "open",
+                    "play",
+                    "search",
+                    "song",
+                    "music",
                     "abre",
                     "abrir",
                     "toca",

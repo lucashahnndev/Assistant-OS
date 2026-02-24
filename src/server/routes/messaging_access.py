@@ -32,6 +32,8 @@ class GroupCreateRequest(BaseModel):
     deny_skills: List[str] = Field(default_factory=list)
     allow_actions: List[str] = Field(default_factory=list)
     deny_actions: List[str] = Field(default_factory=list)
+    worker_view_scope: str = "owner_identity"
+    worker_control_scope: str = "owner_identity"
 
 class GroupPatchRequest(BaseModel):
     name: Optional[str] = None
@@ -40,6 +42,8 @@ class GroupPatchRequest(BaseModel):
     deny_skills: Optional[List[str]] = None
     allow_actions: Optional[List[str]] = None
     deny_actions: Optional[List[str]] = None
+    worker_view_scope: Optional[str] = None
+    worker_control_scope: Optional[str] = None
 
 @router.get("/interfaces")
 async def get_interfaces(request: Request, user: User = Depends(get_current_user)):
@@ -193,6 +197,8 @@ async def create_group(payload: GroupCreateRequest, request: Request, user_ctx: 
         deny_skills=payload.deny_skills,
         allow_actions=payload.allow_actions,
         deny_actions=payload.deny_actions,
+        worker_view_scope=payload.worker_view_scope,
+        worker_control_scope=payload.worker_control_scope,
         is_system=False,
     )
     service.save_permission_group(group)

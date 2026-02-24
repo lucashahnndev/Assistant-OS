@@ -73,9 +73,12 @@ def _registry() -> SkillRegistry:
         DummySkill(
             name="weather_control",
             namespace="weather.control",
-            actions=["get"],
+            actions=["get", "forecast"],
             contract={
-                "actions": {"get": {"description": "Get current weather by city or coordinates"}}
+                "actions": {
+                    "get": {"description": "Get current weather by city or coordinates"},
+                    "forecast": {"description": "Get weather forecast for upcoming days"},
+                }
             },
         )
     )
@@ -90,6 +93,25 @@ def _registry() -> SkillRegistry:
                         "description": "Searches Wikipedia by topic",
                         "risk_level": "low",
                     }
+                }
+            },
+        )
+    )
+    registry.register(
+        DummySkill(
+            name="task_management",
+            namespace="task.scheduler",
+            actions=["create", "list"],
+            contract={
+                "actions": {
+                    "create": {
+                        "description": "Creates a scheduler task definition with name and context",
+                        "risk_level": "low",
+                    },
+                    "list": {
+                        "description": "Lists scheduler task definitions",
+                        "risk_level": "low",
+                    },
                 }
             },
         )
@@ -169,6 +191,7 @@ def test_semantic_resolver_matches_search_rule_when_allowed():
     assert plan is not None
     assert plan.action_id == "web.search.discover"
     assert "query" in plan.args
+    assert plan.args["query"] == "energia solar"
 
 
 def test_semantic_resolver_prefers_wikipedia_for_explicit_intent():
@@ -181,7 +204,7 @@ def test_semantic_resolver_prefers_wikipedia_for_explicit_intent():
 
     assert plan is not None
     assert plan.action_id == "wikipedia.search"
-    assert plan.args.get("query")
+    assert plan.args.get("query") == "energia solar"
 
 
 def test_semantic_resolver_generic_search_stays_on_web_search():
@@ -218,6 +241,36 @@ def test_semantic_resolver_extracts_weather_city():
     assert plan is not None
     assert plan.action_id == "weather.control.get"
     assert plan.args.get("city") == "Porto Alegre"
+
+
+def test_semantic_resolver_handles_typo_rain_tomorrow():
+    registry = _registry()
+    resolver = SemanticResolver(threshold=0.92, skill_registry=registry)
+    plan = resolver.resolve(
+        "vai chovaer amanha em Canoas?",
+        {"allowed_actions": ["weather.control.forecast", "weather.control.get"], "skill_registry": registry},
+    )
+
+    assert plan is not None
+    assert plan.action_id == "weather.control.forecast"
+    assert plan.args.get("days") == 2
+    assert plan.args.get("city") == "Canoas"
+
+
+def test_semantic_resolver_matches_task_create_for_portuguese_prompt():
+    registry = _registry()
+    resolver = SemanticResolver(threshold=0.92, skill_registry=registry)
+    plan = resolver.resolve(
+        "criar tarefa: resumo diário de emails para enviar às 18h",
+        {"allowed_actions": ["task.scheduler.create", "task.scheduler.list"], "skill_registry": registry},
+    )
+
+    assert plan is not None
+    assert plan.action_id == "task.scheduler.create"
+    assert isinstance(plan.args.get("name"), str)
+    assert isinstance(plan.args.get("context"), str)
+    assert len(plan.args.get("name")) > 0
+    assert len(plan.args.get("context")) > 0
 
 
 def test_fallback_chain_uses_semantic_when_llm_confidence_is_rejected():

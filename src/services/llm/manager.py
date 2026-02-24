@@ -63,6 +63,7 @@ class LLMManager:
             if 'openai' in key: return 'openai'
             if 'ollama' in key: return 'ollama'
             if 'gemini' in key or 'google' in key: return 'gemini'
+            if 'huggingface' in key or key == 'hf': return 'huggingface'
             return key
 
         # Instantiate Chat Providers
@@ -119,7 +120,7 @@ class LLMManager:
         provider = self.vision_providers.get(provider_name) if provider_name else self.active_chat_provider
         
         if not provider:
-            return "Erro: Nenhum provedor de visão configurado ou disponível."
+            return "Error: No vision provider configured or available."
             
         return provider.analyze_image(image_path, prompt)
 
@@ -128,18 +129,18 @@ class LLMManager:
         Generates a concise semantic summary of a large text (e.g., a tool log).
         """
         if not self.active_chat_provider:
-            return "Erro: Nenhum provedor LLM ativo para sumarização."
+            return "Error: No active LLM provider for summarization."
         
         # Heuristic: if it's already small, don't waste tokens
         if len(text) < 500:
             return text
             
         prompt = (
-            "Capture a essência desse log técnico. Se for um erro, descreva a causa raiz. "
-            "Se for uma listagem, resuma o que foi listado. Mantenha menos de 200 caracteres.\n\n"
-            f"LOG:\n{text[:4000]}" # Limit input to avoid token overflow in summarizer itself
+            "Capture the essence of this technical log. If it is an error, describe the root cause. "
+            "If it is a listing, summarize what was listed. Keep it under 200 characters.\n\n"
+            f"LOG:\n{text[:4000]}"  # Limit input to avoid token overflow in summarizer itself
         )
         
-        system_prompt = "Você é um especialista em análise de logs técnicos. Resuma o log de forma muito concisa em português."
+        system_prompt = "You are a technical log analysis specialist. Summarize the log very concisely in English."
         
         return self.active_chat_provider.generate_text(prompt, system_prompt=system_prompt)

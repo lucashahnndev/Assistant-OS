@@ -6,6 +6,7 @@ import requests
 
 from ..base import SkillBase
 from services.location.location_service import LocationService
+from services.search.query_semantics import QuerySemantics
 
 logger = logging.getLogger("MapsSearchSkill")
 
@@ -304,11 +305,11 @@ class MapsSearchSkill(SkillBase):
             return self._result(
                 ok=False,
                 status="error",
-                text=f"Ação desconhecida para maps_search: {action_id}",
+                text=f"Unknown action para maps_search: {action_id}",
                 error="UNKNOWN_ACTION",
             )
 
-        query = self._sanitize_text(self._resolve_query(params))
+        query = QuerySemantics.rewrite_for_maps(self._sanitize_text(self._resolve_query(params)))
         city = self._sanitize_text(self._resolve_city(params))
         category = self._sanitize_text(params.get("category") or params.get("place_type"))
         keywords_raw = params.get("keywords")
@@ -370,13 +371,29 @@ class MapsSearchSkill(SkillBase):
                     open_now=open_now,
                 )
                 if not result.get("ok"):
+                    provider_message = str(result.get("message") or "")
+                    provider_error = result.get("error", "GOOGLE_MAPS_API_ERROR")
+                    can_fallback_to_web = provider_error == "GOOGLE_MAPS_API_ERROR" and (
+                        "enable billing" in provider_message.lower()
+                        or "billing" in provider_message.lower()
+                    )
                     return self._result(
                         ok=False,
                         status="error",
-                        text=f"Erro na API do Google Maps: {result.get('message')}",
-                        error=result.get("error", "GOOGLE_MAPS_API_ERROR"),
-                        message=result.get("message"),
+                        text=f"Erro na API do Google Maps: {provider_message}",
+                        error=provider_error,
+                        message=provider_message,
                         provider="google_maps",
+                        fallback_action="web.search.discover" if can_fallback_to_web else None,
+                        fallback_params=(
+                            {
+                                "query": QuerySemantics.rewrite_for_maps(base_query),
+                                "mode": "links",
+                                "limit": min(limit, 5),
+                            }
+                            if can_fallback_to_web
+                            else None
+                        ),
                     )
                 for item in result.get("places", []):
                     pid = item.get("placeId") or f"{item.get('name')}::{item.get('address')}"

@@ -53,7 +53,7 @@ class DeezerSearchSkill(SkillBase):
             return f"Nenhum resultado encontrado para '{query}' no Deezer."
         lines = [f"Resultados Deezer para '{query}' ({len(results)} itens):"]
         for i, item in enumerate(results, start=1):
-            title = item.get("title") or "Sem título"
+            title = item.get("title") or "Untitled"
             artist = item.get("artist")
             score = item.get("confidenceScore")
             line = f"{i}. {title}"
@@ -88,7 +88,7 @@ class DeezerSearchSkill(SkillBase):
                 "count": 0,
                 "results": [],
                 "best": None,
-                "text": "Erro: parâmetro 'query' é obrigatório para deezer.search.search.",
+                "text": "Error: parameter 'query' is required para deezer.search.search.",
             }
 
         if search_type not in {"track", "artist", "album", "playlist"}:
@@ -102,7 +102,7 @@ class DeezerSearchSkill(SkillBase):
                 "count": 0,
                 "results": [],
                 "best": None,
-                "text": f"Erro: tipo '{search_type}' não suportado em deezer.search.search.",
+                "text": f"Error: type '{search_type}' is not supported em deezer.search.search.",
             }
 
         try:

@@ -9,7 +9,6 @@ import platform
 import shutil
 from typing import Optional, List, Dict, Callable, Any
 from services.llm.manager import LLMManager
-from core.intent import AgentIntent
 from core.session import Session
 from core.identity import PrincipalContext
 from core.access_controller import AccessController
@@ -20,6 +19,7 @@ from services.specialist_manager import SpecialistManager
 from services.safety_service import SafetyService
 from services.workspace_service import WorkspaceService
 from services.playback_service import PlaybackService
+from services.i18n import I18nService
 from services.llm.prompt_composer import PromptComposer
 from config.manager import ConfigManager
 from services.location.location_service import LocationService
@@ -33,6 +33,7 @@ from core.resolution.semantic_resolver import SemanticResolver
 from core.reflex.registry import ReflexRegistry
 from core.reflex.resolver import ReflexResolver
 from core.resolution.action_plan import ActionPlan
+from core.scheduler import WorkStatus
 from skills.registry import SkillRegistry
 from skills.loader import SkillLoader
 from core.sessions_index import SessionIndexManager
@@ -67,6 +68,7 @@ class AgentOrchestrator:
         self.scratchpad_service = ScratchpadService(self.workspace_service)
         self.specialist_manager = SpecialistManager()
         self.safety_service = SafetyService()
+        self.i18n = I18nService(default_locale="en")
         self.access_controller = AccessController(self.config_manager.base_data_dir)
         self.location_service = LocationService()
         self.sessions = {} # Dict[str, Session]
@@ -83,6 +85,14 @@ class AgentOrchestrator:
         self._start_playback_gc()
         
         self.initialized = True
+
+    @staticmethod
+    def _is_transient_runtime_session(session: Optional[Session]) -> bool:
+        if not session:
+            return False
+        if not isinstance(getattr(session, "context", None), dict):
+            return False
+        return bool(session.context.get("__transient_session"))
 
     def _start_playback_gc(self):
         """Starts a background thread for playback garbage collection."""
@@ -391,7 +401,209 @@ class AgentOrchestrator:
 
     def set_kernel(self, kernel):
         """Link back to kernel for system skills."""
+        self.kernel = kernel
         self.skill_loader.kernel = kernel
+
+    def _get_planner_config(self) -> Dict[str, Any]:
+        cfg = self.config_manager.get("planner", {})
+        return {
+            "base_max_steps": int(cfg.get("base_max_steps", 15)),
+            "hard_max_steps": int(cfg.get("hard_max_steps", 60)),
+            "replan_budget": int(cfg.get("replan_budget", 4)),
+        }
+
+    def _compute_dynamic_max_steps(self, user_input: str, initial_plan: Optional[ActionPlan]) -> int:
+        planner_cfg = self._get_planner_config()
+        base = max(5, planner_cfg["base_max_steps"])
+        hard = max(base, planner_cfg["hard_max_steps"])
+
+        text = (user_input or "").lower()
+        complexity_markers = (
+            "then",
+            "after",
+            "and",
+            "pipeline",
+            "workflow",
+            "multiple",
+            "batch",
+            "refactor",
+            "analyze",
+            "implement",
+        )
+        complexity_score = sum(1 for marker in complexity_markers if marker in text)
+        if len(text) > 350:
+            complexity_score += 2
+
+        if initial_plan and isinstance(initial_plan.metadata, dict):
+            seed_plan = initial_plan.metadata.get("plan")
+            if isinstance(seed_plan, list):
+                complexity_score += min(5, len(seed_plan))
+
+        dynamic = base + min(25, complexity_score * 2)
+        return min(hard, dynamic)
+
+    @staticmethod
+    def _normalize_plan_tree(raw_plan: Any) -> List[Dict[str, Any]]:
+        if not isinstance(raw_plan, list):
+            return []
+
+        normalized: List[Dict[str, Any]] = []
+        for idx, item in enumerate(raw_plan, start=1):
+            if isinstance(item, str):
+                title = item.strip()
+                if not title:
+                    continue
+                status = "pending"
+                lower = title.lower()
+                if "[x]" in lower:
+                    status = "done"
+                    title = title.replace("[x]", "").replace("[X]", "").strip()
+                elif "[/]" in lower:
+                    status = "in_progress"
+                    title = title.replace("[/]", "").strip()
+                elif "[!]" in lower:
+                    status = "blocked"
+                    title = title.replace("[!]", "").strip()
+                elif "[ ]" in lower:
+                    title = title.replace("[ ]", "").strip()
+                normalized.append(
+                    {
+                        "id": f"s{idx}",
+                        "title": title,
+                        "status": status,
+                        "substeps": [],
+                    }
+                )
+                continue
+
+            if isinstance(item, dict):
+                title = str(item.get("title") or item.get("step") or item.get("name") or "").strip()
+                if not title:
+                    continue
+                status = str(item.get("status") or "pending").strip().lower()
+                if status not in {"pending", "in_progress", "done", "blocked", "skipped"}:
+                    status = "pending"
+                raw_sub = item.get("substeps") or item.get("children") or []
+                substeps = []
+                if isinstance(raw_sub, list):
+                    for sidx, sub in enumerate(raw_sub, start=1):
+                        if isinstance(sub, str):
+                            sub_title = sub.strip()
+                            if not sub_title:
+                                continue
+                            substeps.append(
+                                {
+                                    "id": f"s{idx}.{sidx}",
+                                    "title": sub_title,
+                                    "status": "pending",
+                                }
+                            )
+                        elif isinstance(sub, dict):
+                            sub_title = str(sub.get("title") or sub.get("step") or "").strip()
+                            if not sub_title:
+                                continue
+                            sub_status = str(sub.get("status") or "pending").strip().lower()
+                            if sub_status not in {"pending", "in_progress", "done", "blocked", "skipped"}:
+                                sub_status = "pending"
+                            substeps.append(
+                                {
+                                    "id": f"s{idx}.{sidx}",
+                                    "title": sub_title,
+                                    "status": sub_status,
+                                }
+                            )
+                normalized.append(
+                    {
+                        "id": str(item.get("id") or f"s{idx}"),
+                        "title": title,
+                        "status": status,
+                        "substeps": substeps,
+                    }
+                )
+        return normalized
+
+    @staticmethod
+    def _flatten_plan_lines(plan_tree: List[Dict[str, Any]]) -> List[str]:
+        lines: List[str] = []
+        for idx, step in enumerate(plan_tree, start=1):
+            marker = {
+                "pending": "[ ]",
+                "in_progress": "[/]",
+                "done": "[x]",
+                "blocked": "[!]",
+                "skipped": "[-]",
+            }.get(step.get("status", "pending"), "[ ]")
+            lines.append(f"{marker} {idx}. {step.get('title', 'step')}")
+            for sidx, sub in enumerate(step.get("substeps", []), start=1):
+                sub_marker = {
+                    "pending": "[ ]",
+                    "in_progress": "[/]",
+                    "done": "[x]",
+                    "blocked": "[!]",
+                    "skipped": "[-]",
+                }.get(sub.get("status", "pending"), "[ ]")
+                lines.append(f"  {sub_marker} {idx}.{sidx} {sub.get('title', 'substep')}")
+        return lines
+
+    @staticmethod
+    def _progress_cursor(plan_tree: List[Dict[str, Any]], loops: int, max_steps: int) -> str:
+        total = max(1, len(plan_tree))
+        done = sum(1 for step in plan_tree if step.get("status") == "done")
+        current = next((step for step in plan_tree if step.get("status") == "in_progress"), None)
+        current_title = current.get("title", "planning") if current else "planning"
+        return f"{done}/{total} (loop {loops}/{max_steps}: {current_title})"
+
+    def _touch_work_context(self, work_id: Optional[str], patch: Dict[str, Any]) -> None:
+        if not work_id:
+            return
+        kernel = getattr(self, "kernel", None)
+        scheduler = getattr(kernel, "scheduler", None)
+        if not scheduler:
+            return
+        try:
+            scheduler.update_work_context(work_id, patch)
+        except Exception as e:
+            logger.debug(f"Could not update work context for {work_id}: {e}")
+
+    def _get_work_record(self, work_id: Optional[str]):
+        if not work_id:
+            return None
+        kernel = getattr(self, "kernel", None)
+        scheduler = getattr(kernel, "scheduler", None)
+        if not scheduler:
+            return None
+        return scheduler.get_work(work_id)
+
+    def _wait_for_work_decision(
+        self,
+        work_id: str,
+        cancel_check: Optional[Callable[[], bool]],
+        timeout_seconds: int = 1800,
+    ) -> Dict[str, Any]:
+        kernel = getattr(self, "kernel", None)
+        scheduler = getattr(kernel, "scheduler", None)
+        if not scheduler:
+            return {"decision": "deny", "note": "Scheduler unavailable"}
+
+        started = time.time()
+        while True:
+            if cancel_check and cancel_check():
+                return {"decision": "cancel", "note": "Task cancelled"}
+            if time.time() - started > timeout_seconds:
+                return {"decision": "timeout", "note": "Approval timeout"}
+
+            commands = scheduler.pop_work_commands(work_id)
+            for cmd in commands:
+                name = str(cmd.get("command") or "").strip().lower()
+                if name in {"approve", "deny", "cancel"}:
+                    payload = cmd.get("payload") if isinstance(cmd.get("payload"), dict) else {}
+                    return {"decision": name, "note": payload.get("note")}
+                if name == "inject_message":
+                    payload = cmd.get("payload") if isinstance(cmd.get("payload"), dict) else {}
+                    note = str(payload.get("message") or "").strip()
+                    if note:
+                        return {"decision": "inject", "note": note}
+            time.sleep(0.8)
 
     def delete_session(self, session_id: str):
         """Deletes all data associated with a session (JSON, uploads, workspace)."""
@@ -701,6 +913,8 @@ class AgentOrchestrator:
 
     def _save_session(self, session: Session):
         try:
+            if self._is_transient_runtime_session(session):
+                return
             lock = self._get_or_create_session_lock(session.session_id)
             with lock:
                 sess_dir = os.path.join(self.sessions_dir, session.session_id)
@@ -774,6 +988,104 @@ class AgentOrchestrator:
         # is expected to normalize it to the platform.
         return text
 
+    @staticmethod
+    def _detect_user_language(user_input: str, fallback: str = "en") -> str:
+        text = str(user_input or "").strip().lower()
+        if not text:
+            return fallback
+
+        pt_markers = [
+            " você ", " voce ", " para ", " tarefa ", " criar ", "agendar", "hoje", "amanhã", "amanha",
+            "obrigado", "precisa", "pode", "quero", "como", "porque", "talvez", "melhor", "resumo",
+            "não", "nao", "ção", "ções", "ç",
+        ]
+        en_markers = [
+            " you ", " task ", "create ", "schedule", "today", "tomorrow", "please", "should", "could",
+            "would", "summary", "report", "why", "how", "what",
+        ]
+
+        padded = f" {text} "
+        pt_hits = sum(1 for m in pt_markers if m in padded)
+        en_hits = sum(1 for m in en_markers if m in padded)
+
+        if pt_hits > en_hits:
+            return "pt-BR"
+        if en_hits > pt_hits:
+            return "en"
+        return fallback
+
+    @staticmethod
+    def _normalize_locale(language: str, fallback: str = "en") -> str:
+        value = str(language or fallback or "en").strip().replace("_", "-")
+        lowered = value.lower()
+        if lowered.startswith("pt"):
+            return "pt-BR"
+        if lowered.startswith("en"):
+            return "en"
+        return fallback
+
+    def _session_locale(self, session: Optional[Session], fallback: str = "en") -> str:
+        if not session or not isinstance(getattr(session, "context", None), dict):
+            return fallback
+        return self._normalize_locale(str(session.context.get("user_language") or fallback), fallback=fallback)
+
+    def _t(self, session: Optional[Session], key: str, **kwargs: Any) -> str:
+        return self.i18n.t(key, locale=self._session_locale(session), **kwargs)
+
+    @staticmethod
+    def _looks_like_technical_text(text: str) -> bool:
+        value = (text or "").strip().lower()
+        if not value:
+            return False
+        if re.search(r"\b[a-z]+\.[a-z0-9_]+\.[a-z0-9_]+\b", value):
+            return True
+        markers = (
+            "executed successfully",
+            "completed with status",
+            "status=success",
+            "result of action",
+            "browser media control",
+        )
+        return any(marker in value for marker in markers)
+
+    def _build_contextual_start_ack(self, session: Optional[Session], action_id: str, action_args: Optional[Dict[str, Any]] = None) -> str:
+        locale = self._session_locale(session)
+        is_pt = locale.startswith("pt")
+        args = action_args if isinstance(action_args, dict) else {}
+        action = str(action_id or "").strip().lower()
+
+        if action == "browser.automator.control":
+            ctrl = str(args.get("action") or "").strip().lower()
+            if ctrl == "pause":
+                return "Entendi, vou pausar a música agora." if is_pt else "Understood, I will pause the music now."
+            if ctrl == "play":
+                return "Entendi, vou retomar a reprodução agora." if is_pt else "Understood, I will resume playback now."
+            if ctrl == "next":
+                return "Entendi, vou passar para a próxima faixa agora." if is_pt else "Understood, I will skip to the next track now."
+            if ctrl == "mute":
+                return "Entendi, vou silenciar o áudio agora." if is_pt else "Understood, I will mute the audio now."
+            return "Entendi, vou ajustar o controle de mídia agora." if is_pt else "Understood, I will adjust media controls now."
+
+        if action in {"system.control.screenshot", "vision.analyze"}:
+            return "Entendi, vou capturar a tela e já te envio." if is_pt else "Understood, I will capture the screen and send it shortly."
+
+        return self._t(session, "ack.work_started")
+
+    def build_work_start_ack(
+        self,
+        session: Optional[Session],
+        action_id: str,
+        explicit_text: str = "",
+        action_args: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        cleaned = str(explicit_text or "").strip()
+        if cleaned and not self._looks_like_success_claim(cleaned) and not self._looks_like_technical_text(cleaned):
+            return self._enforce_response_language(session, cleaned)
+        return self._enforce_response_language(
+            session,
+            self._build_contextual_start_ack(session, action_id, action_args=action_args),
+        )
+
     def get_initial_intent(self, user_input: str, session_id: str = "default", user_data: dict = None, context: PrincipalContext = None, attachments: List[str] = None, name: str = "") -> tuple[Optional[ActionPlan], Optional[str], Any]:
         """
         Runs the first phase of resolution: Reflex followed by the configured chain.
@@ -790,6 +1102,11 @@ class AgentOrchestrator:
 
         if user_data:
             session.context.update(user_data)
+
+        session.context["user_language"] = self._detect_user_language(
+            user_input,
+            fallback=str(session.context.get("user_language") or "en"),
+        )
 
         # Persist principal identity context on session to drive per-user prompt filtering.
         if context:
@@ -840,13 +1157,13 @@ class AgentOrchestrator:
         """Asynchronously generates a name for a new web session using the LLM."""
         try:
             logger.info(f"Generating auto-name for session {session.session_id} based on: '{first_user_input[:50]}...'")
-            prompt = f"Gere um título MUITO CURTO (2 a 4 palavras no máximo) resumindo o assunto que o usuário quer tratar. Responda APENAS com o título e nada mais.\n\nUsuário: {first_user_input}"
+            prompt = f"Generate a VERY SHORT title (2 to 4 words maximum) summarizing what the user wants to discuss. Reply ONLY with the title and nothing else.\n\nUser: {first_user_input}"
             
             # Use generate_intent from Kernel's LLM Manager
             intent = self.llm_manager.generate_intent(
                 user_input=prompt,
                 history=[],
-                system_prompt="Você é um assistente que dá títulos às conversas baseadas no primeiro input do usuário. Mantenha o título bem curto. Responda APENAS E EXCLUSIVAMENTE com o título em 2 a 4 palavras."
+                system_prompt="You are an assistant that assigns titles to conversations based on the user's first input. Keep the title very short. Reply ONLY with a 2-to-4-word title."
             )
             
             generated_name = intent.response_text or intent.thought or ""
@@ -871,7 +1188,7 @@ class AgentOrchestrator:
         except Exception as e:
             logger.error(f"Error auto-naming session {session.session_id}: {e}")
 
-    def process(self, user_input: str, session_id: str = "default", on_partial_response=None, user_data: dict = None, callbacks: dict = None, cancel_check: Callable[[], bool] = None, initial_plan: ActionPlan = None, context: PrincipalContext = None, attachments: List[str] = None):
+    def process(self, user_input: str, session_id: str = "default", on_partial_response=None, user_data: dict = None, callbacks: dict = None, cancel_check: Callable[[], bool] = None, initial_plan: ActionPlan = None, context: PrincipalContext = None, attachments: List[str] = None, work_id: str = None):
         """
         Agentic Loop: Input -> Loop [Reason -> Act -> Observe] -> Response
         """
@@ -888,7 +1205,7 @@ class AgentOrchestrator:
         acquired = lock.acquire(blocking=True, timeout=120)
         if not acquired:
             logger.warning(f"Timeout waiting for session lock: {session_id}")
-            return "Ainda estou processando sua solicitação anterior. Por favor, aguarde mais um momento ou tente novamente em breve."
+            return "I am still processing your previous request. Please wait a moment or try again shortly."
 
         try:
             # Check for cancellation before starting the loop (cooperative)
@@ -898,14 +1215,30 @@ class AgentOrchestrator:
             
             # Re-fetch session ensuring it's not None
             if not session:
-                interface = "web"
-                if session_id.startswith("telegram"): interface = "telegram"
-                elif session_id.startswith("voice"): interface = "voice"
-                session = self.create_session(session_id, interface=interface)
+                transient_requested = bool((user_data or {}).get("transient_session"))
+                worker_run = bool((user_data or {}).get("__worker_run"))
+                if transient_requested:
+                    session = Session(session_id, source="system")
+                    session.context["__transient_session"] = True
+                elif worker_run:
+                    logger.error(
+                        "Worker attempted to process without existing session '%s'. Blocking implicit session creation.",
+                        session_id,
+                    )
+                    return self.i18n.t("reply.worker_session_missing", locale="en")
+                else:
+                    interface = "web"
+                    if session_id.startswith("telegram"): interface = "telegram"
+                    elif session_id.startswith("voice"): interface = "voice"
+                    session = self.create_session(session_id, interface=interface)
 
             session.last_interaction = time.time()
             if user_data:
                 session.context.update(user_data)
+            session.context["user_language"] = self._detect_user_language(
+                user_input,
+                fallback=str(session.context.get("user_language") or "en"),
+            )
             if context:
                 session.context["principal_context"] = context.model_dump()
                 
@@ -922,26 +1255,56 @@ class AgentOrchestrator:
             if plan and plan.source == 'reflex' and plan.action_id == 'reply':
                  return plan.response_text
 
-            # HITL: Handle resumed pending action
-            resumed_intent = None
+            # HITL pending action resumption
             if session.pending_action:
-                if any(confirm in user_input.lower() for confirm in ["sim", "yes", "autorizo", "ok", "pode", "manda"]):
-                    logger.info(f"User authorized pending action: {session.pending_action['action']}")
-                    resumed_action = session.pending_action
-                    session.pending_action = None
-                    session.add_message("user", user_input)
-                    # Create the intent to execute
-                    resumed_intent = AgentIntent(
-                        thought=f"Usuário autorizou a ação {resumed_action['action']}. Executando agora conforme solicitado.",
-                        action=resumed_action['action'],
-                        params=resumed_action['params']
-                    )
-                else:
-                    session.pending_action = None
-                    session.add_message("user", user_input)
-                    return "Entendi. Cancelei a ação e não prosseguirei com esse passo."
+                pending = session.pending_action if isinstance(session.pending_action, dict) else {}
+                pending_work_id = str(pending.get("work_id") or "").strip()
+                normalized = (user_input or "").strip().lower()
+                is_yes = normalized in {"yes", "y", "ok", "approve", "autorizo", "sim", "s", "pode", "confirm"}
+                is_no = normalized in {"no", "n", "deny", "deny.", "cancel", "cancelar", "nao", "não", "recusar"}
 
-            # 1. Start Reasoning Loop (Max 15 steps)
+                if pending_work_id:
+                    kernel = getattr(self, "kernel", None)
+                    scheduler = getattr(kernel, "scheduler", None)
+                    if scheduler and (is_yes or is_no):
+                        scheduler.push_work_command(
+                            pending_work_id,
+                            "approve" if is_yes else "deny",
+                            payload={"note": user_input},
+                            source_session_id=session_id,
+                        )
+                        session.pending_action = None
+                        session.add_message("user", user_input)
+                        self._save_session(session)
+                        return self._t(session, "reply.decision_forwarded")
+                    if scheduler:
+                        return self._t(session, "reply.waiting_approval_yes_no")
+
+                if is_yes:
+                    resumed_action_id = str(pending.get("action") or "").strip()
+                    resumed_params = pending.get("params") if isinstance(pending.get("params"), dict) else {}
+                    if resumed_action_id:
+                        logger.info(f"User authorized pending action: {resumed_action_id}")
+                        session.pending_action = None
+                        session.add_message("user", user_input)
+                        plan = ActionPlan(
+                            action_id=resumed_action_id,
+                            args=resumed_params,
+                            confidence=1.0,
+                            source="internal",
+                            thought=f"User approved pending sensitive action '{resumed_action_id}'.",
+                        )
+                elif is_no:
+                    session.pending_action = None
+                    session.add_message("user", user_input)
+                    return self._t(session, "reply.canceled_sensitive_action")
+
+            planner_cfg = self._get_planner_config()
+            max_steps = self._compute_dynamic_max_steps(user_input, plan)
+            replan_budget = max(1, planner_cfg.get("replan_budget", 4))
+            replans_used = 0
+
+            # 1. Start dynamic reasoning loop (supports long tasks with replanning).
             # User message persistence is now handled by Kernel.process_input
             # to cover all paths (Quick and Worker).
             
@@ -960,27 +1323,145 @@ class AgentOrchestrator:
             media_play_handoff_attempts = 0
             media_request = self._is_media_play_request(user_input)
             media_vision_fallback_attempts = 0
-            final_response = "Desculpe, não consegui processar sua solicitação após o limite de passos."
+            maps_billing_fallback_attempts = 0
+            final_response = self._t(session, "reply.step_budget_exceeded")
             final_structured_attachments = None
             final_response_persisted = False
             final_response_streamed = False
             stream_completed = False
+            paused = False
+            actions_used: List[str] = []
+            skills_used: List[str] = []
+            media_used: List[str] = []
+            queued_messages: List[str] = []
+            feedback_cfg = self.config_manager.get("work_feedback", {}) if hasattr(self, "config_manager") else {}
+            progress_feedback_enabled = bool(feedback_cfg.get("progress_updates_enabled", True))
+            emitted_progress_events: set[str] = set()
+
+            def current_step_title() -> str:
+                if not planner_tree:
+                    return "current step"
+                current = next((s for s in planner_tree if s.get("status") == "in_progress"), None)
+                title = str((current or {}).get("title") or "").strip()
+                return title or "current step"
+
+            def progress_note(event: str, action_id: Optional[str] = None) -> str:
+                is_pt = self._session_locale(session).startswith("pt")
+                step = current_step_title()
+                if event == "replan":
+                    if is_pt:
+                        return f"Detectei repetição no passo '{step}'. Vou ajustar a estratégia e seguir por outro caminho."
+                    return f"I detected repetition in step '{step}'. I will adjust the strategy and continue with an alternative path."
+                if event == "failure_recovery":
+                    if is_pt:
+                        return f"Encontrei um problema no passo '{step}' e estou aplicando uma correção."
+                    return f"I found an issue in step '{step}' and I am applying a fix."
+                if event == "fallback":
+                    label = action_id or "fallback action"
+                    if is_pt:
+                        return f"Esse caminho falhou no passo '{step}'. Vou tentar a alternativa '{label}'."
+                    return f"This path failed in step '{step}'. I will try the fallback '{label}'."
+                return ""
+
+            def emit_user_progress(note: str, event_key: Optional[str] = None):
+                if not progress_feedback_enabled:
+                    return
+                if session.pending_action:
+                    return
+                if event_key:
+                    if event_key in emitted_progress_events:
+                        return
+                    emitted_progress_events.add(event_key)
+                text = str(note or "").strip()
+                if not text:
+                    return
+                session.add_message("assistant", text)
+                if callbacks and "send_status" in callbacks:
+                    callbacks["send_status"]("thinking", {"message": text, "kind": "progress"})
+                self._save_session(session)
+
+            planner_tree = self._normalize_plan_tree(plan.metadata.get("plan")) if (plan and isinstance(plan.metadata, dict)) else []
+            if planner_tree:
+                session.context["planner_tree"] = planner_tree
+                session.plan = self._flatten_plan_lines(planner_tree)
+                session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
+
+            self._touch_work_context(
+                work_id,
+                {
+                    "summary": {
+                        "goal": session.state_summary.get("goal") or "Task execution",
+                        "status": "running",
+                        "cursor": session.state_summary.get("cursor"),
+                    },
+                    "planner": {
+                        "max_steps": max_steps,
+                        "replan_budget": replan_budget,
+                        "replans_used": replans_used,
+                        "steps": session.context.get("planner_tree", []),
+                    },
+                    "data": {
+                        "actions_used": [],
+                        "skills_used": [],
+                        "media_used": [],
+                        "queued_messages": [],
+                    },
+                },
+            )
 
             try:
-                while loops < 15:
+                while loops < max_steps:
                     if cancel_check and cancel_check():
                         logger.info(f"Process cancelled for session {session_id}")
-                        return "Tarefa cancelada pelo usuário."
+                        self._touch_work_context(work_id, {"summary": {"status": "cancelled"}})
+                        return "Task canceled by user."
+
+                    if work_id:
+                        kernel = getattr(self, "kernel", None)
+                        scheduler = getattr(kernel, "scheduler", None) if kernel else None
+                        if scheduler:
+                            pending_commands = scheduler.pop_work_commands(work_id)
+                            for cmd in pending_commands:
+                                name = str(cmd.get("command") or "").strip().lower()
+                                payload = cmd.get("payload") if isinstance(cmd.get("payload"), dict) else {}
+                                if name == "cancel":
+                                    logger.info(f"Received cancel command for work {work_id}")
+                                    self._touch_work_context(work_id, {"summary": {"status": "cancelled"}})
+                                    return "Task canceled by external command."
+                                if name == "pause":
+                                    paused = True
+                                    scheduler.update_work_status(work_id, WorkStatus.PAUSED)
+                                    self._touch_work_context(work_id, {"summary": {"status": "paused"}})
+                                if name == "resume":
+                                    paused = False
+                                    scheduler.update_work_status(work_id, WorkStatus.RUNNING)
+                                    self._touch_work_context(work_id, {"summary": {"status": "running"}})
+                                if name == "inject_message":
+                                    note = str(payload.get("message") or "").strip()
+                                    if note:
+                                        queued_messages.append(note)
+                                        session.add_message("user", f"[Injected message] {note}")
+                                        plan = None
+                                if name == "update_context":
+                                    patch = payload.get("patch")
+                                    if isinstance(patch, dict):
+                                        session.context.update(patch)
+                                        self._touch_work_context(work_id, {"data": {"last_context_patch": patch}})
+                            if paused:
+                                if callbacks and 'send_status' in callbacks:
+                                    callbacks['send_status']('thinking', {'code': 'paused', 'message': 'Work is paused. Waiting for resume command.'})
+                                time.sleep(0.8)
+                                continue
 
                     loops += 1
-                    logger.info(f"--- Session {session_id} | Loop {loops}/15 ---")
+                    logger.info(f"--- Session {session_id} | Loop {loops}/{max_steps} ---")
                     
                     if on_partial_response and loops % 3 == 0: 
-                        on_partial_response(f"Refining reasoning (Step {loops}/15)...")
+                        on_partial_response(f"Refining reasoning (Step {loops}/{max_steps})...")
 
                     if not plan:
                         if callbacks and 'send_status' in callbacks:
-                            callbacks['send_status']('thinking', {'step': loops, 'max_steps': 15, 'label': 'Thinking about next action...'})
+                            callbacks['send_status']('thinking', {'step': loops, 'max_steps': max_steps, 'label': 'Thinking about next action...'})
                         
                         # Emit global event for real-time synchronization
                         global_event_bus.emit_threadsafe({
@@ -988,7 +1469,7 @@ class AgentOrchestrator:
                             "session_id": session_id,
                             "phase": "thinking",
                             "message": "Thinking about next action...",
-                            "payload": {'step': loops, 'max_steps': 15}
+                            "payload": {'step': loops, 'max_steps': max_steps}
                         })
 
                         reasoning_context = {
@@ -1003,11 +1484,72 @@ class AgentOrchestrator:
 
                     if not plan:
                         logger.warning("No plan resolved. Breaking loop.")
+                        recovered_reply = self._reply_from_last_success(
+                            action_id=last_action_id,
+                            structured_result=last_action_structured,
+                            raw_output=last_action_output,
+                            language=self._session_locale(session),
+                        ) if last_action_status == "success" else None
+                        final_response = recovered_reply or self._t(session, "reply.no_plan_resolved")
+                        if callbacks and 'send_status' in callbacks:
+                            callbacks['send_status'](
+                                'error',
+                                {
+                                    'code': 'no_plan',
+                                    'message': final_response,
+                                    'action': last_action_id or "",
+                                }
+                            )
                         break
+
+                    if isinstance(plan.metadata, dict) and plan.metadata.get("plan"):
+                        candidate = self._normalize_plan_tree(plan.metadata.get("plan"))
+                        if candidate:
+                            planner_tree = candidate
+                            session.context["planner_tree"] = planner_tree
+                            session.plan = self._flatten_plan_lines(planner_tree)
+                            session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
 
                     # Update state from plan metadata if available
                     if plan.metadata and 'state_summary' in plan.metadata:
                         session.state_summary.update(plan.metadata['state_summary'])
+
+                    if planner_tree:
+                        active = next((s for s in planner_tree if s.get("status") == "in_progress"), None)
+                        if not active:
+                            pending = next((s for s in planner_tree if s.get("status") == "pending"), None)
+                            if pending:
+                                pending["status"] = "in_progress"
+                        session.plan = self._flatten_plan_lines(planner_tree)
+                        session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
+                    else:
+                        if not session.state_summary.get("cursor"):
+                            session.state_summary["cursor"] = f"{loops}/{max_steps} (loop: executing)"
+
+                    # Always keep overwatch metadata updated, even when no explicit planner tree is returned.
+                    self._touch_work_context(
+                        work_id,
+                        {
+                            "planner": {
+                                "max_steps": max_steps,
+                                "replan_budget": replan_budget,
+                                "replans_used": replans_used,
+                                "steps": planner_tree or [],
+                            },
+                            "summary": {
+                                "status": "running",
+                                "cursor": session.state_summary.get("cursor"),
+                                "last_action": plan.action_id,
+                                "last_thought": plan.thought or "",
+                            },
+                            "data": {
+                                "actions_used": actions_used[-80:],
+                                "skills_used": skills_used[-40:],
+                                "media_used": media_used[-80:],
+                                "queued_messages": queued_messages[-40:],
+                            },
+                        },
+                    )
 
                     # Normalize/repair action IDs to reduce "unknown action" loops.
                     if plan.action_id not in ("reply", "error"):
@@ -1022,14 +1564,17 @@ class AgentOrchestrator:
                             plan.action_id = resolved_action
                         elif not self.skill_registry.get_skill_for_action(plan.action_id):
                             suggestions = self.skill_registry.suggest_actions(plan.action_id, limit=3)
-                            suggestion_text = ", ".join(suggestions) if suggestions else "nenhuma sugestão"
+                            suggestion_text = ", ".join(suggestions) if suggestions else "no suggestions"
                             logger.warning(
                                 f"Unknown action from resolver: {plan.action_id} | suggestions: {suggestion_text}"
                             )
                             final_response = (
-                                f"A ação '{plan.action_id}' não existe no runtime atual. "
-                                f"Sugestões próximas: {suggestion_text}. "
-                                "Tente reformular o pedido com mais contexto."
+                                self._t(
+                                    session,
+                                    "reply.unknown_action_template",
+                                    action_id=plan.action_id,
+                                    suggestions=suggestion_text,
+                                )
                             )
                             plan = ActionPlan(
                                 action_id="reply",
@@ -1039,6 +1584,11 @@ class AgentOrchestrator:
                             )
 
                     logger.info(f"Action: {plan.action_id} | Confidence: {plan.confidence}")
+                    if plan.action_id not in {"reply", "error"}:
+                        actions_used.append(plan.action_id)
+                        namespace = ".".join(plan.action_id.split(".")[:2]) if "." in plan.action_id else plan.action_id
+                        if namespace not in skills_used:
+                            skills_used.append(namespace)
                     
                     # Notify Reasoning Chunk
                     if callbacks and 'send_reasoning_chunk' in callbacks:
@@ -1059,11 +1609,47 @@ class AgentOrchestrator:
                     previous_actions.append(current_signature)
                     if len(previous_actions) > 5: previous_actions.pop(0)
                     if len(previous_actions) >= 3 and all(s == current_signature for s in previous_actions[-3:]):
+                        if replans_used < replan_budget:
+                            replans_used += 1
+                            previous_actions = []
+                            session.add_message(
+                                "system",
+                                "REPLAN_TRIGGER: exact repetition detected. Generate an alternative strategy with different action or params.",
+                                msg_type="reasoning",
+                            )
+                            if callbacks and 'send_status' in callbacks:
+                                callbacks['send_status'](
+                                    'executing',
+                                    {
+                                        'code': 'replan',
+                                        'message': "Replanning due to repeated action with no progress.",
+                                        'action': plan.action_id
+                                    }
+                                )
+                            emit_user_progress(
+                                progress_note("replan", action_id=plan.action_id),
+                                event_key=f"replan:{plan.action_id}",
+                            )
+                            self._touch_work_context(
+                                work_id,
+                                {
+                                    "planner": {
+                                        "replans_used": replans_used,
+                                        "replan_budget": replan_budget,
+                                        "steps": planner_tree,
+                                    },
+                                    "summary": {"status": "replanning"},
+                                },
+                            )
+                            plan = None
+                            continue
+
                         logger.warning(f"Loop detected (3 identical actions/params): {current_signature}. Breaking.")
                         recovered_reply = self._reply_from_last_success(
                             action_id=plan.action_id,
                             structured_result=last_action_structured,
                             raw_output=last_action_output,
+                            language=self._session_locale(session),
                         ) if last_action_status == "success" else None
 
                         if recovered_reply:
@@ -1072,7 +1658,7 @@ class AgentOrchestrator:
                                     'executing',
                                     {
                                         'code': 'loop_break_success',
-                                        'message': f"Ação repetida detectada em {plan.action_id}; consolidando resposta final com o último resultado válido.",
+                                        'message': f"Repeated action detected in {plan.action_id}; consolidating final response using the latest valid result.",
                                         'action': plan.action_id
                                     }
                                 )
@@ -1083,11 +1669,11 @@ class AgentOrchestrator:
                                     'error',
                                     {
                                         'code': 'loop_break',
-                                        'message': 'Detectei repetitividade exata sem progresso. Por favor, tente reformular o pedido ou fornecer mais detalhes.',
+                                        'message': 'Exact repetition detected without progress. Please rephrase your request or provide more details.',
                                         'action': plan.action_id
                                     }
                                 )
-                            final_response = "Detectei repetitividade exata sem progresso. Por favor, tente reformular o pedido ou fornecer mais detalhes."
+                            final_response = "Exact repetition detected without progress. Please rephrase your request or provide more details."
                         plan = ActionPlan(
                             action_id='reply',
                             args={},
@@ -1108,11 +1694,37 @@ class AgentOrchestrator:
 
                     # 3. Action Repetition (4 times in last 5 steps) - Hard Break
                     if action_history.count(plan.action_id) >= 4:
+                         if replans_used < replan_budget:
+                             replans_used += 1
+                             previous_actions = []
+                             session.add_message(
+                                 "system",
+                                 "REPLAN_TRIGGER: action repeated too often. Change strategy before continuing.",
+                                 msg_type="reasoning",
+                             )
+                             self._touch_work_context(
+                                 work_id,
+                                 {
+                                     "planner": {
+                                         "replans_used": replans_used,
+                                         "replan_budget": replan_budget,
+                                         "steps": planner_tree,
+                                     },
+                                     "summary": {"status": "replanning"},
+                                 },
+                             )
+                             emit_user_progress(
+                                 progress_note("replan", action_id=plan.action_id),
+                                 event_key=f"replan:{plan.action_id}:hard",
+                             )
+                             plan = None
+                             continue
                          logger.warning(f"Action loop detected (Action '{plan.action_id}' repeated 4/5 times). Breaking.")
                          recovered_reply = self._reply_from_last_success(
                              action_id=plan.action_id,
                              structured_result=last_action_structured,
                              raw_output=last_action_output,
+                             language=self._session_locale(session),
                          ) if last_action_status == "success" else None
 
                          if callbacks and 'send_status' in callbacks:
@@ -1121,15 +1733,15 @@ class AgentOrchestrator:
                                  {
                                      'code': 'loop_break',
                                      'message': (
-                                         f"Parece que estou travado tentando usar a ação '{plan.action_id}' repetidamente."
+                                         f"I seem to be stuck trying to use action '{plan.action_id}' repeatedly."
                                          if recovered_reply else
-                                         f"Parece que estou travado tentando usar a ação '{plan.action_id}' repetidamente sem sucesso. Vou parar para evitar loop infinito."
+                                         f"I seem to be stuck trying to use action '{plan.action_id}' repeatedly without success. I will stop to avoid an infinite loop."
                                      ),
                                      'action': plan.action_id
                                  }
                              )
 
-                         final_response = recovered_reply or f"Parece que estou travado tentando usar a ação '{plan.action_id}' repetidamente sem sucesso. Vou parar para evitar loop infinito."
+                         final_response = recovered_reply or f"I seem to be stuck trying to use action '{plan.action_id}' repeatedly without success. I will stop to avoid an infinite loop."
                          # For a hard break, we force a valid reply object for internal history consistency
                          plan = ActionPlan(
                              action_id='reply',
@@ -1138,7 +1750,7 @@ class AgentOrchestrator:
                              source='internal',
                              attachments=(last_generated_attachment_paths or None),
                          )
-                         plan.thought = "Loop de ações detectado. Interrompendo para evitar gasto excessivo de tokens e tempo."
+                         plan.thought = "Action loop detected. Stopping to avoid excessive token and time usage."
                     
                     # Add current turn to history for context
                     # Use JSON to reinforce the pattern the LLM must follow
@@ -1261,14 +1873,16 @@ class AgentOrchestrator:
                             last_action_id=last_action_id,
                             last_action_reason=last_action_reason,
                             last_action_output=last_action_output,
+                            language=self._session_locale(session),
                         )
+                        final_response = self.apply_conversation_coaching(session, user_input, final_response)
                         
                         # Process attachments
                         attachment_inputs = plan.attachments or last_generated_attachment_paths
                         structured_attachments = self._standardize_attachments(session, attachment_inputs) if attachment_inputs else None
 
                         if not final_response and structured_attachments:
-                            final_response = "Aqui está o arquivo solicitado."
+                            final_response = "Here is the requested file."
                         
                         session.add_message("assistant", final_response, attachments=structured_attachments)
                         final_structured_attachments = structured_attachments
@@ -1286,9 +1900,23 @@ class AgentOrchestrator:
 
                     if plan.action_id == 'error':
                         if callbacks and 'send_status' in callbacks:
-                            callbacks['send_status']('error', {'code': 'action_error', 'message': f"Desculpe, ocorreu um erro durante o processamento: {plan.thought}"})
+                            callbacks['send_status'](
+                                'error',
+                                {
+                                    'code': 'action_error',
+                                    'message': self._t(
+                                        session,
+                                        "reply.error_during_processing",
+                                        details=(plan.thought or "unknown"),
+                                    ),
+                                },
+                            )
                             
-                        final_response = f"Desculpe, ocorreu um erro durante o processamento: {plan.thought}"
+                        final_response = self._t(
+                            session,
+                            "reply.error_during_processing",
+                            details=(plan.thought or "unknown"),
+                        )
                         session.add_message("assistant", final_response)
                         final_response_persisted = True
                         if callbacks and 'send_response' in callbacks:
@@ -1314,13 +1942,115 @@ class AgentOrchestrator:
 
                     # HITL Check
                     if self.safety_service.is_sensitive(plan.action_id, plan.args, self.skill_registry):
-                        session.pending_action = {"action": plan.action_id, "params": plan.args}
                         approval_msg = self.safety_service.get_approval_message(plan.action_id, plan.args)
-                        session.add_message("assistant", approval_msg)
-                        if callbacks and 'send_complete' in callbacks:
-                            callbacks['send_complete']()
-                            stream_completed = True
-                        return approval_msg
+                        work_record = self._get_work_record(work_id)
+                        owner_session_id = work_record.owner_session_id if work_record else session_id
+                        worker_run = bool((user_data or {}).get("__worker_run"))
+
+                        target_session = self.get_session_robust(owner_session_id)
+                        if not target_session:
+                            if worker_run:
+                                final_response = self.i18n.t("reply.approval_target_missing", locale=self._session_locale(session))
+                                logger.error(
+                                    "Worker cannot request approval because owner session '%s' does not exist.",
+                                    owner_session_id,
+                                )
+                                if callbacks and 'send_status' in callbacks:
+                                    callbacks['send_status'](
+                                        'error',
+                                        {
+                                            'code': 'approval_target_missing',
+                                            'message': final_response,
+                                            'action': plan.action_id,
+                                        },
+                                    )
+                                plan = ActionPlan(
+                                    action_id='reply',
+                                    args={},
+                                    response_text=final_response,
+                                    source='internal',
+                                )
+                                continue
+                            interface = "web"
+                            if str(owner_session_id).startswith("telegram"):
+                                interface = "telegram"
+                            elif str(owner_session_id).startswith("voice"):
+                                interface = "voice"
+                            target_session = self.create_session(owner_session_id, interface=interface)
+
+                        target_session.pending_action = {
+                            "action": plan.action_id,
+                            "params": plan.args,
+                            "work_id": work_id,
+                            "requested_at": datetime.datetime.now().isoformat(),
+                        }
+                        target_session.add_message("assistant", approval_msg)
+                        self._save_session(target_session)
+
+                        self._touch_work_context(
+                            work_id,
+                            {
+                                "summary": {
+                                    "status": "waiting_user",
+                                    "approval_prompt": approval_msg,
+                                    "approval_target_session_id": owner_session_id,
+                                }
+                            },
+                        )
+
+                        kernel = getattr(self, "kernel", None)
+                        scheduler = getattr(kernel, "scheduler", None) if kernel else None
+                        if scheduler and work_id:
+                            scheduler.update_work_status(work_id, WorkStatus.WAITING_USER)
+
+                        if callbacks and 'send_status' in callbacks:
+                            callbacks['send_status'](
+                                'thinking',
+                                {'code': 'waiting_user', 'message': approval_msg, 'action': plan.action_id}
+                            )
+
+                        if work_id and scheduler:
+                            decision = self._wait_for_work_decision(work_id, cancel_check)
+                            outcome = decision.get("decision")
+                            if outcome == "approve":
+                                if work_id:
+                                    scheduler.update_work_status(work_id, WorkStatus.RUNNING)
+                                target_session.pending_action = None
+                                self._save_session(target_session)
+                                note = (decision.get("note") or "").strip()
+                                if note:
+                                    session.add_message("user", f"[Approval note]: {note}")
+                                logger.info(f"Approval received for work {work_id}; continuing sensitive action.")
+                            elif outcome == "inject":
+                                note = (decision.get("note") or "").strip()
+                                if note:
+                                    session.add_message("user", note)
+                                if work_id:
+                                    scheduler.update_work_status(work_id, WorkStatus.RUNNING)
+                                continue
+                            else:
+                                if work_id:
+                                    scheduler.update_work_status(work_id, WorkStatus.CANCELLED)
+                                target_session.pending_action = None
+                                self._save_session(target_session)
+                                final_response = "Sensitive action was denied or timed out. I stopped this worker safely."
+                                session.add_message("assistant", final_response)
+                                final_response_persisted = True
+                                if callbacks and 'send_response' in callbacks:
+                                    callbacks['send_response'](final_response, is_chunk=True)
+                                    final_response_streamed = True
+                                if callbacks and 'send_complete' in callbacks:
+                                    callbacks['send_complete']()
+                                    stream_completed = True
+                                break
+                        else:
+                            # No work channel available: keep classic in-session pending action.
+                            session.pending_action = {"action": plan.action_id, "params": plan.args}
+                            session.add_message("assistant", approval_msg)
+                            if callbacks and 'send_complete' in callbacks:
+                                callbacks['send_complete']()
+                                stream_completed = True
+                            return approval_msg
 
                     # Execute via SkillRegistry
                     if callbacks and 'send_status' in callbacks:
@@ -1371,18 +2101,73 @@ class AgentOrchestrator:
                     last_action_output = truncated_result
                     last_action_structured = structured_result
                     last_generated_attachment_paths = self._extract_attachment_paths_from_result(structured_result)
+                    for media_path in last_generated_attachment_paths:
+                        if media_path not in media_used:
+                            media_used.append(media_path)
 
                     if result_status == "failure":
+                        # Deterministic recovery: when Google Maps billing is disabled,
+                        # fallback once to a web links search instead of retrying maps.
+                        if (
+                            plan.action_id == "maps.search.search"
+                            and isinstance(structured_result, dict)
+                            and maps_billing_fallback_attempts < 1
+                        ):
+                            fallback_action = str(structured_result.get("fallback_action") or "").strip()
+                            fallback_params = structured_result.get("fallback_params")
+                            if fallback_action and isinstance(fallback_params, dict):
+                                maps_billing_fallback_attempts += 1
+                                logger.warning(
+                                    "Maps billing failure detected. Switching to fallback action '%s' with params=%s",
+                                    fallback_action,
+                                    fallback_params,
+                                )
+                                plan = ActionPlan(
+                                    action_id=fallback_action,
+                                    args=fallback_params,
+                                    confidence=1.0,
+                                    source="internal",
+                                    thought=(
+                                        "Google Maps unavailable due to billing. "
+                                        "Running fallback to web search with semantic query."
+                                    ),
+                                )
+                                emit_user_progress(
+                                    progress_note("fallback", action_id=fallback_action),
+                                    event_key=f"fallback:{plan.action_id}:{fallback_action}",
+                                )
+                                continue
+
                         failure_signature = (plan.action_id, param_str, self._signature_from_result(raw_result))
                         if failure_signature == last_failure_signature:
                             repeated_failure_count += 1
                         else:
                             repeated_failure_count = 1
                             last_failure_signature = failure_signature
+                        if repeated_failure_count == 1:
+                            emit_user_progress(
+                                progress_note("failure_recovery", action_id=plan.action_id),
+                                event_key=f"failure_recovery:{plan.action_id}:{loops}",
+                            )
                         session.state_summary["last_error"] = result_reason
+                        if planner_tree:
+                            current_step = next((s for s in planner_tree if s.get("status") == "in_progress"), None)
+                            if current_step:
+                                current_step["status"] = "blocked"
+                            session.plan = self._flatten_plan_lines(planner_tree)
+                            session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
                     else:
                         repeated_failure_count = 0
                         last_failure_signature = None
+                        if planner_tree:
+                            current_step = next((s for s in planner_tree if s.get("status") == "in_progress"), None)
+                            if current_step:
+                                current_step["status"] = "done"
+                                next_pending = next((s for s in planner_tree if s.get("status") == "pending"), None)
+                                if next_pending:
+                                    next_pending["status"] = "in_progress"
+                            session.plan = self._flatten_plan_lines(planner_tree)
+                            session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
                     
                     summary = None
                     # Logical Log Compression: If output > 2000 chars, summarize it
@@ -1405,9 +2190,45 @@ class AgentOrchestrator:
                     
                     session.add_message("system", observation, msg_type="reasoning", summary=summary)
                     session.state_summary['last_outcome'] = summary if summary else truncated_result[:300]
+
+                    # Persist reasoning/action episodes for future retrieval/debugging.
+                    try:
+                        self.episodic_memory.store_episode(
+                            user_input=user_input,
+                            thought=plan.thought or "",
+                            action=plan.action_id,
+                            observation=observation,
+                            status=result_status,
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to store episodic memory: {e}")
                     
                     # Log the observation for diagnostic visibility (Professional CLI/assistant.log)
                     logger.info(observation)
+                    self._touch_work_context(
+                        work_id,
+                        {
+                            "summary": {
+                                "status": "running",
+                                "last_action": plan.action_id,
+                                "last_result_status": result_status,
+                                "last_error": result_reason if result_status == "failure" else "",
+                                "cursor": session.state_summary.get("cursor"),
+                            },
+                            "planner": {
+                                "max_steps": max_steps,
+                                "replan_budget": replan_budget,
+                                "replans_used": replans_used,
+                                "steps": planner_tree,
+                            },
+                            "data": {
+                                "actions_used": actions_used[-80:],
+                                "skills_used": skills_used[-40:],
+                                "media_used": media_used[-80:],
+                                "queued_messages": queued_messages[-40:],
+                            },
+                        },
+                    )
 
                     # Fast-path for vision outputs: avoid unnecessary re-reasoning loops.
                     # Vision skills already return user-facing text in "text".
@@ -1416,6 +2237,7 @@ class AgentOrchestrator:
                             action_id=plan.action_id,
                             structured_result=last_action_structured,
                             raw_output=last_action_output,
+                            language=self._session_locale(session),
                         )
                         if recovered_reply:
                             final_response = recovered_reply
@@ -1476,6 +2298,7 @@ class AgentOrchestrator:
                                 action_id=plan.action_id,
                                 structured_result=last_action_structured,
                                 raw_output=last_action_output,
+                                language=self._session_locale(session),
                             )
                             if recovered_reply:
                                 final_response = recovered_reply
@@ -1499,7 +2322,7 @@ class AgentOrchestrator:
                         and isinstance(last_action_structured, dict)
                     ):
                         if last_action_structured.get("playback_confirmed") is True:
-                            final_response = "Reprodução iniciada e confirmada no player do navegador."
+                            final_response = "Playback started and confirmed in the browser player."
                             session.add_message("assistant", final_response)
                             final_response_persisted = True
                             if callbacks and 'send_response' in callbacks:
@@ -1600,17 +2423,21 @@ class AgentOrchestrator:
                             marker in failure_text
                             for marker in (
                                 "402",
+                                "429",
+                                "free-models-per-day",
+                                "rate limit exceeded",
                                 "prompt tokens limit exceeded",
                                 "requires more credits",
                                 "resource_exhausted",
-                                "falta de créditos",
+                                "out of credits",
+                                "no fallback_llm configured",
                             )
                         )
                         if quota_hit or media_vision_fallback_attempts >= 1:
                             final_response = (
-                                "Não foi possível concluir a reprodução automaticamente. "
-                                "O player não foi confirmado em execução e a automação visual falhou por limite/cota do provedor. "
-                                "A tarefa foi encerrada sem sucesso para evitar loops."
+                                "Could not complete playback automatically. "
+                                "The player was not confirmed as running and visual automation failed due to provider limit/quota. "
+                                "The task was ended without success to avoid loops."
                             )
                             session.add_message("assistant", final_response)
                             final_response_persisted = True
@@ -1628,8 +2455,19 @@ class AgentOrchestrator:
                             f"Repeated failure detected for action '{plan.action_id}'. Breaking loop to avoid delirium."
                         )
                         final_response = (
-                            f"Estou travado na ação '{plan.action_id}' sem progresso real. "
-                            "Preciso que você refine o objetivo ou autorize uma estratégia diferente."
+                            f"I am stuck on action '{plan.action_id}' with no real progress. "
+                            "I need you to refine the goal or authorize a different strategy."
+                        )
+                        self._touch_work_context(
+                            work_id,
+                            {
+                                "summary": {
+                                    "status": "blocked",
+                                    "last_error": result_reason,
+                                    "cursor": session.state_summary.get("cursor"),
+                                },
+                                "planner": {"steps": planner_tree},
+                            },
                         )
                         session.add_message("assistant", final_response)
                         final_response_persisted = True
@@ -1647,7 +2485,7 @@ class AgentOrchestrator:
                 # Exit block for 'while'
                 if final_response is None:
                     logger.warning("Reasoning loop ended without a final response.")
-                    final_response = "Concluí as operações internas, mas não gerei uma resposta final. Tudo parece estar em ordem."
+                    final_response = self._t(session, "reply.no_plan_resolved")
                     if callbacks and 'send_response' in callbacks:
                         callbacks['send_response'](final_response, is_chunk=True)
                         final_response_streamed = True
@@ -1656,9 +2494,26 @@ class AgentOrchestrator:
                 logger.error(f"Error in reasoning loop: {e}")
                 
                 if callbacks and 'send_status' in callbacks:
-                    callbacks['send_status']('error', {'code': 'system_error', 'message': f"Desculpe, tive um problema técnico ao processar sua solicitação: {str(e)}"})
+                    callbacks['send_status'](
+                        'error',
+                        {
+                            'code': 'system_error',
+                            'message': self._t(session, "reply.technical_issue", details=str(e)),
+                        },
+                    )
                     
-                final_response = f"Desculpe, tive um problema técnico ao processar sua solicitação: {str(e)}"
+                final_response = self._t(session, "reply.technical_issue", details=str(e))
+                self._touch_work_context(
+                    work_id,
+                    {
+                        "summary": {
+                            "status": "failed",
+                            "last_error": str(e),
+                            "cursor": session.state_summary.get("cursor"),
+                        },
+                        "planner": {"steps": planner_tree, "max_steps": max_steps},
+                    },
+                )
 
             # Guarantee final response lifecycle (persist -> stream -> complete) in all loop exit paths.
             if final_response and not final_response_persisted and not session.pending_action:
@@ -1686,6 +2541,22 @@ class AgentOrchestrator:
 
             # 6. Persist and Return
             self._save_session(session)
+            self._touch_work_context(
+                work_id,
+                {
+                    "summary": {
+                        "status": "completed",
+                        "cursor": session.state_summary.get("cursor"),
+                        "final_response": (final_response or "")[:400],
+                    },
+                    "planner": {
+                        "steps": planner_tree,
+                        "max_steps": max_steps,
+                        "replan_budget": replan_budget,
+                        "replans_used": replans_used,
+                    },
+                },
+            )
             
             # 7. Adaptive Formatting
             channel = session.context.get('channel', 'Web')
@@ -1710,19 +2581,19 @@ class AgentOrchestrator:
             logger.info(f"Consolidating memory for session {session.session_id} (Total tokens: {total_tokens})")
             
             # Context window for summarization: existing summary + new messages
-            existing_summary = session.summary or "Nenhum resumo anterior."
+            existing_summary = session.summary or "No previous summary."
             history_to_summarize = session.get_history()
             
             prompt = (
-                f"Sua conversa atingiu o limite de tokens. Atualize o RESUMO RECURSIVO da sessão.\n"
-                f"RESUMO ATUAL: {existing_summary}\n\n"
-                "INSTRUÇÕES:\n"
-                "1. Integre os fatos novos do histórico ao resumo atual de forma densa.\n"
-                "2. Use formato TOON (Token-Oriented Object Notation): chaves curtas, valores diretos, sem redundância.\n"
-                "3. Mantenha informações críticas: nome do usuário, preferências, metas de longo prazo e caminhos de arquivos importantes.\n"
-                "4. O resultado final deve ser um UNIFICADO e REFINADO resumo, não um anexo.\n"
-                "5. Contrato: Responda APENAS com um objeto JSON no formato:\n"
-                "{\"thought\": \"Análise interna da compressão\", \"response_text\": \"O novo resumo em formato TOON\", \"action\": \"reply\"}"
+                f"Your conversation reached the token limit. Update the session's RECURSIVE SUMMARY.\n"
+                f"CURRENT SUMMARY: {existing_summary}\n\n"
+                "INSTRUCTIONS:\n"
+                "1. Integrate new facts from history into the current summary densely.\n"
+                "2. Use TOON format (Token-Oriented Object Notation): short keys, direct values, no redundancy.\n"
+                "3. Keep critical information: user name, preferences, long-term goals, and important file paths.\n"
+                "4. The final output must be one UNIFIED and REFINED summary, not an appendix.\n"
+                "5. Contract: Reply ONLY with a JSON object in the format:\n"
+                "{\"thought\": \"Internal compression analysis\", \"response_text\": \"The new summary in TOON format\", \"action\": \"reply\"}"
             )
             
             summary_intent = self.llm_manager.generate_intent(prompt, history_to_summarize, "You are a recursive memory compression specialist. USE TOON FORMAT.")
@@ -1818,14 +2689,14 @@ class AgentOrchestrator:
             "traceback",
             "exception",
             "error executing",
-            "erro inesperado",
+            "unexpected error",
             "timed out",
             "timeout",
             "missing ",
             "negado:",
             "denied",
             "permission denied",
-            "não autorizado",
+            "unauthorized",
         ]
         if any(marker in text for marker in failure_markers):
             return "failure", "failure_marker_detected"
@@ -1847,20 +2718,45 @@ class AgentOrchestrator:
         action_id: Optional[str],
         structured_result: Optional[Dict[str, Any]],
         raw_output: Optional[str],
+        language: str = "en",
     ) -> Optional[str]:
         """
         Builds a user-facing reply from the latest successful tool output.
         Used when loop guard triggers after repeated successful actions.
         """
         payload = structured_result if isinstance(structured_result, dict) else {}
+        is_pt = str(language or "").lower().startswith("pt")
+        action = (action_id or "").strip().lower()
+
+        if action == "browser.automator.control":
+            ctrl = str(
+                payload.get("control_action")
+                or payload.get("action")
+                or ""
+            ).strip().lower()
+            if ctrl == "pause":
+                return "Pronto, pausei a música." if is_pt else "Done, I paused the music."
+            if ctrl == "play":
+                return "Pronto, retomei a reprodução." if is_pt else "Done, I resumed playback."
+            if ctrl == "next":
+                return "Pronto, passei para a próxima faixa." if is_pt else "Done, I skipped to the next track."
+            if ctrl == "mute":
+                return "Pronto, silenciei o áudio." if is_pt else "Done, I muted the audio."
+            return "Pronto, apliquei o controle de mídia." if is_pt else "Done, I applied the media control."
+
+        if action == "system.control.screenshot":
+            path = str(payload.get("path") or "").strip()
+            if path:
+                return f"Pronto, capturei a tela: {path}" if is_pt else f"Done, I captured the screen: {path}"
+            return "Pronto, capturei a tela e já anexei para você." if is_pt else "Done, I captured the screen and attached it for you."
 
         text = payload.get("text")
-        if isinstance(text, str) and text.strip():
+        if isinstance(text, str) and text.strip() and not AgentOrchestrator._looks_like_technical_text(text):
             return text.strip()
 
         results = payload.get("results")
         if isinstance(results, list) and results:
-            lines = ["Encontrei estes resultados:"]
+            lines = ["Encontrei estes resultados:" if is_pt else "I found these results:"]
             for idx, item in enumerate(results[:8], start=1):
                 if not isinstance(item, dict):
                     continue
@@ -1882,8 +2778,12 @@ class AgentOrchestrator:
             best_title = str(best.get("title") or best.get("name") or "").strip()
             if best_url or best_title:
                 if best_url and best_title:
-                    return f"Melhor resultado encontrado: {best_title}\n{best_url}"
-                return f"Melhor resultado encontrado:\n{best_url or best_title}"
+                    if is_pt:
+                        return f"Melhor resultado encontrado: {best_title}\n{best_url}"
+                    return f"Best result found: {best_title}\n{best_url}"
+                if is_pt:
+                    return f"Melhor resultado encontrado:\n{best_url or best_title}"
+                return f"Best result found:\n{best_url or best_title}"
 
         # Last resort: avoid dumping huge JSON to user.
         raw = (raw_output or "").strip()
@@ -1891,8 +2791,10 @@ class AgentOrchestrator:
             excerpt = raw if len(raw) <= 700 else raw[:700] + "..."
             return excerpt
 
-        action = action_id or "a ação solicitada"
-        return f"Concluí {action} com sucesso, mas não consegui consolidar automaticamente a resposta final."
+        action = action_id or "the requested action"
+        if is_pt:
+            return f"Concluí {action} com sucesso, mas não consegui consolidar automaticamente a resposta final."
+        return f"I completed {action} successfully, but could not automatically consolidate the final response."
 
     @staticmethod
     def _extract_attachment_paths_from_result(structured_result: Optional[Dict[str, Any]]) -> List[str]:
@@ -1959,9 +2861,9 @@ class AgentOrchestrator:
         failure_markers = (
             "falh",
             "erro",
-            "não consegui",
+            "i could not",
             "nao consegui",
-            "não foi possível",
+            "it was not possible",
             "nao foi possivel",
             "failed",
             "error",
@@ -2035,19 +2937,27 @@ class AgentOrchestrator:
         last_action_id: Optional[str],
         last_action_reason: Optional[str],
         last_action_output: Optional[str],
+        language: str = "en",
     ) -> str:
         """
         Prevents success hallucinations when the last tool observation was a failure.
         """
         if last_action_status != "failure":
             return response_text or ""
+        is_pt = str(language or "").lower().startswith("pt")
 
         reply = (response_text or "").strip()
         if not reply:
+            if is_pt:
+                return (
+                    f"A última ação `{last_action_id or 'unknown'}` falhou "
+                    f"({last_action_reason or 'sem motivo detalhado'}). "
+                    "Preciso ajustar a estratégia para concluir com segurança."
+                )
             return (
-                f"A última ação `{last_action_id or 'desconhecida'}` falhou "
-                f"({last_action_reason or 'sem motivo detalhado'}). "
-                "Preciso ajustar a estratégia para concluir com segurança."
+                f"The last action `{last_action_id or 'unknown'}` failed "
+                f"({last_action_reason or 'no detailed reason'}). "
+                "I need to adjust the strategy to finish safely."
             )
 
         if cls._looks_like_failure_ack(reply):
@@ -2057,10 +2967,16 @@ class AgentOrchestrator:
             output_excerpt = (last_action_output or "").strip()
             if len(output_excerpt) > 220:
                 output_excerpt = output_excerpt[:220] + "..."
+            if is_pt:
+                return (
+                    f"Não consegui concluir porque a ação `{last_action_id or 'unknown'}` falhou "
+                    f"({last_action_reason or 'erro'}). "
+                    f"Última saída: {output_excerpt or 'sem detalhes'}."
+                )
             return (
-                f"Não consegui concluir porque a ação `{last_action_id or 'desconhecida'}` falhou "
-                f"({last_action_reason or 'erro'}). "
-                f"Último retorno: {output_excerpt or 'sem detalhes'}."
+                f"I could not complete because action `{last_action_id or 'unknown'}` failed "
+                f"({last_action_reason or 'error'}). "
+                f"Last output: {output_excerpt or 'no details'}."
             )
 
         return reply
@@ -2118,6 +3034,7 @@ class AgentOrchestrator:
             location=self.location_service.get_current_location(session.context).get("city", "Unknown"),
             channel=session.context.get("channel", "Unknown"),
             user_name=session.context.get("user_name", "Unknown"),
+            user_language=session.context.get("user_language", "en"),
             toon_state=toon_state,
             user_input=user_input,
             project_path=os.getcwd(),
@@ -2131,6 +3048,149 @@ class AgentOrchestrator:
             skills_summary=skills_summary,
             skill_scope=skill_scope,
         )
+
+    def apply_conversation_coaching(self, session: Session, user_input: str, response_text: str) -> str:
+        """
+        Optional post-processing follow-up.
+        By default we keep the LLM-native final response untouched to avoid
+        artificial template endings that break conversational flow.
+        """
+        text = (response_text or "").strip()
+        if not text:
+            return text
+
+        cfg = self.config_manager.get("conversation_coaching", {})
+        if not bool(cfg.get("enabled", True)):
+            return text
+        mode = str(cfg.get("mode", "llm_native")).strip().lower()
+        if mode != "template":
+            return text
+
+        if "?" in text:
+            return text
+
+        max_len = int(cfg.get("max_response_chars_for_followup", 1200))
+        if len(text) > max_len:
+            return text
+
+        lower_input = (user_input or "").lower()
+        locale = self._session_locale(session, fallback="en")
+        pt_markers = ("você", "voce", "relatorio", "relatório", "pode", "quero", "ajuda")
+        is_pt = locale.startswith("pt") or any(marker in lower_input for marker in pt_markers)
+        tone = str(cfg.get("tone", "consultative")).strip().lower()
+
+        followup = ""
+        if any(k in lower_input for k in ("report", "relatorio", "relatório", "html")):
+            if tone == "direct":
+                followup = (
+                    "Posso gerar a versão HTML agora?"
+                    if is_pt else
+                    "Can I generate the HTML version now?"
+                )
+            elif tone == "subtle":
+                followup = (
+                    "Se quiser, posso transformar isso em HTML."
+                    if is_pt else
+                    "If helpful, I can turn this into HTML."
+                )
+            else:
+                followup = (
+                    "Quer que eu já gere uma versão HTML com estrutura profissional?"
+                    if is_pt else
+                    "Would you like me to generate a professional HTML version now?"
+                )
+        elif any(k in lower_input for k in ("plan", "planner", "roadmap", "plano")):
+            if tone == "direct":
+                followup = (
+                    "Posso quebrar isso em milestones agora?"
+                    if is_pt else
+                    "Can I break this into milestones now?"
+                )
+            elif tone == "subtle":
+                followup = (
+                    "Se fizer sentido, eu organizo em milestones."
+                    if is_pt else
+                    "If useful, I can organize this into milestones."
+                )
+            else:
+                followup = (
+                    "Quer que eu quebre isso em um plano de implementação com milestones?"
+                    if is_pt else
+                    "Would you like me to break this into an implementation plan with milestones?"
+                )
+        else:
+            if tone == "direct":
+                followup = (
+                    "Posso avançar para o próximo passo?"
+                    if is_pt else
+                    "Can I proceed to the next step?"
+                )
+            elif tone == "subtle":
+                followup = (
+                    "Se quiser, eu já sigo com o próximo passo."
+                    if is_pt else
+                    "If useful, I can continue with the next step."
+                )
+            else:
+                followup = (
+                    "Quer que eu já avance com o próximo passo prático?"
+                    if is_pt else
+                    "Would you like me to proceed with the next practical step?"
+                )
+
+        joiner = "\n\n" if "\n" in text else " "
+        return f"{text}{joiner}{followup}"
+
+    def _enforce_response_language(self, session: Session, response_text: str) -> str:
+        """
+        Lightweight guardrail to reduce mixed PT/EN user-facing replies.
+        This does not translate full text; it normalizes recurrent cross-language fragments.
+        """
+        text = (response_text or "").strip()
+        if not text:
+            return text
+
+        locale = self._session_locale(session, fallback="en")
+        if locale.startswith("pt"):
+            replacements = {
+                "Feels like:": "Sensação térmica:",
+                "Would you like me to proceed with the next practical step?": "Quer que eu já avance com o próximo passo prático?",
+                "Would you like me to proceed with the next step?": "Quer que eu já avance com o próximo passo?",
+                "Would you like me to break this into an implementation plan with milestones?": "Quer que eu quebre isso em um plano de implementação com milestones?",
+                "Would you like me to generate a professional HTML version now?": "Quer que eu já gere uma versão HTML com estrutura profissional?",
+                "Can I proceed to the next step?": "Posso avançar para o próximo passo?",
+                "Can I generate the HTML version now?": "Posso gerar a versão HTML agora?",
+                "Sorry,": "Desculpe,",
+            }
+            for src, dst in replacements.items():
+                text = text.replace(src, dst)
+            text = re.sub(
+                r"Browser media control '([^']+)' executed successfully\.",
+                r"Pronto, apliquei o controle de mídia (\1).",
+                text,
+                flags=re.IGNORECASE,
+            )
+        else:
+            replacements = {
+                "Sensação térmica:": "Feels like:",
+                "Quer que eu já avance com o próximo passo prático?": "Would you like me to proceed with the next practical step?",
+                "Quer que eu já avance com o próximo passo?": "Would you like me to proceed with the next step?",
+                "Quer que eu quebre isso em um plano de implementação com milestones?": "Would you like me to break this into an implementation plan with milestones?",
+                "Quer que eu já gere uma versão HTML com estrutura profissional?": "Would you like me to generate a professional HTML version now?",
+                "Posso avançar para o próximo passo?": "Can I proceed to the next step?",
+                "Posso gerar a versão HTML agora?": "Can I generate the HTML version now?",
+                "Desculpe,": "Sorry,",
+            }
+            for src, dst in replacements.items():
+                text = text.replace(src, dst)
+            text = re.sub(
+                r"Pronto, apliquei o controle de mídia \(([^)]+)\)\.",
+                r"Done, I applied media control (\1).",
+                text,
+                flags=re.IGNORECASE,
+            )
+
+        return text
 
     def _get_principal_context(self, session: Session) -> Optional[PrincipalContext]:
         """Reconstructs PrincipalContext from persisted session context."""

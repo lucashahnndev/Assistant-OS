@@ -18,7 +18,14 @@ import {
     AlertTriangle,
     Plus,
     Trash2,
-    Layers
+    Layers,
+    ShieldAlert,
+    X,
+    Send,
+    Globe,
+    Terminal,
+    Zap,
+    Eye
 } from 'lucide-react';
 import { api } from '../hooks/api';
 import { toast } from 'react-hot-toast';
@@ -28,27 +35,27 @@ const API_BASE = '/messaging_access';
 const INTERFACE_META = {
     telegram: {
         label: 'Telegram',
-        description: 'Canal oficial do bot no Telegram.',
+        description: 'Official Telegram bot channel.',
         internal: false
     },
     web: {
         label: 'Web',
-        description: 'Canal do painel web autenticado.',
+        description: 'Authenticated web panel channel.',
         internal: false
     },
     cli: {
         label: 'CLI',
-        description: 'Canal local de terminal/bridge para operações e testes.',
+        description: 'Local terminal/bridge channel for operations and testing.',
         internal: false
     },
     validator: {
         label: 'Validator (Legado)',
-        description: 'Alias legado, redirecionado para CLI.',
+        description: 'Legacy alias, redirected to CLI.',
         internal: true
     },
     terminal_bridge: {
         label: 'Terminal Bridge (Legado)',
-        description: 'Alias legado, redirecionado para CLI.',
+        description: 'Legacy alias, redirected to CLI.',
         internal: true
     }
 };
@@ -60,6 +67,13 @@ const INTERFACE_ORDER = {
     validator: 98,
     terminal_bridge: 99
 };
+
+const WORKER_SCOPE_OPTIONS = [
+    { value: 'self_session', label: 'Only Same Session' },
+    { value: 'owner_session', label: 'Any Owner Session' },
+    { value: 'owner_identity', label: 'Same Identity' },
+    { value: 'global', label: 'Global' }
+];
 
 const MessagingAccess = () => {
     const [interfaces, setInterfaces] = useState({});
@@ -81,7 +95,9 @@ const MessagingAccess = () => {
         allow_actions: '',
         deny_actions: '',
         allow_skills: '',
-        deny_skills: ''
+        deny_skills: '',
+        worker_view_scope: 'owner_identity',
+        worker_control_scope: 'owner_identity'
     });
     const [isMobile, setIsMobile] = useState(window.innerWidth <= 640);
     const [showInternalInterfaces, setShowInternalInterfaces] = useState(false);
@@ -191,7 +207,9 @@ const MessagingAccess = () => {
             allow_actions: joinPatterns(group.allow_actions),
             deny_actions: joinPatterns(group.deny_actions),
             allow_skills: joinPatterns(group.allow_skills),
-            deny_skills: joinPatterns(group.deny_skills)
+            deny_skills: joinPatterns(group.deny_skills),
+            worker_view_scope: group.worker_view_scope || 'owner_identity',
+            worker_control_scope: group.worker_control_scope || 'owner_identity'
         });
         setEditGroupActionSearch('');
         setShowAdvancedEdit(false);
@@ -259,7 +277,9 @@ const MessagingAccess = () => {
                 allow_actions: splitPatterns(newGroup.allow_actions),
                 deny_actions: splitPatterns(newGroup.deny_actions),
                 allow_skills: splitPatterns(newGroup.allow_skills),
-                deny_skills: splitPatterns(newGroup.deny_skills)
+                deny_skills: splitPatterns(newGroup.deny_skills),
+                worker_view_scope: newGroup.worker_view_scope,
+                worker_control_scope: newGroup.worker_control_scope
             });
             toast.success("Permission group created");
             setNewGroup({
@@ -269,7 +289,9 @@ const MessagingAccess = () => {
                 allow_actions: '',
                 deny_actions: '',
                 allow_skills: '',
-                deny_skills: ''
+                deny_skills: '',
+                worker_view_scope: 'owner_identity',
+                worker_control_scope: 'owner_identity'
             });
             setGroupActionSearch('');
             setShowAdvancedCreate(false);
@@ -288,7 +310,9 @@ const MessagingAccess = () => {
                 allow_actions: splitPatterns(editingGroup.allow_actions),
                 deny_actions: splitPatterns(editingGroup.deny_actions),
                 allow_skills: splitPatterns(editingGroup.allow_skills),
-                deny_skills: splitPatterns(editingGroup.deny_skills)
+                deny_skills: splitPatterns(editingGroup.deny_skills),
+                worker_view_scope: editingGroup.worker_view_scope,
+                worker_control_scope: editingGroup.worker_control_scope
             });
             toast.success("Group updated");
             setEditingGroup(null);
@@ -327,18 +351,19 @@ const MessagingAccess = () => {
         });
 
         return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <div className="input-field" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 12px' }}>
-                    <Search size={16} color="var(--text-muted)" />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div style={{ position: 'relative' }}>
+                    <Search size={16} style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
                     <input
                         value={searchValue}
                         onChange={(e) => onSearchChange(e.target.value)}
-                        placeholder="Buscar ação por nome, skill ou descrição..."
-                        style={{ width: '100%', border: 'none', outline: 'none', background: 'none', color: 'inherit', padding: '10px 0' }}
+                        placeholder="Search kernel actions..."
+                        className="input-field"
+                        style={{ width: '100%', paddingLeft: '44px', borderRadius: '16px', background: 'rgba(0,0,0,0.2)' }}
                     />
                 </div>
 
-                <div className="glass" style={{ borderRadius: '12px', padding: '6px', maxHeight: '320px', overflowY: 'auto' }}>
+                <div className="custom-scrollbar" style={{ borderRadius: '16px', maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     {actions.map(action => {
                         const decision = getActionDecision(allowText, denyText, action.id);
                         const riskStyle = getRiskTagStyle(action.risk_level);
@@ -346,82 +371,63 @@ const MessagingAccess = () => {
                         return (
                             <div
                                 key={`picker-${action.id}`}
+                                className="glass"
                                 style={{
                                     display: 'flex',
-                                    flexDirection: isMobile ? 'column' : 'row',
-                                    alignItems: isMobile ? 'flex-start' : 'center',
+                                    alignItems: 'center',
                                     justifyContent: 'space-between',
-                                    gap: '10px',
-                                    padding: '10px',
-                                    borderRadius: '10px',
-                                    border: '1px solid rgba(255,255,255,0.04)',
-                                    background: 'rgba(255,255,255,0.02)',
-                                    marginBottom: '6px'
+                                    padding: '12px 16px',
+                                    borderRadius: '14px',
+                                    background: 'rgba(255,255,255,0.01)',
+                                    border: '1px solid var(--card-border)',
+                                    gap: '16px'
                                 }}
                             >
-                                <div style={{ minWidth: 0 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                                        <code style={{ fontSize: '12px', color: 'var(--text-main)' }}>{action.id}</code>
+                                <div style={{ minWidth: 0, flex: 1 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                                        <span style={{ fontSize: '13px', fontWeight: '800' }}>{action.id}</span>
                                         <span style={{
-                                            fontSize: '10px',
-                                            textTransform: 'uppercase',
-                                            letterSpacing: '0.05em',
-                                            borderRadius: '6px',
+                                            fontSize: '9px',
+                                            fontWeight: '900',
                                             padding: '2px 6px',
+                                            borderRadius: '4px',
+                                            textTransform: 'uppercase',
                                             ...riskStyle
                                         }}>
                                             {action.risk_level || 'low'}
                                         </span>
                                     </div>
-                                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>
-                                        {action.description || 'Sem descrição'}
+                                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        {action.description || 'No description provided.'}
                                     </div>
                                 </div>
 
-                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                                    <button
-                                        className="btn-ghost"
-                                        onClick={() => onDecisionChange(action.id, 'default')}
-                                        style={{
-                                            padding: '6px 10px',
-                                            border: '1px solid',
-                                            borderColor: decision === 'default' ? 'var(--accent-color)' : 'var(--card-border)',
-                                            color: decision === 'default' ? 'var(--accent-color)' : 'var(--text-muted)'
-                                        }}
-                                    >
-                                        Padrão
-                                    </button>
-                                    <button
-                                        className="btn-ghost"
-                                        onClick={() => onDecisionChange(action.id, 'allow')}
-                                        style={{
-                                            padding: '6px 10px',
-                                            border: '1px solid',
-                                            borderColor: decision === 'allow' ? '#4ade80' : 'var(--card-border)',
-                                            color: decision === 'allow' ? '#4ade80' : 'var(--text-muted)'
-                                        }}
-                                    >
-                                        Permitir
-                                    </button>
-                                    <button
-                                        className="btn-ghost"
-                                        onClick={() => onDecisionChange(action.id, 'deny')}
-                                        style={{
-                                            padding: '6px 10px',
-                                            border: '1px solid',
-                                            borderColor: decision === 'deny' ? '#f87171' : 'var(--card-border)',
-                                            color: decision === 'deny' ? '#f87171' : 'var(--text-muted)'
-                                        }}
-                                    >
-                                        Negar
-                                    </button>
+                                <div style={{ display: 'flex', gap: '2px', background: 'rgba(0,0,0,0.2)', padding: '4px', borderRadius: '12px' }}>
+                                    {['allow', 'default', 'deny'].map(mode => (
+                                        <button
+                                            key={mode}
+                                            onClick={() => onDecisionChange(action.id, mode)}
+                                            style={{
+                                                padding: '6px 12px',
+                                                fontSize: '10px',
+                                                fontWeight: '800',
+                                                borderRadius: '8px',
+                                                transition: 'var(--transition-fast)',
+                                                background: decision === mode ? (mode === 'allow' ? 'rgba(16, 185, 129, 0.2)' : mode === 'deny' ? 'rgba(239, 68, 68, 0.2)' : 'var(--accent-color)') : 'transparent',
+                                                color: decision === mode ? (mode === 'allow' ? '#4ade80' : mode === 'deny' ? '#f87171' : '#fff') : 'var(--text-muted)',
+                                                border: 'none'
+                                            }}
+                                        >
+                                            {mode.toUpperCase()}
+                                        </button>
+                                    ))}
                                 </div>
                             </div>
                         );
                     })}
                     {actions.length === 0 && (
                         <div style={{ padding: '16px', color: 'var(--text-muted)', fontSize: '13px' }}>
-                            Nenhuma ação encontrada para esse filtro.
+                            No actions found for this filter.
                         </div>
                     )}
                 </div>
@@ -445,7 +451,7 @@ const MessagingAccess = () => {
 
     const activeInterfaceMeta = INTERFACE_META[activeInterface] || {
         label: activeInterface || 'Unknown',
-        description: 'Interface sem metadados.'
+        description: 'Interface metadata not available.'
     };
 
     const handleDeleteGroup = async (group) => {
@@ -491,719 +497,859 @@ const MessagingAccess = () => {
     const newGroupDenyCount = splitPatterns(newGroup.deny_actions).length;
 
     return (
-        <div className="animate-in scroll-container" style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-            <PageHeader
-                title="Messaging Access"
-                subtitle="Manage authorization and skill overrides across interfaces."
-            >
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: isMobile ? 'stretch' : 'flex-end', gap: '8px' }}>
-                    <div className="glass" style={{ display: 'flex', padding: 'var(--space-1)', borderRadius: 'var(--radius-sm)', background: 'rgba(255,255,255,0.05)', overflowX: 'auto', maxWidth: isMobile ? '100%' : '460px' }}>
-                        {visibleInterfaces.map(itf => (
+        <div className="animate-in scroll-container" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? 'var(--space-4)' : 'var(--space-6)', paddingBottom: '100px' }}>
+                <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '24px' }}>
+                    {/* Compact Header */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <div className="flex-center" style={{ width: '40px', height: '40px', borderRadius: '12px', background: 'var(--accent-glow)', color: 'var(--accent-color)' }}>
+                                <Shield size={20} />
+                            </div>
+                            <div>
+                                <h3 style={{ fontSize: '1.1rem', fontWeight: '900', letterSpacing: '-0.01em' }}>Security Hub</h3>
+                                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Interface-wide access control and permission orchestration.</p>
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                            {visibleInterfaces.map(itf => (
+                                <button
+                                    key={itf}
+                                    onClick={() => setActiveInterface(itf)}
+                                    style={{
+                                        padding: '6px 12px',
+                                        background: activeInterface === itf ? 'var(--accent-glow)' : 'transparent',
+                                        border: '1px solid',
+                                        borderColor: activeInterface === itf ? 'var(--accent-color)' : 'var(--card-border)',
+                                        borderRadius: '8px',
+                                        fontSize: '0.6875rem',
+                                        fontWeight: '800',
+                                        color: activeInterface === itf ? 'var(--accent-color)' : 'var(--text-muted)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '6px',
+                                        transition: 'var(--transition-fast)',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    {itf === 'telegram' && <Send size={12} />}
+                                    {itf === 'web' && <Globe size={12} />}
+                                    {itf === 'cli' && <Terminal size={12} />}
+                                    {(INTERFACE_META[itf]?.label || itf).toUpperCase()}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Tabs */}
+                    <nav style={{ display: 'flex', gap: '24px', borderBottom: '1px solid var(--card-border)', marginBottom: '24px' }}>
+                        {['config', 'groups', 'users', 'chats'].map(tab => (
                             <button
-                                key={itf}
-                                onClick={() => setActiveInterface(itf)}
-                                className={`btn-ghost ${activeInterface === itf ? 'active' : ''}`}
+                                key={tab}
+                                onClick={() => setActiveTab(tab)}
                                 style={{
-                                    padding: 'var(--space-2) var(--space-4)',
-                                    textTransform: 'capitalize',
-                                    borderRadius: 'var(--radius-xs)',
-                                    fontSize: '0.75rem',
-                                    fontWeight: activeInterface === itf ? '800' : '700',
-                                    whiteSpace: 'nowrap',
-                                    color: activeInterface === itf ? 'var(--accent-color)' : 'var(--text-muted)'
+                                    padding: '10px 2px',
+                                    background: 'none',
+                                    border: 'none',
+                                    color: activeTab === tab ? 'var(--accent-color)' : 'var(--text-muted)',
+                                    fontWeight: activeTab === tab ? '800' : '600',
+                                    borderBottom: activeTab === tab ? '2px solid var(--accent-color)' : '2px solid transparent',
+                                    cursor: 'pointer',
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.05em',
+                                    fontSize: '0.6875rem',
+                                    transition: 'var(--transition-fast)'
                                 }}
                             >
-                                {INTERFACE_META[itf]?.label || itf}
+                                {tab}
                             </button>
                         ))}
-                    </div>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--text-muted)' }}>
-                        <input
-                            type="checkbox"
-                            checked={showInternalInterfaces}
-                            onChange={(e) => setShowInternalInterfaces(e.target.checked)}
-                        />
-                        Mostrar interfaces internas/legadas
-                    </label>
-                </div>
-            </PageHeader>
+                    </nav>
 
-            <nav style={{ display: 'flex', gap: isMobile ? 'var(--space-4)' : 'var(--space-8)', padding: `0 ${isMobile ? 'var(--space-4)' : 'var(--space-8)'}`, marginBottom: '0', borderBottom: '1px solid var(--card-border)', overflowX: isMobile ? 'auto' : 'visible' }}>
-                {['config', 'groups', 'users', 'chats'].map(tab => (
-                    <button
-                        key={tab}
-                        onClick={() => setActiveTab(tab)}
-                        style={{
-                            padding: 'var(--space-4) var(--space-1)',
-                            background: 'none',
-                            border: 'none',
-                            color: activeTab === tab ? 'var(--accent-color)' : 'var(--text-muted)',
-                            fontWeight: activeTab === tab ? '800' : '600',
-                            borderBottom: activeTab === tab ? '2px solid var(--accent-color)' : '2px solid transparent',
-                            cursor: 'pointer',
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.05em',
-                            fontSize: '0.75rem',
-                            transition: 'var(--transition)',
-                            whiteSpace: 'nowrap'
-                        }}
-                    >
-                        {tab}
-                    </button>
-                ))}
-            </nav>
-
-            <div className="glass" style={{ margin: `0 ${isMobile ? 'var(--space-4)' : 'var(--space-6)'}`, padding: '12px 14px', borderRadius: '12px', display: 'flex', flexDirection: isMobile ? 'column' : 'row', justifyContent: 'space-between', gap: '6px' }}>
-                <div style={{ fontSize: '13px' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Canal ativo para alterações:</span>{' '}
-                    <strong style={{ color: 'var(--accent-color)' }}>{activeInterfaceMeta.label}</strong>
-                </div>
-                <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                    {activeInterfaceMeta.description}
-                </div>
-            </div>
-
-            <div style={{ flex: 1, overflowY: 'auto', padding: '0 var(--space-6) 100px var(--space-6)' }}>
-                {activeTab === 'config' && (
-                    <div className={isMobile ? "flex flex-col" : "grid-2"} style={{ gap: '24px' }}>
-                        <section className="glass p-6 rounded-2xl">
-                            <h3 style={{ fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
-                                <Settings size={20} /> Access Strategy
-                            </h3>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                                <div className="space-y-2">
-                                    <label style={{ display: 'block', fontSize: '13px', color: 'var(--text-muted)' }}>Private Messages (DMs)</label>
-                                    <select
-                                        value={currentConf.dm_mode}
-                                        onChange={(e) => handleInterfaceUpdate({ dm_mode: e.target.value })}
-                                        className="input-field"
-                                    >
-                                        <option value="approved_only">Approved Only (Strict)</option>
-                                        <option value="auto_approve">Auto Approve (Trust first)</option>
-                                        <option value="anyone">Anyone (Low-Risk Only)</option>
-                                    </select>
-                                </div>
-                                <div className="space-y-2">
-                                    <label style={{ display: 'block', fontSize: '13px', color: 'var(--text-muted)' }}>Groups / Channels</label>
-                                    <select
-                                        value={currentConf.group_mode}
-                                        onChange={(e) => handleInterfaceUpdate({ group_mode: e.target.value })}
-                                        className="input-field"
-                                    >
-                                        <option value="approved_only">Approved Only</option>
-                                        <option value="auto_approve">Auto Approve</option>
-                                        <option value="anyone">Anyone (Low-Risk Only)</option>
-                                    </select>
-                                </div>
-                                <div className="space-y-2">
-                                    <label style={{ display: 'block', fontSize: '13px', color: 'var(--text-muted)' }}>Default User Group</label>
-                                    <select
-                                        value={currentConf.default_user_group || ''}
-                                        onChange={(e) => handleInterfaceUpdate({ default_user_group: e.target.value })}
-                                        className="input-field"
-                                    >
-                                        {groupOptions.map(g => (
-                                            <option key={`dug-${g.value}`} value={g.value}>{g.label}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div className="space-y-2">
-                                    <label style={{ display: 'block', fontSize: '13px', color: 'var(--text-muted)' }}>Auto-Approve User Group</label>
-                                    <select
-                                        value={currentConf.auto_approve_user_group || ''}
-                                        onChange={(e) => handleInterfaceUpdate({ auto_approve_user_group: e.target.value })}
-                                        className="input-field"
-                                    >
-                                        {groupOptions.map(g => (
-                                            <option key={`aug-${g.value}`} value={g.value}>{g.label}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div className="space-y-2">
-                                    <label style={{ display: 'block', fontSize: '13px', color: 'var(--text-muted)' }}>Default Chat Group</label>
-                                    <select
-                                        value={currentConf.default_chat_group || ''}
-                                        onChange={(e) => handleInterfaceUpdate({ default_chat_group: e.target.value })}
-                                        className="input-field"
-                                    >
-                                        {groupOptions.map(g => (
-                                            <option key={`dcg-${g.value}`} value={g.value}>{g.label}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div className="space-y-2">
-                                    <label style={{ display: 'block', fontSize: '13px', color: 'var(--text-muted)' }}>Auto-Approve Chat Group</label>
-                                    <select
-                                        value={currentConf.auto_approve_chat_group || ''}
-                                        onChange={(e) => handleInterfaceUpdate({ auto_approve_chat_group: e.target.value })}
-                                        className="input-field"
-                                    >
-                                        {groupOptions.map(g => (
-                                            <option key={`acg-${g.value}`} value={g.value}>{g.label}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                            </div>
-                        </section>
-
-                        <section className="glass p-6 rounded-2xl">
-                            <h3 style={{ fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
-                                <Activity size={20} /> Rate Limits
-                            </h3>
-                            <div className="space-y-6">
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                    <span style={{ fontSize: '14px' }}>Enable Rate Limiting</span>
-                                    <button
-                                        onClick={() => handleInterfaceUpdate({ rate_limit_enabled: !currentConf.rate_limit_enabled })}
-                                        style={{ padding: 0, width: '48px', height: '24px', borderRadius: '12px', background: currentConf.rate_limit_enabled ? 'var(--accent-color)' : '#334155', position: 'relative' }}
-                                    >
-                                        <div style={{ position: 'absolute', top: '2px', left: currentConf.rate_limit_enabled ? '26px' : '2px', width: '20px', height: '20px', borderRadius: '50%', background: '#fff', transition: 'all 0.2s' }} />
-                                    </button>
-                                </div>
-                                <div className="space-y-2">
-                                    <label style={{ display: 'block', fontSize: '13px', color: 'var(--text-muted)' }}>Messages per Minute (Burst)</label>
-                                    <input
-                                        type="number"
-                                        value={currentConf.max_msgs_per_min}
-                                        onChange={(e) => handleInterfaceUpdate({ max_msgs_per_min: parseInt(e.target.value) })}
-                                        className="input-field"
-                                        style={{ textAlign: 'left' }}
-                                    />
-                                </div>
-                            </div>
-                        </section>
-                    </div>
-                )}
-
-                {activeTab === 'groups' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                        <section className="glass p-6 rounded-2xl">
-                            <h3 style={{ fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
-                                <Plus size={20} /> Create Permission Group
-                            </h3>
-                            <div className="grid-2" style={{ gap: '12px' }}>
-                                <input
-                                    className="input-field"
-                                    placeholder="group_id (ex: support_team)"
-                                    value={newGroup.id}
-                                    onChange={(e) => setNewGroup(prev => ({ ...prev, id: e.target.value }))}
-                                />
-                                <input
-                                    className="input-field"
-                                    placeholder="Group Name"
-                                    value={newGroup.name}
-                                    onChange={(e) => setNewGroup(prev => ({ ...prev, name: e.target.value }))}
-                                />
-                                <input
-                                    className="input-field"
-                                    placeholder="Description"
-                                    value={newGroup.description}
-                                    onChange={(e) => setNewGroup(prev => ({ ...prev, description: e.target.value }))}
-                                    style={{ gridColumn: isMobile ? 'auto' : '1 / -1' }}
-                                />
-                                <div style={{ gridColumn: isMobile ? 'auto' : '1 / -1', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
-                                    <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-                                        Fluxo simples: escolha as ações e marque como <strong>Permitir</strong> ou <strong>Negar</strong>.
+                    {/* Content */}
+                    {activeTab === 'config' && (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '24px' }}>
+                            <div style={{ padding: '20px', borderRadius: '20px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--card-border)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
+                                    <div className="flex-center" style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'var(--accent-glow)', color: 'var(--accent-color)' }}>
+                                        <Shield size={18} />
                                     </div>
+                                    <h3 style={{ fontSize: '0.875rem', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Access Strategy</h3>
+                                </div>
+
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                        <div>
+                                            <label style={{ display: 'block', fontSize: '11px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '8px', textTransform: 'uppercase' }}>Private Messages</label>
+                                            <select
+                                                value={currentConf.dm_mode}
+                                                onChange={(e) => handleInterfaceUpdate({ dm_mode: e.target.value })}
+                                                className="input-field"
+                                                style={{ width: '100%', borderRadius: '12px', background: 'rgba(0,0,0,0.2)' }}
+                                            >
+                                                <option value="approved_only">Approved Only</option>
+                                                <option value="auto_approve">Auto Approve</option>
+                                                <option value="anyone">Anyone</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label style={{ display: 'block', fontSize: '11px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '8px', textTransform: 'uppercase' }}>Groups / Channels</label>
+                                            <select
+                                                value={currentConf.group_mode}
+                                                onChange={(e) => handleInterfaceUpdate({ group_mode: e.target.value })}
+                                                className="input-field"
+                                                style={{ width: '100%', borderRadius: '12px', background: 'rgba(0,0,0,0.2)' }}
+                                            >
+                                                <option value="approved_only">Approved Only</option>
+                                                <option value="auto_approve">Auto Approve</option>
+                                                <option value="anyone">Anyone</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                        {[
+                                            { label: 'Default User Group', key: 'default_user_group', prefix: 'dug' },
+                                            { label: 'Auto-Approve User Group', key: 'auto_approve_user_group', prefix: 'aug' },
+                                            { label: 'Default Chat Group', key: 'default_chat_group', prefix: 'dcg' },
+                                            { label: 'Auto-Approve Chat Group', key: 'auto_approve_chat_group', prefix: 'acg' }
+                                        ].map(field => (
+                                            <div key={field.key}>
+                                                <label style={{ display: 'block', fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase' }}>{field.label}</label>
+                                                <select
+                                                    value={currentConf[field.key] || ''}
+                                                    onChange={(e) => handleInterfaceUpdate({ [field.key]: e.target.value })}
+                                                    className="input-field"
+                                                    style={{ width: '100%', fontSize: '12px', padding: '10px', borderRadius: '10px', background: 'rgba(0,0,0,0.2)' }}
+                                                >
+                                                    {groupOptions.map(g => (
+                                                        <option key={`${field.prefix}-${g.value}`} value={g.value}>{g.label}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div style={{ padding: '20px', borderRadius: '20px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--card-border)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
+                                    <div className="flex-center" style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b' }}>
+                                        <Activity size={18} />
+                                    </div>
+                                    <h3 style={{ fontSize: '0.875rem', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Traffic Control</h3>
+                                </div>
+
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px', borderRadius: '16px', background: 'rgba(0,0,0,0.2)' }}>
+                                        <div>
+                                            <div style={{ fontSize: '13px', fontWeight: '800' }}>Global Rate Limit</div>
+                                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Prevent API exhaustion</div>
+                                        </div>
+                                        <div
+                                            onClick={() => handleInterfaceUpdate({ rate_limit_enabled: !currentConf.rate_limit_enabled })}
+                                            style={{
+                                                width: '44px',
+                                                height: '24px',
+                                                borderRadius: '12px',
+                                                background: currentConf.rate_limit_enabled ? 'var(--accent-color)' : 'rgba(255,255,255,0.1)',
+                                                position: 'relative',
+                                                cursor: 'pointer',
+                                                transition: 'var(--transition-fast)'
+                                            }}
+                                        >
+                                            <div style={{
+                                                width: '18px',
+                                                height: '18px',
+                                                borderRadius: '50%',
+                                                background: '#fff',
+                                                position: 'absolute',
+                                                top: '3px',
+                                                left: currentConf.rate_limit_enabled ? '23px' : '3px',
+                                                transition: 'var(--transition-fast)',
+                                                boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                                            }} />
+                                        </div>
+                                    </div>
+
+                                    <div style={{ opacity: currentConf.rate_limit_enabled ? 1 : 0.4, pointerEvents: currentConf.rate_limit_enabled ? 'auto' : 'none', transition: 'opacity 0.2s' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+                                            <label style={{ fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', textTransform: 'uppercase' }}>MSG / MINUTE (BURST)</label>
+                                            <span style={{ fontSize: '12px', fontWeight: '900', color: 'var(--accent-color)' }}>{currentConf.max_msgs_per_min || 0}</span>
+                                        </div>
+                                        <input
+                                            type="range"
+                                            min="0"
+                                            max="120"
+                                            step="5"
+                                            value={currentConf.max_msgs_per_min || 0}
+                                            onChange={(e) => handleInterfaceUpdate({ max_msgs_per_min: parseInt(e.target.value) })}
+                                            style={{ width: '100%', accentColor: 'var(--accent-color)' }}
+                                        />
+                                    </div>
+
+                                    <div style={{ marginTop: 'auto', padding: '16px', borderRadius: '16px', background: 'rgba(239, 68, 68, 0.05)', border: '1px solid rgba(239, 68, 68, 0.1)' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#ef4444', marginBottom: '4px' }}>
+                                            <Zap size={14} />
+                                            <span style={{ fontSize: '11px', fontWeight: '900', textTransform: 'uppercase' }}>Emergency Stop</span>
+                                        </div>
+                                        <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Instantly disable all communication for this interface.</p>
+                                        <button className="btn-ghost" style={{ width: '100%', marginTop: '12px', fontSize: '11px', fontWeight: '800', background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
+                                            ACTIVATE LOCKDOWN
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {activeTab === 'groups' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                            {/* Create Group Form */}
+                            <div style={{ padding: isMobile ? '16px' : '20px', borderRadius: '16px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--card-border)' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <div className="flex-center" style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'var(--accent-glow)', color: 'var(--accent-color)' }}>
+                                            <Plus size={16} />
+                                        </div>
+                                        <div>
+                                            <h3 style={{ fontSize: '0.875rem', fontWeight: '800' }}>Create Permission Group</h3>
+                                            <p style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>Define permissions and worker scopes for users.</p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Basic Fields */}
+                                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 1.5fr', gap: '12px', marginBottom: '12px' }}>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase' }}>Group ID</label>
+                                        <input
+                                            className="input-field"
+                                            placeholder="e.g. support_staff"
+                                            value={newGroup.id}
+                                            onChange={(e) => setNewGroup(prev => ({ ...prev, id: e.target.value }))}
+                                            style={{ width: '100%', background: 'rgba(0,0,0,0.2)', borderRadius: '10px', padding: '10px 12px', fontSize: '12px' }}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase' }}>Display Name</label>
+                                        <input
+                                            className="input-field"
+                                            placeholder="Internal Support"
+                                            value={newGroup.name}
+                                            onChange={(e) => setNewGroup(prev => ({ ...prev, name: e.target.value }))}
+                                            style={{ width: '100%', background: 'rgba(0,0,0,0.2)', borderRadius: '10px', padding: '10px 12px', fontSize: '12px' }}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase' }}>Description</label>
+                                        <input
+                                            className="input-field"
+                                            placeholder="Purpose of this group..."
+                                            value={newGroup.description}
+                                            onChange={(e) => setNewGroup(prev => ({ ...prev, description: e.target.value }))}
+                                            style={{ width: '100%', background: 'rgba(0,0,0,0.2)', borderRadius: '10px', padding: '10px 12px', fontSize: '12px' }}
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Scopes Row */}
+                                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px', padding: '12px', borderRadius: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--card-border)', marginBottom: '12px' }}>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase' }}>View Scope</label>
+                                        <select
+                                            className="input-field"
+                                            value={newGroup.worker_view_scope}
+                                            onChange={(e) => setNewGroup(prev => ({ ...prev, worker_view_scope: e.target.value }))}
+                                            style={{ width: '100%', fontSize: '12px', padding: '8px 12px', background: 'rgba(0,0,0,0.1)' }}
+                                        >
+                                            {WORKER_SCOPE_OPTIONS.map(opt => (
+                                                <option key={`new-view-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase' }}>Control Scope</label>
+                                        <select
+                                            className="input-field"
+                                            value={newGroup.worker_control_scope}
+                                            onChange={(e) => setNewGroup(prev => ({ ...prev, worker_control_scope: e.target.value }))}
+                                            style={{ width: '100%', fontSize: '12px', padding: '8px 12px', background: 'rgba(0,0,0,0.1)' }}
+                                        >
+                                            {WORKER_SCOPE_OPTIONS.map(opt => (
+                                                <option key={`new-control-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                {/* Action Picker - Collapsible */}
+                                <details style={{ marginBottom: '12px' }}>
+                                    <summary style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderRadius: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--card-border)', fontSize: '11px', fontWeight: '800', color: 'var(--text-secondary)', listStyle: 'none' }}>
+                                        <span>⚙ Skill Permissions (optional)</span>
+                                        <span style={{ display: 'flex', gap: '8px' }}>
+                                            <span style={{ fontSize: '10px', fontWeight: '900', color: '#4ade80' }}>+{newGroupAllowCount}</span>
+                                            <span style={{ fontSize: '10px', fontWeight: '900', color: '#f87171' }}>-{newGroupDenyCount}</span>
+                                        </span>
+                                    </summary>
+                                    <div style={{ marginTop: '12px' }}>
+                                        {renderActionPicker({
+                                            searchValue: groupActionSearch,
+                                            onSearchChange: setGroupActionSearch,
+                                            allowText: newGroup.allow_actions,
+                                            denyText: newGroup.deny_actions,
+                                            onDecisionChange: setNewGroupActionDecision
+                                        })}
+
+                                        {showAdvancedCreate && (
+                                            <div className="animate-in" style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px', marginTop: '12px' }}>
+                                                <textarea
+                                                    className="input-field"
+                                                    placeholder="Allow patterns (e.g. system.*)..."
+                                                    value={newGroup.allow_actions}
+                                                    onChange={(e) => setNewGroup(prev => ({ ...prev, allow_actions: e.target.value }))}
+                                                    style={{ minHeight: '70px', fontSize: '11px', background: 'rgba(16, 185, 129, 0.05)', borderRadius: '10px' }}
+                                                />
+                                                <textarea
+                                                    className="input-field"
+                                                    placeholder="Deny patterns (e.g. shell.*)..."
+                                                    value={newGroup.deny_actions}
+                                                    onChange={(e) => setNewGroup(prev => ({ ...prev, deny_actions: e.target.value }))}
+                                                    style={{ minHeight: '70px', fontSize: '11px', background: 'rgba(239, 68, 68, 0.05)', borderRadius: '10px' }}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                </details>
+
+                                {/* Create Button */}
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button
+                                        onClick={handleCreateGroup}
+                                        className="btn-primary"
+                                        style={{ flex: 1, padding: '10px 16px', borderRadius: '10px', fontWeight: '800', fontSize: '0.75rem' }}
+                                    >
+                                        <Plus size={14} /> CREATE GROUP
+                                    </button>
                                     <button
                                         className="btn-ghost"
                                         onClick={() => setShowAdvancedCreate(prev => !prev)}
-                                        style={{ border: '1px solid var(--card-border)', padding: '6px 10px' }}
+                                        style={{ padding: '10px', borderRadius: '10px', background: 'rgba(255,255,255,0.04)' }}
+                                        title="Toggle raw pattern editor"
                                     >
-                                        {showAdvancedCreate ? 'Ocultar modo avançado' : 'Modo avançado (patterns)'}
+                                        <Settings size={16} />
                                     </button>
                                 </div>
-                                <div style={{ gridColumn: isMobile ? 'auto' : '1 / -1', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                                    <span style={{ fontSize: '12px', color: '#4ade80', background: 'rgba(34,197,94,0.1)', borderRadius: '8px', padding: '4px 8px' }}>
-                                        Permitidas: {newGroupAllowCount}
-                                    </span>
-                                    <span style={{ fontSize: '12px', color: '#f87171', background: 'rgba(239,68,68,0.1)', borderRadius: '8px', padding: '4px 8px' }}>
-                                        Negadas: {newGroupDenyCount}
-                                    </span>
-                                </div>
-                                <div style={{ gridColumn: isMobile ? 'auto' : '1 / -1' }}>
-                                    {renderActionPicker({
-                                        searchValue: groupActionSearch,
-                                        onSearchChange: setGroupActionSearch,
-                                        allowText: newGroup.allow_actions,
-                                        denyText: newGroup.deny_actions,
-                                        onDecisionChange: setNewGroupActionDecision
-                                    })}
-                                </div>
-                                {showAdvancedCreate && (
-                                    <>
-                                        <textarea
-                                            className="input-field"
-                                            placeholder="allow_actions (um pattern por linha, ex: web.*)"
-                                            value={newGroup.allow_actions}
-                                            onChange={(e) => setNewGroup(prev => ({ ...prev, allow_actions: e.target.value }))}
-                                            style={{ minHeight: '100px', resize: 'vertical' }}
-                                        />
-                                        <textarea
-                                            className="input-field"
-                                            placeholder="deny_actions (um pattern por linha, ex: shell.*)"
-                                            value={newGroup.deny_actions}
-                                            onChange={(e) => setNewGroup(prev => ({ ...prev, deny_actions: e.target.value }))}
-                                            style={{ minHeight: '100px', resize: 'vertical' }}
-                                        />
-                                        <textarea
-                                            className="input-field"
-                                            placeholder="allow_skills (opcional avançado)"
-                                            value={newGroup.allow_skills}
-                                            onChange={(e) => setNewGroup(prev => ({ ...prev, allow_skills: e.target.value }))}
-                                            style={{ minHeight: '100px', resize: 'vertical' }}
-                                        />
-                                        <textarea
-                                            className="input-field"
-                                            placeholder="deny_skills (opcional avançado)"
-                                            value={newGroup.deny_skills}
-                                            onChange={(e) => setNewGroup(prev => ({ ...prev, deny_skills: e.target.value }))}
-                                            style={{ minHeight: '100px', resize: 'vertical' }}
-                                        />
-                                    </>
-                                )}
                             </div>
-                            <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
-                                <button className="btn-primary px-6" onClick={handleCreateGroup}>Create Group</button>
-                            </div>
-                        </section>
 
-                        <section className="glass p-6 rounded-2xl">
-                            <h3 style={{ fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-                                <Layers size={20} /> Existing Groups
-                            </h3>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                {groups.map(group => (
-                                    <div
-                                        key={group.id}
-                                        style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'space-between',
-                                            padding: '12px',
-                                            borderRadius: '12px',
-                                            background: 'rgba(255,255,255,0.03)',
-                                            border: '1px solid var(--card-border)'
-                                        }}
-                                    >
-                                        <div>
-                                            <div style={{ fontWeight: 700 }}>{group.name} <code style={{ opacity: 0.8 }}>{group.id}</code></div>
-                                            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                                                {group.description || 'No description'}
-                                            </div>
-                                        </div>
-                                        <div style={{ display: 'flex', gap: '8px' }}>
-                                            <button className="btn-ghost p-2" onClick={() => openGroupEditor(group)}>
-                                                <Edit size={16} />
-                                            </button>
-                                            <button
-                                                className="btn-ghost p-2"
-                                                onClick={() => handleDeleteGroup(group)}
-                                                style={{ color: group.is_system ? 'var(--text-muted)' : '#f87171' }}
-                                                disabled={group.is_system}
-                                            >
-                                                <Trash2 size={16} />
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                                {groups.length === 0 && (
-                                    <div style={{ color: 'var(--text-muted)', padding: '10px 0' }}>
-                                        No permission groups available.
-                                    </div>
-                                )}
-                            </div>
-                        </section>
-                    </div>
-                )}
+                            {/* Existing Groups */}
+                            <div>
+                                <div style={{ fontSize: '0.6875rem', fontWeight: '800', color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '12px', textTransform: 'uppercase' }}>Existing Groups ({groups.length})</div>
+                                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
+                                    {groups.map(group => (
+                                        <div
+                                            key={group.id}
+                                            style={{
+                                                padding: '16px',
+                                                borderRadius: '14px',
+                                                background: 'rgba(255,255,255,0.02)',
+                                                border: '1px solid var(--card-border)',
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                alignItems: 'flex-start',
+                                                position: 'relative',
+                                                overflow: 'hidden',
+                                                transition: 'var(--transition-fast)'
+                                            }}
+                                        >
+                                            {group.is_system && (
+                                                <div style={{ position: 'absolute', top: 0, right: 0, padding: '3px 8px', background: 'var(--accent-glow)', color: 'var(--accent-color)', fontSize: '8px', fontWeight: '900', borderRadius: '0 0 0 8px' }}>SYSTEM</div>
+                                            )}
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                                                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: group.is_system ? 'var(--accent-color)' : '#4ade80', flexShrink: 0 }}></div>
+                                                    <h4 style={{ fontSize: '0.8125rem', fontWeight: '800' }}>{group.name}</h4>
+                                                    <code style={{ fontSize: '9px', opacity: 0.5 }}>{group.id}</code>
+                                                </div>
+                                                <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: '1.4' }}>{group.description || 'No description.'}</p>
 
-                {(activeTab === 'users' || activeTab === 'chats') && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                        <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: '12px' }}>
-                            <div className="input-field" style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '0 16px' }}>
-                                <Search size={18} color="var(--text-muted)" />
-                                <input
-                                    placeholder={`Search ${activeTab}...`}
-                                    value={searchTerm}
-                                    onChange={(e) => setSearchTerm(e.target.value)}
-                                    style={{ background: 'none', border: 'none', padding: '12px', color: 'inherit', width: '100%', outline: 'none' }}
-                                />
-                            </div>
-                            <select
-                                value={filterStatus}
-                                onChange={(e) => setFilterStatus(e.target.value)}
-                                className="input-field"
-                                style={{ width: isMobile ? '100%' : '160px' }}
-                            >
-                                <option value="all">All Status</option>
-                                <option value="pending">Pending</option>
-                                <option value="approved">Approved</option>
-                                <option value="blocked">Blocked</option>
-                            </select>
-                        </div>
-
-                        <div className={`${!isMobile ? 'glass overflow-hidden rounded-2xl' : ''}`}>
-                            {!isMobile ? (
-                                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                                    <thead style={{ background: 'rgba(255,255,255,0.03)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                                        <tr>
-                                            <th style={{ padding: '16px' }}>Identity</th>
-                                            <th style={{ padding: '16px' }}>ID</th>
-                                            <th style={{ padding: '16px' }}>Group</th>
-                                            <th style={{ padding: '16px' }}>Status</th>
-                                            <th style={{ padding: '16px' }}>Seen</th>
-                                            <th style={{ padding: '16px', textAlign: 'right' }}>Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {(activeTab === 'users' ? filteredUsers : filteredChats).map(item => (
-                                            <tr key={item.id} className="table-row-hover" style={{ borderTop: '1px solid var(--card-border)', transition: 'var(--transition-base)' }}>
-                                                <td style={{ padding: 'var(--space-4) var(--space-4)' }}>
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                                                        <div style={{ padding: 'var(--space-2)', borderRadius: 'var(--radius-sm)', background: 'rgba(255,255,255,0.05)' }}>
-                                                            {activeTab === 'users' ? <User size={16} /> : <MessageSquare size={16} />}
-                                                        </div>
-                                                        <span style={{ fontWeight: '700', fontSize: '0.875rem' }}>{activeTab === 'users' ? item.display_name : item.title}</span>
+                                                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                                                    <div style={{ fontSize: '9px', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--text-muted)', padding: '3px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: '6px' }}>
+                                                        <Eye size={10} /> {group.worker_view_scope || 'owner'}
                                                     </div>
-                                                </td>
-                                                <td style={{ padding: 'var(--space-4)' }}>
-                                                    <code style={{ fontSize: '0.75rem', color: 'var(--text-muted)', background: 'rgba(0,0,0,0.2)', padding: '2px 6px', borderRadius: '4px' }}>{item.id}</code>
-                                                </td>
-                                                <td style={{ padding: 'var(--space-4)' }}>
-                                                    <select
-                                                        value={item.group_id || ''}
-                                                        onChange={(e) => handleAssignGroup(activeTab.slice(0, -1), item, e.target.value)}
-                                                        className="input-field"
-                                                        style={{ minWidth: '170px', padding: '8px 10px', fontSize: '12px' }}
-                                                    >
-                                                        {groupOptions.map(g => (
-                                                            <option key={`row-${item.id}-${g.value}`} value={g.value}>{g.label}</option>
-                                                        ))}
-                                                    </select>
-                                                </td>
-                                                <td style={{ padding: 'var(--space-4)' }}>
-                                                    <span
-                                                        style={{
-                                                            padding: '4px 8px',
-                                                            borderRadius: '6px',
-                                                            fontSize: '11px',
-                                                            fontWeight: 'bold',
-                                                            textTransform: 'uppercase',
-                                                            background: item.status === 'approved' ? 'rgba(34, 197, 94, 0.1)' : item.status === 'pending' ? 'rgba(234, 179, 8, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                                                            color: item.status === 'approved' ? '#4ade80' : item.status === 'pending' ? '#facc15' : '#f87171'
-                                                        }}
-                                                    >
-                                                        {item.status}
-                                                    </span>
-                                                </td>
-                                                <td style={{ padding: 'var(--space-4)', fontSize: '0.8125rem', color: 'var(--text-muted)' }}>
-                                                    {new Date(item.last_seen_at * 1000).toLocaleDateString()}
-                                                </td>
-                                                <td style={{ padding: 'var(--space-4)', textAlign: 'right' }}>
-                                                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                                                        {item.status !== 'approved' && (
-                                                            <button
-                                                                onClick={() => handleStatusUpdate(activeTab.slice(0, -1), item.interface, item.id, 'approved')}
-                                                                className="btn-ghost p-2" title="Approve" style={{ color: '#4ade80' }}
-                                                            >
-                                                                <CheckCircle size={18} />
-                                                            </button>
-                                                        )}
-                                                        {item.status !== 'blocked' && (
-                                                            <button
-                                                                onClick={() => handleStatusUpdate(activeTab.slice(0, -1), item.interface, item.id, 'blocked')}
-                                                                className="btn-ghost p-2" title="Block" style={{ color: '#f87171' }}
-                                                            >
-                                                                <Slash size={18} />
-                                                            </button>
-                                                        )}
-                                                        <button
-                                                            onClick={() => setEditingOverrides({ type: activeTab.slice(0, -1), data: JSON.parse(JSON.stringify(item)) })}
-                                                            className="btn-ghost p-2" title="Edit Overrides"
-                                                        >
-                                                            <Edit size={18} />
-                                                        </button>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            ) : (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                    {(activeTab === 'users' ? filteredUsers : filteredChats).map(item => (
-                                        <div key={item.id} className="glass p-4 rounded-xl flex flex-col gap-4">
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                                    <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)' }}>
-                                                        {activeTab === 'users' ? <User size={20} /> : <MessageSquare size={20} />}
-                                                    </div>
-                                                    <div>
-                                                        <div style={{ fontWeight: '700', fontSize: '14px' }}>{activeTab === 'users' ? item.display_name : item.title}</div>
-                                                        <code style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{item.id}</code>
+                                                    <div style={{ fontSize: '9px', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--text-muted)', padding: '3px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: '6px' }}>
+                                                        <Zap size={10} /> {group.worker_control_scope || 'owner'}
                                                     </div>
                                                 </div>
-                                                <span
-                                                    style={{
-                                                        padding: '4px 8px',
-                                                        borderRadius: '6px',
-                                                        fontSize: '10px',
-                                                        fontWeight: 'bold',
-                                                        textTransform: 'uppercase',
-                                                        background: item.status === 'approved' ? 'rgba(34, 197, 94, 0.1)' : item.status === 'pending' ? 'rgba(234, 179, 8, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                                                        color: item.status === 'approved' ? '#4ade80' : item.status === 'pending' ? '#facc15' : '#f87171'
-                                                    }}
-                                                >
-                                                    {item.status}
-                                                </span>
                                             </div>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                                                    Last seen: {new Date(item.last_seen_at * 1000).toLocaleDateString()}
-                                                </span>
-                                                <div style={{ display: 'flex', gap: '4px' }}>
-                                                    {item.status !== 'approved' && (
-                                                        <button
-                                                            onClick={() => handleStatusUpdate(activeTab.slice(0, -1), item.interface, item.id, 'approved')}
-                                                            className="btn-ghost p-2" style={{ color: '#4ade80' }}
-                                                        >
-                                                            <CheckCircle size={20} />
-                                                        </button>
-                                                    )}
-                                                    {item.status !== 'blocked' && (
-                                                        <button
-                                                            onClick={() => handleStatusUpdate(activeTab.slice(0, -1), item.interface, item.id, 'blocked')}
-                                                            className="btn-ghost p-2" style={{ color: '#f87171' }}
-                                                        >
-                                                            <Slash size={20} />
-                                                        </button>
-                                                    )}
-                                                    <button
-                                                        onClick={() => setEditingOverrides({ type: activeTab.slice(0, -1), data: JSON.parse(JSON.stringify(item)) })}
-                                                        className="btn-ghost p-2"
-                                                    >
-                                                        <Edit size={20} />
+                                            <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                                                <button className="btn-ghost" style={{ padding: '6px', borderRadius: '8px' }} onClick={() => openGroupEditor(group)}>
+                                                    <Edit size={14} />
+                                                </button>
+                                                {!group.is_system && (
+                                                    <button className="btn-ghost" style={{ padding: '6px', borderRadius: '8px', color: '#f87171' }} onClick={() => handleDeleteGroup(group)}>
+                                                        <Trash2 size={14} />
                                                     </button>
-                                                </div>
-                                            </div>
-                                            <div>
-                                                <label style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>
-                                                    Permission Group
-                                                </label>
-                                                <select
-                                                    value={item.group_id || ''}
-                                                    onChange={(e) => handleAssignGroup(activeTab.slice(0, -1), item, e.target.value)}
-                                                    className="input-field"
-                                                    style={{ width: '100%', padding: '8px 10px', fontSize: '12px' }}
-                                                >
-                                                    {groupOptions.map(g => (
-                                                        <option key={`mrow-${item.id}-${g.value}`} value={g.value}>{g.label}</option>
-                                                    ))}
-                                                </select>
+                                                )}
                                             </div>
                                         </div>
                                     ))}
                                 </div>
-                            )}
-                            {(activeTab === 'users' ? filteredUsers : filteredChats).length === 0 && (
-                                <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                                    No {activeTab} found for this interface.
+                            </div>
+                        </div>
+                    )}
+
+                    {(activeTab === 'users' || activeTab === 'chats') && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                            {/* Search + Filters */}
+                            <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: '10px', alignItems: isMobile ? 'stretch' : 'center' }}>
+                                <div style={{ position: 'relative', flex: 1 }}>
+                                    <Search size={14} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                                    <input
+                                        placeholder={`Search ${activeTab}...`}
+                                        value={searchTerm}
+                                        onChange={(e) => setSearchTerm(e.target.value)}
+                                        className="input-field"
+                                        style={{ width: '100%', paddingLeft: '36px', borderRadius: '10px', background: 'rgba(0,0,0,0.2)', padding: '8px 12px 8px 36px', fontSize: '12px' }}
+                                    />
                                 </div>
-                            )}
-                        </div>
-                    </div>
-                )}
-            </div>
+                                <div style={{ display: 'flex', gap: '4px', overflowX: 'auto', paddingBottom: isMobile ? '4px' : '0' }}>
+                                    {['all', 'pending', 'approved', 'blocked'].map(status => (
+                                        <button
+                                            key={status}
+                                            onClick={() => setFilterStatus(status)}
+                                            style={{
+                                                padding: '6px 12px',
+                                                borderRadius: '8px',
+                                                fontSize: '10px',
+                                                fontWeight: '800',
+                                                textTransform: 'uppercase',
+                                                letterSpacing: '0.03em',
+                                                background: filterStatus === status ? 'var(--accent-glow)' : 'rgba(255,255,255,0.02)',
+                                                color: filterStatus === status ? 'var(--accent-color)' : 'var(--text-muted)',
+                                                border: '1px solid',
+                                                borderColor: filterStatus === status ? 'var(--accent-color)' : 'var(--card-border)',
+                                                transition: 'var(--transition-fast)',
+                                                whiteSpace: 'nowrap'
+                                            }}
+                                        >
+                                            {status}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
 
-            {/* Overrides Modal */}
-            {editingOverrides && (
-                <div
-                    style={{
-                        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-                        background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center',
-                        justifyContent: 'center', zIndex: 1000, padding: '20px'
-                    }}
-                >
-                    <div className="glass animate-pop" style={{ width: '100%', maxWidth: '800px', maxHeight: '90vh', overflowY: 'auto', borderRadius: '24px', position: 'relative' }}>
-                        <div style={{ padding: '24px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <h3 style={{ fontSize: '20px', fontWeight: '700' }}>
-                                Skill Overrides: <span style={{ color: 'var(--accent-color)' }}>{editingOverrides.data.display_name || editingOverrides.data.title}</span>
-                            </h3>
-                            <button onClick={() => setEditingOverrides(null)} className="btn-ghost p-2">
-                                <XCircle size={24} />
-                            </button>
-                        </div>
-
-                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '32px' }}>
-                            <section>
-                                <h4 style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '16px', textTransform: 'uppercase' }}>Allowed & Denied Skills</h4>
-                                <div className="grid-1" style={{ gap: '12px' }}>
-                                    {registry.map(action => {
-                                        const isAllowed = editingOverrides.data.overrides.allow_skills.includes(action.id);
-                                        const isDenied = editingOverrides.data.overrides.deny_skills.includes(action.id);
-
-                                        return (
-                                            <div key={action.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px', borderRadius: '12px', background: 'rgba(255,255,255,0.03)' }}>
-                                                <div>
-                                                    <div style={{ fontWeight: '600', fontSize: '14px' }}>{action.id}</div>
-                                                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{action.description}</div>
+                            {/* Table / Cards */}
+                            <div style={{ overflow: 'hidden', borderRadius: '14px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--card-border)' }}>
+                                {!isMobile ? (
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                        <thead>
+                                            <tr style={{ background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid var(--card-border)' }}>
+                                                <th style={{ padding: '12px 16px', fontSize: '10px', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Name</th>
+                                                <th style={{ padding: '12px 16px', fontSize: '10px', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase' }}>ID</th>
+                                                <th style={{ padding: '12px 16px', fontSize: '10px', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Group</th>
+                                                <th style={{ padding: '12px 16px', fontSize: '10px', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Status</th>
+                                                <th style={{ padding: '12px 16px', fontSize: '10px', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Last Active</th>
+                                                <th style={{ padding: '12px 16px', fontSize: '10px', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase', textAlign: 'right' }}>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {(activeTab === 'users' ? filteredUsers : filteredChats).map(item => (
+                                                <tr key={item.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', transition: 'background 0.2s' }} className="hover-highlight">
+                                                    <td style={{ padding: '12px 16px' }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                            <div className="flex-center" style={{ width: '28px', height: '28px', borderRadius: '50%', background: 'linear-gradient(135deg, var(--accent-color) 0%, #a855f7 100%)', color: '#fff', fontSize: '11px', fontWeight: '900', flexShrink: 0 }}>
+                                                                {(activeTab === 'users' ? item.display_name : item.title)?.charAt(0) || '?'}
+                                                            </div>
+                                                            <span style={{ fontSize: '12px', fontWeight: '700' }}>{activeTab === 'users' ? item.display_name : item.title}</span>
+                                                        </div>
+                                                    </td>
+                                                    <td style={{ padding: '12px 16px' }}>
+                                                        <code style={{ fontSize: '10px', color: 'var(--text-muted)', background: 'rgba(0,0,0,0.2)', padding: '3px 6px', borderRadius: '4px' }}>{item.id}</code>
+                                                    </td>
+                                                    <td style={{ padding: '12px 16px' }}>
+                                                        <select
+                                                            value={item.group_id || ''}
+                                                            onChange={(e) => handleAssignGroup(activeTab.slice(0, -1), item, e.target.value)}
+                                                            className="input-field"
+                                                            style={{ fontSize: '11px', padding: '5px 8px', background: 'rgba(0,0,0,0.1)', borderRadius: '6px', minWidth: '120px' }}
+                                                        >
+                                                            {groupOptions.map(g => (
+                                                                <option key={`row-${item.id}-${g.value}`} value={g.value}>{g.label}</option>
+                                                            ))}
+                                                        </select>
+                                                    </td>
+                                                    <td style={{ padding: '12px 16px' }}>
+                                                        <span style={{
+                                                            fontSize: '9px',
+                                                            fontWeight: '900',
+                                                            padding: '3px 8px',
+                                                            borderRadius: '6px',
+                                                            textTransform: 'uppercase',
+                                                            background: item.status === 'approved' ? 'rgba(16, 185, 129, 0.1)' : item.status === 'blocked' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(245, 158, 11, 0.1)',
+                                                            color: item.status === 'approved' ? '#4ade80' : item.status === 'blocked' ? '#f87171' : '#facc15'
+                                                        }}>
+                                                            {item.status}
+                                                        </span>
+                                                    </td>
+                                                    <td style={{ padding: '12px 16px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                                                        {new Date(item.last_seen_at * 1000).toLocaleDateString()}
+                                                    </td>
+                                                    <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                                                        <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                                                            <button
+                                                                onClick={() => handleStatusUpdate(activeTab.slice(0, -1), item.interface, item.id, item.status === 'approved' ? 'pending' : 'approved')}
+                                                                className="btn-ghost"
+                                                                style={{ padding: '6px', borderRadius: '8px', color: item.status === 'approved' ? '#f87171' : '#4ade80' }}
+                                                                title={item.status === 'approved' ? "Revoke" : "Approve"}
+                                                            >
+                                                                {item.status === 'approved' ? <Slash size={14} /> : <CheckCircle size={14} />}
+                                                            </button>
+                                                            <button
+                                                                onClick={() => setEditingOverrides({ type: activeTab.slice(0, -1), data: JSON.parse(JSON.stringify(item)) })}
+                                                                className="btn-ghost"
+                                                                style={{ padding: '6px', borderRadius: '8px' }}
+                                                                title="Edit skill overrides"
+                                                            >
+                                                                <Edit size={14} />
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                ) : (
+                                    /* Mobile Cards */
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', background: 'var(--card-border)' }}>
+                                        {(activeTab === 'users' ? filteredUsers : filteredChats).map(item => (
+                                            <div key={item.id} style={{ padding: '14px 16px', background: 'var(--card-bg)' }}>
+                                                {/* Top: Avatar + Name + Status */}
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                                                        <div className="flex-center" style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--accent-glow)', color: 'var(--accent-color)', fontSize: '12px', fontWeight: '900', flexShrink: 0 }}>
+                                                            {(activeTab === 'users' ? item.display_name : item.title)?.charAt(0) || '?'}
+                                                        </div>
+                                                        <div style={{ minWidth: 0 }}>
+                                                            <div style={{ fontWeight: '700', fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activeTab === 'users' ? item.display_name : item.title}</div>
+                                                            <code style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{item.id}</code>
+                                                        </div>
+                                                    </div>
+                                                    <span style={{
+                                                        fontSize: '9px', fontWeight: '900', padding: '3px 8px', borderRadius: '6px', textTransform: 'uppercase', flexShrink: 0,
+                                                        background: item.status === 'approved' ? 'rgba(16, 185, 129, 0.1)' : item.status === 'blocked' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(245, 158, 11, 0.1)',
+                                                        color: item.status === 'approved' ? '#4ade80' : item.status === 'blocked' ? '#f87171' : '#facc15'
+                                                    }}>
+                                                        {item.status}
+                                                    </span>
                                                 </div>
-                                                <div style={{ display: 'flex', gap: '8px' }}>
+
+                                                {/* Middle: Group + Last Active */}
+                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+                                                    <div>
+                                                        <label style={{ display: 'block', fontSize: '9px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '3px', textTransform: 'uppercase' }}>Group</label>
+                                                        <select
+                                                            value={item.group_id || ''}
+                                                            onChange={(e) => handleAssignGroup(activeTab.slice(0, -1), item, e.target.value)}
+                                                            className="input-field"
+                                                            style={{ width: '100%', padding: '6px 8px', fontSize: '11px', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}
+                                                        >
+                                                            {groupOptions.map(g => (
+                                                                <option key={`mrow-${item.id}-${g.value}`} value={g.value}>{g.label}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label style={{ display: 'block', fontSize: '9px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '3px', textTransform: 'uppercase' }}>Last Active</label>
+                                                        <div style={{ fontSize: '12px', fontWeight: '600', padding: '6px 0' }}>{new Date(item.last_seen_at * 1000).toLocaleDateString()}</div>
+                                                    </div>
+                                                </div>
+
+                                                {/* Bottom: Action Buttons */}
+                                                <div style={{ display: 'flex', gap: '6px' }}>
                                                     <button
-                                                        onClick={() => {
-                                                            const o = editingOverrides.data.overrides;
-                                                            if (isAllowed) o.allow_skills = o.allow_skills.filter(s => s !== action.id);
-                                                            else {
-                                                                o.allow_skills.push(action.id);
-                                                                o.deny_skills = o.deny_skills.filter(s => s !== action.id);
-                                                            }
-                                                            setEditingOverrides({ ...editingOverrides });
-                                                        }}
-                                                        className={`btn-ghost px-3 py-1 text-xs`}
-                                                        style={{
-                                                            border: '1px solid',
-                                                            borderColor: isAllowed ? '#4ade80' : 'var(--border-color)',
-                                                            color: isAllowed ? '#4ade80' : '#fff'
-                                                        }}
+                                                        onClick={() => handleStatusUpdate(activeTab.slice(0, -1), item.interface, item.id, item.status === 'approved' ? 'pending' : 'approved')}
+                                                        style={{ flex: 1, padding: '8px', borderRadius: '8px', background: item.status === 'approved' ? 'rgba(239,68,68,0.1)' : 'rgba(16,185,129,0.1)', color: item.status === 'approved' ? '#f87171' : '#4ade80', fontSize: '10px', fontWeight: '800', border: 'none' }}
                                                     >
-                                                        {isAllowed ? 'Explicitly Allowed' : 'Allow'}
+                                                        {item.status === 'approved' ? 'REVOKE' : 'APPROVE'}
                                                     </button>
                                                     <button
-                                                        onClick={() => {
-                                                            const o = editingOverrides.data.overrides;
-                                                            if (isDenied) o.deny_skills = o.deny_skills.filter(s => s !== action.id);
-                                                            else {
-                                                                o.deny_skills.push(action.id);
-                                                                o.allow_skills = o.allow_skills.filter(s => s !== action.id);
-                                                            }
-                                                            setEditingOverrides({ ...editingOverrides });
-                                                        }}
-                                                        className={`btn-ghost px-3 py-1 text-xs`}
-                                                        style={{
-                                                            border: '1px solid',
-                                                            borderColor: isDenied ? '#f87171' : 'var(--border-color)',
-                                                            color: isDenied ? '#f87171' : '#fff'
-                                                        }}
+                                                        onClick={() => setEditingOverrides({ type: activeTab.slice(0, -1), data: JSON.parse(JSON.stringify(item)) })}
+                                                        style={{ padding: '8px 14px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', color: 'var(--text-secondary)', border: 'none', fontSize: '10px', fontWeight: '800' }}
                                                     >
-                                                        {isDenied ? 'Explicitly Denied' : 'Deny'}
+                                                        OVERRIDES
                                                     </button>
                                                 </div>
                                             </div>
-                                        )
-                                    })}
+                                        ))}
+                                    </div>
+                                )}
+                                {(activeTab === 'users' ? filteredUsers : filteredChats).length === 0 && (
+                                    <div style={{ padding: '48px 20px', textAlign: 'center' }}>
+                                        <div className="flex-center" style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'rgba(255,255,255,0.02)', margin: '0 auto 12px' }}>
+                                            <Search size={20} style={{ opacity: 0.2 }} />
+                                        </div>
+                                        <h4 style={{ fontSize: '0.8125rem', fontWeight: '800', marginBottom: '4px' }}>No records found</h4>
+                                        <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Try adjusting your search or filters.</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </section>
+            </div>
+
+            {/* Overrides Modal */}
+            {
+                editingOverrides && (
+                    <div
+                        style={{
+                            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                            background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: isMobile ? 'flex-end' : 'center',
+                            justifyContent: 'center', zIndex: 1000, padding: isMobile ? '0' : '20px',
+                            backdropFilter: 'blur(8px)'
+                        }}
+                        onClick={() => setEditingOverrides(null)}
+                    >
+                        <div className="glass animate-pop" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: isMobile ? '100%' : '720px', maxHeight: isMobile ? '90vh' : '85vh', overflowY: 'auto', borderRadius: isMobile ? '20px 20px 0 0' : '24px', position: 'relative', border: '1px solid var(--card-border)' }}>
+                            <div style={{ padding: isMobile ? '16px' : '24px', borderBottom: '1px solid var(--card-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.01)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+                                    <div className="flex-center" style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'var(--accent-glow)', color: 'var(--accent-color)', flexShrink: 0 }}>
+                                        <ShieldAlert size={18} />
+                                    </div>
+                                    <div style={{ minWidth: 0 }}>
+                                        <h3 style={{ fontSize: '1rem', fontWeight: '800' }}>Skill Overrides</h3>
+                                        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            {editingOverrides.data.display_name || editingOverrides.data.title}
+                                        </p>
+                                    </div>
                                 </div>
-                            </section>
-                        </div>
-
-                        <div style={{ padding: '24px', background: 'rgba(255,255,255,0.03)', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-                            <button onClick={() => setEditingOverrides(null)} className="btn-ghost px-6">Cancel</button>
-                            <button onClick={handleSaveOverrides} className="btn-primary px-8">Save Changes</button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Group Editor Modal */}
-            {editingGroup && (
-                <div
-                    style={{
-                        position: 'fixed',
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        background: 'rgba(0,0,0,0.8)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        zIndex: 1000,
-                        padding: '20px'
-                    }}
-                >
-                    <div className="glass animate-pop" style={{ width: '100%', maxWidth: '900px', maxHeight: '90vh', overflowY: 'auto', borderRadius: '24px' }}>
-                        <div style={{ padding: '24px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <h3 style={{ fontSize: '20px', fontWeight: '700' }}>
-                                Edit Group: <span style={{ color: 'var(--accent-color)' }}>{editingGroup.name}</span>
-                            </h3>
-                            <button onClick={() => { setEditingGroup(null); setShowAdvancedEdit(false); }} className="btn-ghost p-2">
-                                <XCircle size={24} />
-                            </button>
-                        </div>
-
-                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                            <input
-                                className="input-field"
-                                value={editingGroup.name}
-                                onChange={(e) => setEditingGroup(prev => ({ ...prev, name: e.target.value }))}
-                                placeholder="Group Name"
-                            />
-                            <input
-                                className="input-field"
-                                value={editingGroup.description || ''}
-                                onChange={(e) => setEditingGroup(prev => ({ ...prev, description: e.target.value }))}
-                                placeholder="Description"
-                            />
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
-                                <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-                                    Permitidas: {splitPatterns(editingGroup.allow_actions).length} | Negadas: {splitPatterns(editingGroup.deny_actions).length}
-                                </div>
-                                <button
-                                    className="btn-ghost"
-                                    onClick={() => setShowAdvancedEdit(prev => !prev)}
-                                    style={{ border: '1px solid var(--card-border)', padding: '6px 10px' }}
-                                >
-                                    {showAdvancedEdit ? 'Ocultar modo avançado' : 'Modo avançado (patterns)'}
+                                <button onClick={() => setEditingOverrides(null)} className="btn-ghost" style={{ width: '36px', height: '36px', borderRadius: '10px', flexShrink: 0 }}>
+                                    <X size={18} />
                                 </button>
                             </div>
-                            {renderActionPicker({
-                                searchValue: editGroupActionSearch,
-                                onSearchChange: setEditGroupActionSearch,
-                                allowText: editingGroup.allow_actions,
-                                denyText: editingGroup.deny_actions,
-                                onDecisionChange: setEditingGroupActionDecision
-                            })}
-                            {showAdvancedEdit && (
-                                <div className="grid-2" style={{ gap: '12px' }}>
-                                    <textarea
-                                        className="input-field"
-                                        value={editingGroup.allow_actions}
-                                        onChange={(e) => setEditingGroup(prev => ({ ...prev, allow_actions: e.target.value }))}
-                                        placeholder="allow_actions (um pattern por linha)"
-                                        style={{ minHeight: '120px', resize: 'vertical' }}
-                                    />
-                                    <textarea
-                                        className="input-field"
-                                        value={editingGroup.deny_actions}
-                                        onChange={(e) => setEditingGroup(prev => ({ ...prev, deny_actions: e.target.value }))}
-                                        placeholder="deny_actions (um pattern por linha)"
-                                        style={{ minHeight: '120px', resize: 'vertical' }}
-                                    />
-                                    <textarea
-                                        className="input-field"
-                                        value={editingGroup.allow_skills}
-                                        onChange={(e) => setEditingGroup(prev => ({ ...prev, allow_skills: e.target.value }))}
-                                        placeholder="allow_skills (opcional avançado)"
-                                        style={{ minHeight: '120px', resize: 'vertical' }}
-                                    />
-                                    <textarea
-                                        className="input-field"
-                                        value={editingGroup.deny_skills}
-                                        onChange={(e) => setEditingGroup(prev => ({ ...prev, deny_skills: e.target.value }))}
-                                        placeholder="deny_skills (opcional avançado)"
-                                        style={{ minHeight: '120px', resize: 'vertical' }}
-                                    />
-                                </div>
-                            )}
-                        </div>
 
-                        <div style={{ padding: '24px', background: 'rgba(255,255,255,0.03)', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-                            <button onClick={() => { setEditingGroup(null); setShowAdvancedEdit(false); }} className="btn-ghost px-6">Cancel</button>
-                            <button onClick={handleSaveGroup} className="btn-primary px-8">Save Group</button>
+                            <div style={{ padding: isMobile ? '16px' : '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                <div style={{ padding: '10px 12px', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.05)', border: '1px solid rgba(245, 158, 11, 0.1)', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                    <Activity size={14} style={{ color: '#f59e0b', flexShrink: 0 }} />
+                                    <p style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: '1.4' }}>
+                                        Overrides take precedence over group policies.
+                                    </p>
+                                </div>
+
+                                <section>
+                                    <div style={{ fontSize: '10px', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '16px' }}>Explicit Skill Permissions</div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                        {registry.map(action => {
+                                            const isAllowed = editingOverrides.data.overrides.allow_skills.includes(action.id);
+                                            const isDenied = editingOverrides.data.overrides.deny_skills.includes(action.id);
+
+                                            return (
+                                                <div key={action.id} className="glass" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderRadius: '14px', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--card-border)' }}>
+                                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                                        <div style={{ fontWeight: '800', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                            {action.id}
+                                                            <span style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '4px', background: 'rgba(0,0,0,0.2)', color: 'var(--text-muted)', fontWeight: '900' }}>SKILL</span>
+                                                        </div>
+                                                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{action.description}</div>
+                                                    </div>
+                                                    <div style={{ display: 'flex', gap: '4px', background: 'rgba(0,0,0,0.2)', padding: '4px', borderRadius: '12px' }}>
+                                                        {[
+                                                            { id: 'allow', label: 'ALLOW', active: isAllowed, color: '#4ade80', bg: 'rgba(16, 185, 129, 0.2)' },
+                                                            { id: 'none', label: 'INHERIT', active: !isAllowed && !isDenied, color: '#fff', bg: 'var(--accent-color)' },
+                                                            { id: 'deny', label: 'DENY', active: isDenied, color: '#f87171', bg: 'rgba(239, 68, 68, 0.2)' }
+                                                        ].map(mode => (
+                                                            <button
+                                                                key={mode.id}
+                                                                onClick={() => {
+                                                                    const o = editingOverrides.data.overrides;
+                                                                    if (mode.id === 'allow') {
+                                                                        o.allow_skills = [action.id]; // simplifying for UI, assuming one override at a time per row or similar
+                                                                        o.deny_skills = o.deny_skills.filter(s => s !== action.id);
+                                                                    } else if (mode.id === 'deny') {
+                                                                        o.deny_skills = [action.id];
+                                                                        o.allow_skills = o.allow_skills.filter(s => s !== action.id);
+                                                                    } else {
+                                                                        o.allow_skills = o.allow_skills.filter(s => s !== action.id);
+                                                                        o.deny_skills = o.deny_skills.filter(s => s !== action.id);
+                                                                    }
+                                                                    setEditingOverrides({ ...editingOverrides });
+                                                                }}
+                                                                style={{
+                                                                    padding: '6px 12px',
+                                                                    fontSize: '10px',
+                                                                    fontWeight: '800',
+                                                                    borderRadius: '8px',
+                                                                    transition: 'var(--transition-fast)',
+                                                                    background: mode.active ? mode.bg : 'transparent',
+                                                                    color: mode.active ? mode.color : 'var(--text-muted)',
+                                                                    border: 'none'
+                                                                }}
+                                                            >
+                                                                {mode.label}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                </section>
+                            </div>
+
+                            <div style={{ padding: isMobile ? '12px 16px' : '16px 24px', background: 'rgba(255,255,255,0.02)', borderTop: '1px solid var(--card-border)', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                                <button onClick={() => setEditingOverrides(null)} className="btn-ghost" style={{ padding: '10px 20px', borderRadius: '10px', fontWeight: '800', fontSize: '12px' }}>Cancel</button>
+                                <button onClick={handleSaveOverrides} className="btn-primary" style={{ padding: '10px 24px', borderRadius: '10px', fontWeight: '800', fontSize: '12px' }}>Apply</button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
-        </div>
+                )
+            }
+
+            {/* Group Editor Modal */}
+            {
+                editingGroup && (
+                    <div
+                        style={{
+                            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                            background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: isMobile ? 'flex-end' : 'center',
+                            justifyContent: 'center', zIndex: 1000, padding: isMobile ? '0' : '20px',
+                            backdropFilter: 'blur(12px)'
+                        }}
+                        onClick={() => { setEditingGroup(null); setShowAdvancedEdit(false); }}
+                    >
+                        <div className="glass animate-pop" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: isMobile ? '100%' : '800px', maxHeight: isMobile ? '92vh' : '90vh', overflowY: 'auto', borderRadius: isMobile ? '20px 20px 0 0' : '24px', border: '1px solid var(--card-border)' }}>
+                            <div style={{ padding: isMobile ? '16px' : '24px', borderBottom: '1px solid var(--card-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.01)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+                                    <div className="flex-center" style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'var(--accent-glow)', color: 'var(--accent-color)', flexShrink: 0 }}>
+                                        <Shield size={18} />
+                                    </div>
+                                    <div style={{ minWidth: 0 }}>
+                                        <h3 style={{ fontSize: '1rem', fontWeight: '800' }}>Edit Group</h3>
+                                        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            {editingGroup.name}
+                                        </p>
+                                    </div>
+                                </div>
+                                <button onClick={() => { setEditingGroup(null); setShowAdvancedEdit(false); }} className="btn-ghost" style={{ width: '36px', height: '36px', borderRadius: '10px', flexShrink: 0 }}>
+                                    <X size={18} />
+                                </button>
+                            </div>
+
+                            <div style={{ padding: isMobile ? '16px' : '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px' }}>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>Display Name</label>
+                                        <input
+                                            className="input-field"
+                                            value={editingGroup.name}
+                                            onChange={(e) => setEditingGroup(prev => ({ ...prev, name: e.target.value }))}
+                                            placeholder="Display Name"
+                                            style={{ width: '100%', background: 'rgba(0,0,0,0.2)', padding: '10px 12px', borderRadius: '10px', fontSize: '12px' }}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>Description</label>
+                                        <input
+                                            className="input-field"
+                                            value={editingGroup.description || ''}
+                                            onChange={(e) => setEditingGroup(prev => ({ ...prev, description: e.target.value }))}
+                                            placeholder="Purpose of this group..."
+                                            style={{ width: '100%', background: 'rgba(0,0,0,0.2)', padding: '10px 12px', borderRadius: '10px', fontSize: '12px' }}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px' }}>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>View Scope</label>
+                                        <select
+                                            className="input-field"
+                                            value={editingGroup.worker_view_scope || 'owner_identity'}
+                                            onChange={(e) => setEditingGroup(prev => ({ ...prev, worker_view_scope: e.target.value }))}
+                                            style={{ width: '100%', background: 'rgba(0,0,0,0.2)', padding: '10px 12px', borderRadius: '10px', fontSize: '12px' }}
+                                        >
+                                            {WORKER_SCOPE_OPTIONS.map(opt => (
+                                                <option key={`edit-view-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>Control Scope</label>
+                                        <select
+                                            className="input-field"
+                                            value={editingGroup.worker_control_scope || 'owner_identity'}
+                                            onChange={(e) => setEditingGroup(prev => ({ ...prev, worker_control_scope: e.target.value }))}
+                                            style={{ width: '100%', background: 'rgba(0,0,0,0.2)', padding: '10px 12px', borderRadius: '10px', fontSize: '12px' }}
+                                        >
+                                            {WORKER_SCOPE_OPTIONS.map(opt => (
+                                                <option key={`edit-control-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div style={{ borderTop: '1px solid var(--card-border)', paddingTop: '16px' }}>
+                                    <div style={{ display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', justifyContent: 'space-between', marginBottom: '12px', flexDirection: isMobile ? 'column' : 'row', gap: '8px' }}>
+                                        <div>
+                                            <div style={{ fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Skill Permissions</div>
+                                            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                                                {splitPatterns(editingGroup.allow_actions).length} allowed | {splitPatterns(editingGroup.deny_actions).length} denied
+                                            </div>
+                                        </div>
+                                        <button
+                                            className="btn-ghost"
+                                            onClick={() => setShowAdvancedEdit(prev => !prev)}
+                                            style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', color: 'var(--accent-color)', padding: '6px 12px', borderRadius: '8px' }}
+                                        >
+                                            {showAdvancedEdit ? 'Standard' : 'Advanced'}
+                                        </button>
+                                    </div>
+
+                                    {renderActionPicker({
+                                        searchValue: editGroupActionSearch,
+                                        onSearchChange: setEditGroupActionSearch,
+                                        allowText: editingGroup.allow_actions,
+                                        denyText: editingGroup.deny_actions,
+                                        onDecisionChange: setEditingGroupActionDecision
+                                    })}
+
+                                    {showAdvancedEdit && (
+                                        <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px' }}>
+                                            <div>
+                                                <label style={{ display: 'block', fontSize: '10px', color: 'var(--text-muted)', fontWeight: '800', marginBottom: '4px' }}>ALLOW PATTERNS</label>
+                                                <textarea
+                                                    className="input-field"
+                                                    value={editingGroup.allow_actions}
+                                                    onChange={(e) => setEditingGroup(prev => ({ ...prev, allow_actions: e.target.value }))}
+                                                    placeholder="e.g. kernel.*"
+                                                    style={{ width: '100%', minHeight: '80px', background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '10px', fontSize: '11px', fontFamily: 'monospace' }}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label style={{ display: 'block', fontSize: '10px', color: 'var(--text-muted)', fontWeight: '800', marginBottom: '4px' }}>DENY PATTERNS</label>
+                                                <textarea
+                                                    className="input-field"
+                                                    value={editingGroup.deny_actions}
+                                                    onChange={(e) => setEditingGroup(prev => ({ ...prev, deny_actions: e.target.value }))}
+                                                    placeholder="e.g. fs.remove"
+                                                    style={{ width: '100%', minHeight: '80px', background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '10px', fontSize: '11px', fontFamily: 'monospace' }}
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div style={{ padding: isMobile ? '12px 16px' : '16px 24px', background: 'rgba(255,255,255,0.02)', borderTop: '1px solid var(--card-border)', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                                <button onClick={() => { setEditingGroup(null); setShowAdvancedEdit(false); }} className="btn-ghost" style={{ padding: '10px 20px', borderRadius: '10px', fontSize: '12px' }}>Cancel</button>
+                                <button onClick={handleSaveGroup} className="btn-primary" style={{ padding: '10px 24px', borderRadius: '10px', fontWeight: '800', fontSize: '12px' }}>Save Changes</button>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+        </div >
     );
 };
 

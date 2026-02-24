@@ -44,7 +44,7 @@ class ShellSkill(SkillBase):
                 "exit_code": None,
                 "stdout": "",
                 "stderr": "",
-                "text": "Erro: parâmetro 'command' é obrigatório para shell.control.execute.",
+                "text": "Error: parâmetro 'command' é obrigatório para shell.control.execute.",
             }
         
         ws_dir = getattr(self.kernel.workspace_service, "get_workspace_dir", lambda: None)() if self.kernel and hasattr(self.kernel, "workspace_service") else None
@@ -66,9 +66,9 @@ class ShellSkill(SkillBase):
             
             if result.returncode == 0:
                 if output:
-                    text = f"Comando executado com sucesso (exit=0).\nSaída:\n{output}"
+                    text = f"Command executed successfully (exit=0).\nSaída:\n{output}"
                 else:
-                    text = "Comando executado com sucesso (sem saída)."
+                    text = "Command executed successfully (sem saída)."
                 return {
                     "ok": True,
                     "status": "success",
@@ -90,7 +90,7 @@ class ShellSkill(SkillBase):
                 "exit_code": result.returncode,
                 "stdout": output,
                 "stderr": error,
-                "text": f"Erro: comando retornou código {result.returncode}. STDERR:\n{error or '(vazio)'}",
+                "text": f"Error: comando retornou código {result.returncode}. STDERR:\n{error or '(vazio)'}",
             }
                 
         except subprocess.TimeoutExpired:
@@ -104,7 +104,7 @@ class ShellSkill(SkillBase):
                 "exit_code": None,
                 "stdout": "",
                 "stderr": "",
-                "text": f"Erro: o comando excedeu o tempo limite de {timeout_sec} segundos.",
+                "text": f"Error: o comando excedeu o tempo limite de {timeout_sec} segundos.",
             }
         except Exception as e:
             return {

@@ -1,7 +1,9 @@
 from typing import Dict, Any
+from services.i18n import I18nService
 
 class SafetyService:
     def __init__(self):
+        self.i18n = I18nService(default_locale="en")
         # Legacy action aliases kept for backward compatibility.
         self.legacy_sensitive_actions = {
             "process_kill",
@@ -64,15 +66,15 @@ class SafetyService:
         action = (action or "").lower().strip()
 
         if action == "process_kill" or "process.kill" in action:
-            return f"Você tem certeza que deseja finalizar o processo PID {params.get('pid')}?"
+            return self.i18n.t("safety.confirm_process_kill", pid=params.get("pid"))
         elif action in ["reboot", "shutdown", "power_reboot", "power_shutdown"] or "control.power" in action:
-            return "Você tem certeza que deseja REINICIAR ou DESLIGAR o sistema?"
+            return self.i18n.t("safety.confirm_power")
         elif action == "execute_command" or action.startswith("shell."):
-            return f"Você autoriza a execução do seguinte comando no shell: `{params.get('command')}`?"
+            return self.i18n.t("safety.confirm_shell", command=params.get("command"))
         elif "service_" in action or "service.manage" in action:
-            return f"Você autoriza a alteração do serviço `{params.get('unit')}` ({action})?"
+            return self.i18n.t("safety.confirm_service", unit=params.get("unit"), action=action)
             
-        return f"Ação sensível detectada: `{action}`. Você autoriza a execução?"
+        return self.i18n.t("safety.confirm_generic", action=action)
 
     def _is_high_risk_action(self, action: str, skill_registry: Any = None) -> bool:
         if action in self.legacy_sensitive_actions:

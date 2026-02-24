@@ -37,4 +37,4 @@ class ILLMProvider(ABC):
         Directly analyzes an image without conversation history.
         Default implementation returns an error if not overridden.
         """
-        return "Erro: Este provedor de LLM não suporta análise direta de imagens (Visão)."
+        return "Error: Este provedor de LLM não suporta análise direta de imagens (Visão)."

@@ -54,7 +54,7 @@ class OpenRouterProvider(ILLMProvider):
                     thought="Model returned empty response.",
                     action="reply",
                     params={},
-                    response_text="Desculpe, meu cérebro está um pouco lento agora. Pode repetir?"
+                    response_text="Sorry, my brain is a bit slow right now. Could you repeat that?"
                 )
 
             content = response.choices[0].message.content.strip()
@@ -183,7 +183,7 @@ class OpenRouterProvider(ILLMProvider):
             return True
 
         # Progress/operation stubs are not final user-facing replies.
-        if text.startswith(("pesquisando", "procurando", "buscando", "abrindo", "executando", "aguarde", "um momento")):
+        if text.startswith(("searching", "looking for", "opening", "running", "please wait", "one moment", "pesquisando", "procurando", "buscando", "abrindo", "executando", "aguarde", "um momento")):
             return True
 
         reasoning_cues = [
@@ -192,6 +192,7 @@ class OpenRouterProvider(ILLMProvider):
             "my plan",
             "plano:",
             "action:",
+            "action",
             "ação",
             "acao",
             "params",
@@ -205,14 +206,18 @@ class OpenRouterProvider(ILLMProvider):
             return False
         # Typical final-answer markers (tables/lists/markdown/reporting style).
         markers = [
+            "**title",
             "**título",
             "**titulo",
             "**artista",
+            "**album",
             "**álbum",
             "**album",
             "veja os detalhes",
+            "the song",
             "a música",
             "a musica",
+            "is now playing",
             "está sendo reproduzida",
             "esta sendo reproduzida",
             "resultado",
@@ -308,10 +313,6 @@ class OpenRouterProvider(ILLMProvider):
         if cls._looks_like_user_facing_final(text):
             return None
 
-        # If model output is user-facing plain text, keep old behavior.
-        if not cls._looks_like_internal_reasoning(text):
-            return None
-
         action_id, params = cls._infer_action_and_params(user_input, text)
         if action_id:
             return AgentIntent(
@@ -320,6 +321,10 @@ class OpenRouterProvider(ILLMProvider):
                 params=params,
                 response_text=None,
             )
+
+        # If model output is user-facing plain text and no action could be inferred, keep old behavior.
+        if not cls._looks_like_internal_reasoning(text):
+            return None
 
         # Mark as unknown to trigger resolver fallback instead of exposing internal monologue as final reply.
         return AgentIntent(
@@ -336,7 +341,7 @@ class OpenRouterProvider(ILLMProvider):
         logger.info(f"Vision Request: Image={image_path} | Model={self.model}")
         if not os.path.exists(image_path):
             logger.error(f"Vision File Not Found: {image_path}")
-            return f"Erro: Arquivo não encontrado: {image_path}"
+            return f"Error: File not found: {image_path}"
             
         try:
             import base64
@@ -393,10 +398,10 @@ class OpenRouterProvider(ILLMProvider):
 
             if response.choices and response.choices[0].message.content:
                 return response.choices[0].message.content.strip()
-            return "O modelo não retornou nenhuma descrição."
+            return "The model returned no description."
         except Exception as e:
             logger.error(f"OpenRouter Vision Error: {e}")
-            return f"Erro na análise de visão: {e}"
+            return f"Error in vision analysis: {e}"
 
     def generate_text(self, prompt: str, system_prompt: str = "") -> str:
         """Generates plain text using OpenRouter."""
@@ -411,7 +416,7 @@ class OpenRouterProvider(ILLMProvider):
                 messages=messages,
                 temperature=0.3
             )
-            return response.choices[0].message.content.strip() if response.choices else "Erro: Resposta vazia do OpenRouter."
+            return response.choices[0].message.content.strip() if response.choices else "Error: Empty response from OpenRouter."
         except Exception as e:
             logger.error(f"OpenRouter generate_text error: {e}")
-            return f"Erro na geração de texto: {e}"
+            return f"Error generating text: {e}"

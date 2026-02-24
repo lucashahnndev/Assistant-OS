@@ -39,13 +39,18 @@ class MemorySkill(SkillBase):
                 "status": "error",
                 "error": "MEMORY_SERVICE_UNAVAILABLE",
                 "message": "MemoryService not available.",
-                "text": "Erro: serviço de memória indisponível.",
+                "text": "Error: serviço de memória indisponível.",
             }
 
         if action == "recall":
             query = self._resolve_query(params)
             results = ms.search_memory(query)
             count = len(results) if isinstance(results, list) else 0
+            preview = ""
+            if count > 0:
+                preview = str(results[0].get("content") or "").strip()
+                if len(preview) > 200:
+                    preview = preview[:200] + "..."
             return {
                 "ok": True,
                 "status": "success" if count > 0 else "empty",
@@ -53,7 +58,11 @@ class MemorySkill(SkillBase):
                 "query": query,
                 "count": count,
                 "results": results if isinstance(results, list) else [],
-                "text": f"Memória: {count} resultado(s) para '{query}'.",
+                "text": (
+                    f"Memória: {count} resultado(s) para '{query}'."
+                    if count == 0 else
+                    f"Memória: {count} resultado(s) para '{query}'. Primeiro resultado: {preview}"
+                ),
             }
         elif action == "store":
             content = self._resolve_content(params)
@@ -63,7 +72,7 @@ class MemorySkill(SkillBase):
                     "status": "error",
                     "error": "MISSING_CONTENT",
                     "message": "Missing 'content' parameter.",
-                    "text": "Erro: parâmetro 'content' é obrigatório para memory.store.",
+                    "text": "Error: parâmetro 'content' é obrigatório para memory.store.",
                 }
             category = params.get("category", "general")
             ms.add_fact(category, content)

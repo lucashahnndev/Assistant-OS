@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, SkipBack, SkipForward, Monitor, ExternalLink, Download, Maximize2 } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Monitor, ExternalLink, Download, Maximize2, Minimize2, X } from 'lucide-react';
 
 const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = null }) => {
     const [manifest, setManifest] = useState(initialManifest);
@@ -8,6 +8,9 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
     const [playbackSpeed, setPlaybackSpeed] = useState(1000); // ms per step
     const playbackTimerRef = useRef(null);
     const [isLive, setIsLive] = useState(!initialManifest || initialManifest.status === 'running');
+    const manifestPollRef = useRef(null);
+    const [isFullscreen, setIsFullscreen] = useState(false);
+    const [isMinimized, setIsMinimized] = useState(false);
 
     // Fetch manifest if not provided
     useEffect(() => {
@@ -24,9 +27,15 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
 
     const fetchManifest = async () => {
         try {
-            const response = await fetch(`http://localhost:8000/api/sessions/${sessionId}/playback/${runId}/manifest`);
+            const response = await fetch(`/api/sessions/${sessionId}/playback/${runId}/manifest`, {
+                credentials: 'include',
+                cache: 'no-store',
+            });
             const data = await response.json();
             setManifest(data);
+            if (isLive && data?.steps?.length) {
+                setCurrentStepIndex(data.steps.length - 1);
+            }
             if (data.status !== 'running') {
                 setIsLive(false);
                 setCurrentStepIndex(data.steps?.length > 0 ? data.steps.length - 1 : 0);
@@ -41,30 +50,51 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
         if (liveEvent && liveEvent.run_id === runId) {
             if (liveEvent.type === 'playback.frame') {
                 setManifest(prev => {
-                    if (!prev) return {
-                        run_id: runId,
-                        session_id: sessionId,
-                        status: 'running',
-                        steps: [liveEvent.frame],
-                        title: 'Browser Agent'
-                    };
+                    if (!prev) {
+                        const seeded = {
+                            run_id: runId,
+                            session_id: sessionId,
+                            status: 'running',
+                            steps: [liveEvent.frame],
+                            title: 'Browser Agent'
+                        };
+                        if (isLive) setCurrentStepIndex(0);
+                        return seeded;
+                    }
                     const newSteps = [...(prev.steps || []), liveEvent.frame];
+                    if (isLive) setCurrentStepIndex(newSteps.length - 1);
                     return { ...prev, steps: newSteps, total_steps: newSteps.length };
                 });
-                if (isLive) {
-                    setManifest(prev => {
-                        if (prev && prev.steps) {
-                            setCurrentStepIndex(prev.steps.length - 1);
-                        }
-                        return prev;
-                    });
-                }
             } else if (liveEvent.type === 'playback.end') {
                 setIsLive(false);
-                setManifest(prev => prev ? { ...prev, status: 'success' } : null);
+                setManifest(prev => prev ? { ...prev, status: liveEvent.status || 'success' } : null);
+                fetchManifest();
             }
         }
     }, [liveEvent, runId, isLive]);
+
+    // Poll manifest while live to avoid stale UI if SSE frames are missed.
+    useEffect(() => {
+        if (!runId || !sessionId || !isLive) {
+            if (manifestPollRef.current) {
+                clearInterval(manifestPollRef.current);
+                manifestPollRef.current = null;
+            }
+            return;
+        }
+
+        fetchManifest();
+        manifestPollRef.current = setInterval(() => {
+            fetchManifest();
+        }, 1000);
+
+        return () => {
+            if (manifestPollRef.current) {
+                clearInterval(manifestPollRef.current);
+                manifestPollRef.current = null;
+            }
+        };
+    }, [runId, sessionId, isLive]);
 
     useEffect(() => {
         if (isPlaying && !isLive) {
@@ -95,13 +125,64 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
         );
     }
 
+    // Minimized compact chip
+    if (isMinimized) {
+        return (
+            <div
+                onClick={() => setIsMinimized(false)}
+                style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '6px 14px',
+                    borderRadius: '12px',
+                    background: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid var(--card-border)',
+                    cursor: 'pointer',
+                    margin: '8px 0',
+                    transition: 'all 0.2s ease',
+                }}
+            >
+                <Monitor size={12} color="var(--accent-color)" />
+                <span style={{ fontSize: '11px', fontWeight: '700', color: 'var(--text-primary)' }}>
+                    {manifest.title || 'Browser Session'}
+                </span>
+                <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                    • {manifest.steps.length} frames
+                </span>
+                {isLive && (
+                    <div style={{ width: '6px', height: '6px', background: '#ef4444', borderRadius: '50%', animation: 'pulse 1.5s infinite' }} />
+                )}
+                <Maximize2 size={12} color="var(--text-muted)" />
+            </div>
+        );
+    }
+
     const currentStep = manifest.steps[currentStepIndex];
     if (!currentStep) return null;
 
-    // Build URL: prepend backend base if it's a relative path from manifest
-    let frameUrl = currentStep.url || `http://localhost:8000/api/sessions/${sessionId}/playback/${runId}/${currentStep.frame_filename}`;
-    if (frameUrl.startsWith('/api')) {
-        frameUrl = `http://localhost:8000${frameUrl}`;
+    // Build frame URL on same-origin /api path so auth cookies are always sent.
+    const rawFrameRef = currentStep.url || currentStep.frame_filename || currentStep.filename || '';
+    let frameUrl = '';
+    if (rawFrameRef) {
+        if (rawFrameRef.startsWith('/api/')) {
+            frameUrl = rawFrameRef;
+        } else if (rawFrameRef.startsWith('http://') || rawFrameRef.startsWith('https://')) {
+            try {
+                const parsed = new URL(rawFrameRef);
+                frameUrl = parsed.pathname + parsed.search;
+            } catch {
+                frameUrl = rawFrameRef;
+            }
+        } else if (rawFrameRef.startsWith('frames/')) {
+            // Manifest stores frames as "frames/000001.jpg"
+            const basename = rawFrameRef.replace(/^frames\//, '');
+            frameUrl = `/api/sessions/${sessionId}/playback/${runId}/frames/${basename}`;
+        } else {
+            frameUrl = `/api/sessions/${sessionId}/playback/${runId}/frames/${rawFrameRef}`;
+        }
+    } else {
+        frameUrl = `/api/sessions/${sessionId}/playback/${runId}/frames/${String(currentStepIndex).padStart(6, '0')}.jpg`;
     }
 
     return (
@@ -128,7 +209,8 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
                     )}
                 </div>
                 <div style={{ display: 'flex', gap: '4px' }}>
-                    <button style={{ padding: '6px', borderRadius: '8px' }} className="btn-ghost"><Maximize2 size={14} /></button>
+                    <button onClick={() => setIsFullscreen(true)} style={{ padding: '6px', borderRadius: '8px' }} className="btn-ghost" title="Fullscreen"><Maximize2 size={14} /></button>
+                    <button onClick={() => setIsMinimized(true)} style={{ padding: '6px', borderRadius: '8px' }} className="btn-ghost" title="Minimize"><Minimize2 size={14} /></button>
                 </div>
             </div>
 
@@ -230,6 +312,136 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
                     to { transform: rotate(360deg); }
                 }
             `}} />
+
+            {/* Fullscreen Modal */}
+            {isFullscreen && (
+                <div
+                    onClick={() => setIsFullscreen(false)}
+                    style={{
+                        position: 'fixed',
+                        inset: 0,
+                        background: 'rgba(0, 0, 0, 0.9)',
+                        backdropFilter: 'blur(12px)',
+                        WebkitBackdropFilter: 'blur(12px)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        zIndex: 10000,
+                        animation: 'fadeIn 0.25s ease',
+                    }}
+                >
+                    <div
+                        onClick={e => e.stopPropagation()}
+                        style={{
+                            position: 'relative',
+                            width: '90vw',
+                            maxWidth: '1200px',
+                            background: 'var(--card-bg)',
+                            border: '1px solid var(--card-border)',
+                            borderRadius: 'var(--radius-md)',
+                            overflow: 'hidden',
+                            boxShadow: 'var(--shadow-xl)',
+                        }}
+                    >
+                        {/* Fullscreen Header */}
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '10px 16px',
+                            borderBottom: '1px solid var(--card-border)',
+                            background: 'rgba(0,0,0,0.3)',
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <Monitor size={14} color="var(--accent-color)" />
+                                <span style={{ fontSize: '12px', fontWeight: '700' }}>{manifest.title || 'Browser Session'}</span>
+                                {isLive && (
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '12px', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+                                        <div style={{ width: '6px', height: '6px', background: '#ef4444', borderRadius: '50%', animation: 'pulse 1.5s infinite' }} />
+                                        <span style={{ fontSize: '9px', color: '#ef4444', fontWeight: '800', textTransform: 'uppercase' }}>Live</span>
+                                    </div>
+                                )}
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                                    {(currentStepIndex + 1).toString().padStart(2, '0')} / {manifest.steps.length.toString().padStart(2, '0')}
+                                </span>
+                            </div>
+                            <button
+                                onClick={() => setIsFullscreen(false)}
+                                className="vp-btn"
+                                title="Close fullscreen"
+                            >
+                                <X size={14} />
+                            </button>
+                        </div>
+
+                        {/* Fullscreen Frame */}
+                        <div style={{ width: '100%', background: '#000' }}>
+                            <img
+                                src={frameUrl}
+                                alt={`Step ${currentStepIndex}`}
+                                style={{ width: '100%', height: 'auto', maxHeight: '80vh', objectFit: 'contain', display: 'block' }}
+                            />
+                            {currentStep.action && (
+                                <div style={{
+                                    position: 'absolute',
+                                    bottom: '80px',
+                                    left: '16px',
+                                    right: '16px',
+                                    background: 'rgba(15, 23, 42, 0.85)',
+                                    backdropFilter: 'blur(8px)',
+                                    padding: '10px 14px',
+                                    borderRadius: '12px',
+                                    fontSize: '12px',
+                                    color: '#fff',
+                                    border: '1px solid rgba(255,255,255,0.1)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '10px',
+                                    boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+                                }}>
+                                    <div style={{ width: '8px', height: '8px', background: 'var(--accent-color)', borderRadius: '2px' }} />
+                                    <span style={{ color: 'var(--accent-color)', fontWeight: '800', textTransform: 'uppercase' }}>{currentStep.action.name}</span>
+                                    <span style={{ opacity: 0.8, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentStep.action.target}</span>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Fullscreen Controls */}
+                        <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '16px', borderTop: '1px solid var(--card-border)' }}>
+                            <button
+                                onClick={() => setIsPlaying(!isPlaying)}
+                                disabled={isLive}
+                                style={{
+                                    background: isPlaying ? 'rgba(255,255,255,0.1)' : 'var(--accent-color)',
+                                    width: '36px',
+                                    height: '36px',
+                                    borderRadius: '50%',
+                                    display: 'flex',
+                                    justifyContent: 'center',
+                                    alignItems: 'center',
+                                    border: 'none',
+                                    cursor: isLive ? 'not-allowed' : 'pointer',
+                                    opacity: isLive ? 0.5 : 1,
+                                }}
+                            >
+                                {isPlaying ? <Pause size={18} color="white" fill="white" /> : <Play size={18} color="white" fill="white" style={{ marginLeft: '2px' }} />}
+                            </button>
+                            <input
+                                type="range"
+                                min="0"
+                                max={manifest.steps.length - 1}
+                                value={currentStepIndex}
+                                disabled={isLive}
+                                onChange={e => { setCurrentStepIndex(parseInt(e.target.value)); setIsPlaying(false); }}
+                                style={{ flex: 1, accentColor: 'var(--accent-color)', cursor: isLive ? 'not-allowed' : 'pointer', height: '4px', borderRadius: '2px' }}
+                            />
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: '600', fontFamily: 'monospace' }}>
+                                {(currentStepIndex + 1).toString().padStart(2, '0')} / {manifest.steps.length.toString().padStart(2, '0')}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

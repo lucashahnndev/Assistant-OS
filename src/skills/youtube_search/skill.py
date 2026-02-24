@@ -158,7 +158,7 @@ class YouTubeSearchSkill(SkillBase):
             return f"Nenhum resultado encontrado no YouTube para '{query}'."
         lines = [f"Resultados YouTube para '{query}' via {provider} ({len(results)} itens):"]
         for i, item in enumerate(results, start=1):
-            title = item.get("title") or "Sem título"
+            title = item.get("title") or "Untitled"
             channel = item.get("channel")
             score = item.get("confidenceScore")
             url = item.get("url")
@@ -198,7 +198,7 @@ class YouTubeSearchSkill(SkillBase):
                 "count": 0,
                 "results": [],
                 "best": None,
-                "text": "Erro: parâmetro 'query' é obrigatório para youtube.search.find.",
+                "text": "Error: parameter 'query' is required para youtube.search.find.",
             }
 
         if search_type not in {"video", "playlist", "channel"}:
@@ -212,7 +212,7 @@ class YouTubeSearchSkill(SkillBase):
                 "count": 0,
                 "results": [],
                 "best": None,
-                "text": f"Erro: tipo '{search_type}' não suportado em youtube.search.find.",
+                "text": f"Error: type '{search_type}' is not supported em youtube.search.find.",
             }
 
         # 1. Check Config

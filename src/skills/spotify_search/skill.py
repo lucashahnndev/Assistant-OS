@@ -146,7 +146,7 @@ class SpotifySearchSkill(SkillBase):
             return f"Nenhum resultado encontrado para '{query}' no Spotify."
         lines = [f"Resultados Spotify para '{query}' ({len(results)} itens):"]
         for i, item in enumerate(results, start=1):
-            title = item.get("title") or "Sem título"
+            title = item.get("title") or "Untitled"
             artist = item.get("artist")
             score = item.get("confidenceScore")
             line = f"{i}. {title}"
@@ -181,7 +181,7 @@ class SpotifySearchSkill(SkillBase):
                 "count": 0,
                 "results": [],
                 "best": None,
-                "text": "Erro: parâmetro 'query' é obrigatório para spotify.search.search.",
+                "text": "Error: parameter 'query' is required para spotify.search.search.",
             }
 
         if search_type not in {"track", "artist", "album", "playlist"}:
@@ -195,7 +195,7 @@ class SpotifySearchSkill(SkillBase):
                 "count": 0,
                 "results": [],
                 "best": None,
-                "text": f"Erro: tipo '{search_type}' não suportado em spotify.search.search.",
+                "text": f"Error: type '{search_type}' is not supported em spotify.search.search.",
             }
 
         # 1. Check Config

@@ -3,6 +3,7 @@ import re
 from typing import Dict, Any, List
 
 import requests
+from services.search.query_semantics import QuerySemantics
 from ..base import SkillBase
 
 logger = logging.getLogger("WebSearchSkill")
@@ -171,7 +172,7 @@ class WebSearchSkill(SkillBase):
 
     @staticmethod
     def _normalize_result_item(raw: Dict[str, Any], rank: int) -> Dict[str, Any]:
-        title = raw.get("title") or raw.get("heading") or "Sem título"
+        title = raw.get("title") or raw.get("heading") or "Untitled"
         url = raw.get("href") or raw.get("url") or ""
         snippet = raw.get("body") or raw.get("snippet") or raw.get("text") or ""
         return {
@@ -190,7 +191,7 @@ class WebSearchSkill(SkillBase):
         lines = [f"Resultados para '{query}' ({len(results)} itens):"]
         for item in results:
             rank = item.get("rank", 0)
-            title = item.get("title", "Sem título")
+            title = item.get("title", "Untitled")
             snippet = item.get("snippet", "")
             url = item.get("url", "")
             lines.append(f"{rank}. {title}")
@@ -306,13 +307,13 @@ class WebSearchSkill(SkillBase):
     @staticmethod
     def _render_knowledge_text(query: str, docs: List[Dict[str, Any]], warnings: List[str]) -> str:
         if not docs:
-            base = f"Não consegui extrair conteúdo de conhecimento para '{query}'."
+            base = f"I could not extrair conteúdo de conhecimento para '{query}'."
             if warnings:
                 base += " Mantive os links para referência."
             return base
         lines = [f"Base de conhecimento para '{query}' ({len(docs)} fonte(s) extraídas):"]
         for doc in docs:
-            lines.append(f"- {doc.get('title', 'Sem título')} ({doc.get('url', 'sem URL')})")
+            lines.append(f"- {doc.get('title', 'Untitled')} ({doc.get('url', 'sem URL')})")
         if warnings:
             lines.append(f"Avisos: {len(warnings)} ocorrência(s) durante extração.")
         return "\n".join(lines)
@@ -357,15 +358,26 @@ class WebSearchSkill(SkillBase):
                 "knowledge_docs": [],
                 "chunks": [],
                 "warnings": [],
-                "text": "Erro: parâmetro 'query' é obrigatório para web.search.discover.",
+                "text": "Error: parameter 'query' is required para web.search.discover.",
             }
 
         if action == "discover":
-            results = self._ddg_search(query, limit=limit)
+            query_variants = QuerySemantics.web_variants(query, limit=3)
+            results: List[Dict[str, Any]] = []
+            effective_query = query
+            for candidate_query in query_variants:
+                candidate_results = self._ddg_search(candidate_query, limit=limit)
+                if candidate_results:
+                    results = candidate_results
+                    effective_query = candidate_query
+                    break
+
+            if not results:
+                effective_query = query_variants[0] if query_variants else query
             warnings: List[str] = []
             knowledge_docs: List[Dict[str, Any]] = []
             chunks: List[Dict[str, Any]] = []
-            text = self._render_summary_text(query, results)
+            text = self._render_summary_text(effective_query, results)
 
             if mode == "knowledge" and results:
                 candidates = results[:knowledge_limit]
@@ -386,7 +398,7 @@ class WebSearchSkill(SkillBase):
                     doc_chunks = self._chunk_text(content, chunk_size=chunk_size, overlap=chunk_overlap)
                     doc = {
                         "rank": entry.get("rank"),
-                        "title": extraction.get("title") or entry.get("title") or "Sem título",
+                        "title": extraction.get("title") or entry.get("title") or "Untitled",
                         "url": url,
                         "excerpt": self._truncate(content, 280),
                         "content": content,
@@ -408,14 +420,16 @@ class WebSearchSkill(SkillBase):
                             }
                         )
 
-                text = self._render_knowledge_text(query, knowledge_docs, warnings)
+                text = self._render_knowledge_text(effective_query, knowledge_docs, warnings)
 
             if not results:
                 return {
                     "ok": True,
                     "status": "empty",
                     "provider": "duckduckgo",
-                    "query": query,
+                    "query": effective_query,
+                    "query_original": query,
+                    "queries_executed": query_variants,
                     "mode": mode,
                     "count": 0,
                     "results": [],
@@ -430,7 +444,9 @@ class WebSearchSkill(SkillBase):
                 "ok": True,
                 "status": "success",
                 "provider": "duckduckgo",
-                "query": query,
+                "query": effective_query,
+                "query_original": query,
+                "queries_executed": query_variants,
                 "mode": mode,
                 "count": len(results),
                 "results": results,
@@ -454,5 +470,5 @@ class WebSearchSkill(SkillBase):
             "knowledge_docs": [],
             "chunks": [],
             "warnings": [],
-            "text": f"Erro: ação desconhecida '{action_id}' para web_search.",
+            "text": f"Error: ação desconhecida '{action_id}' para web_search.",
         }

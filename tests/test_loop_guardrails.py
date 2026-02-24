@@ -72,7 +72,8 @@ def test_ground_reply_blocks_false_success_claim_after_failure():
         last_action_output="Error executing shell.execute: boom",
     )
 
-    assert "falhou" in grounded.lower()
+    lower = grounded.lower()
+    assert ("falhou" in lower) or ("failed" in lower)
     assert "shell.control.execute" in grounded
     assert grounded != "Pronto, concluído com sucesso."
 
@@ -88,3 +89,20 @@ def test_ground_reply_keeps_honest_failure_message():
     )
 
     assert grounded == original
+
+
+def test_reply_from_last_success_localizes_header_for_ptbr():
+    reply = AgentOrchestrator._reply_from_last_success(
+        action_id="web.search.discover",
+        structured_result={
+            "results": [
+                {"title": "Resultado A", "url": "https://example.com/a"},
+                {"title": "Resultado B", "url": "https://example.com/b"},
+            ]
+        },
+        raw_output="",
+        language="pt-BR",
+    )
+
+    assert isinstance(reply, str)
+    assert reply.startswith("Encontrei estes resultados:")

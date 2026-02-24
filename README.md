@@ -1,48 +1,48 @@
 # Assistant-OS (Atlas)
 
-Plataforma de agente modular com foco em:
-- orquestração de ações por skills;
-- controle de acesso granular por usuário/grupo;
-- múltiplos drivers (web, telegram, cli, voz);
-- memória operacional e execução em loop com guardrails.
+Modular agent platform focused on:
+- skill-based action orchestration;
+- granular access control per user/group;
+- multiple drivers (web, telegram, cli, voice);
+- operational memory and loop execution with guardrails.
 
-## Estado Atual (v2 base)
-- Arquitetura principal em `src/core`, `src/server`, `src/services`, `src/skills`.
-- Frontend React em `frontend/`.
-- Stack de skills de conhecimento com:
-  - `web.search.discover` (modo `links|knowledge|auto`);
-  - `wikipedia.search` (retorno estruturado para RAG).
+## Current State (v2 base)
+- Core architecture in `src/core`, `src/server`, `src/services`, `src/skills`.
+- React frontend in `frontend/`.
+- Knowledge skill stack with:
+  - `web.search.discover` (`links|knowledge|auto` mode);
+  - `wikipedia.search` (structured output for RAG).
 
-## Estrutura
+## Structure
 ```text
 src/
-  core/        # orquestração, sessão, ACL, resolução de intenção
-  server/      # API FastAPI e rotas
-  drivers/     # integrações de interface/canal
-  services/    # serviços de suporte (LLM, memória, workspace, safety)
-  skills/      # plugins de ação (contrato + runtime)
-frontend/      # painel web React
-data/          # configuração, sessões, identidades e artefatos
-tests/         # suíte enxuta de testes automatizados
-scripts/       # utilitários operacionais (bridge/validação)
+  core/        # orchestration, session, ACL, intent resolution
+  server/      # FastAPI API and routes
+  drivers/     # interface/channel integrations
+  services/    # support services (LLM, memory, workspace, safety)
+  skills/      # action plugins (contract + runtime)
+frontend/      # React web panel
+data/          # configuration, sessions, identities, artifacts
+tests/         # lean automated test suite
+scripts/       # operational utilities (bridge/validation)
 ```
 
-## Setup Rápido
-1. Criar ambiente virtual:
+## Quick Setup
+1. Create virtual environment:
 ```bash
 python -m venv env
 ```
 
-2. Instalar dependências:
+2. Install dependencies:
 ```bash
 ./env/bin/pip install -r requirements.txt
 ```
 
-3. Ajustar configuração:
-- arquivo principal: `data/config.json`
-- exemplo base: `config.json.example`
+3. Adjust configuration:
+- main file: `data/config.json`
+- base example: `config.json.example`
 
-## Execução
+## Run
 ### Backend API
 ```bash
 PYTHONPATH=src ./env/bin/python -m uvicorn src.server.main:create_app --factory --host 0.0.0.0 --port 8000
@@ -55,25 +55,23 @@ npm install
 npm run dev
 ```
 
-## Testes
-A pasta `tests/` foi reduzida para uma suíte objetiva e mantida.
-
-Executar:
+## Tests
+Run:
 ```bash
 PYTHONPATH=src ./env/bin/python -m pytest -q tests
 ```
 
-Coberturas principais:
-- resolução de intenção;
-- guardrails de loop e normalização de ação;
-- permissões e escopo por usuário;
-- qualidade/contrato das skills;
-- integração de fluxo do orquestrador.
+Main coverage:
+- intent resolution;
+- loop guardrails and action normalization;
+- permissions and user scope;
+- skill quality/contract;
+- orchestrator flow integration.
 
 ## Scripts
-Scripts mantidos:
-- `scripts/test_bridge.py`: bridge CLI para testes manuais de fluxo.
-- `scripts/validate_agent.py`: suíte de validação manual guiada.
+Maintained scripts:
+- `scripts/test_bridge.py`: CLI bridge for manual flow testing.
+- `scripts/validate_agent.py`: guided manual validation suite.
 
-## Licença
-BSD 3-Clause. Veja `LICENSE`.
+## License
+BSD 3-Clause. See `LICENSE`.

@@ -88,7 +88,7 @@ class OllamaProvider(ILLMProvider):
             response = requests.post(self.api_url, json=payload, timeout=120)
             response.raise_for_status()
             data = response.json()
-            return data['message']['content'].strip() if 'message' in data else "Erro: Resposta vazia do Ollama."
+            return data['message']['content'].strip() if 'message' in data else "Error: Resposta vazia do Ollama."
         except Exception as e:
             logger.error(f"Ollama generate_text error: {e}")
             return f"Erro na geração de texto: {e}"

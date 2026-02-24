@@ -3,6 +3,7 @@ import json
 import hashlib
 import datetime
 import shutil
+import threading
 from typing import Dict, Any, List, Optional
 from utils.logging_config import get_logger
 
@@ -12,91 +13,99 @@ class PlaybackService:
     def __init__(self, workspace_service, config_manager=None):
         self.ws = workspace_service
         self.config_manager = config_manager
+        self._io_lock = threading.RLock()
         
     def _get_playback_dir(self, session_id: str, run_id: str) -> str:
         session_dir = self.ws.get_session_dir(session_id)
         playback_dir = os.path.join(session_dir, "playback", run_id)
         return playback_dir
 
+    @staticmethod
+    def _atomic_write_json(path: str, payload: Dict[str, Any]) -> None:
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+
     def start_run(self, session_id: str, run_id: str, title: str, source: Dict[str, str]) -> str:
-        playback_dir = self._get_playback_dir(session_id, run_id)
-        frames_dir = os.path.join(playback_dir, "frames")
-        os.makedirs(frames_dir, exist_ok=True)
-        
-        manifest_path = os.path.join(playback_dir, "manifest.json")
-        manifest = {
-            "manifest_version": 1,
-            "run_id": run_id,
-            "session_id": session_id,
-            "title": title,
-            "source": source,
-            "status": "running",
-            "created_at": datetime.datetime.now().isoformat(),
-            "ended_at": None,
-            "total_steps": 0,
-            "steps": []
-        }
-        
-        with open(manifest_path, 'w', encoding='utf-8') as f:
-            json.dump(manifest, f, indent=2)
-            
+        with self._io_lock:
+            playback_dir = self._get_playback_dir(session_id, run_id)
+            frames_dir = os.path.join(playback_dir, "frames")
+            os.makedirs(frames_dir, exist_ok=True)
+
+            manifest_path = os.path.join(playback_dir, "manifest.json")
+            manifest = {
+                "manifest_version": 1,
+                "run_id": run_id,
+                "session_id": session_id,
+                "title": title,
+                "source": source,
+                "status": "running",
+                "created_at": datetime.datetime.now().isoformat(),
+                "ended_at": None,
+                "total_steps": 0,
+                "steps": []
+            }
+            self._atomic_write_json(manifest_path, manifest)
+
         logger.info(f"Playback run started: {run_id} in session {session_id}")
         return manifest_path
 
     def add_frame(self, session_id: str, run_id: str, step: int, action: Dict[str, Any], frame_bytes: bytes, width: int = 960, height: int = 540) -> Dict[str, Any]:
-        playback_dir = self._get_playback_dir(session_id, run_id)
-        filename = f"frames/{step:06d}.jpg"
-        frame_path = os.path.join(playback_dir, filename)
-        
-        # Save frame
-        with open(frame_path, 'wb') as f:
-            f.write(frame_bytes)
-            
-        # Calculate SHA256
-        sha256 = hashlib.sha256(frame_bytes).hexdigest()
-        
-        # Update manifest
-        manifest_path = os.path.join(playback_dir, "manifest.json")
-        if os.path.exists(manifest_path):
-            with open(manifest_path, 'r', encoding='utf-8') as f:
-                manifest = json.load(f)
-            
-            step_meta = {
-                "step": step,
-                "ts": datetime.datetime.now().isoformat(),
-                "action": action,
-                "frame_filename": filename,
-                "frame_sha256": sha256,
-                "width": width,
-                "height": height,
-                "bytes": len(frame_bytes),
-                "mime": "image/jpeg"
-            }
-            manifest["steps"].append(step_meta)
-            manifest["total_steps"] = len(manifest["steps"])
-            
-            with open(manifest_path, 'w', encoding='utf-8') as f:
-                json.dump(manifest, f, indent=2)
-                
-            return step_meta
+        with self._io_lock:
+            playback_dir = self._get_playback_dir(session_id, run_id)
+            filename = f"frames/{step:06d}.jpg"
+            frame_path = os.path.join(playback_dir, filename)
+
+            # Save frame
+            with open(frame_path, "wb") as f:
+                f.write(frame_bytes)
+                f.flush()
+                os.fsync(f.fileno())
+
+            # Calculate SHA256
+            sha256 = hashlib.sha256(frame_bytes).hexdigest()
+
+            # Update manifest
+            manifest_path = os.path.join(playback_dir, "manifest.json")
+            if os.path.exists(manifest_path):
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+
+                step_meta = {
+                    "step": step,
+                    "ts": datetime.datetime.now().isoformat(),
+                    "action": action,
+                    "frame_filename": filename,
+                    "frame_sha256": sha256,
+                    "width": width,
+                    "height": height,
+                    "bytes": len(frame_bytes),
+                    "mime": "image/jpeg",
+                }
+                manifest["steps"].append(step_meta)
+                manifest["total_steps"] = len(manifest["steps"])
+                self._atomic_write_json(manifest_path, manifest)
+                return step_meta
         return {}
 
     def end_run(self, session_id: str, run_id: str, status: str = "success") -> str:
-        playback_dir = self._get_playback_dir(session_id, run_id)
-        manifest_path = os.path.join(playback_dir, "manifest.json")
-        
-        if os.path.exists(manifest_path):
-            with open(manifest_path, 'r', encoding='utf-8') as f:
-                manifest = json.load(f)
-            
-            manifest["status"] = status
-            manifest["ended_at"] = datetime.datetime.now().isoformat()
-            
-            with open(manifest_path, 'w', encoding='utf-8') as f:
-                json.dump(manifest, f, indent=2)
-                
-            logger.info(f"Playback run ended: {run_id} with status {status}")
-            return manifest_path
+        with self._io_lock:
+            playback_dir = self._get_playback_dir(session_id, run_id)
+            manifest_path = os.path.join(playback_dir, "manifest.json")
+
+            if os.path.exists(manifest_path):
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+
+                manifest["status"] = status
+                manifest["ended_at"] = datetime.datetime.now().isoformat()
+                self._atomic_write_json(manifest_path, manifest)
+
+                logger.info(f"Playback run ended: {run_id} with status {status}")
+                return manifest_path
         return ""
 
     def cleanup_expired(self):

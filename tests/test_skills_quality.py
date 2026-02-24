@@ -12,6 +12,7 @@ from skills.spotify_search.skill import SpotifySearchSkill
 from skills.system_apps.skill import SystemAppsSkill
 from skills.system_control.skill import SystemSkill
 from skills.system_logs.skill import SystemLogsSkill
+from skills.task_management.skill import TaskSkill
 from skills.vision.skill import VisionSkill
 from skills.weather_control.skill import WeatherSkill
 from skills.web_search.skill import WebSearchSkill
@@ -70,6 +71,8 @@ def test_web_search_returns_structured_payload(monkeypatch):
     assert result["status"] == "success"
     assert result["count"] == 1
     assert result["best"]["title"] == "Paris"
+    assert result["query_original"] == "capital da França"
+    assert isinstance(result["queries_executed"], list)
 
 
 def test_web_search_knowledge_mode_returns_docs_and_chunks(monkeypatch):
@@ -210,6 +213,79 @@ def test_deezer_search_rejects_invalid_type():
     assert result["error"] == "INVALID_TYPE"
 
 
+def test_task_scheduler_create_and_trigger_via_skill():
+    class DummyTask:
+        def __init__(self, task_id, name, context):
+            self.task_id = task_id
+            self.name = name
+            self.context = context
+
+        def to_dict(self):
+            return {"task_id": self.task_id, "name": self.name, "context": self.context}
+
+    class DummyTrigger:
+        def __init__(self, trigger_id, task_id):
+            self.trigger_id = trigger_id
+            self.task_id = task_id
+
+        def to_dict(self):
+            return {"trigger_id": self.trigger_id, "task_id": self.task_id}
+
+    class DummyScheduler:
+        def __init__(self):
+            self.created = None
+            self.triggered = None
+
+        def create_task(self, name, context, owner_session_id=None, owner_sender_id=None):
+            self.created = (name, context, owner_session_id, owner_sender_id)
+            return DummyTask("t1", name, context)
+
+        def add_trigger(self, task_id, schedule_type, schedule_value, holiday_rules=None):
+            self.triggered = (task_id, schedule_type, schedule_value, holiday_rules or {})
+            return DummyTrigger("tr1", task_id)
+
+        def get_task(self, task_id):
+            if task_id == "t1":
+                return {"task_id": "t1", "name": "Daily Report", "context": "Generate report"}
+            return None
+
+        def trigger_execution(self, task_id, trigger_id=None):
+            self.last_run = (task_id, trigger_id)
+
+        def list_works(self, **kwargs):
+            return [{"work_id": "w1", "status": "running"}]
+
+    scheduler = DummyScheduler()
+    kernel = SimpleNamespace(scheduler=scheduler, orchestrator=None)
+    skill = TaskSkill(kernel=kernel, config={})
+    session = SimpleNamespace(session_id="s-owner", context={})
+
+    created = skill.execute(
+        "task.scheduler.create",
+        {"name": "Daily Report", "context": "Generate report"},
+        {"session": session},
+    )
+    assert created["ok"] is True
+    assert created["task"]["task_id"] == "t1"
+    assert scheduler.created[2] == "s-owner"
+
+    trig = skill.execute(
+        "task.scheduler.add_trigger",
+        {"task_id": "t1", "schedule_type": "cron", "schedule_value": "0 9 * * 1"},
+        {"session": session},
+    )
+    assert trig["ok"] is True
+    assert trig["trigger"]["trigger_id"] == "tr1"
+
+    run = skill.execute("task.scheduler.run", {"task_id": "t1"}, {"session": session})
+    assert run["ok"] is True
+    assert scheduler.last_run == ("t1", None)
+
+    works = skill.execute("task.scheduler.list_works", {}, {"session": session})
+    assert works["ok"] is True
+    assert works["count"] == 1
+
+
 def test_weather_forecast_action_available(monkeypatch):
     skill = WeatherSkill(kernel=None, config={"api_key": "test-key"})
     monkeypatch.setattr(skill, "_resolve_location", lambda params, context: {"city": "Sao Paulo", "lat": None, "lon": None})
@@ -297,6 +373,32 @@ def test_maps_search_diverse_mode_executes_variants_and_deduplicates(monkeypatch
     assert len(result["queries_executed"]) >= 2
     assert result["count"] == 2
     assert result["best"]["placeId"] in {"pidA", "pidB"}
+
+
+def test_maps_search_returns_web_fallback_payload_on_billing_error(monkeypatch):
+    skill = MapsSearchSkill(kernel=None, config={})
+    monkeypatch.setattr(skill, "_get_api_key", lambda: "test-key")
+    monkeypatch.setattr(skill, "_resolve_location_bias", lambda api_key, near, city, context: None)
+    monkeypatch.setattr(
+        skill,
+        "_search_google_places",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "error": "GOOGLE_MAPS_API_ERROR",
+            "message": "You must enable Billing on the Google Cloud Project",
+        },
+    )
+
+    result = skill.execute(
+        "maps.search.search",
+        {"query": "Encontra o link de maps do mercado do Lukas em porto alegre"},
+        {},
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "GOOGLE_MAPS_API_ERROR"
+    assert result["fallback_action"] == "web.search.discover"
+    assert result["fallback_params"]["query"] == "mercado do Lukas em porto alegre"
 
 
 def test_memory_skill_returns_structured_store_and_recall():

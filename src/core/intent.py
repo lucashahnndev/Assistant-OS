@@ -14,7 +14,7 @@ class AgentIntent(BaseModel):
     state_summary: Dict[str, Any] = Field(default_factory=dict, description="Internal state in TOON format to be carried over to the next turn.")
     action: str = Field(..., description="The name of the action to be executed (e.g., 'play_music', 'search_web').")
     params: Dict[str, Any] = Field(default_factory=dict, description="Parameters required for the action.")
-    task_label: Optional[str] = Field(None, description="A short, human-readable label for the task (e.g., 'Capturando tela', 'Pesquisando no Google').")
+    task_label: Optional[str] = Field(None, description="A short, human-readable label for the task (e.g., 'Capturing screen', 'Searching on Google').")
     response_text: Optional[str] = Field(None, description="Text to be spoken back to the user immediately.")
     attachments: Optional[List[str]] = Field(None, description="A list of absolute file paths to attach to the response when action is 'reply'.")
 

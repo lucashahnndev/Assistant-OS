@@ -18,7 +18,17 @@ class SessionIndexManager:
         try:
             if os.path.exists(self.index_path):
                 with open(self.index_path, 'r', encoding='utf-8') as f:
-                    self.index = json.load(f)
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    self.index = loaded
+                else:
+                    logger.warning(
+                        "Invalid session index format at %s (expected object, got %s). Resetting to empty index.",
+                        self.index_path,
+                        type(loaded).__name__,
+                    )
+                    self.index = {}
+                    self.save()
                 logger.info(f"Session index loaded: {len(self.index)} sessions.")
             else:
                 self.index = {}

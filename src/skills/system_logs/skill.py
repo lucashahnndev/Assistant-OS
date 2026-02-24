@@ -80,5 +80,5 @@ class SystemLogsSkill(SkillBase):
             "status": "error",
             "error": "UNKNOWN_ACTION",
             "message": f"Unknown action: {action_id}",
-            "text": f"Ação desconhecida em system_logs: {action_id}",
+            "text": f"Unknown action em system_logs: {action_id}",
         }

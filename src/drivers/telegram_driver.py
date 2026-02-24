@@ -165,16 +165,16 @@ class TelegramDriver(BaseDriver):
             # 1. Error Handling (Architectural delegation)
             if phase == 'error' and isinstance(payload, dict):
                 code = payload.get('code')
-                message = payload.get('message', 'Erro desconhecido.')
-                action = payload.get('action', 'ferramenta')
+                message = payload.get('message', 'Unknown error.')
+                action = payload.get('action', 'tool')
                 
                 error_msg = message
                 if code == 'loop_break':
-                    error_msg = f"⚠️ **Aviso de Sistema**: Pareço estar travado ao tentar usar a ferramenta `{action}` repetidamente sem sucesso. Vou interromper o processo para evitar loop infinito."
+                    error_msg = f"⚠️ **System Warning**: I appear to be stuck trying to use the tool `{action}` repeatedly without success. I will stop to avoid an infinite loop."
                 elif code == 'action_error':
-                    error_msg = f"❌ **Erro de Execução**:\n{message}"
+                    error_msg = f"❌ **Execution Error**:\n{message}"
                 elif code == 'system_error':
-                    error_msg = f"❗ **Falha Técnica**:\n{message}"
+                    error_msg = f"❗ **Technical Failure**:\n{message}"
                 
                 # We use send_response (which handles markdownify and types)
                 self.send_response(error_msg, target=target)
@@ -319,7 +319,7 @@ class TelegramDriver(BaseDriver):
                         self.kernel.orchestrator.index_manager.register_session(session)
             except Exception as e:
                 logger.error(f"Error in background processing: {e}")
-                self.send_response("Desculpe, houve um erro interno ao processar sua mensagem.", target=f"telegram_{user_id}")
+                self.send_response("Sorry, there was an internal error while processing your message.", target=f"telegram_{user_id}")
             finally:
                 # Ensure we signal complete to stop typing if not already stopped by send_response
                 self.send_complete(f"telegram_{target_id}")

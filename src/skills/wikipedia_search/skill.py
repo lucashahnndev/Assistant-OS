@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from ..base import SkillBase
+from services.search.query_semantics import QuerySemantics
 
 logger = logging.getLogger("WikipediaSearchSkill")
 
@@ -156,7 +157,7 @@ class WikipediaSearchSkill(SkillBase):
             return f"Nenhum conteúdo encontrado na Wikipedia para '{query}' (idioma: {language})."
         lines = [f"Wikipedia: {len(docs)} artigo(s) para '{query}' (idioma: {language})."]
         for doc in docs[:5]:
-            lines.append(f"- {doc.get('title', 'Sem título')} ({doc.get('url', 'sem URL')})")
+            lines.append(f"- {doc.get('title', 'Untitled')} ({doc.get('url', 'sem URL')})")
         if warnings:
             lines.append(f"Avisos: {len(warnings)} ocorrência(s).")
         return "\n".join(lines)
@@ -259,16 +260,16 @@ class WikipediaSearchSkill(SkillBase):
                 query=self._sanitize_text(self._resolve_query(params)),
                 language="pt",
                 error="UNKNOWN_ACTION",
-                message=f"Ação desconhecida para wikipedia_search: {action_id}",
+                message=f"Unknown action para wikipedia_search: {action_id}",
             )
 
-        query = self._sanitize_text(self._resolve_query(params))
+        query = QuerySemantics.rewrite_for_wikipedia(self._sanitize_text(self._resolve_query(params)))
         if not query:
             return self._result_error(
                 query="",
                 language="pt",
                 error="MISSING_QUERY",
-                message="Erro: parâmetro 'query' é obrigatório para wikipedia.search.",
+                message="Error: parameter 'query' is required para wikipedia.search.",
             )
 
         language, explicit_language = self._resolve_language(params)

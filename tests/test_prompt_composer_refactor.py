@@ -14,6 +14,7 @@ def _base_prompt_kwargs():
         "location": "Canoas",
         "channel": "web",
         "user_name": "tester",
+        "user_language": "pt-BR",
         "toon_state": "{\"goal\": \"standby\"}",
         "user_input": "me diga a previsão do tempo",
         "project_path": "/tmp/project",
@@ -38,6 +39,7 @@ def test_prompt_composer_omits_irrelevant_dynamic_sections():
     assert "[SESSION ATTACHMENTS]" not in prompt
     assert "[STRUCTURED OUTPUT CONTRACT]" in prompt
     assert "Scope: principal-filtered" in prompt
+    assert "Detected user language: pt-BR" in prompt
 
 
 def test_prompt_composer_includes_browser_and_dev_context_when_needed():

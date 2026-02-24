@@ -1,7 +1,39 @@
 {
   "name": "Deep Memory",
-  "description": "Use these skills to access your long-term, indexable storage. This memory is NOT automatically included in the prompt; you must explicit recall it. Saves a piece of information permanently for future retrieval. Use this for user preferences, important facts, or complex instructions. - **params**: - `content` (str): The information to save. Be descriptive. - `category` (str, optional): A tag for organization (e.g., 'user_preference', 'system_config', 'project_data'). Default: 'general'. Searches your deep memory for information relevant to a specific query. The results will be returned in the [OBSERVATION]. - **params**: - `query` (str): Keywords or a question to search for.",
-  "actions": [],
+  "description": "Compatibility layer for explicit long-term memory actions.",
+  "actions": [
+    {
+      "name": "deep.memory.recall_memory",
+      "description": "Search long-term memory by semantic query.",
+      "parameters": {
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "deep.memory.store_memory",
+      "description": "Store a long-term memory fact.",
+      "parameters": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ]
+      }
+    }
+  ],
   "permissions": [],
   "config_schema": {}
 }

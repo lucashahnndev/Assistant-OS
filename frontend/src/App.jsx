@@ -1,7 +1,9 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
+import { VideoPlayerProvider } from './context/VideoPlayerContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import VideoPlayerDock from './components/VideoPlayerDock';
 import DashboardLayout from './layouts/DashboardLayout';
 
 // Pages (to be implemented)
@@ -66,21 +68,24 @@ function App() {
         <BrowserRouter>
             <ThemeProvider>
                 <AuthProvider>
-                    <Toaster position="top-right"
-                        toastOptions={{
-                            style: {
-                                background: 'var(--card-bg)',
-                                color: 'var(--text-main)',
-                                border: '1px solid var(--card-border)',
-                                backdropFilter: 'var(--surface-blur)',
-                                borderRadius: '12px',
-                                fontSize: '14px',
-                                fontWeight: '600',
-                                boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
-                            },
-                        }}
-                    />
-                    <AppRoutes />
+                    <VideoPlayerProvider>
+                        <Toaster position="top-right"
+                            toastOptions={{
+                                style: {
+                                    background: 'var(--card-bg)',
+                                    color: 'var(--text-main)',
+                                    border: '1px solid var(--card-border)',
+                                    backdropFilter: 'var(--surface-blur)',
+                                    borderRadius: '12px',
+                                    fontSize: '14px',
+                                    fontWeight: '600',
+                                    boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+                                },
+                            }}
+                        />
+                        <AppRoutes />
+                        <VideoPlayerDock />
+                    </VideoPlayerProvider>
                 </AuthProvider>
             </ThemeProvider>
         </BrowserRouter>

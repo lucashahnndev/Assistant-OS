@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 
 import { api } from '../hooks/api';
 import PlaybackCard from '../components/PlaybackCard';
+import LinkPreviewCard from '../components/LinkPreviewCard';
 import toast from 'react-hot-toast';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -42,7 +43,8 @@ import {
     FileCode,
     Archive,
     Table,
-    Download
+    Download,
+    Monitor
 } from 'lucide-react';
 
 const SessionIcon = ({ source, size = 16 }) => {
@@ -164,7 +166,7 @@ const CodeBlock = ({ node, inline, className, children, ...props }) => {
         navigator.clipboard.writeText(text);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
-        toast.success("Código copiado!");
+        toast.success("Code copied!");
     };
 
     if (inline) {
@@ -295,8 +297,8 @@ const formatDate = (ts) => {
         const yesterday = new Date(today);
         yesterday.setDate(yesterday.getDate() - 1);
 
-        if (date.toDateString() === today.toDateString()) return 'Hoje';
-        if (date.toDateString() === yesterday.toDateString()) return 'Ontem';
+        if (date.toDateString() === today.toDateString()) return 'Today';
+        if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
         return date.toLocaleDateString();
     } catch (e) {
         return '';
@@ -344,10 +346,10 @@ const looksLikeInternalMonologue = (content) => {
         'vou usar a acao',
         'i will use the action',
         'my plan is',
-        'plano:',
+        'plan:',
         '"action":',
         '"params":',
-        'retornando resultados'
+        'returning results'
     ];
     return strictCues.some((cue) => text.includes(cue));
 };
@@ -458,7 +460,7 @@ const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agent
                     borderBottom: isUser ? '1px solid rgba(255,255,255,0.1)' : '1px solid var(--card-border)'
                 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                        <p style={{ fontSize: '11px', fontWeight: 'bold', color: isUser ? '#fff' : 'var(--text-primary)' }}>{isUser ? 'Você' : agentName}</p>
+                        <p style={{ fontSize: '11px', fontWeight: 'bold', color: isUser ? '#fff' : 'var(--text-primary)' }}>{isUser ? 'You' : agentName}</p>
                         {msg.timestamp && <p style={{ fontSize: '10px', color: isUser ? 'rgba(255,255,255,0.7)' : 'var(--text-muted)' }}>{formatTime(msg.timestamp)}</p>}
                     </div>
 
@@ -611,7 +613,7 @@ const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agent
                             {!isUser && isStreaming && (
                                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '8px', opacity: 0.75 }}>
                                     <span style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--accent-color)' }}>
-                                        Digitando
+                                        Typing
                                     </span>
                                     {[0, 1, 2].map(i => (
                                         <span
@@ -646,12 +648,17 @@ const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agent
                         </div>
                     )}
                 </div>
+                {!isUser && msg.content && !isStreaming && (
+                    <div style={{ display: 'flex', justifyContent: 'center', marginTop: 'var(--space-3)' }}>
+                        <LinkPreviewCard messageContent={msg.content} />
+                    </div>
+                )}
             </div>
         </div>
     );
 });
 
-const MessageList = memo(({ messages, sessionId, streamingMessage, onExpand, scrollRef, agentName, onScroll }) => {
+const MessageList = memo(({ messages, sessionId, streamingMessage, onExpand, scrollRef, agentName, onScroll, latestPlaybackEvent, playbackRuns }) => {
     const filteredMessages = useMemo(() =>
         messages.filter(msg => !msg.content.includes('[SYSTEM_NOTIFICATION]')),
         [messages]
@@ -688,6 +695,35 @@ const MessageList = memo(({ messages, sessionId, streamingMessage, onExpand, scr
             result.push(<MessageItem key={msg.id || `msg-${i}`} msg={msg} sessionId={sessionId} onExpand={onExpand} agentName={agentName} />);
         });
 
+        // Add live playback card at the end of messages
+        if (latestPlaybackEvent) {
+            result.push(
+                <div key="live-playback" style={{ padding: '8px 16px', maxWidth: '500px', width: '100%' }}>
+                    <PlaybackCard
+                        runId={latestPlaybackEvent.run_id}
+                        sessionId={sessionId}
+                        liveEvent={latestPlaybackEvent}
+                    />
+                </div>
+            );
+        }
+
+        // Render completed (historical) playback runs as compact chips
+        if (!latestPlaybackEvent && playbackRuns && playbackRuns.length > 0) {
+            // Show the most recent completed playback inline
+            const recentRun = playbackRuns[0];
+            if (recentRun && recentRun.status !== 'running') {
+                result.push(
+                    <div key={`playback-${recentRun.run_id}`} style={{ padding: '8px 16px', maxWidth: '500px', width: '100%' }}>
+                        <PlaybackCard
+                            runId={recentRun.run_id}
+                            sessionId={sessionId}
+                        />
+                    </div>
+                );
+            }
+        }
+
         if (streamingMessage) {
             result.push(<MessageItem key="streaming" msg={streamingMessage} sessionId={sessionId} isStreaming={true} onExpand={onExpand} agentName={agentName} />);
         }
@@ -703,9 +739,9 @@ const MessageList = memo(({ messages, sessionId, streamingMessage, onExpand, scr
                         <Bot size={32} />
                     </div>
                     <div style={{ padding: '32px', borderRadius: '24px', background: 'var(--card-bg)', border: '1px solid var(--card-border)', boxShadow: '0 10px 30px rgba(0,0,0,0.1)' }}>
-                        <h2 style={{ fontSize: '24px', fontWeight: '900', marginBottom: '12px', color: 'var(--text-main)' }}>Sistema Operacional Cognitivo</h2>
+                        <h2 style={{ fontSize: '24px', fontWeight: '900', marginBottom: '12px', color: 'var(--text-main)' }}>Cognitive Operating System</h2>
                         <p style={{ color: 'var(--text-muted)', fontSize: '15px', lineHeight: '1.6' }}>
-                            Pronto para processar. Identificado como <strong>{agentName}</strong>. Qual a sua diretriz?
+                            Ready to process. Identified as <strong>{agentName}</strong>. What is your directive?
                         </p>
                     </div>
                 </div>
@@ -795,7 +831,7 @@ const AttachmentList = ({ items, sessionId, onExpand }) => {
                     <FilePreviewIcon type={item.type} />
                     <div className="doc-info">
                         {/* Only show filename basename for better UX */}
-                        <span className="doc-name">{item.name?.split('/').pop() || 'Arquivo'}</span>
+                        <span className="doc-name">{item.name?.split('/').pop() || 'File'}</span>
                         <span className="doc-meta">{item.mime ? (item.mime.split('/')[1]?.toUpperCase() || 'FILE') : (item.name?.split('.').pop()?.toUpperCase() || 'FILE')}</span>
                     </div>
                 </div>
@@ -844,6 +880,7 @@ const Chat = () => {
     const [pendingFiles, setPendingFiles] = useState([]); // { file, previewUrl, type, name }
     const [isSending, setIsSending] = useState(false);
     const [latestPlaybackEvent, setLatestPlaybackEvent] = useState(null);
+    const [playbackRuns, setPlaybackRuns] = useState([]);
     const [isSessionsCollapsed, setIsSessionsCollapsed] = useState(() => {
         return localStorage.getItem('assistant_chat_sessions_collapsed') === 'true';
     });
@@ -1291,10 +1328,10 @@ const Chat = () => {
             await api.patch(`/sessions/${selectedId}`, { name: editNameValue.trim() });
             setCurrentSession(prev => prev ? { ...prev, name: editNameValue.trim() } : prev);
             setSessions(prev => prev.map(s => s.session_id === selectedId ? { ...s, name: editNameValue.trim() } : s));
-            toast.success("Nome atualizado");
+            toast.success("Name updated");
         } catch (err) {
             console.error("Error renaming session:", err);
-            toast.error("Erro ao renomear");
+            toast.error("Error renaming");
         }
         setIsEditingName(false);
     };
@@ -1313,11 +1350,11 @@ const Chat = () => {
                 setCurrentSession(prev => prev ? { ...prev, profile_picture: res.profile_picture } : prev);
                 // Update in sessions list
                 setSessions(prev => prev.map(s => s.session_id === selectedId ? { ...s, profile_picture: res.profile_picture } : s));
-                toast.success('Imagem de perfil atualizada!');
+                toast.success('Profile image updated!');
             }
         } catch (err) {
             console.error("Error uploading avatar:", err);
-            toast.error("Erro ao fazer upload da imagem.");
+            toast.error("Error uploading image.");
         }
 
         // Reset input
@@ -1380,14 +1417,33 @@ const Chat = () => {
         }
     };
 
+    const fetchPlaybackRuns = async (id) => {
+        if (!id) return;
+        try {
+            const response = await api.get(`/sessions/${id}/playback`);
+            setPlaybackRuns(response?.runs || []);
+        } catch (error) {
+            console.error("Error fetching playback runs:", error);
+        }
+    };
+
     useEffect(() => {
         if (showChatProfile && selectedId) {
             fetchSessionMedia(selectedId);
+            fetchPlaybackRuns(selectedId);
         }
     }, [showChatProfile, selectedId]);
 
+    // Also fetch playback runs on session load for inline rendering
+    useEffect(() => {
+        if (selectedId) {
+            fetchPlaybackRuns(selectedId);
+        }
+    }, [selectedId]);
+
     const ChatProfile = ({ desktopFullWidth = false }) => {
-        const [activeTab, setActiveTab] = useState('media'); // 'media' | 'docs' | 'links'
+        const [activeTab, setActiveTab] = useState('media'); // 'media' | 'docs' | 'links' | 'playback'
+        const [expandedPlayback, setExpandedPlayback] = useState(null); // run_id of currently expanded playback
 
         const normalizeAssetPath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
         const profilePicturePath = normalizeAssetPath(currentSession?.profile_picture || '');
@@ -1474,9 +1530,27 @@ const Chat = () => {
                                     transition: '0.2s'
                                 }}
                             >
-                                {tab === 'media' ? 'Fotos' : tab === 'docs' ? 'Arquivos' : 'Links'}
+                                {tab === 'media' ? 'Fotos' : tab === 'docs' ? 'Files' : tab === 'links' ? 'Links' : 'Playback'}
                             </button>
                         ))}
+                        {playbackRuns.length > 0 && (
+                            <button
+                                onClick={() => setActiveTab('playback')}
+                                style={{
+                                    flex: 1,
+                                    padding: '8px',
+                                    fontSize: '12px',
+                                    fontWeight: 'bold',
+                                    borderRadius: '8px',
+                                    background: activeTab === 'playback' ? 'var(--accent-glow)' : 'transparent',
+                                    color: activeTab === 'playback' ? 'var(--accent-color)' : 'var(--text-muted)',
+                                    textTransform: 'uppercase',
+                                    transition: '0.2s'
+                                }}
+                            >
+                                Playback
+                            </button>
+                        )}
                     </div>
 
                     {loadingMedia ? (
@@ -1533,12 +1607,91 @@ const Chat = () => {
                                             </div>
                                             <div style={{ flex: 1, minWidth: 0 }}>
                                                 <span style={{ fontSize: '13px', color: 'var(--text-main)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: '600' }}>{l.url}</span>
-                                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{formatDate(l.timestamp)} · {l.role === 'user' ? 'Você' : 'Assistente'}</span>
+                                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{formatDate(l.timestamp)} · {l.role === 'user' ? 'You' : 'Assistente'}</span>
                                             </div>
                                             <ChevronRight size={14} className="text-muted group-hover:text-accent" />
                                         </a>
                                     )) : (
                                         <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>Nenhum link.</div>
+                                    )}
+                                </div>
+                            )}
+
+                            {activeTab === 'playback' && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                    {playbackRuns.length > 0 ? playbackRuns.map((run) => (
+                                        <div key={run.run_id}>
+                                            {expandedPlayback === run.run_id ? (
+                                                <div>
+                                                    <button
+                                                        onClick={() => setExpandedPlayback(null)}
+                                                        className="btn-ghost"
+                                                        style={{ marginBottom: '8px', fontSize: '11px', fontWeight: '700', color: 'var(--accent-color)' }}
+                                                    >
+                                                        ← Voltar
+                                                    </button>
+                                                    <PlaybackCard
+                                                        runId={run.run_id}
+                                                        sessionId={selectedId}
+                                                    />
+                                                </div>
+                                            ) : (
+                                                <div
+                                                    onClick={() => setExpandedPlayback(run.run_id)}
+                                                    style={{
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        gap: '12px',
+                                                        padding: '10px 12px',
+                                                        background: 'rgba(255,255,255,0.03)',
+                                                        borderRadius: '12px',
+                                                        border: '1px solid var(--card-border)',
+                                                        cursor: 'pointer',
+                                                        transition: '0.2s',
+                                                    }}
+                                                    className="hover:bg-white/5"
+                                                >
+                                                    {run.thumbnail ? (
+                                                        <img
+                                                            src={run.thumbnail}
+                                                            alt=""
+                                                            style={{
+                                                                width: '56px',
+                                                                height: '42px',
+                                                                objectFit: 'cover',
+                                                                borderRadius: '6px',
+                                                                flexShrink: 0,
+                                                                border: '1px solid rgba(255,255,255,0.05)',
+                                                            }}
+                                                        />
+                                                    ) : (
+                                                        <div style={{
+                                                            width: '56px',
+                                                            height: '42px',
+                                                            borderRadius: '6px',
+                                                            background: 'rgba(255,255,255,0.05)',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center',
+                                                            flexShrink: 0,
+                                                        }}>
+                                                            <Monitor size={16} color="var(--text-muted)" />
+                                                        </div>
+                                                    )}
+                                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                                        <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-primary)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                            {run.title || 'Browser Session'}
+                                                        </span>
+                                                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                                            {run.total_steps} frames · {run.status === 'success' ? '✓' : run.status === 'running' ? '▶' : '—'}
+                                                        </span>
+                                                    </div>
+                                                    <ChevronRight size={14} className="text-muted" />
+                                                </div>
+                                            )}
+                                        </div>
+                                    )) : (
+                                        <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>Nenhum playback.</div>
                                     )}
                                 </div>
                             )}
@@ -1551,7 +1704,7 @@ const Chat = () => {
                             onClick={(e) => { deleteSession(e, selectedId); setShowChatProfile(false); }}
                             style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '12px', padding: '12px', color: 'var(--error)', borderRadius: '12px', fontSize: '14px', justifyContent: 'flex-start' }}
                         >
-                            <Trash2 size={18} /> Excluir Conversa
+                            <Trash2 size={18} /> Delete Conversation
                         </button>
                     </div>
                 </div>
@@ -1643,7 +1796,7 @@ const Chat = () => {
 
     const deleteSession = async (e, id) => {
         e.stopPropagation();
-        if (!window.confirm("Deseja realmente excluir esta sessão e todos os seus arquivos?")) return;
+        if (!window.confirm("Do you really want to delete this session and all its files?")) return;
 
         try {
             await api.delete(`/sessions/${id}`);
@@ -1654,7 +1807,7 @@ const Chat = () => {
             }
             fetchSessions();
         } catch (err) {
-            toast.error("Erro ao excluir sessão.");
+            toast.error("Error deleting session.");
         }
     };
 
@@ -1686,11 +1839,11 @@ const Chat = () => {
                     setSelectedId(activeId);
                     fetchSessions();
                 } else {
-                    toast.error("Erro ao inicializar sessão.");
+                    toast.error("Error initializing session.");
                     return;
                 }
             } catch (err) {
-                toast.error("Erro ao criar sessão.");
+                toast.error("Error creating session.");
                 return;
             }
         }
@@ -1738,7 +1891,7 @@ const Chat = () => {
                 pendingFiles.forEach(item => { if (item.previewUrl) URL.revokeObjectURL(item.previewUrl); });
                 setPendingFiles([]);
             } catch (err) {
-                toast.error("Erro ao enviar anexos.");
+                toast.error("Error sending attachments.");
                 setUploading(false);
                 setIsSending(false);
                 setStreamingMessage(null);
@@ -1801,7 +1954,7 @@ const Chat = () => {
         if (files.length === 0) return;
 
         if (pendingFiles.length + files.length > 10) {
-            toast.error("Máximo de 10 arquivos permitidos.");
+            toast.error("Maximum of 10 files allowed.");
             return;
         }
 
@@ -1852,21 +2005,21 @@ const Chat = () => {
             border: '1px solid rgba(255,255,255,0.12)',
             animation: 'slide-up 0.2s ease-out'
         }}>
-            <p style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 'bold', padding: '4px 10px 8px' }}>Itens Anexados (Máx 10)</p>
+            <p style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 'bold', padding: '4px 10px 8px' }}>Attached Items (Max 10)</p>
             <button onClick={() => { fileInputRef.current.accept = "image/*"; fileInputRef.current.click(); }} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px', borderRadius: '10px' }}>
                 <Paperclip size={16} color="#ec4899" /> Imagens
             </button>
             <button onClick={() => { fileInputRef.current.accept = "audio/*"; fileInputRef.current.click(); }} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px', borderRadius: '10px' }}>
-                <Music size={16} color="#10b981" /> Áudio
+                <Music size={16} color="#10b981" /> Audio
             </button>
             <button onClick={() => { fileInputRef.current.accept = "video/*"; fileInputRef.current.click(); }} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px', borderRadius: '10px' }}>
-                <Video size={16} color="#8b5cf6" /> Vídeos
+                <Video size={16} color="#8b5cf6" /> Videos
             </button>
             <button onClick={() => { fileInputRef.current.accept = ".pdf,.doc,.docx,.xls,.xlsx,.txt"; fileInputRef.current.click(); }} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px', borderRadius: '10px' }}>
                 <FileText size={16} color="#3b82f6" /> Documentos
             </button>
             <button onClick={() => { fileInputRef.current.accept = "*/*"; fileInputRef.current.click(); }} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px', borderRadius: '10px' }}>
-                <FileIcon size={16} color="#f59e0b" /> Arquivos
+                <FileIcon size={16} color="#f59e0b" /> Files
             </button>
         </div>
     );
@@ -1915,7 +2068,7 @@ const Chat = () => {
                                     style={{ flex: 1, padding: '10px', fontSize: '0.8rem' }}
                                     onClick={(e) => e.stopPropagation()}
                                 >
-                                    <Download size={16} /> Baixar Arquivo
+                                    <Download size={16} /> Baixar File
                                 </a>
                             )}
                             {isPending && (
@@ -2078,304 +2231,290 @@ const Chat = () => {
                     <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
                         {!shouldUseFullProfileDesktop && (
                             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                            {/* Header */}
-                            <div style={{ padding: isMobile ? '6px 12px' : '8px 16px', borderBottom: '1px solid var(--card-border)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                {isMobile && (
-                                    <button className="btn-ghost" onClick={() => setMobileView('sessions')} style={{ padding: '0.4rem', marginLeft: '-0.4rem' }}>
-                                        <ChevronLeft size={20} />
-                                    </button>
-                                )}
-                                {selectedId && currentSession ? (
-                                    <SessionAvatar
-                                        session={currentSession}
-                                        size={isMobile ? 28 : 32}
-                                        showBadge={false}
-                                        onClick={() => setShowChatProfile(true)}
-                                    />
-                                ) : (
-                                    <div className="flex-center" style={{ width: isMobile ? '28px' : '32px', height: isMobile ? '28px' : '32px', background: isConnected ? 'var(--success)' : 'var(--text-muted)', color: '#fff', borderRadius: '50%' }}>
-                                        <Bot size={isMobile ? 16 : 18} />
-                                    </div>
-                                )}
-                                <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                                    {isEditingName ? (
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                                            <input
-                                                autoFocus
-                                                value={editNameValue}
-                                                onChange={(e) => setEditNameValue(e.target.value)}
-                                                onKeyDown={(e) => {
-                                                    if (e.key === 'Enter') handleRenameSession();
-                                                    if (e.key === 'Escape') setIsEditingName(false);
-                                                }}
-                                                onBlur={handleRenameSession}
-                                                style={{
-                                                    background: 'rgba(255,255,255,0.05)',
-                                                    border: '1px solid var(--accent-color)',
-                                                    borderRadius: '6px',
-                                                    padding: '2px 6px',
-                                                    color: '#fff',
-                                                    fontSize: isMobile ? '13px' : '14px',
-                                                    fontWeight: 'bold',
-                                                    outline: 'none',
-                                                    width: '100%'
-                                                }}
-                                            />
-                                        </div>
+                                {/* Header */}
+                                <div style={{ padding: isMobile ? '6px 12px' : '8px 16px', borderBottom: '1px solid var(--card-border)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    {isMobile && (
+                                        <button className="btn-ghost" onClick={() => setMobileView('sessions')} style={{ padding: '0.4rem', marginLeft: '-0.4rem' }}>
+                                            <ChevronLeft size={20} />
+                                        </button>
+                                    )}
+                                    {selectedId && currentSession ? (
+                                        <SessionAvatar
+                                            session={currentSession}
+                                            size={isMobile ? 28 : 32}
+                                            showBadge={false}
+                                            onClick={() => setShowChatProfile(true)}
+                                        />
                                     ) : (
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                            <h3
-                                                style={{ fontSize: isMobile ? '13px' : '14px', fontWeight: 'bold', margin: 0, cursor: selectedId ? 'pointer' : 'default', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}
-                                                onClick={() => { if (selectedId) setShowChatProfile(true); }}
+                                        <div className="flex-center" style={{ width: isMobile ? '28px' : '32px', height: isMobile ? '28px' : '32px', background: isConnected ? 'var(--success)' : 'var(--text-muted)', color: '#fff', borderRadius: '50%' }}>
+                                            <Bot size={isMobile ? 16 : 18} />
+                                        </div>
+                                    )}
+                                    <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                                        {isEditingName ? (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                                                <input
+                                                    autoFocus
+                                                    value={editNameValue}
+                                                    onChange={(e) => setEditNameValue(e.target.value)}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter') handleRenameSession();
+                                                        if (e.key === 'Escape') setIsEditingName(false);
+                                                    }}
+                                                    onBlur={handleRenameSession}
+                                                    style={{
+                                                        background: 'rgba(255,255,255,0.05)',
+                                                        border: '1px solid var(--accent-color)',
+                                                        borderRadius: '6px',
+                                                        padding: '2px 6px',
+                                                        color: '#fff',
+                                                        fontSize: isMobile ? '13px' : '14px',
+                                                        fontWeight: 'bold',
+                                                        outline: 'none',
+                                                        width: '100%'
+                                                    }}
+                                                />
+                                            </div>
+                                        ) : (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                <h3
+                                                    style={{ fontSize: isMobile ? '13px' : '14px', fontWeight: 'bold', margin: 0, cursor: selectedId ? 'pointer' : 'default', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}
+                                                    onClick={() => { if (selectedId) setShowChatProfile(true); }}
+                                                >
+                                                    {selectedId ? (currentSession?.name || `Session: ${selectedId.substring(0, 8)}...`) : 'Select a session'}
+                                                </h3>
+                                                {(!isMobile && selectedId) && <ChevronRight size={14} style={{ opacity: 0.5, transition: '0.2s', cursor: 'pointer' }} onClick={() => setShowChatProfile(true)} className="hover:opacity-100" />}
+                                                <div
+                                                    title={isConnected ? 'Connected' : 'Disconnected'}
+                                                    style={{
+                                                        width: '8px',
+                                                        height: '8px',
+                                                        borderRadius: '50%',
+                                                        marginLeft: '4px',
+                                                        backgroundColor: isConnected ? 'var(--success)' : 'var(--text-muted)',
+                                                        boxShadow: isConnected ? '0 0 6px var(--success-glow, rgba(16, 185, 129, 0.4))' : 'none',
+                                                        flexShrink: 0
+                                                    }}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {selectedId && (
+                                        <div style={{ position: 'relative' }}>
+                                            <button
+                                                className="btn-ghost"
+                                                onClick={() => setShowActionsMenu(!showActionsMenu)}
+                                                style={{ padding: '8px' }}
                                             >
-                                                {selectedId ? (currentSession?.name || `Session: ${selectedId.substring(0, 8)}...`) : 'Select a session'}
-                                            </h3>
-                                            {(!isMobile && selectedId) && <ChevronRight size={14} style={{ opacity: 0.5, transition: '0.2s', cursor: 'pointer' }} onClick={() => setShowChatProfile(true)} className="hover:opacity-100" />}
-                                            <div
-                                                title={isConnected ? 'Connected' : 'Disconnected'}
-                                                style={{
-                                                    width: '8px',
-                                                    height: '8px',
-                                                    borderRadius: '50%',
-                                                    marginLeft: '4px',
-                                                    backgroundColor: isConnected ? 'var(--success)' : 'var(--text-muted)',
-                                                    boxShadow: isConnected ? '0 0 6px var(--success-glow, rgba(16, 185, 129, 0.4))' : 'none',
-                                                    flexShrink: 0
-                                                }}
-                                            />
+                                                <MoreHorizontal size={20} />
+                                            </button>
+                                            {showActionsMenu && (
+                                                <div className="glass" style={{
+                                                    position: 'absolute',
+                                                    top: '100%',
+                                                    right: 0,
+                                                    marginTop: '8px',
+                                                    padding: '8px',
+                                                    zIndex: 1000,
+                                                    minWidth: '160px',
+                                                    display: 'flex',
+                                                    flexDirection: 'column',
+                                                    gap: '4px',
+                                                    background: 'var(--card-bg)',
+                                                    boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
+                                                }}>
+                                                    <button
+                                                        className="btn-ghost"
+                                                        style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', fontSize: '13px', justifyContent: 'flex-start', color: 'var(--error)' }}
+                                                        onClick={(e) => {
+                                                            deleteSession(e, selectedId);
+                                                            setShowActionsMenu(false);
+                                                        }}
+                                                    >
+                                                        <Trash2 size={16} /> Delete Session
+                                                    </button>
+                                                    <button
+                                                        className="btn-ghost"
+                                                        style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', fontSize: '13px', justifyContent: 'flex-start' }}
+                                                        onClick={() => {
+                                                            setIsEditingName(true);
+                                                            setEditNameValue(currentSession?.name || '');
+                                                            setShowActionsMenu(false);
+                                                        }}
+                                                    >
+                                                        <Edit size={16} /> Rename
+                                                    </button>
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </div>
 
-                                {selectedId && (
-                                    <div style={{ position: 'relative' }}>
-                                        <button
-                                            className="btn-ghost"
-                                            onClick={() => setShowActionsMenu(!showActionsMenu)}
-                                            style={{ padding: '8px' }}
-                                        >
-                                            <MoreHorizontal size={20} />
-                                        </button>
-                                        {showActionsMenu && (
-                                            <div className="glass" style={{
-                                                position: 'absolute',
-                                                top: '100%',
-                                                right: 0,
-                                                marginTop: '8px',
-                                                padding: '8px',
-                                                zIndex: 1000,
-                                                minWidth: '160px',
-                                                display: 'flex',
-                                                flexDirection: 'column',
-                                                gap: '4px',
-                                                background: 'var(--card-bg)',
-                                                boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
-                                            }}>
-                                                <button
-                                                    className="btn-ghost"
-                                                    style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', fontSize: '13px', justifyContent: 'flex-start', color: 'var(--error)' }}
-                                                    onClick={(e) => {
-                                                        deleteSession(e, selectedId);
-                                                        setShowActionsMenu(false);
-                                                    }}
-                                                >
-                                                    <Trash2 size={16} /> Excluir Sessão
-                                                </button>
-                                                <button
-                                                    className="btn-ghost"
-                                                    style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', fontSize: '13px', justifyContent: 'flex-start' }}
-                                                    onClick={() => {
-                                                        setIsEditingName(true);
-                                                        setEditNameValue(currentSession?.name || '');
-                                                        setShowActionsMenu(false);
-                                                    }}
-                                                >
-                                                    <Edit size={16} /> Renomear
-                                                </button>
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
+                                {/* Messages Container */}
+                                <div className="flex-1 overflow-hidden flex flex-col relative">
 
-                            {/* Messages Container */}
-                            <div className="flex-1 overflow-hidden flex flex-col relative">
-                                {/* Playback Overlay (Live) */}
-                                {latestPlaybackEvent && latestPlaybackEvent.type !== 'playback.end' && (
-                                    <div style={{
-                                        position: 'absolute',
-                                        top: '10px',
-                                        right: isMobile ? '10px' : '24px',
-                                        width: isMobile ? 'calc(100% - 20px)' : '320px',
-                                        zIndex: 100,
-                                        pointerEvents: 'auto'
-                                    }}>
-                                        <PlaybackCard
-                                            runId={latestPlaybackEvent.run_id}
-                                            sessionId={selectedId}
-                                            liveEvent={latestPlaybackEvent}
-                                        />
-                                    </div>
-                                )}
 
-                                <MessageList
-                                    messages={messages}
-                                    sessionId={selectedId}
-                                    streamingMessage={streamingMessage}
-                                    onExpand={setPreviewFile}
-                                    scrollRef={scrollRef}
-                                    agentName={agentName}
-                                    onScroll={handleScroll}
-                                />
-
-                                {/* WhatsApp-like scroll to bottom button */}
-                                {showScrollButton && (
-                                    <button
-                                        onClick={scrollToBottom}
-                                        className="glass flex-center"
-                                        style={{
-                                            position: 'absolute',
-                                            bottom: '20px',
-                                            right: '20px',
-                                            width: '40px',
-                                            height: '40px',
-                                            borderRadius: '50%',
-                                            zIndex: 50,
-                                            color: 'var(--accent-color)',
-                                            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-                                            animation: 'fadeIn 0.2s ease'
-                                        }}
-                                    >
-                                        <ChevronDown size={24} />
-                                    </button>
-                                )}
-                            </div>
-
-                            {/* Input Area */}
-                            <div style={{
-                                padding: isMobile ? '2px 8px calc(8px + env(safe-area-inset-bottom))' : '4px 14px 4px',
-                                borderTop: '1px solid var(--card-border)',
-                                background: 'var(--bg-color)',
-                                position: 'relative',
-                                zIndex: 10
-                            }}>
-                                {pendingFiles.length > 0 && (
-                                    <div className="previews-container animate-fade-in" style={{
-                                        marginBottom: '8px',
-                                        padding: '6px',
-                                        background: 'rgba(255,255,255,0.02)',
-                                        borderRadius: '12px',
-                                        border: '1px solid var(--card-border)'
-                                    }}>
-                                        {pendingFiles.map((file, idx) => (
-                                            <div key={idx} className="preview-item" onClick={() => setPreviewFile(file)}>
-                                                <button
-                                                    onClick={(e) => { e.stopPropagation(); removePendingFile(idx); }}
-                                                    className="preview-remove"
-                                                >
-                                                    <X size={10} />
-                                                </button>
-                                                {file.type === 'image' && <img src={file.previewUrl} alt="preview" />}
-                                                {file.type === 'video' && <video src={file.previewUrl} />}
-                                                {(file.type !== 'image' && file.type !== 'video') && <FilePreviewIcon type={file.type} />}
-                                                <div className="file-name-tag">{truncateFileName(file.name)}</div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-
-                                {showAttachMenu && <AttachmentMenu />}
-                                <div style={{
-                                    position: 'relative',
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    background: 'var(--card-bg)',
-                                    border: '1px solid var(--card-border)',
-                                    borderRadius: isMobile ? '24px' : '16px',
-                                    boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
-                                    overflow: 'hidden',
-                                    transition: 'var(--transition)'
-                                }} className="input-container-complex">
-                                    <textarea
-                                        ref={inputRef}
-                                        rows="1"
-                                        placeholder={(isConnected || !selectedId) ? (uploading ? "Sincronizando..." : "Mensagem...") : "Conectando..."}
-                                        value={input}
-                                        onChange={(e) => setInput(e.target.value)}
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                                if (e.ctrlKey) {
-                                                    e.preventDefault();
-                                                    const start = e.target.selectionStart;
-                                                    const end = e.target.selectionEnd;
-                                                    const val = e.target.value;
-                                                    setInput(val.substring(0, start) + "\n" + val.substring(end));
-                                                    setTimeout(() => {
-                                                        e.target.selectionStart = e.target.selectionEnd = start + 1;
-                                                        e.target.style.height = 'auto';
-                                                        e.target.style.height = `${e.target.scrollHeight}px`;
-                                                    }, 0);
-                                                } else if (!e.shiftKey) {
-                                                    e.preventDefault();
-                                                    handleSend(e);
-                                                }
-                                            }
-                                        }}
-                                        disabled={!isConnected && selectedId || isSending || uploading}
-                                        className="custom-scrollbar"
-                                        style={{
-                                            width: '100%',
-                                            padding: isMobile ? '10px 44px 10px 44px' : '12px 56px 12px 56px',
-                                            background: 'transparent',
-                                            border: 'none',
-                                            color: 'var(--text-main)',
-                                            fontSize: isMobile ? '14px' : '15px',
-                                            resize: 'none',
-                                            minHeight: isMobile ? '40px' : '48px',
-                                            maxHeight: '200px',
-                                            overflowY: 'auto',
-                                            lineHeight: '1.4',
-                                            outline: 'none',
-                                            whiteSpace: 'pre-wrap'
-                                        }}
+                                    <MessageList
+                                        messages={messages}
+                                        sessionId={selectedId}
+                                        streamingMessage={streamingMessage}
+                                        onExpand={setPreviewFile}
+                                        scrollRef={scrollRef}
+                                        agentName={agentName}
+                                        onScroll={handleScroll}
+                                        latestPlaybackEvent={latestPlaybackEvent}
+                                        playbackRuns={playbackRuns}
                                     />
-                                    <button
-                                        ref={attachButtonRef}
-                                        type="button"
-                                        disabled={uploading}
-                                        onClick={() => setShowAttachMenu(!showAttachMenu)}
-                                        className="flex-center"
-                                        style={{
-                                            position: 'absolute', left: isMobile ? '8px' : '12px', bottom: isMobile ? '4px' : '6px',
-                                            width: isMobile ? '32px' : '36px', height: isMobile ? '32px' : '36px', borderRadius: '50%',
-                                            color: uploading ? 'var(--warning)' : 'var(--text-muted)',
-                                            background: 'rgba(255,255,255,0.05)',
-                                            border: 'none',
-                                            transition: 'var(--transition)',
-                                            zIndex: 5
-                                        }}
-                                    >
-                                        {uploading ? <Cpu size={18} className="animate-spin" /> : <Paperclip size={isMobile ? 18 : 22} />}
-                                    </button>
-                                    <button
-                                        onClick={handleSend}
-                                        disabled={(!input.trim() && pendingFiles.length === 0) || isSending || uploading}
-                                        className="flex-center"
-                                        style={{
-                                            position: 'absolute', right: isMobile ? '8px' : '12px', bottom: isMobile ? '4px' : '6px',
-                                            width: isMobile ? '32px' : '36px', height: isMobile ? '32px' : '36px', borderRadius: '50%',
-                                            background: (input.trim() || pendingFiles.length > 0) && !isSending && !uploading ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
-                                            color: '#fff',
-                                            transition: 'var(--transition)',
-                                            border: 'none',
-                                            cursor: (input.trim() || pendingFiles.length > 0) && !isSending && !uploading ? 'pointer' : 'default',
-                                            zIndex: 5
-                                        }}
-                                    >
-                                        {isSending || uploading ? <Cpu size={16} className="animate-spin" /> : <Send size={isMobile ? 16 : 18} />}
-                                    </button>
+
+                                    {/* WhatsApp-like scroll to bottom button */}
+                                    {showScrollButton && (
+                                        <button
+                                            onClick={scrollToBottom}
+                                            className="glass flex-center"
+                                            style={{
+                                                position: 'absolute',
+                                                bottom: '20px',
+                                                right: '20px',
+                                                width: '40px',
+                                                height: '40px',
+                                                borderRadius: '50%',
+                                                zIndex: 50,
+                                                color: 'var(--accent-color)',
+                                                boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                                                animation: 'fadeIn 0.2s ease'
+                                            }}
+                                        >
+                                            <ChevronDown size={24} />
+                                        </button>
+                                    )}
                                 </div>
-                            </div>
+
+                                {/* Input Area */}
+                                <div style={{
+                                    padding: isMobile ? '2px 8px calc(8px + env(safe-area-inset-bottom))' : '4px 14px 4px',
+                                    borderTop: '1px solid var(--card-border)',
+                                    background: 'var(--bg-color)',
+                                    position: 'relative',
+                                    zIndex: 10
+                                }}>
+                                    {pendingFiles.length > 0 && (
+                                        <div className="previews-container animate-fade-in" style={{
+                                            marginBottom: '8px',
+                                            padding: '6px',
+                                            background: 'rgba(255,255,255,0.02)',
+                                            borderRadius: '12px',
+                                            border: '1px solid var(--card-border)'
+                                        }}>
+                                            {pendingFiles.map((file, idx) => (
+                                                <div key={idx} className="preview-item" onClick={() => setPreviewFile(file)}>
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); removePendingFile(idx); }}
+                                                        className="preview-remove"
+                                                    >
+                                                        <X size={10} />
+                                                    </button>
+                                                    {file.type === 'image' && <img src={file.previewUrl} alt="preview" />}
+                                                    {file.type === 'video' && <video src={file.previewUrl} />}
+                                                    {(file.type !== 'image' && file.type !== 'video') && <FilePreviewIcon type={file.type} />}
+                                                    <div className="file-name-tag">{truncateFileName(file.name)}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {showAttachMenu && <AttachmentMenu />}
+                                    <div style={{
+                                        position: 'relative',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        background: 'var(--card-bg)',
+                                        border: '1px solid var(--card-border)',
+                                        borderRadius: isMobile ? '24px' : '16px',
+                                        boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
+                                        overflow: 'hidden',
+                                        transition: 'var(--transition)'
+                                    }} className="input-container-complex">
+                                        <textarea
+                                            ref={inputRef}
+                                            rows="1"
+                                            placeholder={(isConnected || !selectedId) ? (uploading ? "Syncing..." : "Message...") : "Connecting..."}
+                                            value={input}
+                                            onChange={(e) => setInput(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                    if (e.ctrlKey) {
+                                                        e.preventDefault();
+                                                        const start = e.target.selectionStart;
+                                                        const end = e.target.selectionEnd;
+                                                        const val = e.target.value;
+                                                        setInput(val.substring(0, start) + "\n" + val.substring(end));
+                                                        setTimeout(() => {
+                                                            e.target.selectionStart = e.target.selectionEnd = start + 1;
+                                                            e.target.style.height = 'auto';
+                                                            e.target.style.height = `${e.target.scrollHeight}px`;
+                                                        }, 0);
+                                                    } else if (!e.shiftKey) {
+                                                        e.preventDefault();
+                                                        handleSend(e);
+                                                    }
+                                                }
+                                            }}
+                                            disabled={!isConnected && selectedId || isSending || uploading}
+                                            className="custom-scrollbar"
+                                            style={{
+                                                width: '100%',
+                                                padding: isMobile ? '10px 44px 10px 44px' : '12px 56px 12px 56px',
+                                                background: 'transparent',
+                                                border: 'none',
+                                                color: 'var(--text-main)',
+                                                fontSize: isMobile ? '14px' : '15px',
+                                                resize: 'none',
+                                                minHeight: isMobile ? '40px' : '48px',
+                                                maxHeight: '200px',
+                                                overflowY: 'auto',
+                                                lineHeight: '1.4',
+                                                outline: 'none',
+                                                whiteSpace: 'pre-wrap'
+                                            }}
+                                        />
+                                        <button
+                                            ref={attachButtonRef}
+                                            type="button"
+                                            disabled={uploading}
+                                            onClick={() => setShowAttachMenu(!showAttachMenu)}
+                                            className="flex-center"
+                                            style={{
+                                                position: 'absolute', left: isMobile ? '8px' : '12px', bottom: isMobile ? '4px' : '6px',
+                                                width: isMobile ? '32px' : '36px', height: isMobile ? '32px' : '36px', borderRadius: '50%',
+                                                color: uploading ? 'var(--warning)' : 'var(--text-muted)',
+                                                background: 'rgba(255,255,255,0.05)',
+                                                border: 'none',
+                                                transition: 'var(--transition)',
+                                                zIndex: 5
+                                            }}
+                                        >
+                                            {uploading ? <Cpu size={18} className="animate-spin" /> : <Paperclip size={isMobile ? 18 : 22} />}
+                                        </button>
+                                        <button
+                                            onClick={handleSend}
+                                            disabled={(!input.trim() && pendingFiles.length === 0) || isSending || uploading}
+                                            className="flex-center"
+                                            style={{
+                                                position: 'absolute', right: isMobile ? '8px' : '12px', bottom: isMobile ? '4px' : '6px',
+                                                width: isMobile ? '32px' : '36px', height: isMobile ? '32px' : '36px', borderRadius: '50%',
+                                                background: (input.trim() || pendingFiles.length > 0) && !isSending && !uploading ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
+                                                color: '#fff',
+                                                transition: 'var(--transition)',
+                                                border: 'none',
+                                                cursor: (input.trim() || pendingFiles.length > 0) && !isSending && !uploading ? 'pointer' : 'default',
+                                                zIndex: 5
+                                            }}
+                                        >
+                                            {isSending || uploading ? <Cpu size={16} className="animate-spin" /> : <Send size={isMobile ? 16 : 18} />}
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         )}
                         {!isMobile && showChatProfile && <ChatProfile desktopFullWidth={shouldUseFullProfileDesktop} />}

@@ -43,6 +43,8 @@ class PermissionGroup(BaseModel):
     deny_skills: List[str] = Field(default_factory=list)
     allow_actions: List[str] = Field(default_factory=list)
     deny_actions: List[str] = Field(default_factory=list)
+    worker_view_scope: str = "owner_identity"   # self_session | owner_session | owner_identity | global
+    worker_control_scope: str = "owner_identity" # self_session | owner_session | owner_identity | global
     is_system: bool = False
 
 class UserEntity(BaseModel):

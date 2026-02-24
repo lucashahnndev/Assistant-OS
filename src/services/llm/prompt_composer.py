@@ -72,6 +72,7 @@ class PromptComposer:
         location: str,
         channel: str,
         user_name: str,
+        user_language: str,
         toon_state: str,
         user_input: str,
         project_path: str,
@@ -98,7 +99,11 @@ class PromptComposer:
             "[LANGUAGE DIRECTIVE]\n"
             "- Think internally in English in the 'thought' field.\n"
             "- Keep action ids and params in English.\n"
-            "- Return 'response_text' in the user's language."
+            f"- Detected user language: {user_language or 'auto'}.\n"
+            "- Return 'response_text' in the detected user language.\n"
+            "- If detection is uncertain, follow the latest user message language.\n"
+            "- Never mix languages in 'response_text'. Use one language only.\n"
+            "- Forbidden: bilingual endings like Portuguese sentence + English follow-up."
         )
 
         prompt_parts.append(presentation_directive.strip())
@@ -175,7 +180,11 @@ class PromptComposer:
             "- Prefer discovery/read actions before destructive actions.\n"
             "- Use browser automation only when UI interaction is required.\n"
             "- If an action fails, report the failure honestly and pick an alternative.\n"
-            "- Use `memory.recall` only when older context is needed."
+            "- Use `memory.recall` only when older context is needed.\n"
+            "- In the final user reply, when appropriate, suggest one logical next step grounded in the current context/result.\n"
+            "- The suggestion must be specific to the task outcome, not a generic template, and should sound natural.\n"
+            "- If no meaningful next step exists, do not force a suggestion.\n"
+            "- Do not challenge the user; ask supportive, practical follow-up questions only when useful."
         )
 
         prompt_parts.append(
@@ -185,6 +194,8 @@ class PromptComposer:
             "- Use this schema:\n"
             f"{json.dumps(self._INTENT_SCHEMA, indent=2, ensure_ascii=False)}\n"
             "- If the task is done or blocked, use `action: \"reply\"`.\n"
+            "- If `action` is not `reply`, `response_text` must be a start/in-progress acknowledgment and must not claim completion/success.\n"
+            "- `response_text` is user-facing prose: do not include namespaced action ids, raw JSON, or tool diagnostics.\n"
             "- For multi-step execution, do not use `reply` in intermediate steps.\n"
             "- If the same action+params fails 3 times, stop and ask for clarification."
         )

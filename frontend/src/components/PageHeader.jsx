@@ -30,7 +30,7 @@ const PageHeader = ({ title, subtitle, children }) => {
         }}>
             <div style={{ width: isMobile ? '100%' : 'auto' }}>
                 <h2 style={{
-                    fontSize: isMobile ? '1.25rem' : '1.5rem',
+                    fontSize: isMobile ? '1.1rem' : '1.25rem',
                     fontWeight: '800',
                     color: 'var(--text-primary)',
                     letterSpacing: '-0.02em',

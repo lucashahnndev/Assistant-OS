@@ -144,6 +144,11 @@ class ConfigManager:
                 "openai": {
                     "api_key": ""
                 },
+                "huggingface": {
+                    "api_key": "",
+                    "model": "HuggingFaceTB/SmolLM3-3B",
+                    "base_url": "https://router.huggingface.co/v1"
+                },
                 "ollama": {
                     "model": "llama3",
                     "url": "http://localhost:11434/api/chat"
@@ -201,6 +206,11 @@ class ConfigManager:
             "providers": {
                 "google": {
                     "model": "gemini-2.0-flash"
+                },
+                "huggingface": {
+                    "api_key": "",
+                    "model": "Qwen/Qwen2.5-VL-7B-Instruct",
+                    "base_url": "https://router.huggingface.co/v1"
                 }
             }
         }
@@ -225,3 +235,12 @@ class ConfigManager:
             }
         }
         return self.get("location", default_loc)
+
+    def get_i18n_config(self):
+        """Returns i18n/language configuration."""
+        default_i18n = {
+            "default_locale": "en",
+            "fallback_locale": "en",
+            "supported_locales": ["en", "pt-BR"],
+        }
+        return self.get("i18n", default_i18n)

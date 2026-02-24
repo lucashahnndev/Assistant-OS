@@ -3,7 +3,7 @@
   "description": "Manage long-term facts and conversation context.",
   "actions": [
     {
-      "name": "search_deep_memory",
+      "name": "memory.recall",
       "description": "Search for historical facts or user preferences stored in deep memory. ",
       "parameters": {
         "properties": {
@@ -18,12 +18,12 @@
       }
     },
     {
-      "name": "remember_fact",
+      "name": "memory.store",
       "description": "Save an important piece of information for future sessions. ",
       "parameters": {
         "properties": {
           "category": {
-            "type": "string, optional",
+            "type": "string",
             "description": "e.g., \"preference\", \"user_info\"."
           },
           "content": {
@@ -32,7 +32,6 @@
           }
         },
         "required": [
-          "category",
           "content"
         ]
       }

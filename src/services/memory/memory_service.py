@@ -71,20 +71,44 @@ class MemoryService:
                 logger.error(f"Error updating ChromaDB: {e}")
         return False
 
-    def search_memory(self, query: str) -> str:
-        """Vector-based semantic search."""
-        if self.collection:
-            try:
-                results = self.collection.query(
-                    query_texts=[query],
-                    n_results=5
-                )
-                if results and results['documents'] and results['documents'][0]:
-                    return "\n".join(results['documents'][0])
-            except Exception as e:
-                logger.error(f"ChromaDB search failed: {e}")
+    def search_memory(self, query: str, n_results: int = 5) -> List[Dict]:
+        """Vector-based semantic search.
 
-        return "Nenhuma memória relevante encontrada."
+        Returns a structured list to keep the contract stable for skills/API.
+        """
+        if not self.collection:
+            return []
+
+        try:
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=max(1, int(n_results or 5))
+            )
+            docs = (results or {}).get("documents") or []
+            ids = (results or {}).get("ids") or []
+            metas = (results or {}).get("metadatas") or []
+            distances = (results or {}).get("distances") or []
+
+            if not docs or not docs[0]:
+                return []
+
+            payload: List[Dict] = []
+            for i, content in enumerate(docs[0]):
+                item_id = ids[0][i] if ids and ids[0] and i < len(ids[0]) else None
+                metadata = metas[0][i] if metas and metas[0] and i < len(metas[0]) else {}
+                distance = distances[0][i] if distances and distances[0] and i < len(distances[0]) else None
+                payload.append(
+                    {
+                        "id": item_id,
+                        "content": content,
+                        "metadata": metadata or {},
+                        "distance": distance,
+                    }
+                )
+            return payload
+        except Exception as e:
+            logger.error(f"ChromaDB search failed: {e}")
+            return []
 
     def get_all_summaries(self, sessions_dir: str) -> str:
         """Gathers all session summaries for context."""

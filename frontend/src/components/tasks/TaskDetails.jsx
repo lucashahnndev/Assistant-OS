@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { Play, RotateCw, Save, Clock, Trash2, Power, Terminal, FileText } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Play, RotateCw, Clock, Trash2, Power, Terminal, FileText } from 'lucide-react';
 import { api } from '../../hooks/api';
 import toast from 'react-hot-toast';
 import NoteManager from './NoteManager';
@@ -12,7 +12,8 @@ const TaskDetails = ({ taskId, onDelete }) => {
     const [activeTab, setActiveTab] = useState('triggers'); // triggers, notes, history, live
     const [logs, setLogs] = useState('');
     const [liveExecution, setLiveExecution] = useState(null);
-    const logIntervalRef = useRef(null);
+    const [overwatch, setOverwatch] = useState(null);
+    const [latestTaskWork, setLatestTaskWork] = useState(null);
 
     const fetchTask = async () => {
         try {
@@ -56,12 +57,39 @@ const TaskDetails = ({ taskId, onDelete }) => {
         }
     };
 
+    const fetchTaskOverwatch = async () => {
+        try {
+            const works = await api.get('/tasks/works?include_completed=true&limit=200');
+            const rows = Array.isArray(works) ? works : [];
+            const related = rows.filter((w) => {
+                const data = w?.context?.data || {};
+                return data?.task_id === taskId || w?.key === taskId || String(w?.label || '').includes(taskId);
+            });
+            if (related.length === 0) {
+                setLatestTaskWork(null);
+                setOverwatch(null);
+                return;
+            }
+            const sorted = related.sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0));
+            const latest = sorted[0];
+            setLatestTaskWork(latest);
+            const data = await api.get(`/tasks/works/${latest.work_id}/overwatch?events_limit=200`);
+            setOverwatch(data);
+        } catch (error) {
+            console.error("Error fetching task overwatch:", error);
+        }
+    };
+
     useEffect(() => {
         if (taskId) {
             fetchTask();
             fetchLatestExecution();
+            fetchTaskOverwatch();
             // Poll for latest execution status every 3s
-            const interval = setInterval(fetchLatestExecution, 3000);
+            const interval = setInterval(() => {
+                fetchLatestExecution();
+                fetchTaskOverwatch();
+            }, 3000);
             return () => clearInterval(interval);
         }
     }, [taskId]);
@@ -71,7 +99,10 @@ const TaskDetails = ({ taskId, onDelete }) => {
             await api.post(`/tasks/definitions/${taskId}/run`);
             toast.success("Task execution started");
             setActiveTab('live');
-            setTimeout(fetchLatestExecution, 500);
+            setTimeout(() => {
+                fetchLatestExecution();
+                fetchTaskOverwatch();
+            }, 500);
         } catch (error) {
             toast.error("Failed to start task");
         }
@@ -84,6 +115,18 @@ const TaskDetails = ({ taskId, onDelete }) => {
             toast.success("Cancellation requested");
         } catch (error) {
             toast.error("Failed to stop task");
+        }
+    };
+
+    const handleDeleteTask = async () => {
+        const confirmed = window.confirm("Delete this task definition and its triggers?");
+        if (!confirmed) return;
+        try {
+            await api.delete(`/tasks/definitions/${taskId}`);
+            toast.success("Task deleted");
+            if (typeof onDelete === 'function') onDelete(taskId);
+        } catch (error) {
+            toast.error("Failed to delete task");
         }
     };
 
@@ -109,7 +152,7 @@ const TaskDetails = ({ taskId, onDelete }) => {
                         <span style={{ fontWeight: '700' }}>Executar Agora</span>
                     </button>
                     <button
-                        onClick={() => onDelete(taskId)}
+                        onClick={handleDeleteTask}
                         className="btn-ghost"
                         style={{ color: 'var(--error)', padding: '10px' }}
                         title="Delete Task"
@@ -121,6 +164,7 @@ const TaskDetails = ({ taskId, onDelete }) => {
 
             <div className="glass" style={{ display: 'flex', padding: '0 24px', borderRadius: '16px', flexShrink: 0 }}>
                 {[
+                    { id: 'overwatch', label: 'OVERWATCH', icon: Terminal },
                     { id: 'live', label: 'AO VIVO', icon: Terminal },
                     { id: 'triggers', label: 'AGENDAMENTOS', icon: Clock },
                     { id: 'notes', label: 'NOTAS', icon: FileText },
@@ -157,6 +201,61 @@ const TaskDetails = ({ taskId, onDelete }) => {
                 {activeTab === 'notes' && <NoteManager notes={task.notes} taskId={taskId} onUpdate={fetchTask} />}
 
                 {activeTab === 'history' && <ExecutionHistory taskId={taskId} />}
+
+                {activeTab === 'overwatch' && (
+                    <div className="h-full flex flex-col gap-4">
+                        {!latestTaskWork || !overwatch ? (
+                            <div style={{ color: 'var(--text-muted)' }}>No worker data for this task yet.</div>
+                        ) : (
+                            <>
+                                <div className="glass" style={{ padding: '14px', borderRadius: '12px' }}>
+                                    <div><b>Work ID:</b> {latestTaskWork.work_id}</div>
+                                    <div><b>Status:</b> {latestTaskWork.status}</div>
+                                    <div><b>Last Thought:</b> {overwatch?.summary?.last_thought || '-'}</div>
+                                    <div><b>Last Action:</b> {overwatch?.summary?.last_action || '-'}</div>
+                                    <div><b>Cursor:</b> {overwatch?.summary?.cursor || '-'}</div>
+                                    <div><b>Last Error:</b> {overwatch?.summary?.last_error || '-'}</div>
+                                </div>
+                                <div className="glass" style={{ padding: '14px', borderRadius: '12px' }}>
+                                    <div><b>Planner</b></div>
+                                    {Array.isArray(overwatch?.planner?.steps) && overwatch.planner.steps.length > 0 ? (
+                                        <div style={{ marginTop: '10px', display: 'grid', gap: '8px' }}>
+                                            {overwatch.planner.steps.map((step, idx) => (
+                                                <div key={`task-ow-step-${idx}`} style={{ border: '1px solid var(--card-border)', borderRadius: '8px', padding: '8px 10px' }}>
+                                                    <div style={{ fontSize: '12px', fontWeight: '800' }}>{idx + 1}. {step?.step || step?.title || 'Untitled step'}</div>
+                                                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>status: {step?.status || 'pending'}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div style={{ marginTop: '8px', color: 'var(--text-muted)' }}>No planner steps available.</div>
+                                    )}
+                                </div>
+                                <div className="glass" style={{ padding: '14px', borderRadius: '12px' }}>
+                                    <div><b>Skills Used:</b> {(overwatch?.skills_used || []).join(', ') || '-'}</div>
+                                    <div style={{ marginTop: '8px' }}><b>Actions Used:</b></div>
+                                    <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                                        {(overwatch?.actions_used || []).slice(-30).join(' | ') || 'No actions recorded yet.'}
+                                    </div>
+                                </div>
+                                <div className="glass" style={{ padding: '14px', borderRadius: '12px' }}>
+                                    <div><b>Recent Flow Events</b></div>
+                                    <div style={{ marginTop: '10px', maxHeight: '240px', overflow: 'auto' }}>
+                                        {(overwatch?.events || []).slice(-12).map((ev, idx) => (
+                                            <div key={`task-ow-ev-${idx}`} style={{ borderBottom: '1px solid var(--card-border)', padding: '8px 0' }}>
+                                                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{ev.ts}</div>
+                                                <div style={{ fontSize: '12px', fontWeight: '700' }}>{ev.event}</div>
+                                            </div>
+                                        ))}
+                                        {(overwatch?.events || []).length === 0 && (
+                                            <div style={{ color: 'var(--text-muted)' }}>No events captured.</div>
+                                        )}
+                                    </div>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                )}
 
                 {activeTab === 'live' && (
                     <div className="h-full flex flex-col gap-4">

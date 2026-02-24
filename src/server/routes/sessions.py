@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, File, UploadFile
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, Response
 from core.identity import PrincipalContext
 from ..auth import get_current_user
 from ..core.models import User, AuditLog
@@ -327,7 +327,7 @@ async def upload_files(
     Upload multiple files/images to a session (Max 10).
     """
     if len(files) > 10:
-        raise HTTPException(status_code=400, detail="Máximo de 10 arquivos por vez.")
+        raise HTTPException(status_code=400, detail="Maximum of 10 files at a time.")
 
     kernel = get_kernel(request)
     orch = kernel.orchestrator
@@ -430,6 +430,44 @@ async def stream_session_events(session_id: str, request: Request, user: User = 
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+@router.get("/{session_id}/playback")
+def list_playback_runs(session_id: str, request: Request, user: User = Depends(get_current_user)):
+    """Lists all playback runs for a session, with manifest summaries."""
+    kernel = get_kernel(request)
+    playback_dir = os.path.join(kernel.orchestrator.sessions_dir, session_id, "playback")
+    
+    if not os.path.isdir(playback_dir):
+        return {"runs": []}
+    
+    runs = []
+    for run_id in sorted(os.listdir(playback_dir), reverse=True):
+        manifest_path = os.path.join(playback_dir, run_id, "manifest.json")
+        if not os.path.isfile(manifest_path):
+            continue
+        try:
+            with open(manifest_path, 'r', encoding='utf-8') as f:
+                manifest = json.load(f)
+            # Get first frame as thumbnail
+            frames_dir = os.path.join(playback_dir, run_id, "frames")
+            first_frame = None
+            if os.path.isdir(frames_dir):
+                frame_files = sorted(os.listdir(frames_dir))
+                if frame_files:
+                    first_frame = f"/api/sessions/{session_id}/playback/{run_id}/frames/{frame_files[0]}"
+            
+            runs.append({
+                "run_id": run_id,
+                "title": manifest.get("title", "Browser Session"),
+                "status": manifest.get("status", "unknown"),
+                "total_steps": len(manifest.get("steps", [])),
+                "thumbnail": first_frame,
+                "created_at": os.path.getmtime(manifest_path),
+            })
+        except Exception:
+            continue
+    
+    return {"runs": runs}
+
 @router.get("/{session_id}/playback/{run_id}/manifest")
 def get_playback_manifest(session_id: str, run_id: str, request: Request, user: User = Depends(get_current_user)):
     """Returns the manifest for a specific playback run."""
@@ -450,7 +488,8 @@ def get_playback_frame(session_id: str, run_id: str, filename: str, request: Req
     path = os.path.join(kernel.orchestrator.sessions_dir, session_id, "playback", run_id, "frames", filename)
     
     if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Frame not found")
+        # Playback viewers poll future frames; avoid noisy 404 spam for normal tailing.
+        return Response(status_code=204)
         
     return FileResponse(path, media_type="image/jpeg")
 
