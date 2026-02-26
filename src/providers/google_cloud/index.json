@@ -1,0 +1,17 @@
+{
+    "provider": "google_cloud",
+    "display_name": "Google Cloud TTS",
+    "supports": [
+        "tts"
+    ],
+    "defaults": {},
+    "fields": [
+        {
+            "name": "api_key_ref",
+            "type": "env_ref",
+            "label": "Google Cloud API Key",
+            "required": true
+        }
+    ],
+    "models": []
+}

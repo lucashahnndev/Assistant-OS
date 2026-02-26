@@ -1,0 +1,13 @@
+{
+  "nav.dashboard": "Dashboard",
+  "nav.console": "Console",
+  "nav.tasks": "Tasks",
+  "nav.skills": "Skills",
+  "nav.memory": "Memory",
+  "nav.security": "Security",
+  "nav.settings": "Settings",
+  "header.menu": "Menu",
+  "header.toggle_sidebar": "Toggle Sidebar",
+  "header.collapse": "Collapse header",
+  "action.copy_code.success": "Code copied!"
+}

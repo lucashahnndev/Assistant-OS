@@ -2,6 +2,7 @@
     "logging": {
         "level": "INFO",
         "separate_files": true,
+        "console_colors": true,
         "services": {
             "llm": "DEBUG",
             "telegram": "INFO",
@@ -68,6 +69,11 @@
         "hard_max_steps": 60,
         "replan_budget": 4
     },
+    "memory": {
+        "consolidation_threshold_tokens": 1600,
+        "toon_delta_max_entries": 8,
+        "toon_delta_text_limit": 96
+    },
     "work_execution": {
         "preempt_on_new_input": false,
         "default_scope": "global"
@@ -88,7 +94,8 @@
                 },
                 "openrouter": {
                     "api_key": "ENV_OPENROUTER_API_KEY",
-                    "model": "arcee-ai/trinity-large-preview:free"
+                    "model": "arcee-ai/trinity-large-preview:free",
+                    "timeout": 30
                 },
                 "openai": {
                     "api_key": "ENV_OPENAI_API_KEY",
@@ -180,6 +187,18 @@
         "semantic_fallback": true,
         "semantic_first_threshold": 0.92,
         "llm_confidence_threshold": 0.65
+    },
+    "prompt_context": {
+        "actions_mode": "on_demand",
+        "actions_pack_style": "compact_json",
+        "focus_limit": 8,
+        "instruction_pack_style": "compact_json",
+        "personality_max_chars": 220,
+        "toon_deltas_mode": "adaptive",
+        "specialist_prompt_mode": "ultra_compact",
+        "specialist_prompt_max_chars": 320,
+        "observation_result_max_chars": 900,
+        "observation_summarize_threshold_chars": 1800
     },
     "skills": {
         "system_logs": {

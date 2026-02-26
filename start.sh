@@ -5,6 +5,8 @@
 # Colores para el log
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}>>> Starting AOSD Integrated System...${NC}"
@@ -12,21 +14,66 @@ echo -e "${BLUE}>>> Starting AOSD Integrated System...${NC}"
 # Ensure we are in the project root
 cd "$(dirname "$0")"
 
+PYTHON_BIN="python3"
+NODE_MIN_MAJOR=20
+NODE_MIN_MINOR=19
+
+# Try to load NVM automatically
+if [ -s "$HOME/.nvm/nvm.sh" ]; then
+    source "$HOME/.nvm/nvm.sh"
+fi
+
+node_version_ok() {
+    if ! command -v node >/dev/null 2>&1; then
+        return 1
+    fi
+    local ver major minor
+    ver="$(node -v 2>/dev/null | sed 's/^v//')"
+    major="${ver%%.*}"
+    minor="$(echo "$ver" | cut -d. -f2)"
+    major="${major:-0}"
+    minor="${minor:-0}"
+    if [ "$major" -gt "$NODE_MIN_MAJOR" ]; then
+        return 0
+    fi
+    if [ "$major" -eq "$NODE_MIN_MAJOR" ] && [ "$minor" -ge "$NODE_MIN_MINOR" ]; then
+        return 0
+    fi
+    return 1
+}
+
+# Auto-install or use Node 20 via NVM if current version is not OK
+if ! node_version_ok; then
+    if [ -s "$HOME/.nvm/nvm.sh" ]; then
+        echo -e "${YELLOW}[System]${NC} Node version is below 20.19. Attempting to use NVM to fix..."
+        nvm install 20
+        nvm use 20
+    fi
+fi
+
 # 0. Activate Virtual Environment
 if [ -f "env/bin/activate" ]; then
     echo -e "${GREEN}[System]${NC} Activating Virtual Environment..."
     source env/bin/activate
+    PYTHON_BIN="$(pwd)/env/bin/python"
 else
     echo -e "${YELLOW}[Warning]${NC} Virtual environment 'env' not found. Continuing with system python..."
 fi
 
+if ! "$PYTHON_BIN" -c "import dotenv" >/dev/null 2>&1; then
+    echo -e "${RED}[Error]${NC} Python dependencies not available for: $PYTHON_BIN"
+    echo -e "${YELLOW}[Fix]${NC} Run ./setup.sh after installing system deps:"
+    echo "      sudo apt-get update && sudo apt-get install -y python3-venv nodejs npm"
+    exit 1
+fi
+
 # 1. Read Configuration for Ports
 echo -e "${GREEN}[System]${NC} Reading configuration..."
-BACKEND_PORT=$(python3 -c "import json,os; conf=json.load(open('data/config.json')); print(conf.get('interfaces', {}).get('server', {}).get('port', 8000))")
-FRONTEND_PORT=$(python3 -c "import json,os; conf=json.load(open('data/config.json')); print(conf.get('frontend', {}).get('port', 5173))")
-BACKEND_HOST=$(python3 -c "import json,os; conf=json.load(open('data/config.json')); print(conf.get('interfaces', {}).get('server', {}).get('host', '0.0.0.0'))")
-FRONTEND_PUBLIC=$(python3 -c "import json,os; conf=json.load(open('data/config.json')); print(str(conf.get('frontend', {}).get('public_mode', False)).lower())")
-FRONTEND_HOST=$(python3 -c "import json,os; conf=json.load(open('data/config.json')); print(conf.get('frontend', {}).get('host', 'localhost'))")
+BACKEND_PORT=$("$PYTHON_BIN" -c "import json,os; conf=json.load(open('data/config.json')); print(conf.get('interfaces', {}).get('server', {}).get('port', 8000))")
+FRONTEND_PORT=$("$PYTHON_BIN" -c "import json,os; conf=json.load(open('data/config.json')); print(conf.get('frontend', {}).get('port', 5173))")
+BACKEND_HOST=$("$PYTHON_BIN" -c "import json,os; conf=json.load(open('data/config.json')); print(conf.get('interfaces', {}).get('server', {}).get('host', '0.0.0.0'))")
+FRONTEND_PUBLIC=$("$PYTHON_BIN" -c "import json,os; conf=json.load(open('data/config.json')); print(str(conf.get('frontend', {}).get('public_mode', False)).lower())")
+FRONTEND_HOST=$("$PYTHON_BIN" -c "import json,os; conf=json.load(open('data/config.json')); print(conf.get('frontend', {}).get('host', 'localhost'))")
 
 # If public mode is ON, we bind to 0.0.0.0 to allow external access
 if [ "$FRONTEND_PUBLIC" = "true" ]; then
@@ -40,39 +87,69 @@ echo -e "${GREEN}[System]${NC} Configured Frontend: http://$FRONTEND_HOST:$FRONT
 # 2. Start Backend (Agent Kernel + API)
 echo -e "${GREEN}[Backend]${NC} Starting Agent Kernel and Portal API..."
 export PYTHONPATH=$PYTHONPATH:$(pwd)/src
-python3 src/main.py &
+BOOT_LOG_DIR="$(pwd)/data/logs"
+BOOT_LOG_FILE="$BOOT_LOG_DIR/start_backend.log"
+mkdir -p "$BOOT_LOG_DIR"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting backend bootstrap..." >> "$BOOT_LOG_FILE"
+"$PYTHON_BIN" src/main.py \
+    > >(tee -a "$BOOT_LOG_FILE") \
+    2> >(tee -a "$BOOT_LOG_FILE" >&2) &
 BACKEND_PID=$!
 
 # 3. Wait for Backend port to be ready
 echo -e "${GREEN}[System]${NC} Waiting for Backend API to be ready on port $BACKEND_PORT..."
 MAX_RETRIES=60
 COUNT=0
-while ! python3 -c "import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.settimeout(1); s.connect(('127.0.0.1', $BACKEND_PORT)); s.close()" 2>/dev/null; do
+while ! "$PYTHON_BIN" -c "import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.settimeout(1); s.connect(('127.0.0.1', $BACKEND_PORT)); s.close()" 2>/dev/null; do
+    if ! kill -0 $BACKEND_PID 2>/dev/null; then
+        echo -e "${RED}[Error]${NC} Backend process exited before binding port $BACKEND_PORT."
+        echo -e "${YELLOW}[Log]${NC} Last backend lines ($BOOT_LOG_FILE):"
+        tail -n 80 "$BOOT_LOG_FILE" 2>/dev/null || true
+        echo -e "${YELLOW}[Fix]${NC} Run in foreground for traceback:"
+        echo "      PYTHONPATH=\$PYTHONPATH:$(pwd)/src $PYTHON_BIN src/main.py"
+        exit 1
+    fi
     sleep 1
     COUNT=$((COUNT+1))
     if [ $COUNT -ge $MAX_RETRIES ]; then
         echo -e "${RED}[Error]${NC} Backend failed to start on port $BACKEND_PORT within ${MAX_RETRIES}s"
-        kill $BACKEND_PID
+        echo -e "${YELLOW}[Log]${NC} Last backend lines ($BOOT_LOG_FILE):"
+        tail -n 80 "$BOOT_LOG_FILE" 2>/dev/null || true
+        if kill -0 $BACKEND_PID 2>/dev/null; then
+            kill $BACKEND_PID
+        fi
         exit 1
     fi
 done
 echo -e "${GREEN}[System]${NC} Backend is online!"
 
 # 4. Start Frontend (Vite)
-echo -e "${GREEN}[Frontend]${NC} Starting React Developer Console..."
-cd frontend
-# Exporting vars for Vite
-export VITE_PORT=$FRONTEND_PORT
-export VITE_HOST=$FRONTEND_HOST
-export VITE_API_URL="http://127.0.0.1:$BACKEND_PORT"
-npm run dev -- --host $VITE_HOST &
-FRONTEND_PID=$!
+FRONTEND_PID=""
+if node_version_ok; then
+    echo -e "${GREEN}[Frontend]${NC} Starting React Developer Console..."
+    cd frontend
+    # Exporting vars for Vite
+    export VITE_PORT=$FRONTEND_PORT
+    export VITE_HOST=$FRONTEND_HOST
+    export VITE_API_URL="http://127.0.0.1:$BACKEND_PORT"
+    npm run dev -- --host $VITE_HOST &
+    FRONTEND_PID=$!
+else
+    echo -e "${YELLOW}[Frontend]${NC} Skipped: Node $(node -v 2>/dev/null || echo 'not installed') is below required >= v${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}."
+    echo -e "${YELLOW}[Fix]${NC} Upgrade Node (recommended nvm):"
+    echo "      nvm install 20.19.0 && nvm use 20.19.0"
+    echo -e "${YELLOW}[Info]${NC} Backend is running without frontend."
+fi
 
 # Handle shutdown
 cleanup() {
     echo -e "\n${BLUE}>>> Shutting down AOSD...${NC}"
-    kill $BACKEND_PID
-    kill $FRONTEND_PID
+    if kill -0 $BACKEND_PID 2>/dev/null; then
+        kill $BACKEND_PID
+    fi
+    if kill -0 $FRONTEND_PID 2>/dev/null; then
+        kill $FRONTEND_PID
+    fi
     exit
 }
 
@@ -80,7 +157,11 @@ trap cleanup SIGINT
 
 echo -e "${BLUE}>>> System is running!${NC}"
 echo -e "${BLUE}>>> Backend API: http://localhost:$BACKEND_PORT"
-echo -e "${BLUE}>>> Frontend Console: http://localhost:$FRONTEND_PORT"
+if [ -n "$FRONTEND_PID" ]; then
+    echo -e "${BLUE}>>> Frontend Console: http://localhost:$FRONTEND_PORT"
+else
+    echo -e "${BLUE}>>> Frontend Console: skipped (Node upgrade required)"
+fi
 
 # Keep script alive
 wait

@@ -14,7 +14,7 @@
   "reply.waiting_approval_yes_no": "Este worker está aguardando aprovação. Responda com 'sim' para aprovar ou 'não' para negar.",
   "reply.decision_forwarded": "Perfeito. Enviei sua decisão para o worker em execução.",
   "reply.step_budget_exceeded": "Desculpe, não consegui processar sua solicitação dentro do orçamento de passos atual.",
-  "reply.no_plan_resolved": "Não consegui concluir com segurança a partir deste contexto. Posso tentar outra estratégia se você quiser.",
+  "reply.no_plan_resolved": "I could not conclude safely from this context. I can retry with a different strategy if you want.",
   "reply.unknown_action_template": "A ação '{action_id}' não existe no runtime atual. Sugestões próximas: {suggestions}. Reformule com mais contexto.",
   "reply.error_during_processing": "Desculpe, ocorreu um erro durante o processamento: {details}",
   "reply.technical_issue": "Desculpe, tive um problema técnico ao processar sua solicitação: {details}",

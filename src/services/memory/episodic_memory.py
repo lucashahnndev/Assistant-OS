@@ -2,6 +2,7 @@ import os
 import json
 import uuid
 import time
+import hashlib
 from typing import List, Dict, Optional
 import chromadb
 from utils.logging_config import get_logger
@@ -28,17 +29,52 @@ class EpisodicMemoryService:
             logger.error(f"Error initializing Episodic ChromaDB: {e}")
             self.collection = None
 
+        # In-memory dedupe guard to avoid storing repeated loops of identical episodes.
+        self._last_episode_hash = ""
+        self._last_episode_ts = 0.0
+
+    @staticmethod
+    def _clip(value: str, limit: int) -> str:
+        text = str(value or "").strip()
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "..."
+
+    def _should_skip_duplicate(self, digest: str, now_ts: float) -> bool:
+        # Skip exact duplicate episodes when they happen in a short window.
+        if digest == self._last_episode_hash and (now_ts - self._last_episode_ts) < 120:
+            return True
+        self._last_episode_hash = digest
+        self._last_episode_ts = now_ts
+        return False
+
     def store_episode(self, user_input: str, thought: str, action: str, observation: str, status: str = "success"):
         """Stores a single reasoning/action episode."""
         if not self.collection: return
         
         try:
-            doc = f"User: {user_input}\nThought: {thought}\nAction: {action}\nObservation: {observation}"
+            now_ts = time.time()
+            # TOON-like compact episode to reduce storage footprint.
+            episode = {
+                "v": "toon.v1",
+                "u": self._clip(user_input, 180),
+                "t": self._clip(thought, 220),
+                "a": str(action or "").strip(),
+                "o": self._clip(observation, 320),
+                "s": str(status or "unknown"),
+                "ts": int(now_ts),
+            }
+            doc = json.dumps(episode, ensure_ascii=False, separators=(",", ":"))
+            digest = hashlib.sha1(doc.encode("utf-8")).hexdigest()
+            if self._should_skip_duplicate(digest, now_ts):
+                return
+
             metadata = {
-                "action": action,
-                "status": status,
-                "timestamp": time.time(),
-                "user_input": user_input[:100] # Truncate for metadata
+                "action": str(action or ""),
+                "status": str(status or "unknown"),
+                "timestamp": now_ts,
+                "user_input": self._clip(user_input, 80),
+                "hash": digest,
             }
             
             self.collection.add(

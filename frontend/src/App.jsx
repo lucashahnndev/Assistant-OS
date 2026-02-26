@@ -79,7 +79,7 @@ function App() {
                                     borderRadius: '12px',
                                     fontSize: '14px',
                                     fontWeight: '600',
-                                    boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+                                    boxShadow: 'var(--shadow-lg)',
                                 },
                             }}
                         />

@@ -122,7 +122,7 @@ class YouTubeSearchSkill(SkillBase):
             q = f"site:{target} {query}"
             results: List[Dict[str, Any]] = []
             with DDGS() as ddgs:
-                for item in ddgs.text(q, max_results=max(5, limit * 4)):
+                for item in ddgs.text(q, max_results=max(5, limit * 4), timeout=3):
                     if not isinstance(item, dict):
                         continue
                     url = (item.get("href") or "").strip()
@@ -155,8 +155,8 @@ class YouTubeSearchSkill(SkillBase):
     @staticmethod
     def _render_text(query: str, results: List[Dict[str, Any]], provider: str) -> str:
         if not results:
-            return f"Nenhum resultado encontrado no YouTube para '{query}'."
-        lines = [f"Resultados YouTube para '{query}' via {provider} ({len(results)} itens):"]
+            return f"No YouTube results for '{query}'."
+        lines = [f"YouTube results for '{query}' via {provider} ({len(results)} items):"]
         for i, item in enumerate(results, start=1):
             title = item.get("title") or "Untitled"
             channel = item.get("channel")
@@ -198,7 +198,7 @@ class YouTubeSearchSkill(SkillBase):
                 "count": 0,
                 "results": [],
                 "best": None,
-                "text": "Error: parameter 'query' is required para youtube.search.find.",
+                "text": "Error: parameter 'query' is required for youtube.search.find.",
             }
 
         if search_type not in {"video", "playlist", "channel"}:
@@ -212,7 +212,7 @@ class YouTubeSearchSkill(SkillBase):
                 "count": 0,
                 "results": [],
                 "best": None,
-                "text": f"Error: type '{search_type}' is not supported em youtube.search.find.",
+                "text": f"Error: type '{search_type}' is not supported in youtube.search.find.",
             }
 
         # 1. Check Config
@@ -240,15 +240,15 @@ class YouTubeSearchSkill(SkillBase):
                 "https://www.googleapis.com/youtube/v3/search"
                 f"?part=snippet&maxResults={limit}&q={query_qs}&key={api_key}&type={search_type}"
             )
-            response = requests.get(url, timeout=10)
+            response = requests.get(url, timeout=4)
             data = response.json()
 
             if response.status_code >= 400 or "error" in data:
                 error_msg = data.get("error", {}).get("message", f"HTTP {response.status_code}")
                 fallback_results = self._fallback_search_web(query, limit, search_type)
-                text = self._render_text(query, fallback_results, "duckduckgo_fallback")
+                text = self._render_text(query, fallback_results, "duckduckgo_fallback") if fallback_results else "Provider unavailable for YouTube search."
                 return {
-                    "ok": True if fallback_results else False,
+                    "ok": bool(fallback_results),
                     "status": "success" if fallback_results else "error",
                     "provider": "youtube_fallback_web" if fallback_results else "youtube",
                     "query": query,
@@ -257,7 +257,7 @@ class YouTubeSearchSkill(SkillBase):
                     "best": fallback_results[0] if fallback_results else None,
                     "fallback": True,
                     "warning": f"YouTube API error: {error_msg}",
-                    "text": text if fallback_results else f"Erro na API do YouTube: {error_msg}",
+                    "text": text,
                 }
 
             items = data.get("items", [])
@@ -307,9 +307,9 @@ class YouTubeSearchSkill(SkillBase):
         except Exception as e:
             logger.error(f"YouTube Search Execution Error: {e}")
             fallback_results = self._fallback_search_web(query, limit, search_type)
-            text = self._render_text(query, fallback_results, "duckduckgo_fallback")
+            text = self._render_text(query, fallback_results, "duckduckgo_fallback") if fallback_results else "Provider unavailable for YouTube search."
             return {
-                "ok": True if fallback_results else False,
+                "ok": bool(fallback_results),
                 "status": "success" if fallback_results else "error",
                 "provider": "youtube_fallback_web" if fallback_results else "youtube",
                 "query": query,
@@ -318,5 +318,5 @@ class YouTubeSearchSkill(SkillBase):
                 "best": fallback_results[0] if fallback_results else None,
                 "fallback": True,
                 "warning": f"YouTube exception: {str(e)}",
-                "text": text if fallback_results else f"Erro na execução da busca do YouTube: {str(e)}",
+                "text": text,
             }

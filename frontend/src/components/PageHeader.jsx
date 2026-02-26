@@ -22,11 +22,14 @@ const PageHeader = ({ title, subtitle, children }) => {
             flexDirection: isMobile ? 'column' : 'row',
             justifyContent: 'space-between',
             alignItems: isMobile ? 'flex-start' : 'center',
-            padding: isMobile ? 'var(--space-4) var(--space-4)' : 'var(--space-6) var(--space-6)',
+            padding: isMobile ? 'var(--space-4) var(--space-4)' : 'var(--space-4) var(--space-6)',
             borderBottom: '1px solid var(--card-border)',
-            background: 'rgba(0, 0, 0, 0.02)',
-            marginBottom: isMobile ? 'var(--space-3)' : 'var(--space-6)',
-            gap: isMobile ? 'var(--space-3)' : 'var(--space-4)'
+            background: 'var(--card-bg)',
+            backdropFilter: 'var(--surface-blur)',
+            WebkitBackdropFilter: 'var(--surface-blur)',
+            marginBottom: isMobile ? 'var(--space-3)' : 'var(--space-4)',
+            gap: isMobile ? 'var(--space-3)' : 'var(--space-4)',
+            borderRadius: 'var(--radius-md)'
         }}>
             <div style={{ width: isMobile ? '100%' : 'auto' }}>
                 <h2 style={{

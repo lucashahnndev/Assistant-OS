@@ -5,6 +5,7 @@ import {
     Activity,
     Plus,
     Layout,
+    Terminal,
     XCircle,
     Clock,
     Zap,
@@ -128,18 +129,11 @@ const Tasks = () => {
     };
 
     const renderHeader = () => (
-        <div style={{ padding: isMobile ? '12px' : '16px 24px 12px' }}>
-            {/* Compact Title Row */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <div className="flex-center" style={{ width: '32px', height: '32px', borderRadius: '10px', background: 'var(--accent-glow)', color: 'var(--accent-color)' }}>
-                        <Zap size={16} />
-                    </div>
-                    <div>
-                        <h3 style={{ fontSize: '1rem', fontWeight: '800' }}>Tasks</h3>
-                        <p style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>Worker fleet and execution history.</p>
-                    </div>
-                </div>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <PageHeader
+                title="Tasks"
+                subtitle="Worker fleet and execution history."
+            >
                 <button
                     onClick={() => setShowNewTaskModal(true)}
                     className="btn-primary"
@@ -147,15 +141,25 @@ const Tasks = () => {
                         padding: '7px 14px',
                         borderRadius: '8px',
                         fontWeight: '800',
-                        fontSize: '0.6875rem'
+                        fontSize: '0.6875rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
                     }}
                 >
                     <Plus size={14} /> NEW TASK
                 </button>
-            </div>
+            </PageHeader>
 
             {/* Compact Stats Row */}
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '0', flexWrap: 'wrap', alignItems: 'stretch' }}>
+            <div style={{
+                display: 'flex',
+                gap: '8px',
+                marginBottom: 'var(--space-4)',
+                flexWrap: 'wrap',
+                alignItems: 'stretch',
+                padding: isMobile ? '0 var(--space-4)' : '0 var(--space-6)'
+            }}>
                 <div style={{ padding: '8px 12px', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--card-border)', minWidth: '120px' }}>
                     <div className="flex-center" style={{ width: '28px', height: '28px', borderRadius: '8px', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success)' }}>
                         <Activity size={14} className={activeAgents.length > 0 ? "animate-pulse" : ""} />
@@ -272,7 +276,7 @@ const Tasks = () => {
             return (
                 <div className="glass" style={{
                     padding: '16px',
-                    borderRadius: '16px',
+                    borderRadius: '8px',
                     background: 'rgba(255,255,255,0.01)',
                     border: '1px solid var(--card-border)',
                     display: 'flex',
@@ -334,7 +338,7 @@ const Tasks = () => {
         if (workViewTab === 'archive') {
             return (
                 <div style={{ padding: '0 var(--space-6) var(--space-6) var(--space-6)' }}>
-                    <div className="glass" style={{ padding: '24px', borderRadius: '20px' }}>
+                    <div className="glass" style={{ padding: '24px', borderRadius: '8px' }}>
                         <h3 style={{ fontSize: '0.875rem', fontWeight: '800', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)' }}>
                             <Clock size={16} /> History
                         </h3>
@@ -344,7 +348,7 @@ const Tasks = () => {
                                     display: 'flex',
                                     alignItems: 'center',
                                     padding: '12px 16px',
-                                    borderRadius: '12px',
+                                    borderRadius: '8px',
                                     background: 'rgba(255,255,255,0.01)',
                                     border: '1px solid var(--card-border)',
                                     gap: '16px'
@@ -377,7 +381,7 @@ const Tasks = () => {
                         {topActive.length > 0 ? topActive.map(work => (
                             <WorkerCard key={work.work_id} work={work} />
                         )) : (
-                            <div className="glass" style={{ padding: '30px', borderRadius: '12px', textAlign: 'center', gridColumn: '1 / -1', borderStyle: 'dashed' }}>
+                            <div className="glass" style={{ padding: '30px', borderRadius: '8px', textAlign: 'center', gridColumn: '1 / -1', borderStyle: 'dashed' }}>
                                 <p style={{ color: 'var(--text-muted)', fontSize: '12px' }}>No active workers.</p>
                             </div>
                         )}
@@ -393,7 +397,7 @@ const Tasks = () => {
                         {recentWorks.map(work => (
                             <div key={work.work_id} className="glass" style={{
                                 padding: '12px 16px',
-                                borderRadius: '14px',
+                                borderRadius: '8px',
                                 display: 'flex',
                                 alignItems: 'center',
                                 gap: '14px',
@@ -487,7 +491,7 @@ const Tasks = () => {
                     </div>
 
                     {overwatchTab === 'overview' && (
-                        <div className="glass" style={{ padding: '14px', borderRadius: '12px' }}>
+                        <div className="glass" style={{ padding: '14px', borderRadius: '8px' }}>
                             <div><b>Summary:</b> {summary.goal || '-'} | {summary.cursor || '-'}</div>
                             <div><b>Last Thought:</b> {summary.last_thought || '-'}</div>
                             <div><b>Last Action:</b> {summary.last_action || '-'}</div>
@@ -500,7 +504,7 @@ const Tasks = () => {
                         </div>
                     )}
                     {overwatchTab === 'planner' && (
-                        <div className="glass" style={{ padding: '14px', borderRadius: '12px' }}>
+                        <div className="glass" style={{ padding: '14px', borderRadius: '8px' }}>
                             <div><b>Planner</b></div>
                             {Array.isArray(planner.steps) && planner.steps.length > 0 ? (
                                 <div style={{ marginTop: '10px', display: 'grid', gap: '8px' }}>
@@ -525,7 +529,7 @@ const Tasks = () => {
                         </div>
                     )}
                     {overwatchTab === 'flow' && (
-                        <div className="glass" style={{ padding: '14px', borderRadius: '12px', maxHeight: '58vh', overflow: 'auto' }}>
+                        <div className="glass" style={{ padding: '14px', borderRadius: '8px', maxHeight: '58vh', overflow: 'auto' }}>
                             {events.map((ev, idx) => (
                                 <div key={`${ev.ts}-${idx}`} style={{ borderBottom: '1px solid var(--card-border)', padding: '8px 0' }}>
                                     <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{ev.ts}</div>
@@ -537,7 +541,7 @@ const Tasks = () => {
                         </div>
                     )}
                     {overwatchTab === 'skills' && (
-                        <div className="glass" style={{ padding: '14px', borderRadius: '12px' }}>
+                        <div className="glass" style={{ padding: '14px', borderRadius: '8px' }}>
                             <div><b>Skills Used:</b></div>
                             <ul>{skills.map(s => <li key={s}>{s}</li>)}</ul>
                             <div style={{ marginTop: '10px' }}><b>Actions Used:</b></div>
@@ -545,21 +549,21 @@ const Tasks = () => {
                         </div>
                     )}
                     {overwatchTab === 'media' && (
-                        <div className="glass" style={{ padding: '14px', borderRadius: '12px' }}>
+                        <div className="glass" style={{ padding: '14px', borderRadius: '8px' }}>
                             <div><b>Media Used:</b></div>
                             <ul>{media.map((m, i) => <li key={`${m}-${i}`}>{m}</li>)}</ul>
                             {media.length === 0 && <div style={{ color: 'var(--text-muted)' }}>No media captured.</div>}
                         </div>
                     )}
                     {overwatchTab === 'triggers' && (
-                        <div className="glass" style={{ padding: '14px', borderRadius: '12px' }}>
+                        <div className="glass" style={{ padding: '14px', borderRadius: '8px' }}>
                             <div><b>Task ID:</b> {task.task_id || '-'}</div>
                             <div><b>Triggers:</b> {task.trigger_count || 0}</div>
                             <pre style={{ whiteSpace: 'pre-wrap', fontSize: '11px' }}>{JSON.stringify(task.triggers || [], null, 2)}</pre>
                         </div>
                     )}
                     {overwatchTab === 'executions' && (
-                        <div className="glass" style={{ padding: '14px', borderRadius: '12px' }}>
+                        <div className="glass" style={{ padding: '14px', borderRadius: '8px' }}>
                             <div><b>Execution Count:</b> {task.execution_count || 0}</div>
                             <div><b>Status:</b> {work.status}</div>
                             <div style={{ marginTop: '12px' }}><b>Recent Executions:</b></div>
@@ -581,7 +585,7 @@ const Tasks = () => {
                         </div>
                     )}
                     {overwatchTab === 'notes' && (
-                        <div className="glass" style={{ padding: '14px', borderRadius: '12px' }}>
+                        <div className="glass" style={{ padding: '14px', borderRadius: '8px' }}>
                             <textarea className="input-field" style={{ minHeight: '100px' }} value={workNote} onChange={e => setWorkNote(e.target.value)} placeholder="Add notes/context for AI..." />
                             <div style={{ marginTop: '8px' }}>
                                 <button className="btn-primary" onClick={saveNote}>Save Note</button>
@@ -597,7 +601,7 @@ const Tasks = () => {
                         </div>
                     )}
                     {overwatchTab === 'queue' && (
-                        <div className="glass" style={{ padding: '14px', borderRadius: '12px' }}>
+                        <div className="glass" style={{ padding: '14px', borderRadius: '8px' }}>
                             <textarea className="input-field" style={{ minHeight: '100px' }} value={queuedMessage} onChange={e => setQueuedMessage(e.target.value)} placeholder="Message to worker queue..." />
                             <div style={{ marginTop: '8px', display: 'flex', gap: '8px' }}>
                                 <button className="btn-ghost" onClick={() => queueMsg(false)}>Queue Message</button>
@@ -622,7 +626,7 @@ const Tasks = () => {
                 flexDirection: 'column',
                 position: 'relative',
                 overflow: 'hidden',
-                borderRadius: '16px'
+                borderRadius: '8px'
             }}>
                 {renderHeader()}
                 {renderWorksMonitor()}

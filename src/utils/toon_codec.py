@@ -1,0 +1,147 @@
+from __future__ import annotations
+
+from typing import Any, Dict, List
+import json
+
+
+def _short_text(value: Any, limit: int = 96) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
+def _risk_code(value: Any) -> str:
+    v = str(value or "").strip().lower()
+    if v == "low":
+        return "l"
+    if v == "medium":
+        return "m"
+    if v == "high":
+        return "h"
+    return "u"
+
+
+def _clean_obj(data: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for k, v in data.items():
+        if v is None:
+            continue
+        if isinstance(v, str) and not v.strip():
+            continue
+        if isinstance(v, (list, dict)) and len(v) == 0:
+            continue
+        if isinstance(v, (int, float)) and v == 0:
+            continue
+        out[k] = v
+    return out
+
+
+def encode_skills_list(rows: List[Dict[str, Any]], include_description: bool = True) -> Dict[str, Any]:
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        item: Dict[str, Any] = {
+            "a": str(row.get("id") or ""),
+            "ns": str(row.get("namespace") or ""),
+            "r": _risk_code(row.get("risk_level")),
+        }
+        if include_description:
+            item["d"] = _short_text(row.get("description"), limit=80)
+        items.append(item)
+
+    return {
+        "v": "toon.v1",
+        "t": "skills.list",
+        "n": len(items),
+        "i": items,
+    }
+
+
+def encode_skills_describe(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        params = meta.get("parameters") if isinstance(meta.get("parameters"), dict) else {}
+        props = params.get("properties") if isinstance(params.get("properties"), dict) else {}
+        required = params.get("required") if isinstance(params.get("required"), list) else []
+
+        item: Dict[str, Any] = {
+            "a": str(row.get("id") or ""),
+            "ok": bool(row.get("ok")),
+        }
+
+        if not item["ok"]:
+            item["e"] = str(row.get("error") or "UNKNOWN")
+            items.append(item)
+            continue
+
+        item["r"] = _risk_code(meta.get("risk_level"))
+        item["d"] = _short_text(meta.get("description"), limit=96)
+        item["req"] = [str(x) for x in required[:16]]
+        item["opt"] = [str(k) for k in list(props.keys())[:24] if k not in item["req"]]
+        items.append(item)
+
+    return {
+        "v": "toon.v1",
+        "t": "skills.describe",
+        "n": len(items),
+        "i": items,
+    }
+
+
+def encode_state_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
+    src = summary if isinstance(summary, dict) else {}
+    payload = {
+        "v": "toon.v1",
+        "t": "state",
+        "g": _short_text(src.get("goal"), 80),
+        "c": _short_text(src.get("cursor"), 80),
+        "d": [str(x) for x in (src.get("done_steps") or [])[:8]],
+        "o": _short_text(src.get("last_outcome"), 120),
+        "e": _short_text(src.get("last_error"), 80),
+        "r": int(src.get("retry_count", 0) or 0),
+    }
+    return _clean_obj(payload)
+
+
+def encode_reasoning_step(
+    *,
+    thought: Any,
+    plan: Any,
+    action: Any,
+    params: Any,
+) -> Dict[str, Any]:
+    compact_plan: List[str] = []
+    if isinstance(plan, list):
+        for item in plan[:4]:
+            raw = str(item or "").strip()
+            # Compresses common planner prefixes: "[x] ", "[/] ", "[ ] "
+            if len(raw) >= 4 and raw[0] == "[" and raw[2] == "]":
+                raw = raw[4:].strip()
+            text = _short_text(raw, 42)
+            if text:
+                compact_plan.append(text)
+
+    compact_params: Dict[str, Any] = {}
+    if isinstance(params, dict):
+        for idx, (k, v) in enumerate(params.items()):
+            if idx >= 6:
+                break
+            if isinstance(v, (int, float, bool)) or v is None:
+                compact_params[str(k)] = v
+            else:
+                compact_params[str(k)] = _short_text(v, 56)
+
+    payload = {
+        "v": "toon.v1",
+        "t": "step",
+        "th": _short_text(thought, 120),
+        "p": compact_plan,
+        "a": str(action or ""),
+        "x": compact_params,
+    }
+    return _clean_obj(payload)
+
+
+def dumps_toon(payload: Dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

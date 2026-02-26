@@ -103,7 +103,8 @@ def get_session(session_id: str, request: Request, user: User = Depends(get_curr
         "profile_picture": getattr(session, 'profile_picture', None),
         "history": history[-15:] if len(history) > 15 else history,
         "context": session.context,
-        "scratchpad": session.scratchpad
+        "scratchpad": session.scratchpad,
+        "runtime_metrics": orch.get_runtime_metrics(session_id) if hasattr(orch, "get_runtime_metrics") else {},
     }
 
 @router.patch("/{session_id}")

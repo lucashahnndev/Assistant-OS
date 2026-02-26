@@ -3,6 +3,28 @@ import logging.handlers
 import os
 import sys
 
+class AnsiColorFormatter(logging.Formatter):
+    """
+    Applies ANSI colors for console output only.
+    File handlers should keep plain text formatting.
+    """
+    RESET = "\033[0m"
+    COLORS = {
+        logging.DEBUG: "\033[36m",     # Cyan
+        logging.INFO: "\033[32m",      # Green
+        logging.WARNING: "\033[33m",   # Yellow
+        logging.ERROR: "\033[31m",     # Red
+        logging.CRITICAL: "\033[1;31m" # Bold Red
+    }
+
+    def format(self, record):
+        base = super().format(record)
+        color = self.COLORS.get(record.levelno, "")
+        if not color:
+            return base
+        return f"{color}{base}{self.RESET}"
+
+
 def setup_logging():
     """
     Configures the root logger and service-specific loggers.
@@ -35,6 +57,15 @@ def setup_logging():
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
+    enable_console_colors = bool(config.get("console_colors", True))
+    no_color_env = bool(os.getenv("NO_COLOR"))
+    supports_tty_color = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+    use_color_formatter = enable_console_colors and supports_tty_color and not no_color_env
+    console_formatter = AnsiColorFormatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ) if use_color_formatter else formatter
+
     # Root Logger initialization
     root_logger = logging.getLogger()
     root_logger.setLevel(global_level)
@@ -44,7 +75,7 @@ def setup_logging():
 
     # Console Handler
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
+    console_handler.setFormatter(console_formatter)
     root_logger.addHandler(console_handler)
 
     # Main Assistant Log (Unified)

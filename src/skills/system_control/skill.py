@@ -5,10 +5,11 @@ import platform
 from typing import Any, Dict, List
 
 from ..base import SkillBase
+from utils.toon_codec import encode_skills_list, encode_skills_describe
 
 try:
     import pyautogui
-except ImportError:
+except BaseException:
     pyautogui = None
 
 
@@ -30,6 +31,12 @@ class SystemSkill(SkillBase):
         return [
             "status",
             "cancel",
+            "skills.list",
+            "skills.list.ai",
+            "skills.list.ui",
+            "skills.describe",
+            "skills.describe.ai",
+            "skills.describe.ui",
             "screenshot",
             "info",
             "time",
@@ -116,6 +123,32 @@ class SystemSkill(SkillBase):
             return "close"
         return ""
 
+    @staticmethod
+    def _looks_like_skill_query(query: str) -> bool:
+        q = str(query or "").strip().lower()
+        if not q:
+            return False
+        markers = (
+            "skill",
+            "skills",
+            "ação",
+            "acoes",
+            "ações",
+            "action",
+            "actions",
+            "namespace",
+            "catalog",
+            "catálogo",
+            "contract",
+            "contrato",
+        )
+        if any(m in q for m in markers):
+            return True
+        # Typical action-id pattern.
+        if "." in q and len(q.split(".")) >= 2:
+            return True
+        return False
+
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         local = self._local_action(action_id)
 
@@ -139,6 +172,153 @@ class SystemSkill(SkillBase):
             now = datetime.datetime.now().strftime("%H:%M:%S")
             return self._result(ok=True, status="success", text=f"Current time is {now}.", time=now)
 
+        if local in {"skills.list", "skills.list.ai", "skills.list.ui"}:
+            orch = getattr(self.kernel, "orchestrator", None) if self.kernel else None
+            registry = getattr(orch, "skill_registry", None)
+            if not registry:
+                return self._result(
+                    ok=False,
+                    status="error",
+                    text="Skill registry not available.",
+                    error="SKILL_REGISTRY_UNAVAILABLE",
+                )
+
+            allowed_actions = context.get("allowed_actions")
+            mode = "ai"
+            if local.endswith(".ui"):
+                mode = "ui"
+            elif local.endswith(".ai"):
+                mode = "ai"
+            output_format = str(params.get("format") or ("legacy" if mode == "ui" else "toon")).strip().lower()
+            include_descriptions = bool(params.get("include_descriptions", mode == "ui"))
+            limit = self._to_int(params.get("limit"), default=40, min_value=1, max_value=200)
+            query = str(params.get("query") or "").strip().lower()
+            query_ignored = False
+            if mode == "ai" and query and not self._looks_like_skill_query(query):
+                # Protect on-demand flow: non-skill queries (e.g. song/web text) should not empty the catalog.
+                query = ""
+                query_ignored = True
+
+            rows = registry.get_catalog(
+                allowed_actions=allowed_actions if isinstance(allowed_actions, list) else None,
+                include_descriptions=include_descriptions,
+            )
+            if query:
+                rows = [
+                    r
+                    for r in rows
+                    if query in str(r.get("id", "")).lower()
+                    or query in str(r.get("namespace", "")).lower()
+                    or query in str(r.get("description", "")).lower()
+                ]
+            rows = rows[:limit]
+            if output_format == "legacy":
+                return self._result(
+                    ok=True,
+                    status="success" if rows else "empty",
+                    text=f"Skill catalog returned {len(rows)} action(s).",
+                    count=len(rows),
+                    items=rows,
+                    catalog_mode="on_demand",
+                    format="legacy",
+                    audience=mode,
+                )
+
+            toon = encode_skills_list(rows, include_description=include_descriptions)
+            return self._result(
+                ok=True,
+                status="success" if rows else "empty",
+                text=f"Skill catalog returned {len(rows)} action(s) in TOON format.",
+                count=len(rows),
+                toon=toon,
+                catalog_mode="on_demand",
+                format="toon",
+                audience=mode,
+                query_ignored=query_ignored,
+            )
+
+        if local in {"skills.describe", "skills.describe.ai", "skills.describe.ui"}:
+            orch = getattr(self.kernel, "orchestrator", None) if self.kernel else None
+            registry = getattr(orch, "skill_registry", None)
+            if not registry:
+                return self._result(
+                    ok=False,
+                    status="error",
+                    text="Skill registry not available.",
+                    error="SKILL_REGISTRY_UNAVAILABLE",
+                )
+
+            requested: List[str] = []
+            one = str(params.get("action_id") or "").strip()
+            many = params.get("action_ids")
+            if one:
+                requested.append(one)
+            if isinstance(many, list):
+                for item in many:
+                    v = str(item or "").strip()
+                    if v:
+                        requested.append(v)
+
+            if not requested:
+                return self._result(
+                    ok=False,
+                    status="error",
+                    text="Missing required parameter 'action_id' or 'action_ids'.",
+                    error="MISSING_ACTION_ID",
+                )
+
+            allowed_actions = context.get("allowed_actions")
+            mode = "ai"
+            if local.endswith(".ui"):
+                mode = "ui"
+            elif local.endswith(".ai"):
+                mode = "ai"
+            output_format = str(params.get("format") or ("legacy" if mode == "ui" else "toon")).strip().lower()
+            allowed_set = set(allowed_actions) if isinstance(allowed_actions, list) else None
+
+            details: List[Dict[str, Any]] = []
+            for action_id in requested[:50]:
+                resolved = registry.resolve_action_id(action_id) or action_id
+                if allowed_set is not None and resolved not in allowed_set:
+                    details.append(
+                        {
+                            "id": action_id,
+                            "ok": False,
+                            "error": "ACTION_NOT_ALLOWED",
+                        }
+                    )
+                    continue
+                metadata = registry.get_action_metadata(resolved)
+                details.append(
+                    {
+                        "id": resolved,
+                        "ok": bool(metadata),
+                        "metadata": metadata or {},
+                    }
+                )
+
+            if output_format == "legacy":
+                return self._result(
+                    ok=True,
+                    status="success",
+                    text=f"Returned details for {len(details)} action(s).",
+                    count=len(details),
+                    items=details,
+                    format="legacy",
+                    audience=mode,
+                )
+
+            toon = encode_skills_describe(details)
+            return self._result(
+                ok=True,
+                status="success",
+                text=f"Returned details for {len(details)} action(s) in TOON format.",
+                count=len(details),
+                toon=toon,
+                format="toon",
+                audience=mode,
+            )
+
         sd = self._system_driver(context)
         if not sd:
             return self._result(
@@ -157,8 +337,8 @@ class SystemSkill(SkillBase):
                     return self._result(
                         ok=False,
                         status="error",
-                        text="Kernel scheduler not available.",
-                        error="SCHEDULER_UNAVAILABLE",
+                        text="System status unavailable (local execution).",
+                        error="STATUS_UNAVAILABLE",
                     )
                 work = scheduler.get_work(work_id)
                 if not work:
@@ -176,6 +356,14 @@ class SystemSkill(SkillBase):
                     text=f"Status loaded for work '{work_id}'.",
                     work_id=work_id,
                     work=data,
+                )
+
+            if not scheduler:
+                return self._result(
+                    ok=False,
+                    status="error",
+                    text="System status unavailable (local execution).",
+                    error="STATUS_UNAVAILABLE",
                 )
 
             active = scheduler.list_active_works() if scheduler else []

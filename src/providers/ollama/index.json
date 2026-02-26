@@ -1,0 +1,31 @@
+{
+    "provider": "ollama",
+    "display_name": "Ollama (Local)",
+    "supports": [
+        "chat"
+    ],
+    "defaults": {
+        "model": "llama3",
+        "base_url": "http://localhost:11434/api/chat"
+    },
+    "fields": [
+        {
+            "name": "model",
+            "type": "string",
+            "label": "Model Name",
+            "required": true
+        },
+        {
+            "name": "base_url",
+            "type": "string",
+            "label": "Ollama Endpoint / URL",
+            "required": true
+        }
+    ],
+    "models": [
+        "llama3",
+        "phi3",
+        "mistral",
+        "qwen"
+    ]
+}

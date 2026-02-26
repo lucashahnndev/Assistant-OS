@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Play, Pause, SkipBack, SkipForward, Monitor, ExternalLink, Download, Maximize2, Minimize2, X } from 'lucide-react';
 
 const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = null }) => {
@@ -114,6 +115,23 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
         return () => clearInterval(playbackTimerRef.current);
     }, [isPlaying, isLive, playbackSpeed, manifest]);
 
+    useEffect(() => {
+        if (!isFullscreen) return undefined;
+
+        const originalOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+
+        const onKeyDown = (event) => {
+            if (event.key === 'Escape') setIsFullscreen(false);
+        };
+        window.addEventListener('keydown', onKeyDown);
+
+        return () => {
+            document.body.style.overflow = originalOverflow;
+            window.removeEventListener('keydown', onKeyDown);
+        };
+    }, [isFullscreen]);
+
     if (!manifest || !manifest.steps || manifest.steps.length === 0) {
         return (
             <div className="playback-card glass loading" style={{ margin: '12px 0', borderRadius: '16px', border: '1px solid var(--card-border)', background: 'rgba(0,0,0,0.4)' }}>
@@ -193,7 +211,7 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
             background: 'rgba(15, 23, 42, 0.6)',
             margin: '16px 0',
             maxWidth: '100%',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+            boxShadow: 'var(--shadow-lg)',
             animation: 'fadeIn 0.3s ease-out'
         }}>
             {/* Header */}
@@ -240,7 +258,7 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
                         display: 'flex',
                         alignItems: 'center',
                         gap: '10px',
-                        boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+                        boxShadow: 'var(--shadow-md)',
                         animation: 'slideUp 0.3s ease-out'
                     }}>
                         <div style={{ width: '8px', height: '8px', background: 'var(--accent-color)', borderRadius: '2px' }} />
@@ -314,7 +332,7 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
             `}} />
 
             {/* Fullscreen Modal */}
-            {isFullscreen && (
+            {isFullscreen && typeof document !== 'undefined' && createPortal((
                 <div
                     onClick={() => setIsFullscreen(false)}
                     style={{
@@ -397,7 +415,7 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
                                     display: 'flex',
                                     alignItems: 'center',
                                     gap: '10px',
-                                    boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+                                    boxShadow: 'var(--shadow-md)',
                                 }}>
                                     <div style={{ width: '8px', height: '8px', background: 'var(--accent-color)', borderRadius: '2px' }} />
                                     <span style={{ color: 'var(--accent-color)', fontWeight: '800', textTransform: 'uppercase' }}>{currentStep.action.name}</span>
@@ -441,7 +459,7 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
                         </div>
                     </div>
                 </div>
-            )}
+            ), document.body)}
         </div>
     );
 };

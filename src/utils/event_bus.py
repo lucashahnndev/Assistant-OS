@@ -47,12 +47,12 @@ class EventBus:
         """
         Thread-safe way to emit events from outside the main event loop.
         """
-        if self._loop:
-            self._loop.call_soon_threadsafe(
-                lambda: asyncio.create_task(self.emit(event))
-            )
-        else:
-            logger.warning("EventBus loop not set. Cannot emit thread-safe event.")
+        if not self._loop:
+            # In CLI/diagnostic runs there is no loop; drop silently to avoid noisy logs.
+            return
+        self._loop.call_soon_threadsafe(
+            lambda: asyncio.create_task(self.emit(event))
+        )
 
 # Global instance
 global_event_bus = EventBus()

@@ -6,10 +6,12 @@ import datetime
 import subprocess
 import json
 import socket
+_PYAUTOGUI_IMPORT_ERROR = None
 try:
     import pyautogui
-except ImportError:
+except BaseException as e:
     pyautogui = None
+    _PYAUTOGUI_IMPORT_ERROR = e
 from .base_driver import BaseDriver
 from utils.logging_config import get_logger
 
@@ -19,6 +21,11 @@ class SystemDriver(BaseDriver):
     def __init__(self, kernel):
         super().__init__(kernel)
         self.os_type = platform.system()
+        if _PYAUTOGUI_IMPORT_ERROR is not None:
+            logger.warning(
+                "PyAutoGUI unavailable (%s). Screenshot support will use CLI fallbacks only.",
+                _PYAUTOGUI_IMPORT_ERROR,
+            )
 
     def start(self):
         logger.info("SystemDriver started.")

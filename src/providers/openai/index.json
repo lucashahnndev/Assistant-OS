@@ -1,0 +1,39 @@
+{
+    "provider": "openai",
+    "display_name": "OpenAI",
+    "supports": [
+        "chat",
+        "stt"
+    ],
+    "defaults": {
+        "model": "gpt-4o-mini",
+        "timeout": 90,
+        "max_tokens": 1024
+    },
+    "fields": [
+        {
+            "name": "api_key_ref",
+            "type": "env_ref",
+            "label": "API Key",
+            "required": true
+        },
+        {
+            "name": "organization_id",
+            "type": "string",
+            "label": "Organization ID",
+            "required": false
+        },
+        {
+            "name": "model",
+            "type": "string",
+            "label": "Model Name",
+            "required": true
+        }
+    ],
+    "models": [
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-3.5-turbo",
+        "whisper-1"
+    ]
+}

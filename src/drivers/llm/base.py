@@ -9,7 +9,7 @@ class ILLMProvider(ABC):
     """
 
     @abstractmethod
-    def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] = None) -> AgentIntent:
+    def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] | None = None, **kwargs) -> AgentIntent:
         """
         Generates an structured intent from the user input and context.
         
@@ -25,7 +25,7 @@ class ILLMProvider(ABC):
         pass
 
     @abstractmethod
-    def generate_text(self, prompt: str, system_prompt: str = "") -> str:
+    def generate_text(self, prompt: str, system_prompt: str = "", **kwargs) -> str:
         """
         Generates a plain text response from a prompt. 
         Used for internal utilities like summarization and log compression.

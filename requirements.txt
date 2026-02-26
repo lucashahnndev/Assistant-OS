@@ -24,9 +24,9 @@ PyYAML
 vosk
 thefuzz[speedup]
 python-dotenv
-python-dotenv
 croniter
 holidays
+pytest
 
 fastapi
 uvicorn

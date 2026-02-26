@@ -1,4 +1,5 @@
 from core.orchestrator import AgentOrchestrator
+from core.session import Session
 from skills.base import SkillBase
 from skills.registry import SkillRegistry
 
@@ -106,3 +107,70 @@ def test_reply_from_last_success_localizes_header_for_ptbr():
 
     assert isinstance(reply, str)
     assert reply.startswith("Encontrei estes resultados:")
+
+
+def test_reply_from_last_success_summarizes_wikipedia_result():
+    reply = AgentOrchestrator._reply_from_last_success(
+        action_id="wikipedia.search",
+        structured_result={
+            "results": [
+                {
+                    "title": "Foguete espacial",
+                    "url": "https://pt.wikipedia.org/wiki/Foguete_espacial",
+                    "content": (
+                        "Um foguete espacial é uma máquina que se desloca expelindo gases. "
+                        "É muito usado em missões espaciais."
+                    ),
+                }
+            ]
+        },
+        raw_output="",
+        language="pt-BR",
+    )
+
+    assert "Resumo rápido sobre Foguete espacial" in reply
+    assert "Fonte: https://pt.wikipedia.org/wiki/Foguete_espacial" in reply
+
+
+def test_should_autocomplete_after_success_action_for_information_searches():
+    assert AgentOrchestrator._should_autocomplete_after_success_action(
+        "me envie uma captura de tela",
+        "system.control.screenshot",
+    )
+    assert AgentOrchestrator._should_autocomplete_after_success_action(
+        "pesquisa sobre foguetes na wikipedia e forneça um resumo",
+        "wikipedia.search",
+    )
+    assert AgentOrchestrator._should_autocomplete_after_success_action(
+        "pesquisa a musica alma no youtube do cantor tz da coro",
+        "youtube.search.find",
+    )
+    assert not AgentOrchestrator._should_autocomplete_after_success_action(
+        "reproduz alma no youtube",
+        "youtube.search.find",
+    )
+
+
+def test_looks_like_instruction_only_query_detects_summary_tail():
+    assert AgentOrchestrator._looks_like_instruction_only_query("e forneça um resumo")
+    assert not AgentOrchestrator._looks_like_instruction_only_query("foguetes")
+
+
+def test_media_pronoun_open_request_detection():
+    assert AgentOrchestrator._is_media_pronoun_open_request("abre ela no youtube")
+    assert AgentOrchestrator._is_media_pronoun_open_request("open it on spotify")
+    assert not AgentOrchestrator._is_media_pronoun_open_request("pesquisa californication no youtube")
+
+
+def test_extract_recent_media_url_from_history_prefers_latest_provider_url():
+    session = Session("t-media-url")
+    session.add_message(
+        "assistant",
+        "Resultado 1 https://www.youtube.com/watch?v=abc123",
+    )
+    session.add_message(
+        "assistant",
+        "Resultado 2 https://open.spotify.com/track/xyz987",
+    )
+    url = AgentOrchestrator._extract_recent_media_url_from_history(session)
+    assert url == "https://open.spotify.com/track/xyz987"

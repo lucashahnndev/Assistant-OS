@@ -120,11 +120,20 @@ class Kernel:
         # Initialize Browser Driver (Internal tool, linked to browser_automator skill)
         browser_skill_config = self.config_manager.get_skill_config("browser_automator")
         if browser_skill_config.get('enabled', False):
-            from drivers.browser_driver import BrowserDriver
-            logger.info("Initializing Browser Driver (Playwright)...")
-            self.browser_driver = BrowserDriver(self)
-            self.drivers.append(self.browser_driver)
-            self.orchestrator.set_browser_driver(self.browser_driver)
+            # Keep browser-use state inside project data dir to avoid permission issues in ~/.config.
+            os.environ.setdefault(
+                "BROWSER_USE_CONFIG_DIR",
+                os.path.join(self.base_data_dir, "browser_use"),
+            )
+            try:
+                from drivers.browser_driver import BrowserDriver
+                logger.info("Initializing Browser Driver (Playwright)...")
+                self.browser_driver = BrowserDriver(self)
+                self.drivers.append(self.browser_driver)
+                self.orchestrator.set_browser_driver(self.browser_driver)
+            except Exception as e:
+                logger.error(f"Browser Driver disabled due to initialization error: {e}")
+                self.browser_driver = None
         else:
             logger.info("Browser Driver disabled (browser_automator skill is inactive).")
             self.browser_driver = None
@@ -423,7 +432,7 @@ class Kernel:
 
         for driver in self.drivers:
             try:
-                print(f"DEBUG: Starting driver {driver}")
+                logger.debug(f"Starting driver {driver}")
                 driver.start()
             except Exception as e:
                 logger.error(f"Error starting driver {driver}: {e}")
@@ -646,8 +655,12 @@ class Kernel:
 
         # IMMEDIATE FEEDBACK: Let the user know we're working BEFORE the synchronous LLM intent resolution
         try:
+            existing_session = self.orchestrator.get_session_robust(session_id)
+            session_fallback_locale = "en"
+            if existing_session and isinstance(getattr(existing_session, "context", None), dict):
+                session_fallback_locale = str(existing_session.context.get("user_language") or "en")
             session_locale = self.orchestrator._normalize_locale(
-                self.orchestrator._detect_user_language(text, fallback="en")
+                self.orchestrator._detect_user_language(text, fallback=session_fallback_locale)
             )
             start_msg = self.orchestrator.i18n.t("status.processing_start", locale=session_locale)
             driver_instance.send_status(session_id, 'thinking', start_msg)
@@ -835,6 +848,7 @@ class Kernel:
                     "work_id": work.work_id,
                 },
             )
+            driver_instance.send_response(ack_msg, target=session_id, is_chunk=True)
             session.add_message("assistant", ack_msg)
             self.orchestrator._save_session(session)
             

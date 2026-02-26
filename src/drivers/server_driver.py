@@ -228,7 +228,7 @@ class ServerDriver(BaseDriver):
          )
 
     def start(self):
-        print("DEBUG: ServerDriver.start() called!")
+        logger.debug("ServerDriver.start() called")
         self.running = True
         self.server_thread = threading.Thread(target=self._run_server, daemon=True)
         self.server_thread.start()

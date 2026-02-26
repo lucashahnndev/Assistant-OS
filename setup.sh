@@ -7,36 +7,172 @@ set -e
 
 echo "🚀 Starting AOSD Setup..."
 
+APT_INSTALL_CMD=""
+MISSING_SYSTEM_DEPS=()
+NODE_MIN_MAJOR=20
+NODE_MIN_MINOR=19
+
+node_version_ok() {
+    if ! command -v node >/dev/null 2>&1; then
+        return 1
+    fi
+    local ver major minor
+    ver="$(node -v 2>/dev/null | sed 's/^v//')"
+    major="${ver%%.*}"
+    minor="$(echo "$ver" | cut -d. -f2)"
+    major="${major:-0}"
+    minor="${minor:-0}"
+    if [ "$major" -gt "$NODE_MIN_MAJOR" ]; then
+        return 0
+    fi
+    if [ "$major" -eq "$NODE_MIN_MAJOR" ] && [ "$minor" -ge "$NODE_MIN_MINOR" ]; then
+        return 0
+    fi
+    return 1
+}
+
+can_use_apt() {
+    command -v apt-get &> /dev/null
+}
+
+configure_apt_install_cmd() {
+    if ! can_use_apt; then
+        APT_INSTALL_CMD=""
+        return
+    fi
+
+    if [ "$(id -u)" -eq 0 ]; then
+        APT_INSTALL_CMD="apt-get"
+        return
+    fi
+
+    if command -v sudo &> /dev/null && sudo -n true 2>/dev/null; then
+        APT_INSTALL_CMD="sudo apt-get"
+        return
+    fi
+
+    APT_INSTALL_CMD=""
+}
+
+try_install_system_deps() {
+    if [ "${#MISSING_SYSTEM_DEPS[@]}" -eq 0 ]; then
+        return
+    fi
+
+    local unique_deps=()
+    local dep
+    for dep in "${MISSING_SYSTEM_DEPS[@]}"; do
+        if [[ ! " ${unique_deps[*]} " =~ " ${dep} " ]]; then
+            unique_deps+=("$dep")
+        fi
+    done
+    MISSING_SYSTEM_DEPS=("${unique_deps[@]}")
+
+    configure_apt_install_cmd
+
+    if [ -z "$APT_INSTALL_CMD" ]; then
+        echo "⚠️  Missing system dependencies: ${MISSING_SYSTEM_DEPS[*]}"
+        echo "   Install manually and rerun setup:"
+        echo "   sudo apt-get update && sudo apt-get install -y ${MISSING_SYSTEM_DEPS[*]}"
+        return
+    fi
+
+    echo "📦 Installing system dependencies: ${MISSING_SYSTEM_DEPS[*]}"
+    $APT_INSTALL_CMD update
+    $APT_INSTALL_CMD install -y "${MISSING_SYSTEM_DEPS[@]}"
+}
+
 # 1. Check for Python 3
 if ! command -v python3 &> /dev/null; then
-    echo "❌ Python 3 is not installed. Please install it first."
-    exit 1
+    MISSING_SYSTEM_DEPS+=("python3")
 fi
 
 # 2. Check for Node.js
 if ! command -v node &> /dev/null; then
-    echo "⚠️  Node.js not found. Attempting to install..."
-    if command -v apt-get &> /dev/null; then
-        echo "📦 detected Debian/Ubuntu. Installing Node.js..."
-        sudo apt-get update && sudo apt-get install -y nodejs npm
-    else
-        echo "❌ Node.js not found and couldn't auto-install. Please install Node.js manually: https://nodejs.org/"
-        exit 1
-    fi
+    MISSING_SYSTEM_DEPS+=("nodejs" "npm")
 else
     echo "✅ Node.js is already installed ($(node -v))."
 fi
 
-# 3. Setup Python Virtual Environment
-echo "🐍 Creating Python virtual environment (env/)..."
-rm -rf env
-python3 -m venv env
+# 3. Ensure venv + ensurepip support is available
+if command -v python3 &> /dev/null && ! python3 -m venv -h >/dev/null 2>&1; then
+    MISSING_SYSTEM_DEPS+=("python3-venv")
+fi
+if command -v python3 &> /dev/null && ! python3 -m ensurepip --version >/dev/null 2>&1; then
+    MISSING_SYSTEM_DEPS+=("python3-venv")
+fi
+
+try_install_system_deps
+
+if ! command -v python3 &> /dev/null; then
+    echo "❌ Python 3 is required."
+    exit 1
+fi
+
+if ! command -v node &> /dev/null; then
+    echo "❌ Node.js is required for frontend setup."
+    exit 1
+fi
+
+if ! node_version_ok; then
+    echo "❌ Node.js $(node -v) is not supported by this frontend."
+    echo "   Required: >= v${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}"
+    echo "   Upgrade (recommended): nvm install 20.19.0 && nvm use 20.19.0"
+    exit 1
+fi
+
+# 4. Setup Python Virtual Environment
+echo "🐍 Preparing Python virtual environment (env/)..."
+
+if [ "${FORCE_RECREATE_ENV:-0}" = "1" ] && [ -d "env" ]; then
+    echo "🧹 FORCE_RECREATE_ENV=1 set. Removing existing env/..."
+    rm -rf env
+fi
+
+if [ -x "./env/bin/pip" ] && [ -f "./env/bin/activate" ]; then
+    echo "✅ Reusing existing virtual environment."
+else
+    rm -rf env
+    if ! python3 -m venv env; then
+        echo "❌ Failed to create virtual environment."
+        echo "   On Debian/Ubuntu install: sudo apt-get install -y python3-venv"
+        exit 1
+    fi
+fi
+
+if [ ! -x "./env/bin/pip" ]; then
+    echo "❌ Virtual environment created without pip (ensurepip unavailable)."
+    echo "   On Debian/Ubuntu install: sudo apt-get install -y python3-venv"
+    exit 1
+fi
 
 echo "📦 Installing Python dependencies..."
 ./env/bin/pip install --upgrade pip
-./env/bin/pip install -r requirements.txt
 
-# 4. Setup Frontend Dependencies
+TMP_REQUIREMENTS="$(mktemp)"
+if command -v rg >/dev/null 2>&1; then
+    rg -v '^\s*pyaudio\s*$' requirements.txt > "$TMP_REQUIREMENTS"
+else
+    grep -vi '^\s*pyaudio\s*$' requirements.txt > "$TMP_REQUIREMENTS"
+fi
+
+./env/bin/pip install -r "$TMP_REQUIREMENTS"
+rm -f "$TMP_REQUIREMENTS"
+
+echo "🎤 Installing optional voice dependency (pyaudio)..."
+if ! ./env/bin/pip install pyaudio; then
+    echo "⚠️  Could not install optional dependency: pyaudio"
+    echo "   Voice capture may be unavailable until system headers are installed."
+    echo "   On Debian/Ubuntu try: sudo apt-get install -y portaudio19-dev python3-dev build-essential"
+fi
+
+if ! ./env/bin/python -c "import dotenv" >/dev/null 2>&1; then
+    echo "❌ Core Python dependencies are incomplete."
+    echo "   Check internet access for pip and rerun: ./setup.sh"
+    exit 1
+fi
+
+# 5. Setup Frontend Dependencies
 if [ -d "frontend" ]; then
     echo "⚛️  Installing Frontend dependencies..."
     cd frontend
@@ -50,7 +186,7 @@ else
     echo "⚠️  Frontend directory not found. Skipping frontend setup."
 fi
 
-# 5. Initialize Configuration Files
+# 6. Initialize Configuration Files
 echo "⚙️  Initializing configuration files..."
 
 # Determine data dir: 1. ENV, 2. Local ./data, 3. Default ~/aosd

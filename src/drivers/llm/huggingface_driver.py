@@ -22,7 +22,7 @@ class HuggingFaceProvider(ILLMProvider):
     Default base URL targets HF Router.
     """
 
-    def __init__(self, config: Dict[str, Any] | None = None):
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
         cfg = config or {}
         self.api_key = self._resolve_secret(cfg.get("api_key"))
         self.model = cfg.get("model", "HuggingFaceTB/SmolLM3-3B")
@@ -106,6 +106,7 @@ class HuggingFaceProvider(ILLMProvider):
         history: List[Dict[str, str]],
         system_prompt: str,
         attachments: List[str] | None = None,
+        **kwargs
     ) -> AgentIntent:
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         messages.extend(history or [])
@@ -161,14 +162,9 @@ class HuggingFaceProvider(ILLMProvider):
             )
         except Exception as e:
             logger.error(f"HuggingFace generate_intent error: {e}")
-            return AgentIntent(
-                thought="Connection Error",
-                action="error",
-                params={"error": str(e)},
-                response_text="I could not acessar o provedor Hugging Face agora.",
-            )
+            raise e
 
-    def generate_text(self, prompt: str, system_prompt: str = "") -> str:
+    def generate_text(self, prompt: str, system_prompt: str = "", **kwargs) -> str:
         messages: List[Dict[str, Any]] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -177,7 +173,7 @@ class HuggingFaceProvider(ILLMProvider):
             return self._chat_completion(messages, max_tokens=min(self.max_tokens, 512), temperature=0.3)
         except Exception as e:
             logger.error(f"HuggingFace generate_text error: {e}")
-            return f"Erro na geração de texto (Hugging Face): {e}"
+            raise e
 
     def analyze_image(self, image_path: str, prompt: str) -> str:
         if not os.path.exists(image_path):
@@ -201,4 +197,4 @@ class HuggingFaceProvider(ILLMProvider):
             return self._chat_completion(messages, max_tokens=min(self.max_tokens, 512), temperature=0.1)
         except Exception as e:
             logger.error(f"HuggingFace analyze_image error: {e}")
-            return f"Erro na análise de imagem (Hugging Face): {e}"
+            raise e

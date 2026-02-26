@@ -1,0 +1,41 @@
+{
+    "provider": "google",
+    "display_name": "Google / Gemini",
+    "supports": [
+        "chat",
+        "vision",
+        "stt"
+    ],
+    "defaults": {
+        "model": "gemini-2.0-flash",
+        "timeout": 90,
+        "max_tokens": 1024
+    },
+    "fields": [
+        {
+            "name": "api_key_ref",
+            "type": "env_ref",
+            "label": "API Key",
+            "required": true
+        },
+        {
+            "name": "model",
+            "type": "string",
+            "label": "Model Name",
+            "required": true
+        },
+        {
+            "name": "language",
+            "type": "string",
+            "label": "Language (for STT)",
+            "required": false,
+            "default": "pt-BR"
+        }
+    ],
+    "models": [
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash"
+    ]
+}

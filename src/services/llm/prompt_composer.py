@@ -54,12 +54,22 @@ class PromptComposer:
 
     _BLOCK_BUDGETS = {
         "toon_state": 2200,
+        "toon_deltas": 900,
         "browser_state": 2600,
         "session_summary": 1800,
         "scratchpad": 1400,
         "attachments": 1400,
-        "skills_summary": 9000,
+        "skills_summary": 3200,
     }
+
+    def __init__(self, block_budgets: Dict[str, int] = None):
+        self.block_budgets = self._BLOCK_BUDGETS.copy()
+        if block_budgets:
+            self.block_budgets.update(block_budgets)
+
+    def update_budgets(self, block_budgets: Dict[str, int]):
+        """Updates the instance block budgets."""
+        self.block_budgets.update(block_budgets)
 
     def compose(
         self,
@@ -68,12 +78,14 @@ class PromptComposer:
         personality: str,
         specialist_prompt: str,
         presentation_directive: str,
+        instruction_pack: str = "",
         sys_info: Dict[str, str],
         location: str,
         channel: str,
         user_name: str,
         user_language: str,
         toon_state: str,
+        toon_deltas: List[Dict[str, Any]],
         user_input: str,
         project_path: str,
         workspace_path: str,
@@ -95,16 +107,15 @@ class PromptComposer:
         ).strip()
         prompt_parts.append(base_header)
 
-        prompt_parts.append(
-            "[LANGUAGE DIRECTIVE]\n"
-            "- Think internally in English in the 'thought' field.\n"
-            "- Keep action ids and params in English.\n"
-            f"- Detected user language: {user_language or 'auto'}.\n"
-            "- Return 'response_text' in the detected user language.\n"
-            "- If detection is uncertain, follow the latest user message language.\n"
-            "- Never mix languages in 'response_text'. Use one language only.\n"
-            "- Forbidden: bilingual endings like Portuguese sentence + English follow-up."
-        )
+        if instruction_pack:
+            prompt_parts.append("[INSTRUCTION PACK]\n" + instruction_pack)
+        else:
+            prompt_parts.append(
+                "[LANGUAGE DIRECTIVE]\n"
+                "- thought/action/params in English.\n"
+                f"- response_text language: {user_language or 'auto'}.\n"
+                "- Never mix languages in response_text."
+            )
 
         prompt_parts.append(presentation_directive.strip())
 
@@ -128,6 +139,14 @@ class PromptComposer:
         )
 
         dynamic_sections: List[str] = []
+        if toon_deltas:
+            toon_deltas_text = json.dumps(toon_deltas, ensure_ascii=False, separators=(",", ":"))
+            dynamic_sections.append(
+                "[TOON CONTEXT DELTAS]\n"
+                "(Recent compact state transitions before full memory consolidation.)\n"
+                f"{self._clip_block('toon_deltas', toon_deltas_text)}"
+            )
+
         if self._needs_dev_context(user_input):
             dynamic_sections.append(
                 "[PYTHON CONTEXT]\n"
@@ -138,7 +157,7 @@ class PromptComposer:
             )
 
         if self._needs_browser_context(user_input, browser_pages):
-            browser_state_text = json.dumps(browser_pages, indent=2, ensure_ascii=False)
+            browser_state_text = json.dumps(browser_pages, ensure_ascii=False, separators=(",", ":"))
             dynamic_sections.append(
                 "[BROWSER STATE]\n"
                 "(Only include browser automation when interaction is needed.)\n"
@@ -158,7 +177,7 @@ class PromptComposer:
             )
 
         if attachments:
-            attachment_text = json.dumps(attachments, indent=2, ensure_ascii=False)
+            attachment_text = json.dumps(attachments, ensure_ascii=False, separators=(",", ":"))
             dynamic_sections.append(
                 "[SESSION ATTACHMENTS]\n"
                 "(Use vision/analyzer actions when needed.)\n"
@@ -176,28 +195,22 @@ class PromptComposer:
 
         prompt_parts.append(
             "[EXECUTION POLICY]\n"
-            "- Always use full namespaced action ids exactly as listed.\n"
-            "- Prefer discovery/read actions before destructive actions.\n"
-            "- Use browser automation only when UI interaction is required.\n"
-            "- If an action fails, report the failure honestly and pick an alternative.\n"
-            "- Use `memory.recall` only when older context is needed.\n"
-            "- In the final user reply, when appropriate, suggest one logical next step grounded in the current context/result.\n"
-            "- The suggestion must be specific to the task outcome, not a generic template, and should sound natural.\n"
-            "- If no meaningful next step exists, do not force a suggestion.\n"
-            "- Do not challenge the user; ask supportive, practical follow-up questions only when useful."
+            "- Use full namespaced action ids exactly.\n"
+            "- Prefer read/discovery before destructive actions.\n"
+            "- Browser actions only for real UI interaction.\n"
+            "- On failure: report honestly and choose an alternative.\n"
+            "- Use memory.recall only when older context is needed.\n"
+            "- Suggest next step only when grounded in current result."
         )
 
         prompt_parts.append(
             "[STRUCTURED OUTPUT CONTRACT]\n"
-            "- Return exactly one JSON object (no markdown/code fence).\n"
-            "- Never output text outside the JSON object.\n"
-            "- Use this schema:\n"
-            f"{json.dumps(self._INTENT_SCHEMA, indent=2, ensure_ascii=False)}\n"
-            "- If the task is done or blocked, use `action: \"reply\"`.\n"
-            "- If `action` is not `reply`, `response_text` must be a start/in-progress acknowledgment and must not claim completion/success.\n"
-            "- `response_text` is user-facing prose: do not include namespaced action ids, raw JSON, or tool diagnostics.\n"
-            "- For multi-step execution, do not use `reply` in intermediate steps.\n"
-            "- If the same action+params fails 3 times, stop and ask for clarification."
+            "- Output exactly one JSON object (no markdown).\n"
+            "- No text outside JSON.\n"
+            f"- Schema: {json.dumps(self._INTENT_SCHEMA, ensure_ascii=False, separators=(',', ':'))}\n"
+            "- action=reply only when done/blocked.\n"
+            "- If action!=reply, response_text must be progress ack only.\n"
+            "- If same action+params fails 3x, stop and ask clarification."
         )
 
         return "\n\n".join([part for part in prompt_parts if part])
@@ -220,7 +233,7 @@ class PromptComposer:
         return any(keyword in lower_text for keyword in keywords)
 
     def _clip_block(self, block_name: str, text: str) -> str:
-        max_chars = self._BLOCK_BUDGETS.get(block_name, 2000)
+        max_chars = self.block_budgets.get(block_name, 2000)
         value = (text or "").strip()
         if len(value) <= max_chars:
             return value

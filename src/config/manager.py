@@ -65,7 +65,15 @@ class ConfigManager:
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    self.config_data = self._substitute_env_vars(data)
+                    
+                # Migrate config to new Model Pool format if needed
+                data, changed = self._migrate_config(data)
+                if changed:
+                    with open(self.config_file, 'w', encoding='utf-8') as fw:
+                        json.dump(data, fw, indent=4)
+                        logger.info("Migrated config.json to new Model Pool format.")
+                        
+                self.config_data = self._substitute_env_vars(data)
             except Exception as e:
                 logger.error(f"Error loading config: {e}")
                 self.config_data = {}
@@ -244,3 +252,113 @@ class ConfigManager:
             "supported_locales": ["en", "pt-BR"],
         }
         return self.get("i18n", default_i18n)
+
+    def _migrate_config(self, data):
+        """
+        Migrates the configuration data from the legacy dictionary format
+        to the new array-based Model Pool format.
+        It also moves any inline API keys to the .env file and replaces
+        them with reference pointers prefixed with ENV_.
+        """
+        changed = False
+        import hashlib
+        
+        env_path = os.path.join(self.base_data_dir, '.env')
+        env_updates = {}
+        
+        def _get_or_create_env_ref(secret_value, provider_name, field_name):
+            if not secret_value: return ""
+            if isinstance(secret_value, str) and secret_value.startswith("ENV_"):
+                return secret_value
+            # Generate new env variable name
+            hash_suffix = hashlib.md5(secret_value.encode()).hexdigest()[:6].upper()
+            env_name = f"{provider_name.upper()}_{field_name.upper()}_{hash_suffix}"
+            env_ref = f"ENV_{env_name}"
+            env_updates[env_name] = secret_value
+            return env_ref
+            
+        def _migrate_modality(old_data):
+            # If it's already a list, it's migrated
+            if isinstance(old_data, list):
+                return old_data, False
+            if not isinstance(old_data, dict) or "providers" not in old_data:
+                return old_data, False
+            
+            pool = []
+            primary = old_data.get("provider", "")
+            priority = 1
+            
+            # Map old dict to new Array Pool
+            for prov_name, prov_cfg in old_data.get("providers", {}).items():
+                inst = {
+                    "id": f"{prov_name}-1",
+                    "provider": prov_name,
+                    "enabled": True,
+                    "priority": 1 if prov_name == primary else priority + 1
+                }
+                
+                if isinstance(prov_cfg, dict):
+                    import copy
+                    cfg_copy = copy.deepcopy(prov_cfg)
+                    # Extract secrets
+                    for k in ["api_key", "token", "organization_id", "client_secret"]:
+                        if k in cfg_copy:
+                            val = cfg_copy.pop(k, "")
+                            if val:
+                                inst[f"{k}_ref"] = _get_or_create_env_ref(val, prov_name, k)
+                    
+                    # Merge remaining config
+                    inst.update(cfg_copy)
+                    
+                pool.append(inst)
+                priority += 1
+                
+            # sort by priority
+            pool.sort(key=lambda x: x["priority"])
+            return pool, True
+
+        cortex = data.get("cortex", {})
+        cortex_changed = False
+        
+        if "chat" in cortex:
+            new_chat, c = _migrate_modality(cortex["chat"])
+            if c:
+                cortex["chat"] = new_chat
+                cortex_changed = True
+                
+        if "vision" in cortex:
+            new_vision, c = _migrate_modality(cortex["vision"])
+            if c:
+                cortex["vision"] = new_vision
+                cortex_changed = True
+                
+        if "audio" in cortex:
+            audio = cortex["audio"]
+            if "stt" in audio:
+                new_stt, c = _migrate_modality(audio["stt"])
+                if c:
+                    audio["stt"] = new_stt
+                    cortex_changed = True
+            if "tts" in audio:
+                new_tts, c = _migrate_modality(audio["tts"])
+                if c:
+                    audio["tts"] = new_tts
+                    cortex_changed = True
+                    
+        if cortex_changed:
+            data["cortex"] = cortex
+            changed = True
+            
+        if changed and env_updates:
+            # write new env variables to .env
+            mode = 'a' if os.path.exists(env_path) else 'w'
+            try:
+                with open(env_path, mode, encoding='utf-8') as fe:
+                    fe.write("\n# Migrated Keys\n")
+                    for k, v in env_updates.items():
+                        fe.write(f"{k}={v}\n")
+                logger.info(f"Migrated secrets and saved to {env_path}")
+            except Exception as e:
+                logger.error(f"Failed to append to .env during migration: {e}")
+                    
+        return data, changed

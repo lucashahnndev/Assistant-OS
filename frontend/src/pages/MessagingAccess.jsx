@@ -500,17 +500,10 @@ const MessagingAccess = () => {
         <div className="animate-in scroll-container" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? 'var(--space-4)' : 'var(--space-6)', paddingBottom: '100px' }}>
                 <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '24px' }}>
-                    {/* Compact Header */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            <div className="flex-center" style={{ width: '40px', height: '40px', borderRadius: '12px', background: 'var(--accent-glow)', color: 'var(--accent-color)' }}>
-                                <Shield size={20} />
-                            </div>
-                            <div>
-                                <h3 style={{ fontSize: '1.1rem', fontWeight: '900', letterSpacing: '-0.01em' }}>Security Hub</h3>
-                                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Interface-wide access control and permission orchestration.</p>
-                            </div>
-                        </div>
+                    <PageHeader
+                        title="Security Hub"
+                        subtitle="Interface-wide access control and permission orchestration."
+                    >
                         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                             {visibleInterfaces.map(itf => (
                                 <button
@@ -539,7 +532,7 @@ const MessagingAccess = () => {
                                 </button>
                             ))}
                         </div>
-                    </div>
+                    </PageHeader>
 
                     {/* Tabs */}
                     <nav style={{ display: 'flex', gap: '24px', borderBottom: '1px solid var(--card-border)', marginBottom: '24px' }}>
@@ -667,7 +660,7 @@ const MessagingAccess = () => {
                                                 top: '3px',
                                                 left: currentConf.rate_limit_enabled ? '23px' : '3px',
                                                 transition: 'var(--transition-fast)',
-                                                boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                                                boxShadow: 'var(--shadow-sm)'
                                             }} />
                                         </div>
                                     </div>

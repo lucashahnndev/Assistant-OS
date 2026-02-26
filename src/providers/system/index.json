@@ -1,0 +1,26 @@
+{
+    "provider": "system",
+    "display_name": "System Native TTS",
+    "supports": [
+        "tts"
+    ],
+    "defaults": {
+        "rate": 150,
+        "volume": 1.0
+    },
+    "fields": [
+        {
+            "name": "rate",
+            "type": "number",
+            "label": "Speech Rate",
+            "required": false
+        },
+        {
+            "name": "volume",
+            "type": "number",
+            "label": "Volume (0.0 to 1.0)",
+            "required": false
+        }
+    ],
+    "models": []
+}

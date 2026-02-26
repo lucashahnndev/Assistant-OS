@@ -166,7 +166,7 @@ def get_env(user: User = Depends(get_current_user)):
         masked_payload = {}
         for key in ordered_keys:
             value = current_env.get(key, "")
-            masked_payload[key] = _mask_value(value) if _is_sensitive_env_key(key) else value
+            masked_payload[key] = value
         return masked_payload
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read .env: {str(e)}")
@@ -193,10 +193,9 @@ def update_env(updates: dict, user: User = Depends(get_current_user)):
             if not isinstance(value, str):
                 value = str(value)
 
-            # If value is masked (lots of stars), and we have it in current_env, skip update for this key
-            # unless the user actually changed it (which they can't easily do if it's masked, 
-            # they must type the new one)
-            if value.strip() == "" or (value.startswith("*") and key in current_env):
+            # If value is empty skip update for this key to prevent clearing by accident,
+            # unless the user explicitly wants to delete (which should be handled differently, but empty for now skips)
+            if value.strip() == "":
                 continue
             current_env[key] = value
 

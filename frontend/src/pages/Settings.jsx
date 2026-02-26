@@ -25,11 +25,13 @@ import {
     Puzzle,
     ExternalLink,
     ChevronLeft,
-    ChevronRight
+    ChevronRight,
+    Plus
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import PageHeader from '../components/PageHeader';
+import ModelPoolManager from '../components/ModelPoolManager';
 
 const Settings = () => {
     const [config, setConfig] = useState(null);
@@ -272,7 +274,7 @@ const Settings = () => {
 
     const renderGeneral = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '24px' }}>
+            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
 
                 <h3 className="section-title">
                     <UserIcon size={20} /> Persona Settings
@@ -301,7 +303,7 @@ const Settings = () => {
                 </div>
             </section>
 
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '24px' }}>
+            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
                 <h3 className="section-title">
                     <Zap size={20} /> Intent Resolution
                 </h3>
@@ -344,7 +346,7 @@ const Settings = () => {
 
     const renderNetwork = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '24px' }}>
+            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
                 <h3 className="section-title">
                     <Globe size={20} /> Connectivity
                 </h3>
@@ -394,7 +396,7 @@ const Settings = () => {
 
     const renderMedia = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '24px' }}>
+            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
                 <h3 className="section-title">
                     <Play size={20} /> Media & Content
                 </h3>
@@ -427,7 +429,7 @@ const Settings = () => {
                         </div>
                     </div>
 
-                    <div style={{ background: 'rgba(255,255,255,0.02)', padding: '20px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div style={{ background: 'rgba(255,255,255,0.02)', padding: '20px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
                         <h4 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '16px', color: 'var(--accent-color)' }}>Persistence Strategy</h4>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             <div className="flex-between">
@@ -460,12 +462,12 @@ const Settings = () => {
 
     const renderInterfaces = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '24px' }}>
+            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
                 <h3 className="section-title">
                     <Monitor size={20} /> Messaging Bridges
                 </h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-                    <div style={{ background: 'rgba(255,255,255,0.02)', padding: '24px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div style={{ background: 'rgba(255,255,255,0.02)', padding: '24px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
                             <div>
                                 <h4 style={{ fontSize: '18px', fontWeight: '700' }}>Telegram</h4>
@@ -510,7 +512,7 @@ const Settings = () => {
 
     const renderSkills = () => (
         <div className="animate-fade-in">
-            <section className="glass" style={{ padding: '32px', borderRadius: '16px', textAlign: 'center' }}>
+            <section className="glass" style={{ padding: '32px', borderRadius: '8px', textAlign: 'center' }}>
                 <Puzzle size={48} style={{ margin: '0 auto 20px', color: 'var(--accent-color)' }} />
                 <h3 style={{ fontSize: '24px', fontWeight: '800', marginBottom: '16px' }}>Cognitive Capabilities</h3>
                 <p style={{ color: '#94a3b8', marginBottom: '32px' }}>
@@ -527,7 +529,7 @@ const Settings = () => {
 
     const renderDebug = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '20px', height: '100%', minHeight: '600px', paddingBottom: '40px' }}>
-            <div className="glass" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 24px', borderRadius: '16px' }}>
+            <div className="glass" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 24px', borderRadius: '8px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <select
                         className="input-field"
@@ -566,14 +568,14 @@ const Settings = () => {
                 style={{
                     flex: 1,
                     background: '#050505',
-                    borderRadius: '20px',
+                    borderRadius: '8px',
                     padding: '24px',
                     overflowY: 'auto',
                     fontFamily: '"Fira Code", monospace',
                     fontSize: '13px',
                     lineHeight: '1.6',
                     border: '1px solid rgba(255,255,255,0.05)',
-                    boxShadow: 'inset 0 4px 20px rgba(0,0,0,0.8)'
+                    boxShadow: 'inset 0 2px 10px rgba(0,0,0,0.5)'
                 }}
             >
                 {logs.length === 0 && <div style={{ color: 'var(--text-muted)', textAlign: 'center', marginTop: '40px' }}>Waiting for system events...</div>}
@@ -635,7 +637,7 @@ const Settings = () => {
 
     const renderWeather = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '16px' }}>
+            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
                 <h3 className="section-title">
                     <CloudSun size={20} /> Environmental Data
                 </h3>
@@ -691,14 +693,22 @@ const Settings = () => {
 
     const renderSecurity = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '16px' }}>
+            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
                     <h3 className="section-title" style={{ marginBottom: 0 }}>
                         <Shield size={20} /> Vault (Environment Secrets)
                     </h3>
+                    <button onClick={() => {
+                        const newKey = prompt("Enter new ENV variable name (e.g. ENV_MY_API_KEY):");
+                        if (newKey) {
+                            setEnvData(prev => ({ ...prev, [newKey]: "" }));
+                        }
+                    }} className="btn-ghost" style={{ fontSize: '12px', padding: '6px 12px' }}>
+                        <Plus size={14} style={{ marginRight: '6px' }} /> Add Secret
+                    </button>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    {Object.entries(envData).map(([key, value]) => (
+                    {Object.entries(envData || {}).map(([key, value]) => (
                         <div key={key} className="form-group">
                             <label style={{ fontSize: '12px', color: '#64748b' }}>{key}</label>
                             <div style={{ position: 'relative' }}>
@@ -708,7 +718,7 @@ const Settings = () => {
                                     style={{ paddingRight: '44px' }}
                                     value={value}
                                     onChange={(e) => {
-                                        const newData = { ...envData, [key]: e.target.value };
+                                        const newData = { ...(envData || {}), [key]: e.target.value };
                                         setEnvData(newData);
                                     }}
                                 />
@@ -729,83 +739,26 @@ const Settings = () => {
 
     const renderLLM = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '16px' }}>
+            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
                 <h3 className="section-title">
                     <Cpu size={20} /> Chat & Reasoning (Cortex)
                 </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                    <div className="form-group">
-                        <label>Active Chat Core</label>
-                        <select className="input-field"
-                            value={config.cortex?.chat?.provider || config.llm?.provider}
-                            onChange={(e) => updateNestedValue('cortex.chat.provider', e.target.value)}
-                        >
-                            <option value="openrouter">OpenRouter (Cloud / Hybrid)</option>
-                            <option value="ollama">Ollama (Local / Privacy-First)</option>
-                            <option value="openai">OpenAI (Direct Native)</option>
-                            <option value="google">Google Gemini (Native)</option>
-                        </select>
-                    </div>
-
-                    {(config.cortex?.chat?.provider === 'openrouter' || config.llm?.provider === 'openrouter') && (
-                        <div className="form-group animate-fade-in">
-                            <label>Chat Model Identifier</label>
-                            <input type="text" className="input-field"
-                                value={config.cortex?.chat?.providers?.openrouter?.model || config.llm?.providers?.openrouter?.model || ''}
-                                onChange={(e) => updateNestedValue('cortex.chat.providers.openrouter.model', e.target.value)}
-                            />
-                        </div>
-                    )}
-
-                    {(config.cortex?.chat?.provider === 'ollama' || config.llm?.provider === 'ollama') && (
-                        <div className="form-group animate-fade-in">
-                            <label>Local Ollama Model</label>
-                            <input type="text" className="input-field"
-                                value={config.cortex?.chat?.providers?.ollama?.model || config.llm?.providers?.ollama?.model || ''}
-                                onChange={(e) => updateNestedValue('cortex.chat.providers.ollama.model', e.target.value)}
-                            />
-                        </div>
-                    )}
-
-                    {(config.cortex?.chat?.provider === 'google' || config.llm?.provider === 'google') && (
-                        <div className="form-group animate-fade-in">
-                            <label>Gemini Chat Model</label>
-                            <input type="text" className="input-field"
-                                value={config.cortex?.chat?.providers?.google?.model || 'gemini-2.0-flash'}
-                                onChange={(e) => updateNestedValue('cortex.chat.providers.google.model', e.target.value)}
-                            />
-                        </div>
-                    )}
-                </div>
+                <ModelPoolManager
+                    modality="chat"
+                    currentPool={config.cortex?.chat || []}
+                    onPoolUpdated={(newPool) => updateNestedValue('cortex.chat', newPool)}
+                />
             </section>
 
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '16px' }}>
+            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
                 <h3 className="section-title">
                     <Eye size={20} /> Vision & Perception
                 </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                    <div className="form-group">
-                        <label>Active Vision Core</label>
-                        <select className="input-field"
-                            value={config.cortex?.vision?.provider || 'google'}
-                            onChange={(e) => updateNestedValue('cortex.vision.provider', e.target.value)}
-                        >
-                            <option value="google">Google Gemini (Recommended for Vision)</option>
-                            <option value="openrouter">OpenRouter (Vision Models)</option>
-                            <option value="openai">OpenAI (GPT-4o Vision)</option>
-                        </select>
-                    </div>
-
-                    {config.cortex?.vision?.provider === 'google' && (
-                        <div className="form-group animate-fade-in">
-                            <label>Gemini Vision Model</label>
-                            <input type="text" className="input-field"
-                                value={config.cortex?.vision?.providers?.google?.model || 'gemini-2.0-flash'}
-                                onChange={(e) => updateNestedValue('cortex.vision.providers.google.model', e.target.value)}
-                            />
-                        </div>
-                    )}
-                </div>
+                <ModelPoolManager
+                    modality="vision"
+                    currentPool={config.cortex?.vision || []}
+                    onPoolUpdated={(newPool) => updateNestedValue('cortex.vision', newPool)}
+                />
             </section>
         </div>
     );
@@ -821,7 +774,7 @@ const Settings = () => {
                 overflowX: isMobile ? 'auto' : 'hidden',
                 overflowY: isMobile ? 'hidden' : 'auto',
                 transition: 'var(--transition)',
-                borderRadius: '16px',
+                borderRadius: '8px',
                 flexShrink: 0,
                 padding: isMobile ? '4px' : '0'
             }}>
@@ -829,7 +782,7 @@ const Settings = () => {
                     <div className="glass" style={{
                         margin: '12px 12px 12px 12px',
                         padding: isTabsCollapsed ? '8px 0' : '8px 14px',
-                        borderRadius: '12px',
+                        borderRadius: '8px',
                         display: 'flex',
                         flexDirection: isTabsCollapsed ? 'column' : 'row',
                         alignItems: 'center',
@@ -902,32 +855,20 @@ const Settings = () => {
                         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                             <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '16px' }}>
                                 <h3 className="section-title"><Mic size={20} /> Speech Recognition (STT)</h3>
-                                <div className="form-group">
-                                    <label>STT Engine</label>
-                                    <select className="input-field"
-                                        value={config.cortex?.audio?.stt?.provider || config.stt?.provider}
-                                        onChange={(e) => updateNestedValue('cortex.audio.stt.provider', e.target.value)}
-                                    >
-                                        <option value="google">Google Cloud (High Precision)</option>
-                                        <option value="vosk">Vosk (Local / Offline)</option>
-                                        <option value="openai">OpenAI Whisper (Direct)</option>
-                                    </select>
-                                </div>
+                                <ModelPoolManager
+                                    modality="stt"
+                                    currentPool={config.cortex?.audio?.stt || []}
+                                    onPoolUpdated={(newPool) => updateNestedValue('cortex.audio.stt', newPool)}
+                                />
                             </section>
 
                             <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '16px' }}>
                                 <h3 className="section-title"><Play size={20} /> Speech Synthesis (TTS)</h3>
-                                <div className="form-group">
-                                    <label>TTS Engine</label>
-                                    <select className="input-field"
-                                        value={config.cortex?.audio?.tts?.provider || 'edge_tts'}
-                                        onChange={(e) => updateNestedValue('cortex.audio.tts.provider', e.target.value)}
-                                    >
-                                        <option value="edge_tts">Edge TTS (Fast & Clear)</option>
-                                        <option value="google_cloud">Google Cloud (Premium)</option>
-                                        <option value="system">System Default (Offline)</option>
-                                    </select>
-                                </div>
+                                <ModelPoolManager
+                                    modality="tts"
+                                    currentPool={config.cortex?.audio?.tts || []}
+                                    onPoolUpdated={(newPool) => updateNestedValue('cortex.audio.tts', newPool)}
+                                />
                             </section>
                         </div>
                     )}

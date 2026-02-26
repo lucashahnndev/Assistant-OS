@@ -3,31 +3,67 @@ from typing import Dict, Optional
 class SpecialistManager:
     def __init__(self):
         self.profiles = {
-            "web_expert": """
-### Domain Expertise: Web Automation & Playwright
-- You are a specialist in web navigation and data extraction.
-- Prioritize using `BrowserDriver` actions for all web-related tasks.
-- When analyzing a page, think about selectors, visibility, and interactive elements.
-- Avoid guessing URLs; use `search_web` to find the correct entry point.
-""",
-            "sysadmin": """
-### Domain Expertise: Linux System Administration
-- You are an expert in shell commands, process management, and security.
-- Prioritize safe execution and use absolute paths where possible.
-- When troubleshooting, check logs and process status before taking destructive actions.
-- Always explain the impact of complex commands to the user.
-""",
-            "dev_expert": """
-### Domain Expertise: Software Development & Python
-- You are a senior software engineer specialized in Python and architectural patterns.
-- Follow PEP 8 and write modular, clean code.
-- When debugging, use a systematic approach: isolate the issue, check dependencies, and verify with tests.
-- Prefer existing project patterns over adding new dependencies.
-"""
+            "web_expert": {
+                "title": "Web Automation & Playwright",
+                "focus": ["browser_navigation", "data_extraction", "selector_reasoning"],
+                "rules": [
+                    "prefer_browser_driver_actions",
+                    "avoid_guessing_urls",
+                    "confirm_interactive_state_before_completion",
+                ],
+            },
+            "sysadmin": {
+                "title": "Linux System Administration",
+                "focus": ["shell_commands", "process_management", "security_safety"],
+                "rules": [
+                    "prefer_safe_execution",
+                    "use_absolute_paths_when_possible",
+                    "check_logs_before_destructive_actions",
+                ],
+            },
+            "dev_expert": {
+                "title": "Software Development & Python",
+                "focus": ["python_architecture", "debugging", "tests"],
+                "rules": [
+                    "follow_pep8",
+                    "prefer_existing_project_patterns",
+                    "verify_changes_with_tests",
+                ],
+            },
         }
 
     def get_specialist_prompt(self, specialist_name: str) -> Optional[str]:
-        return self.profiles.get(specialist_name.lower())
+        profile = self.profiles.get(str(specialist_name or "").lower())
+        if not isinstance(profile, dict):
+            return None
+        title = str(profile.get("title") or "").strip()
+        focus = [str(x) for x in profile.get("focus", []) if str(x).strip()]
+        rules = [str(x) for x in profile.get("rules", []) if str(x).strip()]
+        focus_line = ", ".join(focus[:4]) if focus else "generalist"
+        rules_lines = "\n".join(f"- {r}" for r in rules[:6]) if rules else "- apply_best_practice"
+        return (
+            f"### Domain Expertise: {title}\n"
+            f"- Focus: {focus_line}\n"
+            f"{rules_lines}"
+        )
+
+    def get_specialist_compact(self, specialist_name: str, max_items: int = 3) -> str:
+        profile = self.profiles.get(str(specialist_name or "").lower())
+        if not isinstance(profile, dict):
+            return ""
+        title = str(profile.get("title") or "").strip()
+        focus = [str(x) for x in profile.get("focus", []) if str(x).strip()][:max_items]
+        rules = [str(x) for x in profile.get("rules", []) if str(x).strip()][:max_items]
+        head = str(specialist_name or "").strip().lower()
+        return f"{head}|{title}|f:{','.join(focus)}|r:{','.join(rules)}"
+
+    def get_specialist_ultra_compact(self, specialist_name: str, max_rules: int = 2) -> str:
+        profile = self.profiles.get(str(specialist_name or "").lower())
+        if not isinstance(profile, dict):
+            return ""
+        head = str(specialist_name or "").strip().lower()
+        rules = [str(x) for x in profile.get("rules", []) if str(x).strip()][:max_rules]
+        return f"{head}|r:{','.join(rules)}"
 
     def list_specialists(self) -> list[str]:
         return list(self.profiles.keys())

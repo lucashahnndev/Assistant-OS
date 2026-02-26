@@ -56,14 +56,23 @@ class PlaybackService:
     def add_frame(self, session_id: str, run_id: str, step: int, action: Dict[str, Any], frame_bytes: bytes, width: int = 960, height: int = 540) -> Dict[str, Any]:
         with self._io_lock:
             playback_dir = self._get_playback_dir(session_id, run_id)
+            frames_dir = os.path.join(playback_dir, "frames")
+            try:
+                os.makedirs(frames_dir, exist_ok=True)
+            except Exception:
+                return {}
+
             filename = f"frames/{step:06d}.jpg"
             frame_path = os.path.join(playback_dir, filename)
 
             # Save frame
-            with open(frame_path, "wb") as f:
-                f.write(frame_bytes)
-                f.flush()
-                os.fsync(f.fileno())
+            try:
+                with open(frame_path, "wb") as f:
+                    f.write(frame_bytes)
+                    f.flush()
+                    os.fsync(f.fileno())
+            except Exception:
+                return {}
 
             # Calculate SHA256
             sha256 = hashlib.sha256(frame_bytes).hexdigest()

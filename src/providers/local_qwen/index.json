@@ -1,0 +1,44 @@
+{
+    "provider": "local_qwen",
+    "display_name": "Local Qwen Server",
+    "supports": [
+        "chat",
+        "vision"
+    ],
+    "defaults": {
+        "base_url": "http://127.0.0.1:9000/v1",
+        "model": "Qwen/Qwen2.5-VL-3B-Instruct",
+        "timeout": 30,
+        "max_tokens": 512
+    },
+    "fields": [
+        {
+            "name": "base_url",
+            "type": "string",
+            "label": "Base URL",
+            "required": true
+        },
+        {
+            "name": "model",
+            "type": "string",
+            "label": "Model Name",
+            "required": true
+        },
+        {
+            "name": "timeout",
+            "type": "number",
+            "label": "Timeout (s)",
+            "required": false
+        },
+        {
+            "name": "max_tokens",
+            "type": "number",
+            "label": "Max Tokens",
+            "required": false
+        }
+    ],
+    "models": [
+        "Qwen/Qwen2.5-VL-3B-Instruct",
+        "Qwen/Qwen2.5-VL-7B-Instruct"
+    ]
+}

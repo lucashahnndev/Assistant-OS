@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import ThemeToggle from '../components/ThemeToggle';
+import { useI18n } from '../i18n';
 import {
     LayoutDashboard,
     MessageSquare,
@@ -25,6 +26,7 @@ import {
 const DashboardLayout = () => {
     const { user, logout, agentName } = useAuth();
     const navigate = useNavigate();
+    const { t } = useI18n();
     const location = useLocation();
     const isChat = location.pathname === '/chat' || location.pathname === '/chat/';
     const [isCollapsed, setIsCollapsed] = useState(() => {
@@ -67,13 +69,13 @@ const DashboardLayout = () => {
     };
 
     const navItems = [
-        { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-        { to: '/chat', icon: MessageSquare, label: 'Console' },
-        { to: '/tasks', icon: ClipboardCheck, label: 'Tasks' },
-        { to: '/skills', icon: Cpu, label: 'Skills' },
-        { to: '/memory', icon: Database, label: 'Memory' },
-        { to: '/messaging-access', icon: Shield, label: 'Security' },
-        { to: '/settings', icon: Settings, label: 'Settings' },
+        { to: '/', icon: LayoutDashboard, label: t('nav.dashboard') },
+        { to: '/chat', icon: MessageSquare, label: t('nav.console') },
+        { to: '/tasks', icon: ClipboardCheck, label: t('nav.tasks') },
+        { to: '/skills', icon: Cpu, label: t('nav.skills') },
+        { to: '/memory', icon: Database, label: t('nav.memory') },
+        { to: '/messaging-access', icon: Shield, label: t('nav.security') },
+        { to: '/settings', icon: Settings, label: t('nav.settings') },
     ];
 
     return (
@@ -92,13 +94,14 @@ const DashboardLayout = () => {
                 <header className="glass" style={{
                     height: 'var(--header-height)',
                     minHeight: 'var(--header-height)',
-                    width: 'calc(100% - 2rem)',
-                    margin: '1rem 1rem 0.5rem',
+                    width: 'calc(100% - 1rem)',
+                    margin: '0.5rem 0.5rem 0',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    padding: '0 1.5rem',
+                    padding: '0 1.25rem',
                     borderRadius: 'var(--radius-md)',
+                    borderBottom: '1px solid var(--card-border)',
                     zIndex: 1000,
                     flexShrink: 0
                 }}>
@@ -113,7 +116,7 @@ const DashboardLayout = () => {
                                 }
                             }}
                             style={{ padding: '0.5rem', marginRight: '-0.5rem', color: 'var(--text-primary)' }}
-                            title={isBelowDesktop ? "Menu" : "Toggle Sidebar"}
+                            title={isBelowDesktop ? t('header.menu') : t('header.toggle_sidebar')}
                         >
                             <Menu size={20} />
                         </button>
@@ -147,7 +150,7 @@ const DashboardLayout = () => {
                                 setIsHeaderCollapsed(true);
                             }}
                             style={{ padding: '0.45rem', color: 'var(--text-muted)' }}
-                            title="Recolher cabeçalho"
+                            title={t('header.collapse')}
                         >
                             <ChevronUp size={18} />
                         </button>
@@ -173,7 +176,7 @@ const DashboardLayout = () => {
                         background: 'var(--card-bg)',
                         border: '1px solid var(--card-border)',
                         color: 'var(--text-primary)',
-                        boxShadow: '0 8px 20px rgba(0,0,0,0.35)'
+                        boxShadow: 'var(--shadow-md)'
                     }}
                 >
                     <ChevronDown size={16} />
@@ -185,10 +188,10 @@ const DashboardLayout = () => {
                 {/* Sidebar */}
                 <aside className={`glass ${isBelowDesktop ? 'sidebar-drawer' : ''} ${isDrawerOpen ? 'open' : ''}`} style={{
                     width: isCollapsed && !isBelowDesktop ? '0px' : 'var(--sidebar-width)',
-                    margin: isBelowDesktop ? '0' : (isCollapsed ? '0.5rem 0 1rem 0' : '0.5rem 0 1rem 1rem'),
+                    margin: isBelowDesktop ? '0' : (isCollapsed ? '0.5rem 0 0.5rem 0' : '0.5rem 0 0.5rem 0.5rem'),
                     display: 'flex',
                     flexDirection: 'column',
-                    padding: (isCollapsed && !isBelowDesktop) ? '0' : '1rem 0.75rem',
+                    padding: (isCollapsed && !isBelowDesktop) ? '0' : '1rem 0.625rem',
                     opacity: (isCollapsed && !isBelowDesktop) ? 0 : 1,
                     transition: 'var(--transition-base)',
                     position: isBelowDesktop ? 'fixed' : 'relative',
@@ -292,10 +295,12 @@ const DashboardLayout = () => {
                         position: 'relative',
                         minHeight: 0,
                         overflowY: (isChat || location.pathname === '/skills' || location.pathname === '/memory') ? 'hidden' : 'auto',
-                        borderRadius: 'var(--radius-lg)',
-                        padding: (isChat || isBelowDesktop) ? '0' : '0 var(--space-4)',
+                        borderRadius: 'var(--radius-md)',
+                        padding: (isChat || isBelowDesktop) ? '0' : '0 var(--space-2)',
                         display: 'flex',
-                        flexDirection: 'column'
+                        flexDirection: 'column',
+                        background: 'rgba(255, 255, 255, 0.01)',
+                        border: '1px solid var(--card-border)'
                     }}>
                         <Outlet />
                     </div>

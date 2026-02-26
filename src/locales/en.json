@@ -23,5 +23,9 @@
   "reply.media_takeover_cancelled": "Understood. I kept the current media task and did not take over.",
   "reply.media_takeover_started": "Done. I forced takeover from the previous media task and started your new request.",
   "reply.worker_session_missing": "I could not continue because this worker has no valid parent session. Please start from an existing session.",
-  "reply.approval_target_missing": "I could not request approval because the owner session is missing. Please restart this task from your active session."
+  "reply.approval_target_missing": "I could not request approval because the owner session is missing. Please restart this task from your active session.",
+  "status.thinking_next_action": "Thinking about next action...",
+  "reply.loop_stuck": "I am stuck on action '{action_id}' with no real progress. Please refine the goal or allow a different strategy.",
+  "reply.loop_stuck_recover": "Repeated action detected in {action_id}; consolidating the latest valid result.",
+  "reply.media_control_manual": "Could not control media automatically. Please adjust manually."
 }

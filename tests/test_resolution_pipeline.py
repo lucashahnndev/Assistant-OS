@@ -14,6 +14,9 @@ class DummyLLMManager:
     def generate_intent(self, user_input, history, system_prompt, attachments=None):
         return self._intent
 
+    def get_active_config(self):
+        return {"max_context": 8000}
+
 
 class DummySkill(SkillBase):
     def __init__(self, name: str, namespace: str, actions: list[str], contract: dict | None = None):
@@ -207,6 +210,19 @@ def test_semantic_resolver_prefers_wikipedia_for_explicit_intent():
     assert plan.args.get("query") == "energia solar"
 
 
+def test_semantic_resolver_wikipedia_summary_prompt_extracts_topic_not_instruction_tail():
+    registry = _registry()
+    resolver = SemanticResolver(threshold=0.92, skill_registry=registry)
+    plan = resolver.resolve(
+        "pesquisa sobre foguetes na wikipedia e forneça um resumo",
+        {"allowed_actions": ["wikipedia.search", "web.search.discover"], "skill_registry": registry},
+    )
+
+    assert plan is not None
+    assert plan.action_id == "wikipedia.search"
+    assert plan.args.get("query") == "foguetes"
+
+
 def test_semantic_resolver_generic_search_stays_on_web_search():
     registry = _registry()
     resolver = SemanticResolver(threshold=0.92, skill_registry=registry)
@@ -271,6 +287,31 @@ def test_semantic_resolver_matches_task_create_for_portuguese_prompt():
     assert isinstance(plan.args.get("context"), str)
     assert len(plan.args.get("name")) > 0
     assert len(plan.args.get("context")) > 0
+
+
+def test_semantic_resolver_retries_last_action_plan_on_retry_prompt():
+    registry = _registry()
+    session = Session("resolver-retry")
+    session.context["last_action_plan"] = {
+        "action_id": "system.control.screenshot",
+        "args": {},
+        "status": "failure",
+        "reason": "SYSTEM_DRIVER_UNAVAILABLE",
+    }
+    resolver = SemanticResolver(threshold=0.92, skill_registry=registry)
+    plan = resolver.resolve(
+        "rode novamente, atualizei o ambiente",
+        {
+            "session": session,
+            "allowed_actions": ["system.control.screenshot", "web.search.discover"],
+            "skill_registry": registry,
+        },
+    )
+
+    assert plan is not None
+    assert plan.action_id == "system.control.screenshot"
+    assert plan.args == {}
+    assert plan.metadata.get("semantic_rule") == "retry_last_action"
 
 
 def test_fallback_chain_uses_semantic_when_llm_confidence_is_rejected():

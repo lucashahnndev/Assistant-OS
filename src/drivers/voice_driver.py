@@ -5,7 +5,7 @@ from core.identity import PrincipalContext
 from drivers.voice.assistant import Assistant
 from drivers.voice.interface import AssistantInterface
 from utils.cli import clear_console
-from services.tts import TTSManager
+from services.tts.manager import TTSManager
 from utils.logging_config import get_logger
 import os
 
@@ -34,7 +34,15 @@ class VoiceDriver(BaseDriver):
         stt_config = cm.get_stt_config()
         interface_config = cm.get_interfaces_config().get('voice', {})
         
-        stt_provider = stt_config.get('provider', 'google')
+        stt_provider = 'google'
+        if isinstance(stt_config, list) and stt_config:
+            # Sort by priority and find first enabled
+            active_stts = [s for s in sorted(stt_config, key=lambda x: x.get('priority', 99)) if s.get('enabled', True)]
+            if active_stts:
+                stt_provider = active_stts[0].get('provider', 'google')
+        elif isinstance(stt_config, dict):
+            stt_provider = stt_config.get('provider', 'google')
+            
         # Note: Assistant class might need raw string for 'voice_recognition_engineering'
         # e.g 'google', 'vosk', 'openai'
         
@@ -54,7 +62,15 @@ class VoiceDriver(BaseDriver):
         
         # Load Credentials
         # Only set if explicitly provided in config, otherwise assume Env Var is set externally
-        google_creds = stt_config.get('google_credentials_path')
+        google_creds = None
+        if isinstance(stt_config, list) and stt_config:
+            for s in stt_config:
+                if s.get('provider') == 'google':
+                    google_creds = s.get('google_credentials_path')
+                    break
+        elif isinstance(stt_config, dict):
+            google_creds = stt_config.get('google_credentials_path')
+            
         if google_creds:
              if os.path.exists(google_creds):
                  self.assistant.google_cloud_credentials(google_creds)

@@ -1,0 +1,47 @@
+{
+    "provider": "local_openai",
+    "display_name": "Local Server (OpenAI Compatible)",
+    "supports": [
+        "chat",
+        "vision"
+    ],
+    "defaults": {
+        "base_url": "http://127.0.0.1:8081/v1",
+        "model": "qwen2.5",
+        "timeout": 130,
+        "max_tokens": 512
+    },
+    "fields": [
+        {
+            "name": "api_key_ref",
+            "type": "env_ref",
+            "label": "API Key (optional)",
+            "required": false
+        },
+        {
+            "name": "base_url",
+            "type": "string",
+            "label": "Base URL",
+            "required": true
+        },
+        {
+            "name": "model",
+            "type": "string",
+            "label": "Model Name",
+            "required": true
+        },
+        {
+            "name": "timeout",
+            "type": "number",
+            "label": "Timeout (s)",
+            "required": false
+        },
+        {
+            "name": "max_tokens",
+            "type": "number",
+            "label": "Max Tokens",
+            "required": false
+        }
+    ],
+    "models": []
+}

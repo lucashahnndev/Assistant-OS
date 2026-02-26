@@ -2,6 +2,8 @@ from typing import List, Dict, Any, Optional, Tuple
 import json
 import os
 import re
+import time
+import uuid
 from openai import OpenAI
 from core.intent import AgentIntent
 from drivers.llm.base import ILLMProvider
@@ -11,7 +13,7 @@ from utils.logging_config import get_logger
 logger = get_logger("OpenRouterDriver")
 
 class OpenRouterProvider(ILLMProvider):
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
         # OpenRouter uses the same library/protocol as OpenAI
         self.api_key = config.get('api_key')
         self.model = config.get('model', 'openai/gpt-3.5-turbo') # Default
@@ -21,32 +23,60 @@ class OpenRouterProvider(ILLMProvider):
              cm = ConfigManager()
              self.api_key = cm.get('openrouter', {}).get('api_key')
 
+        timeout_cfg = config.get("timeout", 30)
+        try:
+            self.timeout = float(timeout_cfg)
+        except Exception:
+            self.timeout = 30.0
+
         self.client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=self.api_key,
+            timeout=self.timeout,
         )
         # Vision models on free/low-credit accounts frequently fail with high max_tokens.
         # Keep a conservative default and allow override per provider config.
         self.vision_max_tokens = int(config.get("vision_max_tokens", config.get("max_tokens", 512)))
 
-    def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] = None) -> AgentIntent:
+    def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] | None = None, **kwargs) -> AgentIntent:
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history)
         messages.append({"role": "user", "content": user_input})
 
-        logger.info(f"OpenRouter Request Started | Model: {self.model} | History: {len(history)} messages")
+        req_id = uuid.uuid4().hex[:8]
+        max_tokens = int(kwargs.get("max_tokens", self.vision_max_tokens))
+        sys_tok = self._estimate_tokens(system_prompt)
+        user_tok = self._estimate_tokens(user_input)
+        history_tok = sum(self._estimate_tokens(str(m.get("content", ""))) for m in history)
+        est_prompt_tokens = sys_tok + history_tok + user_tok
+        request_started_at = time.perf_counter()
+
+        logger.info(
+            "OpenRouter Request Started | ReqId: %s | Model: %s | History: %d messages | MaxTokens: %d | EstPromptTokens: %d (system=%d history=%d user=%d)",
+            req_id,
+            self.model,
+            len(history),
+            max_tokens,
+            est_prompt_tokens,
+            sys_tok,
+            history_tok,
+            user_tok,
+        )
 
         try:
             # We remove 'tools' and 'tool_choice' to support generic models
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                timeout=60.0,
+                timeout=self.timeout,
                 extra_headers={
                     "HTTP-Referer": "https://github.com/lucas-openclaw/aosd", # Optional: Change to your site
                     "X-Title": "Atlas Bot"
-                }
+                },
+                max_tokens=max_tokens
             )
+
+            duration_ms = int((time.perf_counter() - request_started_at) * 1000)
 
             if not response.choices or not response.choices[0].message.content:
                 logger.error("OpenRouter returned an empty response.")
@@ -59,6 +89,36 @@ class OpenRouterProvider(ILLMProvider):
 
             content = response.choices[0].message.content.strip()
             logger.info(f"Raw LLM Response (Len: {len(content)}): {content[:100]}...")
+            usage = getattr(response, "usage", None)
+            prompt_tokens = getattr(usage, "prompt_tokens", None) if usage else None
+            completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
+            total_tokens = getattr(usage, "total_tokens", None) if usage else None
+
+            prompt_source = "provider"
+            completion_source = "provider"
+            if prompt_tokens is None:
+                prompt_tokens = est_prompt_tokens
+                prompt_source = "estimated"
+            if completion_tokens is None:
+                completion_tokens = self._estimate_tokens(content)
+                completion_source = "estimated"
+            if total_tokens is None:
+                total_tokens = int(prompt_tokens) + int(completion_tokens)
+
+            tok_per_sec = round((float(completion_tokens) / max(duration_ms / 1000.0, 0.001)), 2)
+            logger.info(
+                "OpenRouter Metrics | ReqId: %s | Model: %s | DurationMs: %d | PromptTokens: %s (%s) | CompletionTokens: %s (%s) | TotalTokens: %s | OutChars: %d | TokPerSec: %.2f",
+                req_id,
+                self.model,
+                duration_ms,
+                prompt_tokens,
+                prompt_source,
+                completion_tokens,
+                completion_source,
+                total_tokens,
+                len(content),
+                tok_per_sec,
+            )
             
             data = self._extract_json(content)
             if data is None:
@@ -79,10 +139,25 @@ class OpenRouterProvider(ILLMProvider):
                 )
 
             # VALIDATION & EXTRACTION
-            thought = data.get("thought", "").strip() or "Reasoning omitted by model."
-            action = data.get("action", "").strip()
+            thought = str(data.get("thought", "") or "").strip() or "Reasoning omitted by model."
+            action = str(data.get("action", "") or "").strip()
             params = data.get("params", {})
-            response_text = data.get("response_text", "")
+            response_text_raw = data.get("response_text", "")
+            if isinstance(response_text_raw, str):
+                response_text = response_text_raw
+            elif response_text_raw is None:
+                response_text = ""
+            elif isinstance(response_text_raw, dict):
+                candidate = (
+                    response_text_raw.get("text")
+                    or response_text_raw.get("response")
+                    or response_text_raw.get("message")
+                )
+                response_text = str(candidate) if candidate is not None else json.dumps(response_text_raw, ensure_ascii=False)
+            elif isinstance(response_text_raw, list):
+                response_text = json.dumps(response_text_raw, ensure_ascii=False)
+            else:
+                response_text = str(response_text_raw)
 
             # When malformed JSON is partially parsed (e.g., only "thought"),
             # avoid defaulting blindly to "reply" with empty text.
@@ -111,29 +186,71 @@ class OpenRouterProvider(ILLMProvider):
                     if not isinstance(params, dict) or not params:
                         params = inferred_params
             
+            normalized_plan = self._normalize_plan_field(data.get("plan", []))
+            state_summary = data.get("state_summary", {})
+            if not isinstance(state_summary, dict):
+                state_summary = {}
+
             attachments = data.get("attachments")
             if not attachments and isinstance(params, dict):
                 attachments = params.get("attachments")
+            normalized_attachments: Optional[List[str]] = None
+            if isinstance(attachments, str) and attachments.strip():
+                normalized_attachments = [attachments.strip()]
+            elif isinstance(attachments, list):
+                cleaned = [str(x).strip() for x in attachments if str(x).strip()]
+                normalized_attachments = cleaned or None
+
+            task_label = data.get("task_label")
+            if task_label is not None:
+                task_label = str(task_label)
 
             return AgentIntent(
                 thought=thought,
-                plan=data.get("plan", []),
-                state_summary=data.get("state_summary", {}),
+                plan=normalized_plan,
+                state_summary=state_summary,
                 action=action,
                 params=params if isinstance(params, dict) else {},
-                task_label=data.get("task_label"),
+                task_label=task_label,
                 response_text=response_text,
-                attachments=attachments
+                attachments=normalized_attachments
             )
 
         except Exception as e:
-            logger.error(f"OpenRouter Error: {e}")
-            return AgentIntent(
-                thought="Connection Error",
-                action="error",
-                params={"error": str(e)},
-                response_text="I can't reach the cloud brain."
-            )
+            duration_ms = int((time.perf_counter() - request_started_at) * 1000)
+            logger.error("OpenRouter Error | ReqId: %s | DurationMs: %d | Error: %s", req_id, duration_ms, e)
+            raise e
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        # Fast approximation for local telemetry when provider usage is unavailable.
+        value = str(text or "")
+        if not value:
+            return 0
+        return max(1, len(value) // 4)
+
+    @staticmethod
+    def _normalize_plan_field(raw_plan: Any) -> List[str]:
+        out: List[str] = []
+
+        def _walk(value: Any) -> None:
+            if value is None:
+                return
+            if isinstance(value, str):
+                text = value.strip()
+                if text:
+                    out.append(text)
+                return
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    _walk(item)
+                return
+            text = str(value).strip()
+            if text:
+                out.append(text)
+
+        _walk(raw_plan)
+        return out[:16]
 
     @staticmethod
     def _extract_json(content: str) -> Dict[str, Any] | None:
@@ -401,9 +518,9 @@ class OpenRouterProvider(ILLMProvider):
             return "The model returned no description."
         except Exception as e:
             logger.error(f"OpenRouter Vision Error: {e}")
-            return f"Error in vision analysis: {e}"
+            raise e
 
-    def generate_text(self, prompt: str, system_prompt: str = "") -> str:
+    def generate_text(self, prompt: str, system_prompt: str = "", **kwargs) -> str:
         """Generates plain text using OpenRouter."""
         try:
             messages = []
@@ -414,9 +531,10 @@ class OpenRouterProvider(ILLMProvider):
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                temperature=0.3
+                temperature=0.3,
+                max_tokens=kwargs.get("max_tokens", 512)
             )
             return response.choices[0].message.content.strip() if response.choices else "Error: Empty response from OpenRouter."
         except Exception as e:
             logger.error(f"OpenRouter generate_text error: {e}")
-            return f"Error generating text: {e}"
+            raise e

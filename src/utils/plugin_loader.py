@@ -28,6 +28,10 @@ class PluginLoader:
 
         # List all python files
         for filename in os.listdir(directory):
+            # Skip abstract/base modules to avoid reloading base classes and
+            # breaking issubclass checks across plugin imports.
+            if filename == "base.py":
+                continue
             if filename.endswith(".py") and not filename.startswith("__"):
                 module_name = filename[:-3]
                 try:

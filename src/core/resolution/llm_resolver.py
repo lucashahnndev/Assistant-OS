@@ -18,9 +18,16 @@ class LLMResolver(IntentResolver):
             logger.warning("No session provided for LLMResolver")
             return None
         
-        system_prompt = context.get("system_prompt", "")
+        # Get limits from active instance in manager
+        active_config = self.llm_manager.get_active_config()
+        max_context = int(active_config.get("max_context", 8000))
+        
+        # History strategy: try to keep history within 40% of context to leave room for system prompt and output
+        history_budget = int(max_context * 0.4)
+        
         # Get history from context or session
-        history = context.get("history") or session.get_context_for_llm(limit_msgs=5)
+        history = context.get("history") or session.get_context_for_llm(limit_tokens=history_budget, limit_msgs=5)
+        system_prompt = context.get("system_prompt", "")
         attachments = context.get("attachments")
         local_context = dict(context)
         local_context["user_input"] = user_input
@@ -126,6 +133,56 @@ class LLMResolver(IntentResolver):
                 if text.startswith(progress_prefixes) and any(c in user_input for c in command_cues):
                     score -= 0.45
                     notes.append("reply_progress_stub_for_operational_request")
+
+                # Harder guardrail: for clearly operational requests, avoid accepting
+                # a plain reply as first choice. Let semantic/reflex resolvers pick an action.
+                operational_cues = (
+                    "open",
+                    "play",
+                    "search",
+                    "find",
+                    "run",
+                    "execute",
+                    "take screenshot",
+                    "screen capture",
+                    "abre",
+                    "abrir",
+                    "toca",
+                    "tocar",
+                    "reproduz",
+                    "reproduzir",
+                    "busca",
+                    "buscar",
+                    "pesquisa",
+                    "pesquisar",
+                    "captura de tela",
+                    "print da tela",
+                    "screenshot",
+                    "wikipedia",
+                    "youtube",
+                    "spotify",
+                    "deezer",
+                )
+                informative_cues = (
+                    "o que é",
+                    "what is",
+                    "explique",
+                    "explain",
+                    "resuma",
+                    "summary",
+                    "resumo",
+                    "descreva",
+                    "describe",
+                    "liste",
+                    "list",
+                    "quais",
+                    "which",
+                )
+                is_operational_request = any(c in user_input for c in operational_cues)
+                is_informational_request = any(c in user_input for c in informative_cues)
+                if is_operational_request and not is_informational_request:
+                    score -= 0.45
+                    notes.append("reply_for_operational_request")
             else:
                 has_attachments = isinstance(getattr(intent, "attachments", None), list) and len(intent.attachments) > 0
                 if has_attachments:

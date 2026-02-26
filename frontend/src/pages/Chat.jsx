@@ -476,7 +476,7 @@ const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agent
                                 padding: '4px 10px',
                                 background: 'var(--bg-color)',
                                 border: '1px solid var(--card-border)',
-                                borderRadius: '12px',
+                                borderRadius: '8px',
                                 boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
                                 flexShrink: 0
                             }}
@@ -654,7 +654,7 @@ const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agent
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     );
 });
 
@@ -1434,6 +1434,26 @@ const Chat = () => {
         }
     }, [showChatProfile, selectedId]);
 
+    useEffect(() => {
+        if (!showChatProfile || !selectedId) return;
+        let cancelled = false;
+        const tick = async () => {
+            try {
+                const data = await api.get(`/sessions/${selectedId}`);
+                if (cancelled || !data) return;
+                setCurrentSession(prev => (prev ? { ...prev, runtime_metrics: data.runtime_metrics || {} } : prev));
+            } catch (error) {
+                // Silent refresh loop for metrics.
+            }
+        };
+        tick();
+        const interval = setInterval(tick, 3000);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [showChatProfile, selectedId]);
+
     // Also fetch playback runs on session load for inline rendering
     useEffect(() => {
         if (selectedId) {
@@ -1442,7 +1462,7 @@ const Chat = () => {
     }, [selectedId]);
 
     const ChatProfile = ({ desktopFullWidth = false }) => {
-        const [activeTab, setActiveTab] = useState('media'); // 'media' | 'docs' | 'links' | 'playback'
+        const [activeTab, setActiveTab] = useState('media'); // 'media' | 'docs' | 'links' | 'playback' | 'metrics'
         const [expandedPlayback, setExpandedPlayback] = useState(null); // run_id of currently expanded playback
 
         const normalizeAssetPath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
@@ -1475,6 +1495,10 @@ const Chat = () => {
         };
 
         const links = (sessionMedia?.links || []).filter(l => !isInternalLink(l));
+        const runtimeMetrics = currentSession?.runtime_metrics || {};
+        const promptMetrics = runtimeMetrics.prompt || {};
+        const turnMetrics = runtimeMetrics.turn || {};
+        const obsMetrics = runtimeMetrics.latest_observation || {};
         const desktopSplitProfileWidth = chatPaneWidth > 0
             ? Math.min(Math.max(Math.round(chatPaneWidth * 0.5), 440), 900)
             : 540;
@@ -1487,7 +1511,7 @@ const Chat = () => {
                 flexDirection: 'column',
                 background: 'var(--card-bg)',
                 borderLeft: (isMobile || desktopFullWidth) ? 'none' : '1px solid var(--card-border)',
-                borderRadius: isMobile ? '0' : (desktopFullWidth ? '0' : '0 var(--radius-lg) var(--radius-lg) 0'),
+                borderRadius: desktopFullWidth ? '0' : (isMobile ? '0' : '8px 0 0 8px'),
                 zIndex: 2500,
                 position: isMobile ? 'fixed' : 'relative',
                 right: 0,
@@ -1514,7 +1538,7 @@ const Chat = () => {
                     </div>
 
                     <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', borderBottom: '1px solid var(--card-border)', paddingBottom: '12px' }}>
-                        {['media', 'docs', 'links'].map(tab => (
+                        {['media', 'docs', 'links', 'metrics'].map(tab => (
                             <button
                                 key={tab}
                                 onClick={() => setActiveTab(tab)}
@@ -1530,7 +1554,7 @@ const Chat = () => {
                                     transition: '0.2s'
                                 }}
                             >
-                                {tab === 'media' ? 'Fotos' : tab === 'docs' ? 'Files' : tab === 'links' ? 'Links' : 'Playback'}
+                                {tab === 'media' ? 'Fotos' : tab === 'docs' ? 'Files' : tab === 'links' ? 'Links' : tab === 'metrics' ? 'Metrics' : 'Playback'}
                             </button>
                         ))}
                         {playbackRuns.length > 0 && (
@@ -1693,6 +1717,29 @@ const Chat = () => {
                                     )) : (
                                         <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>Nenhum playback.</div>
                                     )}
+                                </div>
+                            )}
+
+                            {activeTab === 'metrics' && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                    <div style={{ padding: '12px', borderRadius: '10px', border: '1px solid var(--card-border)', background: 'rgba(255,255,255,0.02)' }}>
+                                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>Prompt</div>
+                                        <div style={{ fontSize: '13px', color: 'var(--text-main)' }}>Total: ~{promptMetrics.prompt_tokens_approx || 0} tokens</div>
+                                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Actions: ~{promptMetrics?.block_tokens_approx?.['[AVAILABLE ACTIONS]'] || 0} · Dynamic: ~{promptMetrics?.block_tokens_approx?.['[DYNAMIC CONTEXT]'] || 0}</div>
+                                    </div>
+
+                                    <div style={{ padding: '12px', borderRadius: '10px', border: '1px solid var(--card-border)', background: 'rgba(255,255,255,0.02)' }}>
+                                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>Turn</div>
+                                        <div style={{ fontSize: '13px', color: 'var(--text-main)' }}>Latency: {turnMetrics.duration_ms || 0} ms</div>
+                                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loops: {turnMetrics.loops || 0} · Lock wait: {turnMetrics.lock_wait_ms || 0} ms</div>
+                                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Last action: {turnMetrics.last_action || '-'}</div>
+                                    </div>
+
+                                    <div style={{ padding: '12px', borderRadius: '10px', border: '1px solid var(--card-border)', background: 'rgba(255,255,255,0.02)' }}>
+                                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>Observation</div>
+                                        <div style={{ fontSize: '13px', color: 'var(--text-main)' }}>Raw: ~{obsMetrics.raw_tokens_approx || 0} · Truncated: ~{obsMetrics.truncated_tokens_approx || 0}</div>
+                                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Summarized: {obsMetrics.summarized ? 'yes' : 'no'} · Total observations: {runtimeMetrics.observation_count || 0}</div>
+                                    </div>
                                 </div>
                             )}
                         </div>
@@ -2123,12 +2170,12 @@ const Chat = () => {
                     flexDirection: 'column',
                     overflow: 'hidden',
                     transition: 'var(--transition)',
-                    borderRadius: isMobile ? '0' : '16px'
+                    borderRadius: isMobile ? '0' : '8px'
                 }}>
                     <div className="glass" style={{
                         padding: (isSessionsCollapsed && !isMobile) ? '8px 0' : '8px 14px',
                         margin: '12px 12px 12px 12px',
-                        borderRadius: '12px',
+                        borderRadius: '8px',
                         display: 'flex',
                         flexDirection: (isSessionsCollapsed && !isMobile) ? 'column' : 'row',
                         alignItems: 'center',
@@ -2223,7 +2270,7 @@ const Chat = () => {
                     flexDirection: 'column',
                     position: 'relative',
                     overflow: 'hidden',
-                    borderRadius: isMobile ? '0' : '16px'
+                    borderRadius: isMobile ? '0' : '8px'
                 }}>
                     <PreviewModal />
 
@@ -2430,7 +2477,7 @@ const Chat = () => {
                                         flexDirection: 'column',
                                         background: 'var(--card-bg)',
                                         border: '1px solid var(--card-border)',
-                                        borderRadius: isMobile ? '24px' : '16px',
+                                        borderRadius: isMobile ? '12px' : '8px',
                                         boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
                                         overflow: 'hidden',
                                         transition: 'var(--transition)'

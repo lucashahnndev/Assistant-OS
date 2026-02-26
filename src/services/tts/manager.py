@@ -11,76 +11,86 @@ logger = get_logger(__name__)
 class TTSManager:
     def __init__(self):
         self.config_manager = ConfigManager()
-        self.tts_config = self.config_manager.get_tts_config()
-        
-        self.providers = {}
-        self.primary_provider = None
-        self.fallback_provider = None
-        
+        self._load_config()
         self._load_providers()
+        
+    def reload(self):
+        logger.info("Hot Reloading TTSManager...")
+        self._load_config()
+        self._load_providers()
+        logger.info("TTSManager Reloaded with new pool.")
+
+    def _load_config(self):
+        self.tts_config = self.config_manager.get_tts_config()
+        if isinstance(self.tts_config, dict):
+            self.tts_config = [] # Failsafe
 
     def _load_providers(self):
-        # Path to providers directory
+        self.tts_pool = []
         providers_dir = os.path.join(os.path.dirname(__file__), 'providers')
         
-        # Load all plugins implementing ITTSProvider
         loaded_classes = PluginLoader.load_plugins(providers_dir, ITTSProvider)
         
-        for name, provider_class in loaded_classes.items():
-            # Standardize names: 'edge' from 'edge.py' becomes 'edge_tts' if needed
-            # For now, we use the module name as the key (e.g., 'edge', 'google', 'system')
-            # But our config uses 'edge_tts', 'google_cloud'. 
-            # We need a mapping or we rename the files/keys. 
-            # Let's handle a simple mapping based on common names or config keys.
-            
-            # Helper to map filename to config key
-            key_map = {
-                'edge': 'edge_tts',
-                'google': 'google_cloud',
-                'system': 'system'
-            }
-            
-            config_key = key_map.get(name, name)
-            
-            try:
-                # Instantiate with specific config
-                provider_config = self.tts_config['providers'].get(config_key, {})
-                instance = provider_class(provider_config)
-                self.providers[config_key] = instance
-                logger.info(f"Loaded TTS Provider: {config_key} ({name})")
-            except Exception as e:
-                logger.error(f"Failed to instantiate TTS Provider {name}: {e}")
+        if not loaded_classes:
+            logger.warning("No TTS Providers found!")
+            return
 
-        # Set Primary and Fallback
-        primary_name = self.tts_config.get('provider', 'system')
-        self.primary_provider = self.providers.get(primary_name)
-        
-        fallback_name = self.tts_config.get('fallback', 'system')
-        self.fallback_provider = self.providers.get(fallback_name)
+        def normalize_name(name):
+            key = name.lower().replace("_provider", "")
+            if 'edge' in key: return 'edge_tts'
+            if 'google' in key: return 'google_cloud'
+            return key
 
-        if not self.primary_provider:
-             logger.warning(f"Primary TTS provider '{primary_name}' not found. Using Fallback.")
-             self.primary_provider = self.fallback_provider
+        for inst_cfg in sorted(self.tts_config, key=lambda x: x.get('priority', 99)):
+            if not inst_cfg.get('enabled', True):
+                continue
+                
+            prov_name = inst_cfg.get('provider', '')
+            norm = normalize_name(prov_name)
+            
+            def match_class(cname):
+                return normalize_name(cname) == norm or cname == norm
+                
+            cls = next((c for n, c in loaded_classes.items() if match_class(n)), None)
+            
+            if cls:
+                try:
+                    instance = cls(inst_cfg)
+                    self.tts_pool.append({
+                        'id': inst_cfg.get('id', prov_name),
+                        'provider': prov_name,
+                        'instance': instance
+                    })
+                    logger.info(f"Loaded TTS Provider Instance: {inst_cfg.get('id', prov_name)} (Priority: {inst_cfg.get('priority', 99)})")
+                except Exception as e:
+                    logger.error(f"Failed to instantiate TTS Provider {prov_name}: {e}")
 
     def speak(self, text):
         if not text:
             return
 
-        success = False
-        
-        # Try Primary
-        if self.primary_provider and self.primary_provider.is_available():
+        if not self.tts_pool:
+            logger.error("No active TTS providers in the pool.")
+            return
+            
+        last_error = ""
+        for item in self.tts_pool:
+            provider_id = item['id']
+            instance = item['instance']
             try:
-                success = self.primary_provider.speak(text)
+                if instance.is_available():
+                    success = instance.speak(text)
+                    if success:
+                        return
+                    else:
+                        logger.warning(f"TTS Provider {provider_id} returned false. Falling back...")
+                else:
+                    logger.warning(f"TTS Provider {provider_id} is unavailable. Falling back...")
             except Exception as e:
-                logger.error(f"Primary TTS provider failed: {e}")
-                success = False
-        
-        # Try Fallback if Primary failed
-        if not success and self.fallback_provider:
-            logger.info("Switching to Fallback TTS Provider.")
-            try:
-                self.fallback_provider.speak(text)
-            except Exception as e:
-                 logger.error(f"Fallback TTS provider failed: {e}")
+                error_msg = str(e)
+                logger.warning(f"TTS Provider {provider_id} failed: {error_msg}. Falling back to next...")
+                last_error = error_msg
+                continue
+                
+        logger.error(f"All TTS providers failed. Last error: {last_error}")
 

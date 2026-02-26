@@ -7,6 +7,7 @@ import time
 import datetime
 import platform
 import shutil
+from collections import deque
 from typing import Optional, List, Dict, Callable, Any
 from services.llm.manager import LLMManager
 from core.session import Session
@@ -23,8 +24,10 @@ from services.i18n import I18nService
 from services.llm.prompt_composer import PromptComposer
 from config.manager import ConfigManager
 from services.location.location_service import LocationService
+from services.search.query_semantics import QuerySemantics
 from utils.logging_config import get_logger, read_recent_logs
 from utils.event_bus import global_event_bus
+from utils.toon_codec import encode_reasoning_step, encode_state_summary, dumps_toon
 
 # New Resolution and Skill imports
 from core.resolution.chain_resolver import FallbackChainResolver
@@ -75,6 +78,10 @@ class AgentOrchestrator:
         self.session_locks = {} # Concurrency guards + persistence serialization (RLock per session)
         self.browser_driver = None
         self.system_driver = None
+        self._instruction_pack_cache: Dict[str, str] = {}
+        self._prompt_metrics_cache: Dict[str, Dict[str, Any]] = {}
+        self._turn_metrics_cache: Dict[str, Dict[str, Any]] = {}
+        self._observation_metrics_cache: Dict[str, deque] = {}
         # Persistence Path
         self.base_data_dir = self.config_manager.base_data_dir
         self.sessions_dir = os.path.join(self.base_data_dir, 'sessions')
@@ -688,6 +695,12 @@ class AgentOrchestrator:
                             continue
                         if filename_lower.startswith("avatar_"):
                             continue
+                        if filename_lower.startswith("collab_step_"):
+                            try:
+                                os.remove(file_path)
+                            except Exception:
+                                pass
+                            continue
                         if normalized_rel_lower.startswith("media/profile_picture/") or "/profile_picture/" in normalized_rel_lower:
                             continue
                         
@@ -1008,6 +1021,24 @@ class AgentOrchestrator:
         pt_hits = sum(1 for m in pt_markers if m in padded)
         en_hits = sum(1 for m in en_markers if m in padded)
 
+        # Strong lexical cues for short colloquial PT-BR messages.
+        pt_strong_patterns = [
+            r"\b(oi|olá|ola|opa|eai|blz|beleza)\b",
+            r"\b(toca|tocar|reproduz|reproduzir|pausa|pausar|pr[oó]xima|proxima)\b",
+            r"\b(m[uú]sica|musica|faixa|cantor|artista)\b",
+            r"\b(me passa|me manda|quero|pode|por favor)\b",
+        ]
+        en_strong_patterns = [
+            r"\b(hello|hi|hey)\b",
+            r"\b(play|pause|resume|next)\b",
+            r"\b(song|track|artist)\b",
+            r"\b(please|can you|could you|would you)\b",
+        ]
+        if any(re.search(pattern, text) for pattern in pt_strong_patterns):
+            pt_hits += 2
+        if any(re.search(pattern, text) for pattern in en_strong_patterns):
+            en_hits += 2
+
         if pt_hits > en_hits:
             return "pt-BR"
         if en_hits > pt_hits:
@@ -1049,25 +1080,23 @@ class AgentOrchestrator:
         return any(marker in value for marker in markers)
 
     def _build_contextual_start_ack(self, session: Optional[Session], action_id: str, action_args: Optional[Dict[str, Any]] = None) -> str:
-        locale = self._session_locale(session)
-        is_pt = locale.startswith("pt")
         args = action_args if isinstance(action_args, dict) else {}
         action = str(action_id or "").strip().lower()
 
         if action == "browser.automator.control":
             ctrl = str(args.get("action") or "").strip().lower()
             if ctrl == "pause":
-                return "Entendi, vou pausar a música agora." if is_pt else "Understood, I will pause the music now."
+                return "Understood, I will pause playback now."
             if ctrl == "play":
-                return "Entendi, vou retomar a reprodução agora." if is_pt else "Understood, I will resume playback now."
+                return "Understood, resuming playback now."
             if ctrl == "next":
-                return "Entendi, vou passar para a próxima faixa agora." if is_pt else "Understood, I will skip to the next track now."
+                return "Understood, I will skip to the next track now."
             if ctrl == "mute":
-                return "Entendi, vou silenciar o áudio agora." if is_pt else "Understood, I will mute the audio now."
-            return "Entendi, vou ajustar o controle de mídia agora." if is_pt else "Understood, I will adjust media controls now."
+                return "Understood, I will mute the audio now."
+            return "Understood, adjusting media controls now."
 
         if action in {"system.control.screenshot", "vision.analyze"}:
-            return "Entendi, vou capturar a tela e já te envio." if is_pt else "Understood, I will capture the screen and send it shortly."
+            return "Understood, capturing the screen now."
 
         return self._t(session, "ack.work_started")
 
@@ -1193,6 +1222,10 @@ class AgentOrchestrator:
         Agentic Loop: Input -> Loop [Reason -> Act -> Observe] -> Response
         """
         logger.debug(f"Processing input in session '{session_id}': {user_input}")
+        turn_started_at = time.perf_counter()
+        lock_wait_ms = 0
+        loops = 0
+        last_action_id = None
 
         # Get or Create Session
         session = self.get_session_robust(session_id)
@@ -1202,7 +1235,9 @@ class AgentOrchestrator:
         
         # Concurrency Guard
         # Increased timeout to 120s to accommodate long LLM turns/dashboard generation
+        lock_wait_started_at = time.perf_counter()
         acquired = lock.acquire(blocking=True, timeout=120)
+        lock_wait_ms = int((time.perf_counter() - lock_wait_started_at) * 1000)
         if not acquired:
             logger.warning(f"Timeout waiting for session lock: {session_id}")
             return "I am still processing your previous request. Please wait a moment or try again shortly."
@@ -1300,10 +1335,11 @@ class AgentOrchestrator:
                     return self._t(session, "reply.canceled_sensitive_action")
 
             planner_cfg = self._get_planner_config()
+            prompt_cfg = self.config_manager.get("prompt_context", {}) if hasattr(self, "config_manager") else {}
             max_steps = self._compute_dynamic_max_steps(user_input, plan)
-            replan_budget = max(1, planner_cfg.get("replan_budget", 4))
+            replan_budget = max(1, min(2, planner_cfg.get("replan_budget", 2)))
             replans_used = 0
-
+    
             # 1. Start dynamic reasoning loop (supports long tasks with replanning).
             # User message persistence is now handled by Kernel.process_input
             # to cover all paths (Quick and Worker).
@@ -1337,32 +1373,27 @@ class AgentOrchestrator:
             feedback_cfg = self.config_manager.get("work_feedback", {}) if hasattr(self, "config_manager") else {}
             progress_feedback_enabled = bool(feedback_cfg.get("progress_updates_enabled", True))
             emitted_progress_events: set[str] = set()
-
+    
             def current_step_title() -> str:
                 if not planner_tree:
                     return "current step"
                 current = next((s for s in planner_tree if s.get("status") == "in_progress"), None)
                 title = str((current or {}).get("title") or "").strip()
-                return title or "current step"
-
+                if title:
+                    return title
+                return "current step"
+    
             def progress_note(event: str, action_id: Optional[str] = None) -> str:
-                is_pt = self._session_locale(session).startswith("pt")
                 step = current_step_title()
                 if event == "replan":
-                    if is_pt:
-                        return f"Detectei repetição no passo '{step}'. Vou ajustar a estratégia e seguir por outro caminho."
-                    return f"I detected repetition in step '{step}'. I will adjust the strategy and continue with an alternative path."
+                    return f"Detected repetition in step '{step}'. Adjusting strategy with an alternate path."
                 if event == "failure_recovery":
-                    if is_pt:
-                        return f"Encontrei um problema no passo '{step}' e estou aplicando uma correção."
-                    return f"I found an issue in step '{step}' and I am applying a fix."
+                    return f"I found an issue in step '{step}' and applied a fix."
                 if event == "fallback":
                     label = action_id or "fallback action"
-                    if is_pt:
-                        return f"Esse caminho falhou no passo '{step}'. Vou tentar a alternativa '{label}'."
-                    return f"This path failed in step '{step}'. I will try the fallback '{label}'."
+                    return f"Fallback triggered at step '{step}' via '{label}'."
                 return ""
-
+    
             def emit_user_progress(note: str, event_key: Optional[str] = None):
                 if not progress_feedback_enabled:
                     return
@@ -1379,13 +1410,13 @@ class AgentOrchestrator:
                 if callbacks and "send_status" in callbacks:
                     callbacks["send_status"]("thinking", {"message": text, "kind": "progress"})
                 self._save_session(session)
-
+    
             planner_tree = self._normalize_plan_tree(plan.metadata.get("plan")) if (plan and isinstance(plan.metadata, dict)) else []
             if planner_tree:
                 session.context["planner_tree"] = planner_tree
                 session.plan = self._flatten_plan_lines(planner_tree)
                 session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
-
+    
             self._touch_work_context(
                 work_id,
                 {
@@ -1408,14 +1439,14 @@ class AgentOrchestrator:
                     },
                 },
             )
-
+    
             try:
                 while loops < max_steps:
                     if cancel_check and cancel_check():
                         logger.info(f"Process cancelled for session {session_id}")
                         self._touch_work_context(work_id, {"summary": {"status": "cancelled"}})
                         return "Task canceled by user."
-
+    
                     if work_id:
                         kernel = getattr(self, "kernel", None)
                         scheduler = getattr(kernel, "scheduler", None) if kernel else None
@@ -1452,36 +1483,43 @@ class AgentOrchestrator:
                                     callbacks['send_status']('thinking', {'code': 'paused', 'message': 'Work is paused. Waiting for resume command.'})
                                 time.sleep(0.8)
                                 continue
-
+    
                     loops += 1
                     logger.info(f"--- Session {session_id} | Loop {loops}/{max_steps} ---")
                     
                     if on_partial_response and loops % 3 == 0: 
                         on_partial_response(f"Refining reasoning (Step {loops}/{max_steps})...")
-
+    
                     if not plan:
+                        thinking_label = self.i18n.t("status.thinking_next_action", locale=self._session_locale(session))
                         if callbacks and 'send_status' in callbacks:
-                            callbacks['send_status']('thinking', {'step': loops, 'max_steps': max_steps, 'label': 'Thinking about next action...'})
+                            callbacks['send_status']('thinking', {'step': loops, 'max_steps': max_steps, 'label': thinking_label})
                         
                         # Emit global event for real-time synchronization
                         global_event_bus.emit_threadsafe({
                             "type": "status",
                             "session_id": session_id,
                             "phase": "thinking",
-                            "message": "Thinking about next action...",
+                            "message": thinking_label,
                             "payload": {'step': loops, 'max_steps': max_steps}
                         })
+    
+                        # Apply dynamic context limits for history retrieval
+                        active_config = self.llm_manager.get_active_config()
+                        max_context = int(active_config.get("max_context", 8000))
+                        # For reasoning loops, we reserve more space for reasoning/output (50%)
+                        reasoning_history_budget = int(max_context * 0.5)
 
                         reasoning_context = {
                             "session": session,
                             "system_prompt": self._construct_system_prompt(session, user_input=user_input),
                             "attachments": attachments if loops == 1 else None, # Only send attachments on first reasoning step
-                            "history": session.get_context_for_llm(limit_msgs=20, limit_tokens=6000),
+                            "history": session.get_context_for_llm(limit_msgs=20, limit_tokens=reasoning_history_budget),
                             "allowed_actions": self._get_allowed_actions_for_session(session),
                             "skill_registry": self.skill_registry,
                         }
                         plan = self.intent_resolver_chain.resolve(user_input, reasoning_context)
-
+    
                     if not plan:
                         logger.warning("No plan resolved. Breaking loop.")
                         recovered_reply = self._reply_from_last_success(
@@ -1490,7 +1528,7 @@ class AgentOrchestrator:
                             raw_output=last_action_output,
                             language=self._session_locale(session),
                         ) if last_action_status == "success" else None
-                        final_response = recovered_reply or self._t(session, "reply.no_plan_resolved")
+                        final_response = recovered_reply or self.i18n.t("reply.no_plan_resolved", locale="en")
                         if callbacks and 'send_status' in callbacks:
                             callbacks['send_status'](
                                 'error',
@@ -1501,7 +1539,7 @@ class AgentOrchestrator:
                                 }
                             )
                         break
-
+    
                     if isinstance(plan.metadata, dict) and plan.metadata.get("plan"):
                         candidate = self._normalize_plan_tree(plan.metadata.get("plan"))
                         if candidate:
@@ -1509,11 +1547,11 @@ class AgentOrchestrator:
                             session.context["planner_tree"] = planner_tree
                             session.plan = self._flatten_plan_lines(planner_tree)
                             session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
-
+    
                     # Update state from plan metadata if available
                     if plan.metadata and 'state_summary' in plan.metadata:
                         session.state_summary.update(plan.metadata['state_summary'])
-
+    
                     if planner_tree:
                         active = next((s for s in planner_tree if s.get("status") == "in_progress"), None)
                         if not active:
@@ -1525,7 +1563,7 @@ class AgentOrchestrator:
                     else:
                         if not session.state_summary.get("cursor"):
                             session.state_summary["cursor"] = f"{loops}/{max_steps} (loop: executing)"
-
+    
                     # Always keep overwatch metadata updated, even when no explicit planner tree is returned.
                     self._touch_work_context(
                         work_id,
@@ -1550,7 +1588,7 @@ class AgentOrchestrator:
                             },
                         },
                     )
-
+    
                     # Normalize/repair action IDs to reduce "unknown action" loops.
                     if plan.action_id not in ("reply", "error"):
                         resolved_action = self.skill_registry.resolve_action_id(plan.action_id)
@@ -1582,13 +1620,85 @@ class AgentOrchestrator:
                                 response_text=final_response,
                                 source="internal",
                             )
-
+    
                     logger.info(f"Action: {plan.action_id} | Confidence: {plan.confidence}")
+                    if (
+                        self._is_media_pronoun_open_request(user_input)
+                        and plan.action_id in {"youtube.search.find", "deezer.search.search", "spotify.search.search"}
+                    ):
+                        recent_media_url = self._extract_recent_media_url_from_history(session)
+                        if recent_media_url:
+                            logger.info(
+                                "Pronoun media override: %s -> browser.automator.play_url (%s)",
+                                plan.action_id,
+                                recent_media_url,
+                            )
+                            plan = ActionPlan(
+                                action_id="browser.automator.play_url",
+                                args={"url": recent_media_url},
+                                confidence=1.0,
+                                source="internal",
+                                thought=(
+                                    "Pronoun-based request to open previously found media. "
+                                    "Reusing latest known media URL from session history."
+                                ),
+                            )
+
                     if plan.action_id not in {"reply", "error"}:
                         actions_used.append(plan.action_id)
                         namespace = ".".join(plan.action_id.split(".")[:2]) if "." in plan.action_id else plan.action_id
                         if namespace not in skills_used:
                             skills_used.append(namespace)
+
+                    # On-demand catalog repair:
+                    # If the model asks for skills.describe without target action(s),
+                    # downgrade safely to skills.list to avoid a hard failure loop.
+                    if plan.action_id == "system.control.skills.describe":
+                        args_obj = plan.args if isinstance(plan.args, dict) else {}
+                        has_one = bool(str(args_obj.get("action_id") or "").strip())
+                        has_many = isinstance(args_obj.get("action_ids"), list) and len(args_obj.get("action_ids")) > 0
+                        if not has_one and not has_many:
+                            logger.warning(
+                                "Auto-repair: '%s' missing action identifiers. Falling back to system.control.skills.list.",
+                                plan.action_id,
+                            )
+                            plan.action_id = "system.control.skills.list"
+                            plan.args = {
+                                "limit": 40,
+                                "include_descriptions": True,
+                            }
+
+                    if plan.action_id in {"system.control.skills.list", "system.control.skills.list.ai"}:
+                        args_obj = plan.args if isinstance(plan.args, dict) else {}
+                        query = str(args_obj.get("query") or "").strip()
+                        if query and not self._looks_like_skill_discovery_query(query):
+                            logger.warning(
+                                "Auto-repair: '%s' received non-skill query '%s'. Clearing query to avoid empty catalog loop.",
+                                plan.action_id,
+                                query[:80],
+                            )
+                            plan.args = {
+                                **args_obj,
+                                "query": "",
+                                "limit": int(args_obj.get("limit", 40) or 40),
+                                "include_descriptions": bool(args_obj.get("include_descriptions", False)),
+                            }
+
+                    if plan.action_id == "wikipedia.search":
+                        args_obj = plan.args if isinstance(plan.args, dict) else {}
+                        current_query = str(args_obj.get("query") or "").strip()
+                        if self._looks_like_instruction_only_query(current_query):
+                            repaired_query = QuerySemantics.rewrite_for_wikipedia(user_input)
+                            if repaired_query and not self._looks_like_instruction_only_query(repaired_query):
+                                logger.warning(
+                                    "Auto-repair: wikipedia.search query '%s' -> '%s'",
+                                    current_query[:80],
+                                    repaired_query[:80],
+                                )
+                                plan.args = {
+                                    **args_obj,
+                                    "query": repaired_query,
+                                }
                     
                     # Notify Reasoning Chunk
                     if callbacks and 'send_reasoning_chunk' in callbacks:
@@ -1602,7 +1712,7 @@ class AgentOrchestrator:
                         "content": plan.thought if plan.thought else f"Resolving intention ({plan.source})...",
                         "timestamp": time.time()
                     })
-
+    
                     # --- Repetitiveness Detection (Enhanced) ---
                     param_str = json.dumps(plan.args, sort_keys=True)
                     current_signature = (plan.action_id, param_str)
@@ -1643,7 +1753,7 @@ class AgentOrchestrator:
                             )
                             plan = None
                             continue
-
+    
                         logger.warning(f"Loop detected (3 identical actions/params): {current_signature}. Breaking.")
                         recovered_reply = self._reply_from_last_success(
                             action_id=plan.action_id,
@@ -1651,29 +1761,35 @@ class AgentOrchestrator:
                             raw_output=last_action_output,
                             language=self._session_locale(session),
                         ) if last_action_status == "success" else None
-
+    
                         if recovered_reply:
                             if callbacks and 'send_status' in callbacks:
+                                loop_success_msg = (
+                                    f"Repeated action detected in {plan.action_id}; consolidating final response using the latest valid result."
+                                )
                                 callbacks['send_status'](
                                     'executing',
                                     {
                                         'code': 'loop_break_success',
-                                        'message': f"Repeated action detected in {plan.action_id}; consolidating final response using the latest valid result.",
+                                        'message': loop_success_msg,
                                         'action': plan.action_id
                                     }
                                 )
                             final_response = recovered_reply
                         else:
+                            loop_break_msg = (
+                                "Exact repetition detected without progress. Please rephrase your request or provide more details."
+                            )
                             if callbacks and 'send_status' in callbacks:
                                 callbacks['send_status'](
                                     'error',
                                     {
                                         'code': 'loop_break',
-                                        'message': 'Exact repetition detected without progress. Please rephrase your request or provide more details.',
+                                        'message': loop_break_msg,
                                         'action': plan.action_id
                                     }
                                 )
-                            final_response = "Exact repetition detected without progress. Please rephrase your request or provide more details."
+                            final_response = loop_break_msg
                         plan = ActionPlan(
                             action_id='reply',
                             args={},
@@ -1691,7 +1807,7 @@ class AgentOrchestrator:
                              "If this approach is not working, STOP and explain the blockage to the user in 'response_text' using 'action': 'reply'. "
                              "DO NOT repeat the same failing action more than 4 times.", 
                              msg_type="reasoning")
-
+    
                     # 3. Action Repetition (4 times in last 5 steps) - Hard Break
                     if action_history.count(plan.action_id) >= 4:
                          if replans_used < replan_budget:
@@ -1726,7 +1842,7 @@ class AgentOrchestrator:
                              raw_output=last_action_output,
                              language=self._session_locale(session),
                          ) if last_action_status == "success" else None
-
+    
                          if callbacks and 'send_status' in callbacks:
                              callbacks['send_status'](
                                  'error',
@@ -1740,7 +1856,7 @@ class AgentOrchestrator:
                                      'action': plan.action_id
                                  }
                              )
-
+    
                          final_response = recovered_reply or f"I seem to be stuck trying to use action '{plan.action_id}' repeatedly without success. I will stop to avoid an infinite loop."
                          # For a hard break, we force a valid reply object for internal history consistency
                          plan = ActionPlan(
@@ -1752,17 +1868,28 @@ class AgentOrchestrator:
                          )
                          plan.thought = "Action loop detected. Stopping to avoid excessive token and time usage."
                     
-                    # Add current turn to history for context
-                    # Use JSON to reinforce the pattern the LLM must follow
+                    # Add current turn to history for context.
+                    # Prefer TOON compact encoding to reduce prompt footprint.
+                    reasoning_mode = str(prompt_cfg.get("reasoning_history_mode", "toon")).strip().lower()
                     history_data = {
                         "thought": plan.thought,
                         "plan": plan.metadata.get('plan', []),
                         "action": plan.action_id,
                         "params": plan.args
                     }
-                    history_entry = json.dumps(history_data, ensure_ascii=False)
+                    if reasoning_mode in {"legacy", "json"}:
+                        history_entry = json.dumps(history_data, ensure_ascii=False, separators=(",", ":"))
+                    else:
+                        history_entry = dumps_toon(
+                            encode_reasoning_step(
+                                thought=history_data.get("thought"),
+                                plan=history_data.get("plan"),
+                                action=history_data.get("action"),
+                                params=history_data.get("params"),
+                            )
+                        )
                     session.add_message("assistant", history_entry, msg_type="reasoning")
-
+    
                     # Deterministic guard against "fake completion" in operational media requests.
                     # If first plan is reply for a playback request, force an actionable search first.
                     if (
@@ -1771,6 +1898,24 @@ class AgentOrchestrator:
                         and last_action_id is None
                         and self._is_media_play_request(user_input)
                     ):
+                        if self._is_media_pronoun_open_request(user_input):
+                            recent_media_url = self._extract_recent_media_url_from_history(session)
+                            if recent_media_url:
+                                logger.info(
+                                    "Reply-only media guard resolved pronoun reference -> browser.automator.play_url (%s)",
+                                    recent_media_url,
+                                )
+                                plan = ActionPlan(
+                                    action_id="browser.automator.play_url",
+                                    args={"url": recent_media_url},
+                                    confidence=1.0,
+                                    source='internal',
+                                    thought=(
+                                        "Reply-only plan for pronoun-based media open request. "
+                                        "Using latest known media URL."
+                                    ),
+                                )
+                                continue
                         forced_action, forced_query = self._derive_media_search_action_and_query(user_input)
                         if forced_action and forced_query:
                             logger.info(
@@ -1788,7 +1933,7 @@ class AgentOrchestrator:
                                     "before accepting final textual reply."
                                 ),
                             )
-
+    
                     # Deterministic guard for first-step browser open with plain-text query in media requests.
                     # Prevents "open search page and stop" behavior and avoids unnecessary browser-use loops.
                     if (
@@ -1806,6 +1951,24 @@ class AgentOrchestrator:
                                 or ""
                             ).strip()
                         if not (open_url.startswith("http://") or open_url.startswith("https://")):
+                            if self._is_media_pronoun_open_request(user_input):
+                                recent_media_url = self._extract_recent_media_url_from_history(session)
+                                if recent_media_url:
+                                    logger.info(
+                                        "browser.automator.open guard resolved pronoun reference -> browser.automator.play_url (%s)",
+                                        recent_media_url,
+                                    )
+                                    plan = ActionPlan(
+                                        action_id="browser.automator.play_url",
+                                        args={"url": recent_media_url},
+                                        confidence=1.0,
+                                        source='internal',
+                                        thought=(
+                                            "Pronoun-based media open request detected. "
+                                            "Switching to direct play_url with the latest known media URL."
+                                        ),
+                                    )
+                                    continue
                             forced_action, forced_query = self._derive_media_search_action_and_query(user_input)
                             if forced_action and forced_query:
                                 logger.info(
@@ -1823,7 +1986,7 @@ class AgentOrchestrator:
                                         "before any generic browser open step."
                                     ),
                                 )
-
+    
                     # Strong first-step gate for playback requests: avoid drifting to unrelated actions
                     # (e.g., web.search.discover) when deterministic media actions are available.
                     if (
@@ -1831,6 +1994,27 @@ class AgentOrchestrator:
                         and last_action_id is None
                         and self._is_media_play_request(user_input)
                     ):
+                        if (
+                            plan.action_id in {"youtube.search.find", "deezer.search.search", "spotify.search.search"}
+                            and self._is_media_pronoun_open_request(user_input)
+                        ):
+                            recent_media_url = self._extract_recent_media_url_from_history(session)
+                            if recent_media_url:
+                                logger.info(
+                                    "First-step media gate upgraded search -> browser.automator.play_url using recent URL (%s)",
+                                    recent_media_url,
+                                )
+                                plan = ActionPlan(
+                                    action_id="browser.automator.play_url",
+                                    args={"url": recent_media_url},
+                                    confidence=1.0,
+                                    source='internal',
+                                    thought=(
+                                        "Pronoun-based media open request resolved to the latest media URL "
+                                        "from session history."
+                                    ),
+                                )
+                                continue
                         allowed_first_step = False
                         if plan.action_id in {"youtube.search.find", "deezer.search.search", "spotify.search.search"}:
                             allowed_first_step = True
@@ -1845,8 +2029,27 @@ class AgentOrchestrator:
                                 ).strip()
                             if raw_url.startswith("http://") or raw_url.startswith("https://"):
                                 allowed_first_step = True
-
+    
                         if not allowed_first_step:
+                            recent_media_url = ""
+                            if self._is_media_pronoun_open_request(user_input):
+                                recent_media_url = self._extract_recent_media_url_from_history(session)
+                            if recent_media_url:
+                                logger.info(
+                                    "First-step media gate resolved pronoun reference with recent URL -> browser.automator.play_url (%s)",
+                                    recent_media_url,
+                                )
+                                plan = ActionPlan(
+                                    action_id="browser.automator.play_url",
+                                    args={"url": recent_media_url},
+                                    confidence=1.0,
+                                    source='internal',
+                                    thought=(
+                                        "User requested to open previously found media. "
+                                        "Using latest known media URL from session history."
+                                    ),
+                                )
+                                continue
                             forced_action, forced_query = self._derive_media_search_action_and_query(user_input)
                             if forced_action and forced_query:
                                 logger.info(
@@ -1865,7 +2068,7 @@ class AgentOrchestrator:
                                         "action to avoid non-productive first-step drift."
                                     ),
                                 )
-
+    
                     if plan.action_id == 'reply':
                         final_response = self._ground_reply_against_last_result(
                             response_text=plan.response_text or "",
@@ -1880,7 +2083,7 @@ class AgentOrchestrator:
                         # Process attachments
                         attachment_inputs = plan.attachments or last_generated_attachment_paths
                         structured_attachments = self._standardize_attachments(session, attachment_inputs) if attachment_inputs else None
-
+    
                         if not final_response and structured_attachments:
                             final_response = "Here is the requested file."
                         
@@ -1897,7 +2100,7 @@ class AgentOrchestrator:
                             callbacks['send_complete']()
                             stream_completed = True
                         break
-
+    
                     if plan.action_id == 'error':
                         if callbacks and 'send_status' in callbacks:
                             callbacks['send_status'](
@@ -1939,14 +2142,14 @@ class AgentOrchestrator:
                                 'action': plan.action_id
                             }
                         )
-
+    
                     # HITL Check
                     if self.safety_service.is_sensitive(plan.action_id, plan.args, self.skill_registry):
                         approval_msg = self.safety_service.get_approval_message(plan.action_id, plan.args)
                         work_record = self._get_work_record(work_id)
                         owner_session_id = work_record.owner_session_id if work_record else session_id
                         worker_run = bool((user_data or {}).get("__worker_run"))
-
+    
                         target_session = self.get_session_robust(owner_session_id)
                         if not target_session:
                             if worker_run:
@@ -1977,7 +2180,7 @@ class AgentOrchestrator:
                             elif str(owner_session_id).startswith("voice"):
                                 interface = "voice"
                             target_session = self.create_session(owner_session_id, interface=interface)
-
+    
                         target_session.pending_action = {
                             "action": plan.action_id,
                             "params": plan.args,
@@ -1986,7 +2189,7 @@ class AgentOrchestrator:
                         }
                         target_session.add_message("assistant", approval_msg)
                         self._save_session(target_session)
-
+    
                         self._touch_work_context(
                             work_id,
                             {
@@ -1997,18 +2200,18 @@ class AgentOrchestrator:
                                 }
                             },
                         )
-
+    
                         kernel = getattr(self, "kernel", None)
                         scheduler = getattr(kernel, "scheduler", None) if kernel else None
                         if scheduler and work_id:
                             scheduler.update_work_status(work_id, WorkStatus.WAITING_USER)
-
+    
                         if callbacks and 'send_status' in callbacks:
                             callbacks['send_status'](
                                 'thinking',
                                 {'code': 'waiting_user', 'message': approval_msg, 'action': plan.action_id}
                             )
-
+    
                         if work_id and scheduler:
                             decision = self._wait_for_work_decision(work_id, cancel_check)
                             outcome = decision.get("decision")
@@ -2051,11 +2254,11 @@ class AgentOrchestrator:
                                 callbacks['send_complete']()
                                 stream_completed = True
                             return approval_msg
-
+    
                     # Execute via SkillRegistry
                     if callbacks and 'send_status' in callbacks:
                         callbacks['send_status']('executing', {'action': plan.action_id, 'label': f"Executing {plan.action_id}..."})
-
+    
                     # Emit global event for real-time synchronization
                     global_event_bus.emit_threadsafe({
                         "type": "status",
@@ -2064,13 +2267,15 @@ class AgentOrchestrator:
                         "message": f"Executing {plan.action_id}...",
                         "payload": {'action': plan.action_id}
                     })
-
+    
                     exec_context = {
                         "session": session,
                         "callbacks": callbacks,
                         "browser_driver": self.browser_driver,
                         "session_id": session_id,
                         "user_input": user_input,
+                        "allowed_actions": self._get_allowed_actions_for_session(session),
+                        "skill_registry": self.skill_registry,
                     }
                     
                     # Access Control: Pre-Dispatch Gate
@@ -2088,11 +2293,21 @@ class AgentOrchestrator:
                             result = self.skill_registry.dispatch(plan.action_id, plan.args, exec_context)
                     else:
                         result = self.skill_registry.dispatch(plan.action_id, plan.args, exec_context)
-
+    
                     # Observe
                     # Truncate results in history to avoid bloating context
                     raw_result = self._serialize_action_result(result)
-                    truncated_result = raw_result[:2000] + "..." if len(raw_result) > 2000 else raw_result
+                    obs_limits = self._observation_limits()
+                    result_max_chars = obs_limits["max_chars"]
+                    if isinstance(result, (dict, list)):
+                        compact_result = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+                    else:
+                        compact_result = raw_result
+                    truncated_result = (
+                        compact_result[:result_max_chars] + "..."
+                        if len(compact_result) > result_max_chars
+                        else compact_result
+                    )
                     result_status, result_reason = self._assess_action_result(result, raw_result)
                     structured_result = self._extract_structured_result(result, raw_result)
                     last_action_status = result_status
@@ -2104,8 +2319,49 @@ class AgentOrchestrator:
                     for media_path in last_generated_attachment_paths:
                         if media_path not in media_used:
                             media_used.append(media_path)
+                    if plan.action_id not in {"reply", "error"}:
+                        session.context["last_action_plan"] = {
+                            "action_id": plan.action_id,
+                            "args": plan.args if isinstance(plan.args, dict) else {},
+                            "status": result_status,
+                            "reason": result_reason,
+                            "ts": time.time(),
+                        }
 
                     if result_status == "failure":
+                        if (
+                            plan.action_id == "system.control.screenshot"
+                            and result_reason in {"SYSTEM_DRIVER_UNAVAILABLE", "SCREENSHOT_FAILED"}
+                        ):
+                            logger.warning(
+                                "Non-retriable screenshot failure detected (%s). Ending turn without retries.",
+                                result_reason,
+                            )
+                            is_pt = self._session_locale(session).startswith("pt")
+                            details = str(structured_result.get("message") or truncated_result or "").strip() if isinstance(structured_result, dict) else str(truncated_result or "").strip()
+                            if len(details) > 220:
+                                details = details[:220] + "..."
+                            if is_pt:
+                                final_response = (
+                                    "Não consegui capturar a tela neste ambiente porque o recurso de screenshot não está disponível. "
+                                    f"Detalhe técnico: {details or result_reason}."
+                                )
+                            else:
+                                final_response = (
+                                    "I could not capture the screen in this environment because screenshot tooling is unavailable. "
+                                    f"Technical detail: {details or result_reason}."
+                                )
+                            session.state_summary["last_error"] = result_reason
+                            session.add_message("assistant", final_response)
+                            final_response_persisted = True
+                            if callbacks and 'send_response' in callbacks:
+                                callbacks['send_response'](final_response, is_chunk=True)
+                                final_response_streamed = True
+                            if callbacks and 'send_complete' in callbacks:
+                                callbacks['send_complete']()
+                                stream_completed = True
+                            break
+
                         # Deterministic recovery: when Google Maps billing is disabled,
                         # fallback once to a web links search instead of retrying maps.
                         if (
@@ -2137,7 +2393,7 @@ class AgentOrchestrator:
                                     event_key=f"fallback:{plan.action_id}:{fallback_action}",
                                 )
                                 continue
-
+    
                         failure_signature = (plan.action_id, param_str, self._signature_from_result(raw_result))
                         if failure_signature == last_failure_signature:
                             repeated_failure_count += 1
@@ -2172,12 +2428,21 @@ class AgentOrchestrator:
                     summary = None
                     # Logical Log Compression: If output > 2000 chars, summarize it
                     # EXEMPT: Vision results and search results should never be summarized as they contain vital semantic/structural data
-                    exemptions = ["vision.", "youtube.", "spotify.", "web.", "deezer.", "maps.", "wikipedia."]
+                    exemptions = [
+                        "vision.",
+                        "youtube.",
+                        "spotify.",
+                        "web.",
+                        "deezer.",
+                        "maps.",
+                        "wikipedia.",
+                        "system.control.skills.",
+                    ]
                     is_exempt = any(plan.action_id.startswith(ext) for ext in exemptions)
                     
-                    if len(raw_result) > 2000 and not is_exempt:
+                    if len(raw_result) > obs_limits["summarize_threshold"] and not is_exempt:
                         logger.info(f"Large output detected ({len(raw_result)} chars). Summarizing...")
-                        summary = self.llm_manager.summarize_output(raw_result)
+                        summary = self._clip_text(self.llm_manager.summarize_output(raw_result), 900)
                         observation = (
                             f"RESULT OF ACTION {plan.action_id} "
                             f"[status={result_status}; reason={result_reason}] (Summarized): {summary}"
@@ -2187,10 +2452,25 @@ class AgentOrchestrator:
                             f"RESULT OF ACTION {plan.action_id} "
                             f"[status={result_status}; reason={result_reason}]: {truncated_result}"
                         )
+                    logger.info(
+                        "Observation Metrics | Session: %s | Action: %s | RawTok~%d | TruncTok~%d | Summarized: %s",
+                        session_id,
+                        plan.action_id,
+                        len(raw_result) // 4,
+                        len(truncated_result) // 4,
+                        "yes" if summary else "no",
+                    )
+                    self._capture_observation_metrics(
+                        session_id=session_id,
+                        action_id=plan.action_id,
+                        raw_result=raw_result,
+                        truncated_result=truncated_result,
+                        summarized=bool(summary),
+                    )
                     
                     session.add_message("system", observation, msg_type="reasoning", summary=summary)
                     session.state_summary['last_outcome'] = summary if summary else truncated_result[:300]
-
+    
                     # Persist reasoning/action episodes for future retrieval/debugging.
                     try:
                         self.episodic_memory.store_episode(
@@ -2230,6 +2510,41 @@ class AgentOrchestrator:
                         },
                     )
 
+                    # Deterministic completion for informational searches.
+                    # If we already have a successful search result, consolidate to user reply
+                    # instead of re-invoking the same action.
+                    if (
+                        result_status == "success"
+                        and self._should_autocomplete_after_success_action(user_input, plan.action_id)
+                    ):
+                        recovered_reply = self._reply_from_last_success(
+                            action_id=plan.action_id,
+                            structured_result=last_action_structured,
+                            raw_output=last_action_output,
+                            language=self._session_locale(session),
+                        )
+                        if recovered_reply:
+                            final_response = recovered_reply
+                            final_structured_attachments = self._standardize_attachments(
+                                session,
+                                last_generated_attachment_paths,
+                            ) if last_generated_attachment_paths else None
+                            session.add_message("assistant", final_response, attachments=final_structured_attachments)
+                            final_response_persisted = True
+                            session.scratchpad = ""
+                            session.plan = []
+                            if callbacks and 'send_response' in callbacks:
+                                callbacks['send_response'](
+                                    final_response,
+                                    is_chunk=True,
+                                    attachments=final_structured_attachments,
+                                )
+                                final_response_streamed = True
+                            if callbacks and 'send_complete' in callbacks:
+                                callbacks['send_complete']()
+                                stream_completed = True
+                            break
+
                     # Fast-path for vision outputs: avoid unnecessary re-reasoning loops.
                     # Vision skills already return user-facing text in "text".
                     if result_status == "success" and plan.action_id.startswith("vision."):
@@ -2260,7 +2575,7 @@ class AgentOrchestrator:
                                     callbacks['send_complete']()
                                     stream_completed = True
                                 break
-
+    
                     # Deterministic media handoff: for "play/reproduzir" intents, do not wait for the LLM
                     # to decide the open/play step after a successful search.
                     if (
@@ -2290,7 +2605,7 @@ class AgentOrchestrator:
                                 thought="Search succeeded and user requested playback. Handing off directly to browser playback.",
                             )
                             continue
-
+    
                     # Fast-path for media open flows when playback is explicitly confirmed.
                     if result_status == "success" and plan.action_id in {"browser.automator.open", "browser.automator.play_url"}:
                         if isinstance(last_action_structured, dict) and last_action_structured.get("playback_confirmed") is True:
@@ -2313,7 +2628,7 @@ class AgentOrchestrator:
                                     callbacks['send_complete']()
                                     stream_completed = True
                                 break
-
+    
                     # Strict completion gate for playback requests:
                     # only consider completed when browser/system exposes active playback.
                     if (
@@ -2332,7 +2647,7 @@ class AgentOrchestrator:
                                 callbacks['send_complete']()
                                 stream_completed = True
                             break
-
+    
                     # General completion-oriented recovery:
                     # when "open" reports partial completion, continue autonomously on the current page
                     # instead of stopping at "page opened".
@@ -2376,7 +2691,7 @@ class AgentOrchestrator:
                             )
                             media_vision_fallback_attempts += 1
                             continue
-
+    
                     # If deterministic play control still can't confirm playback,
                     # escalate to vision automation on the same active tab.
                     if plan.action_id == "browser.automator.control" and isinstance(last_action_structured, dict):
@@ -2411,7 +2726,7 @@ class AgentOrchestrator:
                             )
                             media_vision_fallback_attempts += 1
                             continue
-
+    
                     # Stop retry storm for media requests after vision fallback failure.
                     if (
                         media_request
@@ -2448,15 +2763,16 @@ class AgentOrchestrator:
                                 callbacks['send_complete']()
                                 stream_completed = True
                             break
-
+    
                     # Hard guard for repeated identical failures.
-                    if repeated_failure_count >= 3:
+                    if repeated_failure_count >= 2:
                         logger.warning(
                             f"Repeated failure detected for action '{plan.action_id}'. Breaking loop to avoid delirium."
                         )
-                        final_response = (
-                            f"I am stuck on action '{plan.action_id}' with no real progress. "
-                            "I need you to refine the goal or authorize a different strategy."
+                        final_response = self.i18n.t(
+                            "reply.loop_stuck",
+                            locale=self._session_locale(session),
+                            action_id=plan.action_id,
                         )
                         self._touch_work_context(
                             work_id,
@@ -2485,11 +2801,11 @@ class AgentOrchestrator:
                 # Exit block for 'while'
                 if final_response is None:
                     logger.warning("Reasoning loop ended without a final response.")
-                    final_response = self._t(session, "reply.no_plan_resolved")
+                    final_response = self.i18n.t("reply.no_plan_resolved", locale="en")
                     if callbacks and 'send_response' in callbacks:
                         callbacks['send_response'](final_response, is_chunk=True)
                         final_response_streamed = True
-
+    
             except Exception as e:
                 logger.error(f"Error in reasoning loop: {e}")
                 
@@ -2514,31 +2830,40 @@ class AgentOrchestrator:
                         "planner": {"steps": planner_tree, "max_steps": max_steps},
                     },
                 )
-
+    
             # Guarantee final response lifecycle (persist -> stream -> complete) in all loop exit paths.
             if final_response and not final_response_persisted and not session.pending_action:
                 session.add_message("assistant", final_response, attachments=final_structured_attachments)
                 final_response_persisted = True
-
+    
             if callbacks and 'send_response' in callbacks and final_response and not final_response_streamed and not session.pending_action:
                 callbacks['send_response'](final_response, is_chunk=True, attachments=final_structured_attachments)
                 final_response_streamed = True
-
+    
             if callbacks and 'send_complete' in callbacks and not stream_completed and not session.pending_action:
                 callbacks['send_complete']()
                 stream_completed = True
-
+    
             # Persist final assistant output before optional history pruning/consolidation.
             # This guarantees reload consistency even if session context is compressed.
             if final_response_persisted:
                 self._save_session(session)
-
+    
             # 5. Check for Memory Consolidation (Token-based)
-            # Threshold check: > 3500 tokens
-            total_tokens = sum(m.get("tokens", 0) for m in session.history)
-            if total_tokens > 3500:
-                self._consolidate_memory(session)
+            # Threshold is configurable and intentionally lower to trigger earlier compaction.
+            self._append_toon_delta(
+                session=session,
+                user_input=user_input,
+                last_action_id=last_action_id,
+                last_action_status=last_action_status,
+                last_action_reason=last_action_reason,
+                final_response=final_response,
+            )
 
+            total_tokens = sum(m.get("tokens", 0) for m in session.history)
+            if total_tokens > self._memory_consolidation_threshold():
+                self._consolidate_memory(session)
+    
             # 6. Persist and Return
             self._save_session(session)
             self._touch_work_context(
@@ -2562,6 +2887,22 @@ class AgentOrchestrator:
             channel = session.context.get('channel', 'Web')
             return self._format_response(final_response, channel)
         finally:
+            total_ms = int((time.perf_counter() - turn_started_at) * 1000)
+            self._capture_turn_metrics(
+                session_id=session_id,
+                total_ms=total_ms,
+                lock_wait_ms=lock_wait_ms,
+                loops=loops,
+                last_action_id=last_action_id or "-",
+            )
+            logger.info(
+                "Turn Metrics | Session: %s | DurationMs: %d | LockWaitMs: %d | Loops: %d | LastAction: %s",
+                session_id,
+                total_ms,
+                lock_wait_ms,
+                loops,
+                last_action_id or "-",
+            )
             # Releasing lock
             if acquired:
                 lock.release()
@@ -2569,16 +2910,23 @@ class AgentOrchestrator:
     def _consolidate_memory(self, session: Session, force: bool = False):
         """
         Asks the LLM to summarize the session if it's getting too heavy in tokens.
-        Threshold: ~3500 tokens (leaving space for system prompt and current turn).
+        Threshold: configurable via memory.consolidation_threshold_tokens
+        (default ~1600 to trigger earlier and keep context compact).
         """
         try:
             total_tokens = sum(m.get("tokens", 0) for m in session.history)
+            threshold = self._memory_consolidation_threshold()
             
-            # Check threshold (e.g., 3500 tokens)
-            if total_tokens < 3500 and not force:
+            # Check threshold
+            if total_tokens < threshold and not force:
                 return
 
-            logger.info(f"Consolidating memory for session {session.session_id} (Total tokens: {total_tokens})")
+            logger.info(
+                "Consolidating memory for session %s (Total tokens: %d, Threshold: %d)",
+                session.session_id,
+                total_tokens,
+                threshold,
+            )
             
             # Context window for summarization: existing summary + new messages
             existing_summary = session.summary or "No previous summary."
@@ -2602,6 +2950,10 @@ class AgentOrchestrator:
                 # Update with the newly refined summary
                 session.summary = summary_intent.response_text.strip()
                 logger.info(f"Recursive TOON consolidation successful. Pruning history for session {session.session_id}.")
+                # Keep only the newest deltas after consolidation to avoid prompt bloat.
+                toon_deltas = session.context.get("toon_deltas")
+                if isinstance(toon_deltas, list):
+                    session.context["toon_deltas"] = toon_deltas[-2:]
                 
                 # History Rotation: Keep only the latest messages to prevent context bloat
                 # We keep the last 10 messages (approx 5 turns) to maintain immediate context
@@ -2626,6 +2978,110 @@ class AgentOrchestrator:
             logger.error(f"Error during memory consolidation: {e}")
         except Exception as e:
             logger.error(f"Error during memory consolidation: {e}")
+
+    def _memory_consolidation_threshold(self) -> int:
+        cfg = self.config_manager.get("memory", {}) if hasattr(self, "config_manager") else {}
+        raw = cfg.get("consolidation_threshold_tokens", 1600)
+        try:
+            value = int(raw)
+        except Exception:
+            value = 1600
+        return max(800, min(6000, value))
+
+    def _memory_toon_delta_limits(self) -> Dict[str, int]:
+        cfg = self.config_manager.get("memory", {}) if hasattr(self, "config_manager") else {}
+        try:
+            max_entries = int(cfg.get("toon_delta_max_entries", 8))
+        except Exception:
+            max_entries = 8
+        try:
+            text_limit = int(cfg.get("toon_delta_text_limit", 96))
+        except Exception:
+            text_limit = 96
+        return {
+            "max_entries": max(2, min(32, max_entries)),
+            "text_limit": max(48, min(240, text_limit)),
+        }
+
+    def _observation_limits(self) -> Dict[str, int]:
+        prompt_cfg = self.config_manager.get("prompt_context", {}) if hasattr(self, "config_manager") else {}
+        try:
+            max_chars = int(prompt_cfg.get("observation_result_max_chars", 900))
+        except Exception:
+            max_chars = 900
+        try:
+            summarize_threshold = int(prompt_cfg.get("observation_summarize_threshold_chars", 1800))
+        except Exception:
+            summarize_threshold = 1800
+        return {
+            "max_chars": max(300, min(2400, max_chars)),
+            "summarize_threshold": max(900, min(6000, summarize_threshold)),
+        }
+
+    @staticmethod
+    def _clip_toon_text(value: Any, limit: int) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "..."
+
+    def _append_toon_delta(
+        self,
+        *,
+        session: Session,
+        user_input: str,
+        last_action_id: Optional[str],
+        last_action_status: Optional[str],
+        last_action_reason: Optional[str],
+        final_response: Optional[str],
+    ) -> None:
+        if not session or not isinstance(session.context, dict):
+            return
+
+        limits = self._memory_toon_delta_limits()
+        text_limit = limits["text_limit"]
+        status_map = {"success": "ok", "failure": "er"}
+        status_code = status_map.get(str(last_action_status or "").lower(), "na")
+
+        delta = {
+            "t": int(time.time()),
+            "u": self._clip_toon_text(user_input, text_limit),
+            "a": self._clip_toon_text(last_action_id, text_limit),
+            "s": status_code,
+            "c": self._clip_toon_text(session.state_summary.get("cursor"), text_limit),
+            "o": self._clip_toon_text(
+                session.state_summary.get("last_outcome") or final_response,
+                text_limit,
+            ),
+        }
+        reason = self._clip_toon_text(last_action_reason, text_limit)
+        if reason:
+            delta["r"] = reason
+
+        # Skip empty/no-op deltas.
+        if not delta["u"] and not delta["a"] and not delta["o"]:
+            return
+
+        current = session.context.get("toon_deltas")
+        entries = list(current) if isinstance(current, list) else []
+
+        # De-duplicate with last entry by semantic payload.
+        if entries:
+            last = entries[-1]
+            if isinstance(last, dict):
+                same = (
+                    str(last.get("u") or "") == delta["u"]
+                    and str(last.get("a") or "") == delta["a"]
+                    and str(last.get("s") or "") == delta["s"]
+                    and str(last.get("o") or "") == delta["o"]
+                )
+                if same:
+                    return
+
+        entries.append(delta)
+        session.context["toon_deltas"] = entries[-limits["max_entries"] :]
 
     @staticmethod
     def _serialize_action_result(result: Any) -> str:
@@ -2753,6 +3209,27 @@ class AgentOrchestrator:
         text = payload.get("text")
         if isinstance(text, str) and text.strip() and not AgentOrchestrator._looks_like_technical_text(text):
             return text.strip()
+
+        if action == "wikipedia.search":
+            results = payload.get("results")
+            if isinstance(results, list) and results:
+                first = results[0] if isinstance(results[0], dict) else {}
+                title = str(first.get("title") or "Wikipedia")
+                url = str(first.get("url") or "").strip()
+                raw_summary = str(first.get("content") or first.get("excerpt") or "").strip()
+                raw_summary = re.sub(r"\s+", " ", raw_summary)
+                summary = raw_summary
+                if raw_summary:
+                    parts = re.split(r"(?<=[.!?])\s+", raw_summary)
+                    summary = (" ".join(parts[:2]).strip() or raw_summary)
+                if len(summary) > 420:
+                    summary = summary[:420].rstrip() + "..."
+                if summary:
+                    if is_pt:
+                        message = f"Resumo rápido sobre {title}:\n{summary}"
+                        return f"{message}\n\nFonte: {url}" if url else message
+                    message = f"Quick summary about {title}:\n{summary}"
+                    return f"{message}\n\nSource: {url}" if url else message
 
         results = payload.get("results")
         if isinstance(results, list) and results:
@@ -2897,6 +3374,73 @@ class AgentOrchestrator:
         )
 
     @staticmethod
+    def _is_media_pronoun_open_request(user_input: str) -> bool:
+        text = (user_input or "").lower()
+        if not text:
+            return False
+        open_cues = ("abre", "abrir", "open")
+        pronoun_cues = ("ela", "ele", "isso", "essa", "esse", "it", "that", "this")
+        provider_cues = ("youtube", "deezer", "spotify")
+        return any(c in text for c in open_cues) and any(p in text for p in pronoun_cues) and any(
+            s in text for s in provider_cues
+        )
+
+    @staticmethod
+    def _extract_recent_media_url_from_history(session: Session) -> str:
+        url_re = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+        providers = ("youtube.com", "youtu.be", "deezer.com", "spotify.com")
+        history = session.history if isinstance(session.history, list) else []
+        for msg in reversed(history):
+            content = str(msg.get("content") or "").replace("\\/", "/")
+            matches = url_re.findall(content)
+            for url in reversed(matches):
+                candidate = url.strip()
+                if any(p in candidate.lower() for p in providers):
+                    return candidate
+        return ""
+
+    @classmethod
+    def _should_autocomplete_after_success_action(cls, user_input: str, action_id: str) -> bool:
+        """
+        Finalize early for informational searches to avoid repeated identical actions.
+        """
+        action = (action_id or "").strip().lower()
+        if not action:
+            return False
+
+        # Wikipedia requests are informational in this orchestrator flow.
+        if action == "wikipedia.search":
+            return True
+
+        # Screenshot is a one-shot operational action. After success, we should
+        # immediately consolidate response + attachment and finish the turn.
+        if action == "system.control.screenshot":
+            return True
+
+        # Media searches should only continue when user explicitly asked to play/open.
+        if action in {"youtube.search.find", "deezer.search.search", "spotify.search.search"}:
+            return not cls._is_media_play_request(user_input)
+
+        return False
+
+    @staticmethod
+    def _looks_like_instruction_only_query(query: str) -> bool:
+        q = QuerySemantics.sanitize(query).lower()
+        if not q:
+            return True
+        if len(q) <= 3:
+            return True
+        if re.match(
+            r"^(?:e\s+)?(?:forne[cç]a|fornecer|fa[cç]a|resuma|sumarize|summarize|traga|d[eê])\b",
+            q,
+            re.IGNORECASE,
+        ):
+            return True
+        if any(token in q for token in ("resumo", "summary", "explicação", "explanation")) and len(q.split()) <= 4:
+            return True
+        return False
+
+    @staticmethod
     def _derive_media_search_action_and_query(user_input: str) -> tuple[Optional[str], str]:
         text = (user_input or "").strip()
         lower = text.lower()
@@ -2981,6 +3525,252 @@ class AgentOrchestrator:
 
         return reply
 
+    @staticmethod
+    def _clip_text(value: Any, limit: int) -> str:
+        text = str(value or "").strip()
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "..."
+
+    def _build_instruction_pack(
+        self,
+        *,
+        agent_name: str,
+        personality: str,
+        specialist_hint: str = "",
+        user_language: str,
+        presentation_mode: str,
+        markdown_supported: bool,
+    ) -> str:
+        prompt_cfg = self.config_manager.get("prompt_context", {}) if hasattr(self, "config_manager") else {}
+        style = str(prompt_cfg.get("instruction_pack_style", "compact_json")).strip().lower()
+        if style == "off":
+            return ""
+
+        personality_limit = int(prompt_cfg.get("personality_max_chars", 220) or 220)
+        policy_compact = [
+            "full_namespaced_actions",
+            "read_before_destructive",
+            "browser_only_for_ui",
+            "failure_honesty_and_alternative",
+            "reply_only_when_done_or_blocked",
+            "non_reply_must_be_progress_ack",
+            "stop_after_3_same_failures",
+        ]
+        pack = {
+            "v": "ip.v1",
+            "n": self._clip_text(agent_name, 40),
+            "p": self._clip_text(personality, max(80, personality_limit)),
+            "lang": {"think": "en", "actions": "en", "reply": user_language or "auto", "single_reply_lang": True},
+            "present": {
+                "mode": presentation_mode,
+                "markdown": bool(markdown_supported),
+            },
+            "policy": policy_compact,
+            "output": {
+                "format": "json_only",
+                "schema_keys": ["thought", "plan", "state_summary", "action", "params", "task_label", "response_text", "attachments"],
+            },
+        }
+        if specialist_hint:
+            pack["sp"] = self._clip_text(specialist_hint, 180)
+        cache_key = json.dumps(pack, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        cached = self._instruction_pack_cache.get(cache_key)
+        if cached:
+            return cached
+        serialized = json.dumps(pack, ensure_ascii=False, separators=(",", ":"))
+        # Keep a tiny cache to avoid unbounded growth.
+        if len(self._instruction_pack_cache) > 32:
+            self._instruction_pack_cache.clear()
+        self._instruction_pack_cache[cache_key] = serialized
+        return serialized
+
+    @staticmethod
+    def _prompt_section_span(prompt: str, header: str, next_headers: List[str]) -> int:
+        start = prompt.find(header)
+        if start < 0:
+            return 0
+        end = len(prompt)
+        for h in next_headers:
+            idx = prompt.find(h, start + 1)
+            if idx != -1 and idx < end:
+                end = idx
+        return max(0, end - start)
+
+    def _capture_prompt_metrics(self, session_id: str, prompt: str) -> None:
+        headers = [
+            "[INSTRUCTION PACK]",
+            "[INTERNAL STATE (TOON)]",
+            "[DYNAMIC CONTEXT]",
+            "[AVAILABLE ACTIONS]",
+            "[STRUCTURED OUTPUT CONTRACT]",
+        ]
+        sizes: Dict[str, int] = {}
+        for i, header in enumerate(headers):
+            sizes[header] = self._prompt_section_span(prompt, header, headers[i + 1 :])
+
+        metrics = {
+            "prompt_chars": len(prompt),
+            "prompt_tokens_approx": len(prompt) // 4,
+            "block_chars": sizes,
+            "block_tokens_approx": {k: v // 4 for k, v in sizes.items()},
+        }
+        self._prompt_metrics_cache[session_id] = metrics
+        logger.info(
+            "Prompt Metrics | Session: %s | TotalTok~%d | InstrTok~%d | StateTok~%d | DynTok~%d | ActionsTok~%d | ContractTok~%d",
+            session_id,
+            metrics["prompt_tokens_approx"],
+            metrics["block_tokens_approx"].get("[INSTRUCTION PACK]", 0),
+            metrics["block_tokens_approx"].get("[INTERNAL STATE (TOON)]", 0),
+            metrics["block_tokens_approx"].get("[DYNAMIC CONTEXT]", 0),
+            metrics["block_tokens_approx"].get("[AVAILABLE ACTIONS]", 0),
+            metrics["block_tokens_approx"].get("[STRUCTURED OUTPUT CONTRACT]", 0),
+        )
+
+    def _capture_observation_metrics(
+        self,
+        session_id: str,
+        action_id: str,
+        raw_result: str,
+        truncated_result: str,
+        summarized: bool,
+    ) -> None:
+        bucket = self._observation_metrics_cache.get(session_id)
+        if bucket is None:
+            bucket = deque(maxlen=20)
+            self._observation_metrics_cache[session_id] = bucket
+
+        bucket.append(
+            {
+                "ts": time.time(),
+                "action": action_id,
+                "raw_tokens_approx": len(raw_result) // 4,
+                "truncated_tokens_approx": len(truncated_result) // 4,
+                "summarized": bool(summarized),
+            }
+        )
+
+    def _capture_turn_metrics(
+        self,
+        session_id: str,
+        total_ms: int,
+        lock_wait_ms: int,
+        loops: int,
+        last_action_id: str,
+    ) -> None:
+        self._turn_metrics_cache[session_id] = {
+            "ts": time.time(),
+            "duration_ms": int(total_ms),
+            "lock_wait_ms": int(lock_wait_ms),
+            "loops": int(loops),
+            "last_action": last_action_id or "-",
+        }
+
+    def get_runtime_metrics(self, session_id: str) -> Dict[str, Any]:
+        prompt = self._prompt_metrics_cache.get(session_id) or {}
+        turn = self._turn_metrics_cache.get(session_id) or {}
+        observations = list(self._observation_metrics_cache.get(session_id) or [])
+        latest_observation = observations[-1] if observations else {}
+        return {
+            "prompt": prompt,
+            "turn": turn,
+            "latest_observation": latest_observation,
+            "observation_count": len(observations),
+        }
+
+    def _compact_specialist_prompt(self, specialist_name: str, specialist_prompt: str) -> str:
+        text = str(specialist_prompt or "").strip()
+        if not text:
+            return ""
+        prompt_cfg = self.config_manager.get("prompt_context", {}) if hasattr(self, "config_manager") else {}
+        mode = str(prompt_cfg.get("specialist_prompt_mode", "compact")).strip().lower()
+        if mode in {"off", "raw"}:
+            return text
+
+        try:
+            max_chars = int(prompt_cfg.get("specialist_prompt_max_chars", 320) or 320)
+        except Exception:
+            max_chars = 320
+
+        lines = []
+        for line in text.splitlines():
+            cleaned = line.strip().lstrip("-").strip()
+            if not cleaned:
+                continue
+            if cleaned.startswith("###"):
+                cleaned = cleaned.replace("###", "").strip()
+            lines.append(cleaned)
+        if not lines:
+            return self._clip_text(text, max_chars)
+
+        # Keep semantic essence in a compact single line.
+        compact = " | ".join(lines[:6])
+        if specialist_name:
+            compact = f"Specialist={specialist_name}; {compact}"
+        return self._clip_text(compact, max_chars)
+
+    def _should_include_toon_deltas(self, session: Session, user_input: str) -> bool:
+        if not session or not isinstance(session.context, dict):
+            return False
+        raw = session.context.get("toon_deltas")
+        if not isinstance(raw, list) or not raw:
+            return False
+
+        prompt_cfg = self.config_manager.get("prompt_context", {}) if hasattr(self, "config_manager") else {}
+        mode = str(prompt_cfg.get("toon_deltas_mode", "adaptive")).strip().lower()
+        if mode in {"off", "false", "0", "never"}:
+            return False
+        if mode in {"on", "always", "true", "1"}:
+            return True
+
+        # Adaptive mode: include only when continuity signal is strong.
+        if session.pending_action:
+            return True
+
+        planner_tree = session.context.get("planner_tree")
+        if isinstance(planner_tree, list) and any(
+            isinstance(step, dict) and str(step.get("status") or "") in {"pending", "in_progress"}
+            for step in planner_tree
+        ):
+            return True
+
+        last_error = str((session.state_summary or {}).get("last_error") or "").strip().lower()
+        if last_error and last_error not in {"none", "null", "n/a"}:
+            return True
+
+        text = str(user_input or "").strip().lower()
+        if not text:
+            return False
+        continuity_markers = (
+            "continue",
+            "conseguiu",
+            "deu certo",
+            "e ai",
+            "e aí",
+            "agora",
+            "depois",
+            "entao",
+            "então",
+            "isso",
+            "essa",
+            "esse",
+            "ela",
+            "ele",
+            "it",
+            "that",
+            "those",
+            "abre ela",
+            "open it",
+            "open that",
+            "first music",
+            "primeira musica",
+            "primeira música",
+            "qual foi a primeira",
+            "remember",
+            "lembra",
+        )
+        return any(marker in text for marker in continuity_markers)
+
     def _construct_system_prompt(self, session: Session, user_input: str = "") -> str:
         """Builds the provider-agnostic system prompt with dynamic sections."""
         now = datetime.datetime.now()
@@ -2992,50 +3782,95 @@ class AgentOrchestrator:
             "user": os.getlogin() if hasattr(os, 'getlogin') else "unknown"
         }
         
-        # Serialize state_summary to simulated TOON format
-        toon_state = json.dumps(session.state_summary, indent=2, ensure_ascii=False)
+        prompt_cfg = self.config_manager.get("prompt_context", {}) if hasattr(self, "config_manager") else {}
+        state_mode = str(prompt_cfg.get("state_summary_mode", "toon")).strip().lower()
+        if state_mode in {"legacy", "json"}:
+            toon_state = json.dumps(session.state_summary, ensure_ascii=False, separators=(",", ":"))
+        else:
+            toon_state = dumps_toon(encode_state_summary(session.state_summary))
+        toon_deltas_raw = session.context.get("toon_deltas", [])
+        toon_deltas = toon_deltas_raw if isinstance(toon_deltas_raw, list) else []
+        if not self._should_include_toon_deltas(session, user_input):
+            toon_deltas = []
 
         # Get naming and personality
         agent_config = self.config_manager.get("agent", {})
         agent_name = agent_config.get("agent_name", "Atlas")
         personality = agent_config.get("personality", "You are a proactive Reasoning Agent.")
+        active_specialist = str(session.context.get("active_specialist", "") or "").strip()
+        specialist_prompt_raw = self.specialist_manager.get_specialist_prompt(active_specialist) or ""
+        specialist_mode = str(prompt_cfg.get("specialist_prompt_mode", "ultra_compact")).strip().lower()
+        if specialist_mode == "raw":
+            specialist_prompt = specialist_prompt_raw
+            specialist_hint = ""
+        elif specialist_mode == "off":
+            specialist_prompt = ""
+            specialist_hint = ""
+        else:
+            specialist_prompt = ""
+            if specialist_mode == "ultra_compact":
+                specialist_hint = self.specialist_manager.get_specialist_ultra_compact(active_specialist)
+            else:
+                specialist_hint = self.specialist_manager.get_specialist_compact(active_specialist)
+            if not specialist_hint:
+                specialist_hint = self._compact_specialist_prompt(active_specialist, specialist_prompt_raw)
 
         caps = session.context.get('driver_capabilities', {})
         markdown_supported = caps.get('markdown', True)
         voice_only = caps.get('voice_only', False)
 
+        presentation_mode = "markdown"
         presentation_directive = "[PRESENTATION DIRECTIVE]\n"
         if voice_only:
-            presentation_directive += "- You are speaking to the user via voice. DO NOT use markdown, asterisks, hashes, or complex structural formatting.\n"
-            presentation_directive += "- Keep responses conversational, brief, natural, and easy to listen to.\n"
+            presentation_mode = "voice"
+            presentation_directive += "- Voice mode: plain conversational text only; no markdown.\n"
         elif not markdown_supported:
-            presentation_directive += "- Use plain text only. Do not use markdown like **bold** or *italics*.\n"
-            presentation_directive += "- Use simple text structure to respond.\n"
+            presentation_mode = "plain_text"
+            presentation_directive += "- Plain text only; keep structure simple.\n"
         else:
-            presentation_directive += "- ALWAYS provide a visual summary in 'response_text' if a tool returns data (tables, lists, code).\n"
-            presentation_directive += "- PREFER Markdown tables and code blocks for readability.\n"
-            presentation_directive += "- ALWAYS use rich Markdown formatting (e.g., **bold** for emphasis, *italics*, bullet points for lists, and numbered lists) in your `response_text` by default. Do not output plain text blocks when you can structure them.\n"
-            presentation_directive += "- DO NOT just say 'task complete'. SHOW the result or a snippet of what was found.\n"
+            presentation_mode = "markdown"
+            presentation_directive += "- Markdown preferred for structured outputs (tables/code/lists).\n"
+            presentation_directive += "- Show concrete result snippets; avoid generic completion lines.\n"
 
-        principal = self._get_principal_context(session)
-        allowed_actions = self._get_allowed_actions_for_session(session)
-        skills_summary = self.skill_registry.get_summary(allowed_actions)
-        skill_scope = "principal-filtered" if allowed_actions is not None else "global"
-
-        return self.prompt_composer.compose(
+        instruction_pack = self._build_instruction_pack(
             agent_name=agent_name,
             personality=personality,
-            specialist_prompt=self.specialist_manager.get_specialist_prompt(
-                session.context.get("active_specialist", "")
-            )
-            or "",
+            specialist_hint=specialist_hint,
+            user_language=session.context.get("user_language", "en"),
+            presentation_mode=presentation_mode,
+            markdown_supported=bool(markdown_supported and not voice_only),
+        )
+
+        allowed_actions = self._get_allowed_actions_for_session(session)
+        skills_summary = self._build_prompt_actions_block(user_input=user_input, allowed_actions=allowed_actions)
+        skill_scope = "principal-filtered" if allowed_actions is not None else "global"
+
+        # Apply dynamic budgets based on active model limits
+        active_config = self.llm_manager.get_active_config()
+        max_context = int(active_config.get("max_context", 8000))
+        
+        # Scaling logic: if context is small (< 8k), reduce budgets proportionally
+        if max_context < 8000:
+            scale_factor = max_context / 8000
+            new_budgets = {k: int(v * scale_factor) for k, v in self.prompt_composer._BLOCK_BUDGETS.items()}
+            self.prompt_composer.update_budgets(new_budgets)
+        else:
+            # Reset to defaults if context is large enough
+            self.prompt_composer.update_budgets(self.prompt_composer._BLOCK_BUDGETS)
+
+        prompt = self.prompt_composer.compose(
+            agent_name=agent_name,
+            personality=personality,
+            specialist_prompt=specialist_prompt,
             presentation_directive=presentation_directive,
+            instruction_pack=instruction_pack,
             sys_info=sys_info,
             location=self.location_service.get_current_location(session.context).get("city", "Unknown"),
             channel=session.context.get("channel", "Unknown"),
             user_name=session.context.get("user_name", "Unknown"),
             user_language=session.context.get("user_language", "en"),
             toon_state=toon_state,
+            toon_deltas=toon_deltas,
             user_input=user_input,
             project_path=os.getcwd(),
             workspace_path=self.workspace_service.base_dir,
@@ -3048,6 +3883,147 @@ class AgentOrchestrator:
             skills_summary=skills_summary,
             skill_scope=skill_scope,
         )
+        self._capture_prompt_metrics(session.session_id, prompt)
+        return prompt
+
+    def _build_prompt_actions_block(self, user_input: str, allowed_actions: Optional[List[str]]) -> str:
+        """
+        Builds a compact, low-token action catalog for prompt injection.
+        """
+        prompt_cfg = self.config_manager.get("prompt_context", {}) or {}
+        mode = str(prompt_cfg.get("actions_mode", "on_demand")).strip().lower()
+        pack_style = str(prompt_cfg.get("actions_pack_style", "compact_json")).strip().lower()
+
+        def _pack(payload: Dict[str, Any], header: str) -> str:
+            if pack_style == "off":
+                return header
+            return header + "\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+        # Legacy compatibility mode
+        if mode == "full":
+            return self.skill_registry.get_summary(allowed_actions)
+
+        if mode in {"on_demand", "catalog_on_demand"}:
+            allowed_set = set(allowed_actions) if allowed_actions is not None else set(self.skill_registry.list_actions())
+            bootstrap = [
+                action_id
+                for action_id in (
+                    "system.control.skills.list.ai",
+                    "system.control.skills.describe.ai",
+                    "system.control.skills.list",
+                    "system.control.skills.describe",
+                )
+                if action_id in allowed_set
+            ]
+            if not bootstrap:
+                # Fallback safely when discovery actions are unavailable.
+                mode = "compact_hybrid"
+            else:
+                base_payload = {
+                    "v": "ac.v2",
+                    "m": "on_demand",
+                    "discover": bootstrap,
+                    "rules": [
+                        "discover_if_unknown",
+                        "prefer_ai_over_ui",
+                        "skills_catalog_only_not_content_search",
+                    ],
+                }
+                if self._is_conversational_turn(user_input):
+                    return _pack(
+                        {
+                            **base_payload,
+                            "m": "on_demand_chat",
+                            "prefer_reply": True,
+                        },
+                        "Catalog mode: on_demand_chat",
+                    )
+                return _pack(base_payload, "Catalog mode: on_demand")
+
+        manifest = self.skill_registry.get_compact_manifest(allowed_actions)
+        focus_limit = int(prompt_cfg.get("focus_limit", 8))
+        focus = self.skill_registry.get_focus_actions(
+            user_input=user_input or "",
+            allowed_actions=allowed_actions,
+            limit=focus_limit,
+        )
+
+        if self._is_conversational_turn(user_input):
+            short_focus_ids = [str(row.get("id") or "") for row in focus[:4] if str(row.get("id") or "").strip()]
+            return _pack(
+                {
+                    "v": "ac.v2",
+                    "m": "compact_chat",
+                    "prefer_reply": True,
+                    "focus": short_focus_ids,
+                },
+                "Catalog mode: compact_chat",
+            )
+
+        focus_ids = [str(row.get("id") or "") for row in focus if str(row.get("id") or "").strip()]
+        payload = {
+            "v": "ac.v2",
+            "m": mode,
+            "c": int(manifest.get("count", 0) or 0),
+            "h": str(manifest.get("hash", "none") or "none"),
+            "ns": list(manifest.get("namespaces", [])[:12]),
+            "a": list(manifest.get("actions", [])),
+            "f": focus_ids,
+        }
+        return _pack(payload, f"Catalog mode: {mode}")
+
+    @staticmethod
+    def _is_conversational_turn(user_input: str) -> bool:
+        text = str(user_input or "").strip().lower()
+        if not text:
+            return False
+
+        # Keep this strict to avoid downgrading operational turns.
+        greetings = {
+            "oi",
+            "ola",
+            "olá",
+            "hello",
+            "hi",
+            "hey",
+            "bom dia",
+            "boa tarde",
+            "boa noite",
+            "e ai",
+            "e aí",
+        }
+        normalized = re.sub(r"[!?.,;:]+", "", text).strip()
+        if normalized in greetings:
+            return True
+
+        if len(normalized) <= 12 and any(g in normalized for g in ("oi", "olá", "ola", "hello", "hi", "hey")):
+            return True
+        return False
+
+    @staticmethod
+    def _looks_like_skill_discovery_query(query: str) -> bool:
+        text = str(query or "").strip().lower()
+        if not text:
+            return False
+        markers = (
+            "skill",
+            "skills",
+            "ação",
+            "acoes",
+            "ações",
+            "action",
+            "actions",
+            "namespace",
+            "catalog",
+            "catálogo",
+            "contract",
+            "contrato",
+        )
+        if any(marker in text for marker in markers):
+            return True
+        if "." in text and len(text.split(".")) >= 2:
+            return True
+        return False
 
     def apply_conversation_coaching(self, session: Session, user_input: str, response_text: str) -> str:
         """
@@ -3075,68 +4051,34 @@ class AgentOrchestrator:
 
         lower_input = (user_input or "").lower()
         locale = self._session_locale(session, fallback="en")
+        if locale.startswith("pt"):
+            return text
         pt_markers = ("você", "voce", "relatorio", "relatório", "pode", "quero", "ajuda")
-        is_pt = locale.startswith("pt") or any(marker in lower_input for marker in pt_markers)
+        is_pt = False
         tone = str(cfg.get("tone", "consultative")).strip().lower()
 
         followup = ""
         if any(k in lower_input for k in ("report", "relatorio", "relatório", "html")):
             if tone == "direct":
-                followup = (
-                    "Posso gerar a versão HTML agora?"
-                    if is_pt else
-                    "Can I generate the HTML version now?"
-                )
+                followup = "Can I generate the HTML version now?"
             elif tone == "subtle":
-                followup = (
-                    "Se quiser, posso transformar isso em HTML."
-                    if is_pt else
-                    "If helpful, I can turn this into HTML."
-                )
+                followup = "If helpful, I can turn this into HTML."
             else:
-                followup = (
-                    "Quer que eu já gere uma versão HTML com estrutura profissional?"
-                    if is_pt else
-                    "Would you like me to generate a professional HTML version now?"
-                )
+                followup = "Would you like me to generate a professional HTML version now?"
         elif any(k in lower_input for k in ("plan", "planner", "roadmap", "plano")):
             if tone == "direct":
-                followup = (
-                    "Posso quebrar isso em milestones agora?"
-                    if is_pt else
-                    "Can I break this into milestones now?"
-                )
+                followup = "Can I break this into milestones now?"
             elif tone == "subtle":
-                followup = (
-                    "Se fizer sentido, eu organizo em milestones."
-                    if is_pt else
-                    "If useful, I can organize this into milestones."
-                )
+                followup = "If useful, I can organize this into milestones."
             else:
-                followup = (
-                    "Quer que eu quebre isso em um plano de implementação com milestones?"
-                    if is_pt else
-                    "Would you like me to break this into an implementation plan with milestones?"
-                )
+                followup = "Would you like me to break this into an implementation plan with milestones?"
         else:
             if tone == "direct":
-                followup = (
-                    "Posso avançar para o próximo passo?"
-                    if is_pt else
-                    "Can I proceed to the next step?"
-                )
+                followup = "Can I proceed to the next step?"
             elif tone == "subtle":
-                followup = (
-                    "Se quiser, eu já sigo com o próximo passo."
-                    if is_pt else
-                    "If useful, I can continue with the next step."
-                )
+                followup = "If useful, I can continue with the next step."
             else:
-                followup = (
-                    "Quer que eu já avance com o próximo passo prático?"
-                    if is_pt else
-                    "Would you like me to proceed with the next practical step?"
-                )
+                followup = "Would you like me to proceed with the next practical step?"
 
         joiner = "\n\n" if "\n" in text else " "
         return f"{text}{joiner}{followup}"
@@ -3152,24 +4094,7 @@ class AgentOrchestrator:
 
         locale = self._session_locale(session, fallback="en")
         if locale.startswith("pt"):
-            replacements = {
-                "Feels like:": "Sensação térmica:",
-                "Would you like me to proceed with the next practical step?": "Quer que eu já avance com o próximo passo prático?",
-                "Would you like me to proceed with the next step?": "Quer que eu já avance com o próximo passo?",
-                "Would you like me to break this into an implementation plan with milestones?": "Quer que eu quebre isso em um plano de implementação com milestones?",
-                "Would you like me to generate a professional HTML version now?": "Quer que eu já gere uma versão HTML com estrutura profissional?",
-                "Can I proceed to the next step?": "Posso avançar para o próximo passo?",
-                "Can I generate the HTML version now?": "Posso gerar a versão HTML agora?",
-                "Sorry,": "Desculpe,",
-            }
-            for src, dst in replacements.items():
-                text = text.replace(src, dst)
-            text = re.sub(
-                r"Browser media control '([^']+)' executed successfully\.",
-                r"Pronto, apliquei o controle de mídia (\1).",
-                text,
-                flags=re.IGNORECASE,
-            )
+            return text
         else:
             replacements = {
                 "Sensação térmica:": "Feels like:",

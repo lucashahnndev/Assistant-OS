@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from google import genai
 from google.genai import types
 from core.intent import AgentIntent
@@ -11,7 +11,7 @@ from utils.logging_config import get_logger
 logger = get_logger("GeminiDriver")
 
 class GeminiProvider(ILLMProvider):
-    def __init__(self, config: Dict[str, Any] = None):
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
         if config:
             self.api_key = config.get("api_key")
             self.model_name = config.get("model", "gemini-2.0-flash")
@@ -22,10 +22,11 @@ class GeminiProvider(ILLMProvider):
             cfg = providers.get("google") or providers.get("gemini", {})
             self.api_key = cfg.get("api_key")
             self.model_name = cfg.get("model", "gemini-2.0-flash")
-
+        
+        self.max_tokens = int(config.get("max_tokens", 4096)) if config else 4096
         self.client = genai.Client(api_key=self.api_key)
 
-    def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] = None) -> AgentIntent:
+    def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] | None = None, **kwargs) -> AgentIntent:
         contents = []
         for msg in history:
             role = "user" if msg["role"] == "user" else "model"
@@ -54,7 +55,8 @@ class GeminiProvider(ILLMProvider):
             config = types.GenerateContentConfig(
                 system_instruction=system_prompt,
                 response_mime_type="application/json",
-                temperature=0.2 # Lower temperature for more consistent JSON
+                temperature=0.2, # Lower temperature for more consistent JSON
+                max_output_tokens=kwargs.get("max_tokens", self.max_tokens)
             )
 
             response = self.client.models.generate_content(
@@ -111,19 +113,15 @@ class GeminiProvider(ILLMProvider):
 
         except Exception as e:
             logger.error(f"Gemini Error: {e}")
-            return AgentIntent(
-                thought="Connection Error",
-                action="error",
-                params={"error": str(e)},
-                response_text="Estou com dificuldade de conexão com o Google Gemini."
-            )
+            raise e
 
-    def generate_text(self, prompt: str, system_prompt: str = "") -> str:
+    def generate_text(self, prompt: str, system_prompt: str = "", **kwargs) -> str:
         """Generates plain text using the Flash model."""
         try:
             config = types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                temperature=0.3
+                temperature=0.3,
+                max_output_tokens=kwargs.get("max_tokens", self.max_tokens)
             )
             response = self.client.models.generate_content(
                 model=self.model_name,
@@ -133,7 +131,7 @@ class GeminiProvider(ILLMProvider):
             return response.text.strip() if response.text else "Error: Resposta vazia do Gemini."
         except Exception as e:
             logger.error(f"Gemini generate_text error: {e}")
-            return f"Erro na geração de texto: {e}"
+            raise e
 
     def analyze_image(self, image_path: str, prompt: str) -> str:
         """
@@ -162,4 +160,4 @@ class GeminiProvider(ILLMProvider):
             return response.text or "O modelo não retornou nenhuma descrição."
         except Exception as e:
             logger.error(f"Gemini Vision Error: {e}")
-            return f"Erro na análise de visão: {e}"
+            raise e

@@ -561,7 +561,7 @@ class BrowserDriver(BaseDriver):
                 "phase": phase,
                 "action": action,
                 "frame": {
-                    "url": f"/api/sessions/{session_id}/playback/{run_id}/{step_meta.get('frame_filename', '')}",
+                    "url": f"/api/sessions/{session_id}/playback/{run_id}/frames/{step_meta.get('frame_filename', '')}",
                     "filename": step_meta.get("frame_filename"),
                     "sha256": step_meta.get("frame_sha256"),
                     "mime": "image/jpeg",
@@ -800,7 +800,8 @@ class BrowserDriver(BaseDriver):
     async def _browser_agent_task(self, task, session_id=None, device_id: str = "default"):
         media_task = self._is_media_playback_task(task)
         dom_only_attempted = False
-        dom_playback_ctx = None
+        playback_ctx = None
+        playback_status = "failure"
         try:
             browser_skill_cfg = self.kernel.config_manager.get_skill_config("browser_automator") if self.kernel else {}
             dom_only_enabled = bool((browser_skill_cfg or {}).get("dom_only_fallback_enabled", True))
@@ -808,17 +809,18 @@ class BrowserDriver(BaseDriver):
             dom_only_strategy = str((browser_skill_cfg or {}).get("dom_only_strategy", "llm")).strip().lower()
             if dom_only_strategy not in {"llm", "deterministic"}:
                 dom_only_strategy = "llm"
-            # For DOM-only forced media flows, start playback immediately so frontend sees startup.
-            if media_task and dom_only_enabled and dom_only_force:
-                dom_playback_ctx = self._start_playback_run(
+            # Keep one continuous playback context across all media strategies.
+            if media_task:
+                playback_title = "Autoplay Navigation (DOM-only)" if (dom_only_enabled and dom_only_force) else "Browser Agent"
+                playback_ctx = self._start_playback_run(
                     session_id,
                     "browser.automator.play_url",
-                    "Autoplay Navigation (DOM-only)",
+                    playback_title,
                 )
 
             await self._ensure_browser()
-            if dom_playback_ctx:
-                await self._emit_playback_frame(dom_playback_ctx, "browser_opened", target="", phase="loading")
+            if playback_ctx:
+                await self._emit_playback_frame(playback_ctx, "browser_opened", target="", phase="loading")
             pre_navigated = False
             task_target_url = self._extract_first_url(task)
             if media_task and task_target_url:
@@ -857,22 +859,20 @@ class BrowserDriver(BaseDriver):
                     collab_dom = await self._run_collaborative_media_task(task, session_id=session_id, use_vision=False)
                     if collab_dom.get("status") == "success":
                         self._mark_media_verified(source="dom_only_llm")
-                        self._end_playback_run(dom_playback_ctx, status="success")
+                        playback_status = "success"
                         await self._enforce_task_tab_limit()
                         return f"Task completed: {collab_dom.get('message')}"
-                    self._end_playback_run(dom_playback_ctx, status="failure")
                     await self._enforce_task_tab_limit()
                     return (
                         "FATAL TOOL ERROR while executing task: "
                         f"{collab_dom.get('message') or 'DOM-only LLM did not confirm playback'} "
                         "DO NOT HALLUCINATE SUCCESS."
                     )
-                dom_result = await self._run_dom_only_media_fallback(task, session_id=session_id, run_ctx=dom_playback_ctx)
+                dom_result = await self._run_dom_only_media_fallback(task, session_id=session_id, run_ctx=playback_ctx)
                 await self._enforce_task_tab_limit()
                 if bool(dom_result.get("playback_confirmed")):
-                    self._end_playback_run(dom_playback_ctx, status="success")
+                    playback_status = "success"
                     return f"Task completed: {dom_result.get('message')}"
-                self._end_playback_run(dom_playback_ctx, status="failure")
                 return (
                     "FATAL TOOL ERROR while executing task: "
                     f"{dom_result.get('message') or 'DOM-only fallback failed'} "
@@ -884,7 +884,14 @@ class BrowserDriver(BaseDriver):
                 collaborative = await self._run_collaborative_media_task(task, session_id=session_id)
                 if collaborative.get("status") == "success":
                     self._mark_media_verified(source="collaborative_media")
+                    playback_status = "success"
                     return f"Task completed: {collaborative.get('message')}"
+                if str(collaborative.get("blocker") or "").strip().lower() == "provider_quota":
+                    await self._enforce_task_tab_limit()
+                    return (
+                        "FATAL TOOL ERROR: provider quota/rate limit reached during collaborative media control "
+                        "(e.g. 429/credits). Task aborted early to avoid long retry loops."
+                    )
                 logger.info(
                     "Collaborative media task did not confirm playback (%s). Running one extra local verification pass.",
                     collaborative.get("status"),
@@ -904,35 +911,15 @@ class BrowserDriver(BaseDriver):
                     str(collaborative.get("blocker") or "playback_not_confirmed"),
                 )
 
-            # 1. Setup Playback
-            run_id = f"playback_{uuid.uuid4().hex[:8]}"
-            pb_service = getattr(self.kernel, "playback_service", None) if self.kernel else None
-            pb_config = self.kernel.config_manager.get("playback", {}) if self.kernel else {}
-            playback_enabled = pb_config.get("enabled", True)
-            run_ctx = None
-            
-            if session_id and pb_service and playback_enabled:
-                pb_service.start_run(session_id, run_id, "Browser Execution", {"skill": "browser", "action_id": "browser.run_task"})
-                global_event_bus.emit_threadsafe({
-                    "type": "playback.start",
-                    "run_id": run_id,
-                    "session_id": session_id,
-                    "title": "Browser Agent",
-                    "source": { "skill": "browser", "action_id": "browser.run_task" },
-                    "mode": "frames",
-                    "created_at": datetime.datetime.now().isoformat()
-                })
-                run_ctx = {
-                    "run_id": run_id,
-                    "session_id": session_id,
-                    "pb_service": pb_service,
-                    "step": 1,
-                    "action_id": "browser.run_task",
-                    "ended": False,
-                }
-                self._maybe_start_playback_sampler(run_ctx, phase="loading")
-                # Emit bootstrap/loading frames before the first agent action so UI shows
-                # navigation/load context immediately (instead of waiting step callback).
+            # 1. Ensure a single playback context for this task lifecycle.
+            run_ctx = playback_ctx or self._start_playback_run(session_id, "browser.run_task", "Browser Agent")
+            playback_ctx = run_ctx
+            pb_service = run_ctx.get("pb_service") if run_ctx else None
+            run_id = str(run_ctx.get("run_id") or "") if run_ctx else ""
+            playback_enabled = bool(run_ctx and pb_service and session_id)
+
+            # Emit bootstrap/loading frames once before browser-use actions.
+            if playback_enabled and pb_service and run_id:
                 try:
                     page_boot = self.page or await self._get_current_page()
                     if page_boot:
@@ -955,7 +942,7 @@ class BrowserDriver(BaseDriver):
                                 "phase": "loading",
                                 "action": {"name": "loader_bootstrap", "target": current_target},
                                 "frame": {
-                                    "url": f"/api/sessions/{session_id}/playback/{run_id}/{step_meta['frame_filename']}",
+                                    "url": f"/api/sessions/{session_id}/playback/{run_id}/frames/{step_meta['frame_filename']}",
                                     "filename": step_meta['frame_filename'],
                                     "sha256": step_meta['frame_sha256'],
                                     "mime": "image/jpeg",
@@ -966,7 +953,6 @@ class BrowserDriver(BaseDriver):
                                 "ts": datetime.datetime.now().isoformat()
                             })
 
-                        # Small delayed capture often catches intermediate loader/spinner state.
                         await asyncio.sleep(0.35)
                         frame_loader = await page_boot.screenshot(type='jpeg', quality=70)
                         frame_loader = self._normalize_frame_bytes(frame_loader)
@@ -986,7 +972,7 @@ class BrowserDriver(BaseDriver):
                                 "phase": "loading",
                                 "action": {"name": "loader_probe", "target": current_target},
                                 "frame": {
-                                    "url": f"/api/sessions/{session_id}/playback/{run_id}/{step_meta2['frame_filename']}",
+                                    "url": f"/api/sessions/{session_id}/playback/{run_id}/frames/{step_meta2['frame_filename']}",
                                     "filename": step_meta2['frame_filename'],
                                     "sha256": step_meta2['frame_sha256'],
                                     "mime": "image/jpeg",
@@ -1001,22 +987,23 @@ class BrowserDriver(BaseDriver):
 
             # 2. Get Vision LLM Configuration
             vision_config = self.kernel.config_manager.get_vision_config()
-            
-            provider_name = vision_config.get('provider', 'google')
-            provider_config = vision_config.get('providers', {}).get(provider_name, {})
-            
-            api_key = provider_config.get('api_key')
+            provider_name, provider_config, vision_defaults = self._select_provider_from_config(
+                vision_config,
+                default_provider="google",
+            )
+
+            api_key = provider_config.get('api_key') or provider_config.get('api_key_ref')
             # Fallback to general LLM api key if not specific
             if not api_key:
                 llm_config = self.kernel.config_manager.get_llm_config()
-                api_key = llm_config.get('providers', {}).get(provider_name, {}).get('api_key')
+                api_key = self._extract_provider_api_key(llm_config, provider_name)
 
             model_name = provider_config.get('model', 'gemini-2.0-flash')
             try:
                 vision_max_tokens = int(
                     provider_config.get(
                         "vision_max_tokens",
-                        provider_config.get("max_tokens", vision_config.get("max_tokens", 512))
+                        provider_config.get("max_tokens", vision_defaults.get("max_tokens", 512))
                     )
                 )
             except Exception:
@@ -1042,6 +1029,7 @@ class BrowserDriver(BaseDriver):
                     if collab_dom.get("status") == "success":
                         self._mark_media_verified(source="dom_only_llm")
                         await self._enforce_task_tab_limit()
+                        playback_status = "success"
                         return f"Task completed: {collab_dom.get('message')}"
                     await self._enforce_task_tab_limit()
                     return (
@@ -1052,6 +1040,7 @@ class BrowserDriver(BaseDriver):
                 dom_result = await self._run_dom_only_media_fallback(task, session_id=session_id, run_ctx=run_ctx)
                 await self._enforce_task_tab_limit()
                 if bool(dom_result.get("playback_confirmed")):
+                    playback_status = "success"
                     return f"Task completed: {dom_result.get('message')}"
                 return (
                     "FATAL TOOL ERROR while executing task: "
@@ -1149,7 +1138,7 @@ class BrowserDriver(BaseDriver):
                             "phase": "executing",
                             "action": last_action,
                             "frame": {
-                                "url": f"/api/sessions/{session_id}/playback/{run_id}/{step_meta['frame_filename']}",
+                                "url": f"/api/sessions/{session_id}/playback/{run_id}/frames/{step_meta['frame_filename']}",
                                 "filename": step_meta['frame_filename'],
                                 "sha256": step_meta['frame_sha256'],
                                 "mime": "image/jpeg",
@@ -1198,18 +1187,6 @@ class BrowserDriver(BaseDriver):
             had_errors = bool(result.has_errors())
             error_list = [e for e in (result.errors() or []) if e]
             
-            # End playback
-            if session_id and pb_service and playback_enabled:
-                pb_service.end_run(session_id, run_id, "success" if (completed and successful and final_result) else "failure")
-                global_event_bus.emit_threadsafe({
-                    "type": "playback.end",
-                    "run_id": run_id,
-                    "session_id": session_id,
-                    "status": "success" if (completed and successful and final_result) else "failure",
-                    "total_steps": len(result.history),
-                    "ended_at": datetime.datetime.now().isoformat()
-                })
-
             if session_id:
                 await self._update_driver_state(session_id)
 
@@ -1242,6 +1219,7 @@ class BrowserDriver(BaseDriver):
                     dom_result = await self._run_dom_only_media_fallback(task, session_id=session_id, run_ctx=run_ctx)
                     if bool(dom_result.get("playback_confirmed")):
                         await self._enforce_task_tab_limit()
+                        playback_status = "success"
                         return f"Task completed: {dom_result.get('message')}"
                 if "timed out" in errors_text or "timeout" in errors_text:
                     await self._enforce_task_tab_limit()
@@ -1264,6 +1242,7 @@ class BrowserDriver(BaseDriver):
                 if bool(post_verify.get("playback_confirmed")):
                     self._mark_media_verified(source="browser_use_agent")
             await self._enforce_task_tab_limit()
+            playback_status = "success"
             return f"Task completed: {final_result}"
         except Exception as e:
             logger.error(f"Error in browser_agent task: {e}", exc_info=True)
@@ -1283,14 +1262,16 @@ class BrowserDriver(BaseDriver):
                     if dom_only_strategy == "llm":
                         collab_dom = await self._run_collaborative_media_task(task, session_id=session_id, use_vision=False)
                         if collab_dom.get("status") == "success":
+                            playback_status = "success"
                             return f"Task completed: {collab_dom.get('message')}"
                         return (
                             "FATAL TOOL ERROR while executing task: "
                             f"{collab_dom.get('message') or 'DOM-only LLM did not confirm playback'} "
                             "DO NOT HALLUCINATE SUCCESS."
                         )
-                    dom_result = await self._run_dom_only_media_fallback(task, session_id=session_id, run_ctx=None)
+                    dom_result = await self._run_dom_only_media_fallback(task, session_id=session_id, run_ctx=playback_ctx)
                     if bool(dom_result.get("playback_confirmed")):
+                        playback_status = "success"
                         return f"Task completed: {dom_result.get('message')}"
             except Exception as dom_e:
                 logger.debug(f"DOM-only fallback on exception failed: {dom_e}")
@@ -1303,8 +1284,8 @@ class BrowserDriver(BaseDriver):
             
             return f"FATAL TOOL ERROR while executing task: {error_msg}. DO NOT HALLUCINATE SUCCESS."
         finally:
-            if dom_playback_ctx:
-                self._end_playback_run(dom_playback_ctx, status="failure")
+            if playback_ctx:
+                self._end_playback_run(playback_ctx, status=playback_status)
             if media_task:
                 await self._release_media_page(device_id=device_id)
 
@@ -1910,6 +1891,17 @@ class BrowserDriver(BaseDriver):
                  if playback_confirmed:
                      self._mark_media_verified(page=page, source="status_probe")
             
+            if not worked and action in {"play", "pause", "next", "fullscreen", "mute", "click", "media_play_js"}:
+                try:
+                    await self._send_page_play_signal(page=page)
+                    verification_probe = await self._verify_playback_state(page=page, sample_gap_s=0.4)
+                    details = self._normalize_media_state(verification_probe.get("state", {}))
+                    playback_confirmed = bool(verification_probe.get("playback_confirmed"))
+                    # For pause/next we accept any state probe as a minimal success signal.
+                    worked = playback_confirmed if action == "play" else bool(details)
+                except Exception:
+                    pass
+
             if worked:
                 logger.info(f"Browser media control: {action}")
                 if session_id:
@@ -1926,29 +1918,19 @@ class BrowserDriver(BaseDriver):
                     "verification": verification,
                 }
             else:
-                if action == "play":
-                    state = details or await self._probe_media_state(page=page)
-                    state = self._normalize_media_state(state)
-                    await self._emit_playback_frame(run_ctx, "control_partial", target=action, phase="executing")
-                    self._end_playback_run(run_ctx, status="failure")
-                    return {
-                        "ok": True,
-                        "status": "partial",
-                        "action": action,
-                        "message": "Play signal sent, but playback could not be confirmed.",
-                        "playback_confirmed": False,
-                        "blocker": "playback_not_confirmed",
-                        "details": state,
-                        "verification": verification,
-                    }
-                logger.warning(f"Browser media control action '{action}' is not supported.")
+                state = details or await self._probe_media_state(page=page)
+                state = self._normalize_media_state(state)
+                await self._emit_playback_frame(run_ctx, "control_partial", target=action, phase="executing")
                 self._end_playback_run(run_ctx, status="failure")
+                fallback_msg = "Media control failed. Please adjust manually."
                 return {
                     "ok": False,
                     "status": "error",
                     "action": action,
-                    "message": f"Browser media control failed for action '{action}'.",
+                    "message": fallback_msg,
                     "playback_confirmed": False,
+                    "details": state,
+                    "verification": verification,
                 }
         except Exception as e:
             logger.error(f"Error in browser media control: {e}")
@@ -2157,6 +2139,51 @@ class BrowserDriver(BaseDriver):
         text = str(value or "").strip()
         return (not text) or text.startswith("ENV_")
 
+    @staticmethod
+    def _select_provider_from_config(modality_config: object, default_provider: str = "google") -> tuple[str, dict, dict]:
+        """
+        Normalizes legacy dict and new pool-list configs into:
+        (provider_name, provider_config, modality_defaults).
+        """
+        if isinstance(modality_config, dict):
+            provider_name = str(modality_config.get("provider") or default_provider)
+            providers = modality_config.get("providers", {})
+            provider_config = providers.get(provider_name, {}) if isinstance(providers, dict) else {}
+            return provider_name, dict(provider_config or {}), dict(modality_config)
+
+        if isinstance(modality_config, list):
+            enabled = [entry for entry in modality_config if isinstance(entry, dict) and entry.get("enabled", True)]
+            candidates = enabled or [entry for entry in modality_config if isinstance(entry, dict)]
+            if candidates:
+                selected = sorted(candidates, key=lambda x: x.get("priority", 99))[0]
+                provider_name = str(selected.get("provider") or default_provider)
+                return provider_name, dict(selected), {}
+
+        return default_provider, {}, {}
+
+    @staticmethod
+    def _extract_provider_api_key(modality_config: object, provider_name: str) -> object:
+        """Returns provider api_key from either legacy dict config or new pool-list config."""
+        if isinstance(modality_config, dict):
+            providers = modality_config.get("providers", {})
+            if isinstance(providers, dict):
+                provider_cfg = providers.get(provider_name, {})
+                if isinstance(provider_cfg, dict):
+                    return provider_cfg.get("api_key") or provider_cfg.get("api_key_ref")
+            return None
+
+        if isinstance(modality_config, list):
+            matches = [
+                entry for entry in modality_config
+                if isinstance(entry, dict) and str(entry.get("provider", "")).strip().lower() == provider_name.strip().lower()
+            ]
+            if matches:
+                selected = sorted(matches, key=lambda x: x.get("priority", 99))[0]
+                return selected.get("api_key") or selected.get("api_key_ref")
+            return None
+
+        return None
+
     def _vision_provider_is_usable(self, provider_name: str, model_name: str, api_key: object) -> bool:
         if not str(model_name or "").strip():
             return False
@@ -2328,9 +2355,9 @@ class BrowserDriver(BaseDriver):
         path = None
         ws = getattr(self.kernel, "workspace_service", None) if self.kernel else None
         if session_id and ws:
-            media_dir = os.path.join(ws.get_session_dir(session_id), "media", "image")
-            os.makedirs(media_dir, exist_ok=True)
-            path = os.path.join(media_dir, filename)
+            observer_dir = os.path.join(ws.get_session_dir(session_id), "playback", "_observer")
+            os.makedirs(observer_dir, exist_ok=True)
+            path = os.path.join(observer_dir, filename)
         else:
             path = os.path.join(tempfile.gettempdir(), filename)
         try:
@@ -2391,6 +2418,19 @@ class BrowserDriver(BaseDriver):
             "Sem markdown, sem texto extra."
         )
         raw = llm_manager.analyze_image(screenshot_path, prompt)
+        if self._is_provider_quota_error(str(raw or "")):
+            return {
+                "ok": False,
+                "next_hint": "none",
+                "raw": raw,
+                "parsed": {
+                    "state": "vision_provider_quota",
+                    "next_hint": "none",
+                    "blocker": "provider_quota",
+                },
+                "blocker": "provider_quota",
+                "screenshot_path": screenshot_path,
+            }
         parsed = self._extract_first_json_object(raw) or {}
         next_hint = str(parsed.get("next_hint") or "").strip().lower()
         if next_hint not in {"accept_cookie", "click_play", "press_space", "none"}:
@@ -2871,6 +2911,16 @@ class BrowserDriver(BaseDriver):
                 if use_vision
                 else await self._dom_observe_page(task)
             )
+            blocker = str(observer.get("blocker") or "").strip().lower()
+            if blocker == "provider_quota":
+                return {
+                    "ok": False,
+                    "status": "error",
+                    "message": "Collaborative vision observer hit provider quota/rate limit.",
+                    "blocker": "provider_quota",
+                    "screenshot_path": observer.get("screenshot_path"),
+                    "details": before_state,
+                }
             last_observer = observer
             action = self._plan_next_collab_action(
                 task,

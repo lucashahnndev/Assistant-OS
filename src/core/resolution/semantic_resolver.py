@@ -14,6 +14,11 @@ class SemanticResolver(IntentResolver):
         self.skill_registry = skill_registry
         # English-first semantics with Portuguese aliases for multilingual compatibility.
         self.safe_patterns: List[Tuple[re.Pattern, str, Any]] = [
+            (
+                re.compile(r"^\s*(oi|ol[aá]|ola|hello|hi|hey)\s*[!.?]*\s*$", re.IGNORECASE),
+                "reply",
+                self._greeting_reply_params,
+            ),
             (re.compile(r"\b(what time|current time|que horas|hora atual)\b", re.IGNORECASE), "system.control.time", self._no_params),
             (re.compile(r"\b(system status|status do sistema|estado do sistema)\b", re.IGNORECASE), "system.control.status", self._no_params),
             (re.compile(r"\b(system info|info do sistema|informacoes do sistema|informações do sistema)\b", re.IGNORECASE), "system.control.info", self._no_params),
@@ -84,12 +89,20 @@ class SemanticResolver(IntentResolver):
         if not normalized_input:
             return None
 
+        retry_plan = self._resolve_retry_request(normalized_input, context, available_actions)
+        if retry_plan:
+            return retry_plan
+
         for pattern, action_id, params_builder in self.safe_patterns:
             if not pattern.search(normalized_input):
                 continue
-            if action_id not in available_actions:
+            # Internal reply/error actions are orchestrator-native and do not depend on skill scope.
+            if action_id not in {"reply", "error"} and action_id not in available_actions:
                 continue
             params = params_builder(normalized_input)
+            response_text = None
+            if action_id == "reply" and isinstance(params, dict):
+                response_text = params.get("response_text")
             confidence = 0.97
             if confidence < self.threshold:
                 continue
@@ -98,7 +111,7 @@ class SemanticResolver(IntentResolver):
                 args=params,
                 confidence=confidence,
                 source="semantic",
-                response_text=None,
+                response_text=response_text,
                 thought=f"Semantic match ({pattern.pattern}) -> {action_id}",
                 metadata={"semantic_rule": pattern.pattern},
             )
@@ -125,6 +138,43 @@ class SemanticResolver(IntentResolver):
             )
 
         return None
+
+    def _resolve_retry_request(
+        self,
+        user_input: str,
+        context: Dict[str, Any],
+        available_actions: List[str],
+    ) -> Optional[ActionPlan]:
+        if not self._looks_like_retry_request(user_input):
+            return None
+
+        session = context.get("session")
+        if not session:
+            return None
+        session_ctx = session.context if isinstance(getattr(session, "context", None), dict) else {}
+        last_plan = session_ctx.get("last_action_plan")
+        if not isinstance(last_plan, dict):
+            return None
+
+        action_id = str(last_plan.get("action_id") or "").strip()
+        if not action_id or action_id in {"reply", "error"}:
+            return None
+        if action_id not in available_actions:
+            return None
+
+        args = last_plan.get("args")
+        if not isinstance(args, dict):
+            args = {}
+
+        return ActionPlan(
+            action_id=action_id,
+            args=args,
+            confidence=0.98,
+            source="semantic",
+            response_text=None,
+            thought=f"Retry request resolved to last action '{action_id}'.",
+            metadata={"semantic_rule": "retry_last_action"},
+        )
 
     def _get_available_actions(self, context: Dict[str, Any], registry: Any) -> List[str]:
         allowed_actions = context.get("allowed_actions")
@@ -163,6 +213,18 @@ class SemanticResolver(IntentResolver):
         return [t for t in raw if len(t) > 2]
 
     @staticmethod
+    def _looks_like_retry_request(user_input: str) -> bool:
+        text = (user_input or "").strip().lower()
+        if not text:
+            return False
+        patterns = (
+            r"\b(rode|roda|rodar|executa|execute|tenta|tente)\b.*\b(novamente|de novo)\b",
+            r"\b(again|retry|try again|rerun|run again)\b",
+            r"\b(continue|continuar)\b",
+        )
+        return any(re.search(p, text, flags=re.IGNORECASE) for p in patterns)
+
+    @staticmethod
     def _no_params(user_input: str) -> Dict[str, Any]:
         return {}
 
@@ -172,16 +234,59 @@ class SemanticResolver(IntentResolver):
         return {"query": cleaned}
 
     @staticmethod
+    def _greeting_reply_params(user_input: str) -> Dict[str, Any]:
+        text = (user_input or "").strip().lower()
+        is_pt = any(token in text for token in ("oi", "olá", "ola"))
+        if is_pt:
+            return {"response_text": "Olá! Como posso te ajudar?"}
+        return {"response_text": "Hi! How can I help you?"}
+
+    @staticmethod
     def _wikipedia_params(user_input: str) -> Dict[str, Any]:
         cleaned = QuerySemantics.sanitize(user_input)
-        match = re.search(
+        before_wiki = re.search(
+            r"(?:sobre|about)\s+(.+?)\s+(?:na|no|in|on)?\s*(?:wikipedia|wikip[eé]dia|wiki)\b",
+            cleaned,
+            re.IGNORECASE,
+        )
+        after_wiki = re.search(
             r"(?:wikipedia|wikip[eé]dia|wiki)\s*(?:about|sobre|for|:)?\s*(.+)$",
             cleaned,
             re.IGNORECASE,
         )
-        query = match.group(1).strip() if match and match.group(1).strip() else cleaned
-        query = QuerySemantics.rewrite_for_wikipedia(query)
+        if before_wiki and before_wiki.group(1).strip():
+            candidate = before_wiki.group(1).strip()
+        elif after_wiki and after_wiki.group(1).strip():
+            candidate = after_wiki.group(1).strip()
+        else:
+            candidate = cleaned
+
+        query = QuerySemantics.rewrite_for_wikipedia(candidate)
+        if SemanticResolver._looks_like_instruction_only_query(query):
+            fallback = QuerySemantics.rewrite_for_wikipedia(cleaned)
+            if fallback and not SemanticResolver._looks_like_instruction_only_query(fallback):
+                query = fallback
+
+        if not query:
+            query = cleaned
         return {"query": query}
+
+    @staticmethod
+    def _looks_like_instruction_only_query(query: str) -> bool:
+        q = QuerySemantics.sanitize(query).lower()
+        if not q:
+            return True
+        if len(q) <= 3:
+            return True
+        if re.match(
+            r"^(?:e\s+)?(?:forne[cç]a|fornecer|fa[cç]a|resuma|sumarize|summarize|traga|d[eê])\b",
+            q,
+            re.IGNORECASE,
+        ):
+            return True
+        if any(token in q for token in ("resumo", "summary", "explicação", "explanation")) and len(q.split()) <= 4:
+            return True
+        return False
 
     @staticmethod
     def _maps_params(user_input: str) -> Dict[str, Any]:
@@ -190,7 +295,8 @@ class SemanticResolver(IntentResolver):
 
     @staticmethod
     def _weather_params(user_input: str) -> Dict[str, Any]:
-        m = re.search(r"\b(?:in|em)\s+([a-zA-ZÀ-ÿ0-9\s\-]+)$", user_input.strip(), re.IGNORECASE)
+        base = re.sub(r"[?!.,;:]+\s*$", "", (user_input or "").strip())
+        m = re.search(r"\b(?:in|em)\s+([a-zA-ZÀ-ÿ0-9\s\-]+)$", base, re.IGNORECASE)
         if m:
             return {"city": m.group(1).strip()}
         return {}
@@ -198,7 +304,8 @@ class SemanticResolver(IntentResolver):
     @staticmethod
     def _weather_forecast_params(user_input: str) -> Dict[str, Any]:
         params: Dict[str, Any] = {"days": 2}
-        m = re.search(r"\b(?:in|em)\s+([a-zA-ZÀ-ÿ0-9\s\-]+)$", user_input.strip(), re.IGNORECASE)
+        base = re.sub(r"[?!.,;:]+\s*$", "", (user_input or "").strip())
+        m = re.search(r"\b(?:in|em)\s+([a-zA-ZÀ-ÿ0-9\s\-]+)$", base, re.IGNORECASE)
         if m:
             params["city"] = m.group(1).strip()
         return params

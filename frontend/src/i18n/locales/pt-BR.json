@@ -1,0 +1,13 @@
+{
+  "nav.dashboard": "Painel",
+  "nav.console": "Console",
+  "nav.tasks": "Tarefas",
+  "nav.skills": "Skills",
+  "nav.memory": "Memória",
+  "nav.security": "Segurança",
+  "nav.settings": "Configurações",
+  "header.menu": "Menu",
+  "header.toggle_sidebar": "Alternar barra lateral",
+  "header.collapse": "Recolher cabeçalho",
+  "action.copy_code.success": "Código copiado!"
+}

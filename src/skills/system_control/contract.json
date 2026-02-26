@@ -42,6 +42,151 @@
             }
         },
         {
+            "id": "system.control.skills.list",
+            "name": "skills.list",
+            "description": "Lista ações disponíveis para este usuário (descoberta sob demanda).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Filtro textual opcional por id/namespace/descrição."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Máximo de ações retornadas.",
+                        "default": 40
+                    },
+                    "include_descriptions": {
+                        "type": "boolean",
+                        "description": "Quando true, inclui descrição das ações.",
+                        "default": false
+                    },
+                    "format": {
+                        "type": "string",
+                        "description": "Formato de saída: toon (padrão) ou legacy.",
+                        "default": "toon"
+                    }
+                }
+            }
+        },
+        {
+            "id": "system.control.skills.list.ai",
+            "name": "skills.list.ai",
+            "description": "Lista ações em formato otimizado para IA (TOON compacto).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Filtro textual opcional por id/namespace/descrição."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Máximo de ações retornadas.",
+                        "default": 40
+                    },
+                    "include_descriptions": {
+                        "type": "boolean",
+                        "description": "Quando true, inclui descrição curta no TOON.",
+                        "default": false
+                    }
+                }
+            }
+        },
+        {
+            "id": "system.control.skills.list.ui",
+            "name": "skills.list.ui",
+            "description": "Lista ações em formato detalhado para UI.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Filtro textual opcional por id/namespace/descrição."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Máximo de ações retornadas.",
+                        "default": 40
+                    },
+                    "include_descriptions": {
+                        "type": "boolean",
+                        "description": "Quando true, inclui descrição completa das ações.",
+                        "default": true
+                    }
+                }
+            }
+        },
+        {
+            "id": "system.control.skills.describe",
+            "name": "skills.describe",
+            "description": "Retorna metadados detalhados de uma ou mais ações.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action_id": {
+                        "type": "string",
+                        "description": "ID de ação única."
+                    },
+                    "action_ids": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Lista de IDs de ação."
+                    },
+                    "format": {
+                        "type": "string",
+                        "description": "Formato de saída: toon (padrão) ou legacy.",
+                        "default": "toon"
+                    }
+                }
+            }
+        },
+        {
+            "id": "system.control.skills.describe.ai",
+            "name": "skills.describe.ai",
+            "description": "Retorna metadados de ação em formato otimizado para IA (TOON compacto).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action_id": {
+                        "type": "string",
+                        "description": "ID de ação única."
+                    },
+                    "action_ids": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Lista de IDs de ação."
+                    }
+                }
+            }
+        },
+        {
+            "id": "system.control.skills.describe.ui",
+            "name": "skills.describe.ui",
+            "description": "Retorna metadados detalhados de ação para UI.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action_id": {
+                        "type": "string",
+                        "description": "ID de ação única."
+                    },
+                    "action_ids": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Lista de IDs de ação."
+                    }
+                }
+            }
+        },
+        {
             "id": "system.control.screenshot",
             "name": "screenshot",
             "description": "Captura screenshot da tela atual.",

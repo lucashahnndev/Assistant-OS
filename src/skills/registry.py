@@ -1,7 +1,9 @@
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from .base import SkillBase
 import logging
 import difflib
+import hashlib
+import re
 
 logger = logging.getLogger("SkillRegistry")
 
@@ -133,6 +135,31 @@ class SkillRegistry:
             desc = action_entry.get("description", desc)
         return desc
 
+    @staticmethod
+    def _tokenize(text: str) -> List[str]:
+        tokens = re.findall(r"[a-zA-Z0-9_]+", (text or "").lower())
+        return [t for t in tokens if len(t) > 2]
+
+    def _lexical_score(self, user_input: str, action_id: str, description: str) -> Tuple[float, str]:
+        tokens_input = self._tokenize(user_input)
+        if not tokens_input:
+            return 0.0, "empty_input"
+
+        corpus = f"{action_id} {description}".strip()
+        tokens_action = self._tokenize(corpus)
+        if not tokens_action:
+            return 0.0, "empty_action_tokens"
+
+        overlap = len(set(tokens_input) & set(tokens_action))
+        overlap_ratio = overlap / max(1, len(set(tokens_input)))
+
+        action_suffix = action_id.split(".")[-1]
+        lower_input = (user_input or "").lower()
+        exact_boost = 0.25 if action_suffix in lower_input else 0.0
+        dotless_boost = 0.20 if action_id.replace(".", " ") in lower_input else 0.0
+        score = min(1.0, overlap_ratio + exact_boost + dotless_boost)
+        return score, f"overlap={overlap_ratio:.2f}, exact={exact_boost:.2f}, dotless={dotless_boost:.2f}"
+
     def get_summary(self, allowed_actions: Optional[List[str]] = None) -> str:
         """Returns a summarized list of actions and descriptions.
         If allowed_actions is provided, only those actions are included.
@@ -146,3 +173,79 @@ class SkillRegistry:
             desc = self._describe_action(action_id, skill)
             summary.append(f"- `{action_id}`: {desc}")
         return "\n".join(sorted(summary))
+
+    def get_compact_manifest(self, allowed_actions: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Returns a compact action manifest for prompt injection with minimal token footprint.
+        """
+        allowed_set = set(allowed_actions) if allowed_actions is not None else None
+        actions: List[str] = []
+        namespaces: set[str] = set()
+        for action_id in sorted(self.action_map.keys()):
+            if allowed_set is not None and action_id not in allowed_set:
+                continue
+            actions.append(action_id)
+            ns = ".".join(action_id.split(".")[:2]) if "." in action_id else action_id
+            namespaces.add(ns)
+
+        digest = hashlib.sha1("\n".join(actions).encode("utf-8")).hexdigest()[:12] if actions else "none"
+        return {
+            "count": len(actions),
+            "hash": digest,
+            "namespaces": sorted(namespaces),
+            "actions": actions,
+        }
+
+    def get_focus_actions(
+        self,
+        user_input: str,
+        allowed_actions: Optional[List[str]] = None,
+        limit: int = 8,
+    ) -> List[Dict[str, Any]]:
+        """
+        Returns the most relevant actions for the current user input.
+        """
+        allowed_set = set(allowed_actions) if allowed_actions is not None else None
+        ranked: List[Tuple[float, str, str]] = []
+        for action_id, skill in self.action_map.items():
+            if allowed_set is not None and action_id not in allowed_set:
+                continue
+            desc = self._describe_action(action_id, skill)
+            score, _ = self._lexical_score(user_input or "", action_id, desc)
+            ranked.append((score, action_id, desc))
+
+        ranked.sort(key=lambda x: (-x[0], x[1]))
+        out: List[Dict[str, Any]] = []
+        for score, action_id, desc in ranked[: max(1, int(limit or 1))]:
+            out.append(
+                {
+                    "id": action_id,
+                    "description": desc,
+                    "score": round(float(score), 3),
+                }
+            )
+        return out
+
+    def get_catalog(
+        self,
+        allowed_actions: Optional[List[str]] = None,
+        include_descriptions: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """
+        Returns structured catalog entries for skill discovery actions.
+        """
+        allowed_set = set(allowed_actions) if allowed_actions is not None else None
+        out: List[Dict[str, Any]] = []
+        for action_id in sorted(self.action_map.keys()):
+            if allowed_set is not None and action_id not in allowed_set:
+                continue
+            metadata = self.get_action_metadata(action_id)
+            row: Dict[str, Any] = {
+                "id": action_id,
+                "namespace": ".".join(action_id.split(".")[:2]) if "." in action_id else action_id,
+                "risk_level": str(metadata.get("risk_level") or "unknown"),
+            }
+            if include_descriptions:
+                row["description"] = str(metadata.get("description") or "No description available.")
+            out.append(row)
+        return out
