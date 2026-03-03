@@ -180,6 +180,19 @@ class TelegramDriver(BaseDriver):
                 self.send_response(error_msg, target=target)
                 return
 
+            # 1.1 Permission approval prompt with driver-native buttons.
+            if isinstance(payload, dict):
+                status = str(payload.get("status") or "").strip().lower()
+                approval = payload.get("approval_request") if isinstance(payload.get("approval_request"), dict) else None
+                if status == "waiting_user" and approval:
+                    prompt = str(approval.get("prompt") or payload.get("message") or "This worker needs your approval to continue.").strip()
+                    work_id = str(payload.get("work_id") or "").strip()
+                    options = approval.get("options") if isinstance(approval.get("options"), list) else []
+                    if work_id:
+                        self.bot.send_approval_request(chat_id, work_id, prompt, options=options)
+                        self.send_complete(target)
+                        return
+
             # 2. Activity Indicators
             # Send 'typing' action for 'thinking' or 'executing' phases
             if phase in ['thinking', 'executing']:

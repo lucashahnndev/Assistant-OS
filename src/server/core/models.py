@@ -37,6 +37,24 @@ class ConfigVersion(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     comment = Column(String, nullable=True)
 
+
+class ExternalAccountConnection(Base):
+    __tablename__ = "external_account_connections"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    provider = Column(String, nullable=False, index=True)
+    provider_account_id = Column(String, nullable=True, index=True)
+    account_email = Column(String, nullable=True, index=True)
+    account_name = Column(String, nullable=True)
+    profile_json = Column(Text, nullable=True)
+    encrypted_tokens = Column(Text, nullable=False)
+    token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    scopes = Column(String, nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
 # Database Setup
 import os
 

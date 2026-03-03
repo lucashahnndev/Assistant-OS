@@ -161,6 +161,8 @@ frontend/node_modules/
 docs/*
 !docs/worker_task_contract.md
 tests/*
+!tests/minimal/
+!tests/minimal/*.py
 *.pid
 # Explicit local runtime config
 data/config.json

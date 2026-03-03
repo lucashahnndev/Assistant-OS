@@ -3,6 +3,7 @@ import shutil
 import psutil
 import platform
 import datetime
+import time
 import subprocess
 import json
 import socket
@@ -81,10 +82,31 @@ class SystemDriver(BaseDriver):
                 "top_processes": []
             }
 
-            # Get top 5 processes by CPU
-            procs = sorted(psutil.process_iter(['pid', 'name', 'cpu_percent']), key=lambda p: p.info['cpu_percent'], reverse=True)[:5]
-            for p in procs:
-                status["top_processes"].append(p.info)
+            # Get top processes with a short sampling window for usable CPU percentages.
+            # First pass primes per-process CPU counters.
+            primed = []
+            for p in psutil.process_iter(['pid', 'name']):
+                try:
+                    p.cpu_percent(None)
+                    primed.append(p)
+                except Exception:
+                    continue
+
+            # Small wait to compute deltas without blocking too long.
+            time.sleep(0.08)
+
+            ranked = []
+            for p in primed:
+                try:
+                    info = p.as_dict(attrs=['pid', 'name', 'cpu_percent', 'memory_percent'])
+                    info["cpu_percent"] = float(info.get("cpu_percent") or 0.0)
+                    info["memory_percent"] = float(info.get("memory_percent") or 0.0)
+                    ranked.append(info)
+                except Exception:
+                    continue
+
+            ranked.sort(key=lambda row: (row.get("cpu_percent", 0.0), row.get("memory_percent", 0.0)), reverse=True)
+            status["top_processes"] = ranked[:5]
 
             # Temperature (Linux specific typically)
             if hasattr(psutil, "sensors_temperatures"):
@@ -325,10 +347,6 @@ class SystemDriver(BaseDriver):
             ws_dir = self.kernel.workspace_service.get_workspace_dir()
             target_path = os.path.abspath(os.path.join(ws_dir, path))
 
-            # Anchor to workspace
-            if not target_path.startswith(ws_dir):
-                return f"Access Denied: Cannot write outside workspace."
-
             os.makedirs(os.path.dirname(target_path), exist_ok=True)
             with open(target_path, 'w', encoding='utf-8') as f:
                 f.write(content)
@@ -340,10 +358,6 @@ class SystemDriver(BaseDriver):
         try:
             ws_dir = self.kernel.workspace_service.get_workspace_dir()
             target_path = os.path.abspath(os.path.join(ws_dir, path))
-
-            # Anchor to workspace
-            if not target_path.startswith(ws_dir):
-                return f"Access Denied: Cannot delete outside workspace."
 
             if os.path.isdir(target_path):
                 shutil.rmtree(target_path)

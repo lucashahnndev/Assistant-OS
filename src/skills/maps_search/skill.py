@@ -3,10 +3,11 @@ import os
 from typing import Any, Dict, List, Optional
 
 import requests
+from urllib.parse import quote_plus
 
 from ..base import SkillBase
+from ..shared.google_auth import resolve_google_request_auth
 from services.location.location_service import LocationService
-from services.search.query_semantics import QuerySemantics
 
 logger = logging.getLogger("MapsSearchSkill")
 
@@ -27,8 +28,8 @@ class MapsSearchSkill(SkillBase):
         return ["search"]
 
     @staticmethod
-    def _result(ok: bool, status: str, text: str, **extra: Any) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"ok": ok, "status": status, "text": text}
+    def _result(ok: bool, status: str, **extra: Any) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"ok": ok, "status": status}
         payload.update(extra)
         return payload
 
@@ -92,22 +93,6 @@ class MapsSearchSkill(SkillBase):
             "open_now": ((item.get("opening_hours") or {}).get("open_now")),
             "confidenceScore": 0.9,
         }
-
-    @staticmethod
-    def _summary(query: str, city: str, places: List[Dict[str, Any]], mode: str) -> str:
-        suffix = f" em {city}" if city else ""
-        if not places:
-            return f"Nenhum resultado encontrado para '{query}'{suffix}."
-        lines = [f"Encontrei {len(places)} resultado(s) para '{query}'{suffix} (modo: {mode})."]
-        for p in places[:5]:
-            title = p.get("name") or "Sem nome"
-            addr = p.get("address") or "sem endereço"
-            rating = p.get("rating")
-            if rating is not None:
-                lines.append(f"- {title} ({rating}/5) - {addr}")
-            else:
-                lines.append(f"- {title} - {addr}")
-        return "\n".join(lines)
 
     def _get_api_key(self) -> Optional[str]:
         api_key = self.config.get("apiKey")
@@ -206,14 +191,17 @@ class MapsSearchSkill(SkillBase):
             return None
         return f"{lat},{lon}"
 
-    def _geocode_text(self, api_key: str, text: str) -> Optional[str]:
+    def _geocode_text(self, auth: Dict[str, Any], text: str) -> Optional[str]:
         query = self._sanitize_text(text)
         if not query:
             return None
         try:
+            req_params: Dict[str, Any] = {"address": query}
+            req_params.update(auth.get("params") or {})
             response = requests.get(
                 "https://maps.googleapis.com/maps/api/geocode/json",
-                params={"address": query, "key": api_key},
+                params=req_params,
+                headers=auth.get("headers") or {},
                 timeout=10,
             )
             data = response.json()
@@ -232,7 +220,7 @@ class MapsSearchSkill(SkillBase):
 
     def _search_google_places(
         self,
-        api_key: str,
+        auth: Dict[str, Any],
         query: str,
         location_bias: Optional[str],
         radius: int,
@@ -241,10 +229,10 @@ class MapsSearchSkill(SkillBase):
     ) -> Dict[str, Any]:
         request_params: Dict[str, Any] = {
             "query": query,
-            "key": api_key,
             "language": self.config.get("defaults", {}).get("language", "pt-BR"),
             "region": self.config.get("defaults", {}).get("region", "BR"),
         }
+        request_params.update(auth.get("params") or {})
         if location_bias:
             request_params["location"] = location_bias
             request_params["radius"] = radius
@@ -256,6 +244,7 @@ class MapsSearchSkill(SkillBase):
         response = requests.get(
             "https://maps.googleapis.com/maps/api/place/textsearch/json",
             params=request_params,
+            headers=auth.get("headers") or {},
             timeout=10,
         )
         data = response.json()
@@ -274,9 +263,103 @@ class MapsSearchSkill(SkillBase):
             "places": places,
         }
 
+    @staticmethod
+    def _is_google_maps_denied(message: str) -> bool:
+        text = str(message or "").lower()
+        markers = [
+            "request_denied",
+            "enable billing",
+            "billing",
+            "api is not activated",
+            "not authorized",
+            "api key",
+            "forbidden",
+        ]
+        return any(marker in text for marker in markers)
+
+    def _fallback_to_web_discover(
+        self,
+        context: Dict[str, Any],
+        query: str,
+        city: str,
+        limit: int,
+        reason: str,
+    ) -> Optional[Dict[str, Any]]:
+        registry = context.get("skill_registry") if isinstance(context, dict) else None
+        dispatch = getattr(registry, "dispatch", None) if registry else None
+        if not callable(dispatch):
+            return None
+
+        composed_query = query.strip()
+        if city and city.strip() and city.lower() not in composed_query.lower():
+            composed_query = f"{composed_query} {city.strip()}".strip()
+
+        search_params = {
+            "query": composed_query,
+            "mode": "links",
+            "limit": min(max(3, limit), 8),
+        }
+        try:
+            web_result = dispatch("web.search.discover", search_params, context)
+        except Exception as exc:
+            logger.warning(f"Maps fallback dispatch failed: {exc}")
+            return None
+
+        if not isinstance(web_result, dict) or not web_result.get("ok"):
+            return None
+
+        links = web_result.get("results") if isinstance(web_result.get("results"), list) else []
+        if not links:
+            return None
+
+        places: List[Dict[str, Any]] = []
+        for i, item in enumerate(links[:limit], start=1):
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            title = str(item.get("title") or item.get("name") or f"Result {i}").strip()
+            snippet = str(item.get("snippet") or item.get("description") or "").strip()
+            maps_url = f"https://www.google.com/maps/search/?api=1&query={quote_plus(title)}"
+            if city and city.strip():
+                maps_url = f"https://www.google.com/maps/search/?api=1&query={quote_plus(f'{title} {city.strip()}')}"
+            places.append(
+                {
+                    "rank": i,
+                    "name": title,
+                    "address": snippet or None,
+                    "placeId": None,
+                    "url": maps_url,
+                    "location": None,
+                    "rating": None,
+                    "user_ratings_total": None,
+                    "types": [],
+                    "open_now": None,
+                    "confidenceScore": 0.45,
+                    "source_url": url,
+                }
+            )
+
+        if not places:
+            return None
+
+        return self._result(
+            ok=True,
+            status="fallback",
+            provider="web_search_fallback",
+            query=composed_query,
+            city=city or None,
+            count=len(places),
+            places=places,
+            best=places[0],
+            queries_executed=[composed_query],
+            fallback_from="google_maps",
+            fallback_reason=reason,
+            warning="Google Maps API indisponível; usando fallback de busca web.",
+        )
+
     def _resolve_location_bias(
         self,
-        api_key: str,
+        auth: Dict[str, Any],
         near: str,
         city: str,
         context: Dict[str, Any],
@@ -288,12 +371,12 @@ class MapsSearchSkill(SkillBase):
         if direct:
             return direct
         if near:
-            geocoded = self._geocode_text(api_key, near)
+            geocoded = self._geocode_text(auth, near)
             if geocoded:
                 return geocoded
 
         if city:
-            geocoded = self._geocode_text(api_key, city)
+            geocoded = self._geocode_text(auth, city)
             if geocoded:
                 return geocoded
 
@@ -305,11 +388,11 @@ class MapsSearchSkill(SkillBase):
             return self._result(
                 ok=False,
                 status="error",
-                text=f"Unknown action para maps_search: {action_id}",
                 error="UNKNOWN_ACTION",
+                message=f"Unknown action para maps_search: {action_id}",
             )
 
-        query = QuerySemantics.rewrite_for_maps(self._sanitize_text(self._resolve_query(params)))
+        query = self._sanitize_text(self._resolve_query(params))
         city = self._sanitize_text(self._resolve_city(params))
         category = self._sanitize_text(params.get("category") or params.get("place_type"))
         keywords_raw = params.get("keywords")
@@ -323,7 +406,6 @@ class MapsSearchSkill(SkillBase):
             return self._result(
                 ok=False,
                 status="error",
-                text="Informe pelo menos um query, category ou city para a busca no Maps.",
                 error="MISSING_QUERY",
                 message="query/category/city are required",
             )
@@ -344,17 +426,30 @@ class MapsSearchSkill(SkillBase):
         open_now = self._to_bool(params.get("open_now"))
 
         api_key = self._get_api_key()
-        if not api_key:
+        auth = resolve_google_request_auth(
+            context=context or {},
+            kernel=self.kernel,
+            api_key_fallback=api_key,
+        )
+        if auth.get("mode") == "none":
+            fallback = self._fallback_to_web_discover(
+                context=context,
+                query=base_query,
+                city=city,
+                limit=limit,
+                reason=str(auth.get("reason") or "MISSING_AUTH"),
+            )
+            if fallback:
+                return fallback
             return self._result(
                 ok=False,
                 status="error",
-                text="Google Maps API Key não configurada. Defina GOOGLE_MAPS_API_KEY.",
-                error="MISSING_CONFIG",
-                message="Google Maps API Key not configured.",
-                missing_fields=["apiKey"],
+                error="MISSING_AUTH",
+                message=f"Google Maps auth unavailable: {auth.get('reason')}",
+                missing_fields=["apiKey_or_linked_google_account"],
             )
 
-        location_bias = self._resolve_location_bias(api_key, near, city, context)
+        location_bias = self._resolve_location_bias(auth, near, city, context)
         max_variants = self._to_int(params.get("max_variants"), default=3, min_value=1, max_value=5)
         query_variants = [base_query] if mode == "standard" else self._build_variants(base_query, category, city, max_variants)
 
@@ -363,7 +458,7 @@ class MapsSearchSkill(SkillBase):
             seen_place_ids = set()
             for variant in query_variants:
                 result = self._search_google_places(
-                    api_key=api_key,
+                    auth=auth,
                     query=variant,
                     location_bias=location_bias,
                     radius=radius,
@@ -374,20 +469,28 @@ class MapsSearchSkill(SkillBase):
                     provider_message = str(result.get("message") or "")
                     provider_error = result.get("error", "GOOGLE_MAPS_API_ERROR")
                     can_fallback_to_web = provider_error == "GOOGLE_MAPS_API_ERROR" and (
-                        "enable billing" in provider_message.lower()
-                        or "billing" in provider_message.lower()
+                        self._is_google_maps_denied(provider_message)
                     )
+                    if can_fallback_to_web:
+                        fallback = self._fallback_to_web_discover(
+                            context=context,
+                            query=base_query,
+                            city=city,
+                            limit=limit,
+                            reason=provider_message or provider_error,
+                        )
+                        if fallback:
+                            return fallback
                     return self._result(
                         ok=False,
                         status="error",
-                        text=f"Erro na API do Google Maps: {provider_message}",
                         error=provider_error,
                         message=provider_message,
                         provider="google_maps",
                         fallback_action="web.search.discover" if can_fallback_to_web else None,
                         fallback_params=(
                             {
-                                "query": QuerySemantics.rewrite_for_maps(base_query),
+                                "query": base_query,
                                 "mode": "links",
                                 "limit": min(limit, 5),
                             }
@@ -413,12 +516,10 @@ class MapsSearchSkill(SkillBase):
                 item["rank"] = idx
 
             status = "success" if merged else "empty"
-            text = self._summary(base_query, city, merged, mode)
             return self._result(
                 ok=True,
                 status=status,
-                text=text,
-                provider="google_maps",
+                provider="google_maps_oauth" if auth.get("mode") == "oauth" else "google_maps",
                 query=base_query,
                 mode=mode,
                 city=city or None,
@@ -441,7 +542,6 @@ class MapsSearchSkill(SkillBase):
             return self._result(
                 ok=False,
                 status="error",
-                text=f"Erro na execução da busca do Maps: {str(e)}",
                 error="MAPS_SEARCH_EXCEPTION",
                 message=str(e),
                 provider="google_maps",

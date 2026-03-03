@@ -34,7 +34,7 @@ class Session:
         self.pending_action: Optional[Dict] = None # Stores {action, params} for HITL
         self.drivers_state: Dict[str, Any] = {} # Persistent state for specific drivers (e.g. browser tabs)
 
-    def add_message(self, role: str, content: str, file: Optional[Dict] = None, attachments: Optional[List[Dict]] = None, msg_type: str = "default", summary: str = None):
+    def add_message(self, role: str, content: str, file: Optional[Dict] = None, attachments: Optional[List[Dict]] = None, msg_type: str = "default", summary: str = None, work_id: str = None):
         # Rough token estimation (chars / 4)
         tokens = len(content) // 4
         timestamp = datetime.datetime.now().isoformat()
@@ -47,6 +47,9 @@ class Session:
             "timestamp": timestamp,
             "is_read": role == "user" # Agent "reads" user messages immediately
         }
+        if work_id:
+            msg["work_id"] = work_id
+            
         if summary:
             msg["summary"] = summary
             # When summary is present, LLM context should focus on summary
@@ -66,6 +69,7 @@ class Session:
             "role": role,
             "message": msg,
             "msg_type": msg_type,
+            "work_id": work_id,
             "unread_count": self.get_unread_count("assistant")
         })
 

@@ -21,7 +21,7 @@ SPEAKING_COLOR = "#4CAF50"  # Green
 IDLE_COLOR = "#757575"    # Grey
 
 class FloatingGUI:
-    def __init__(self, name='Atlas'):
+    def __init__(self, name='Assistant'):
         self.name = name
         self.root = None
         self.queue = queue.Queue()
@@ -196,7 +196,7 @@ class FloatingGUI:
     def update_assistant_text(self, text):
         self.queue.put({"action": "update_text", "data": text})
         self.queue.put({"action": "set_color", "data": SPEAKING_COLOR})
-        self.queue.put({"action": "update_status", "data": "Atlas diz:"})
+        self.queue.put({"action": "update_status", "data": "Assistant says:"})
 
     def assistant_color(self):
         self.queue.put({"action": "set_color", "data": SPEAKING_COLOR})

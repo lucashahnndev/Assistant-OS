@@ -24,6 +24,20 @@ def _read_env_file(path: str) -> dict:
             data[key.strip()] = value.strip()
     return data
 
+def _to_config_ref(key: str) -> str:
+    """Normalizes key for config.json references."""
+    token = str(key or "").strip()
+    if not token:
+        return ""
+    return token if token.startswith("ENV_") else f"ENV_{token}"
+
+def _to_env_key(key: str) -> str:
+    """Normalizes key for .env storage (without ENV_ prefix)."""
+    token = str(key or "").strip()
+    if token.startswith("ENV_"):
+        token = token[4:]
+    return token
+
 @router.get("/catalog")
 def get_catalog(user: User = Depends(get_current_user)):
     """
@@ -69,7 +83,15 @@ def get_env_keys(user: User = Depends(get_current_user)):
     """
     env_path = os.path.join(os.getcwd(), ".env")
     env_data = _read_env_file(env_path)
-    return {"keys": [key for key in env_data.keys() if key.startswith("ENV_") or key.endswith("_KEY") or key.endswith("_TOKEN")]}
+    refs = []
+    for key in env_data.keys():
+        token = str(key or "").strip()
+        if not token:
+            continue
+        if token.startswith("ENV_") or token.endswith("_KEY") or token.endswith("_TOKEN") or token.endswith("_SECRET") or token.endswith("_ID"):
+            refs.append(_to_config_ref(token))
+    refs = sorted(set(refs))
+    return {"keys": refs}
 
 @router.post("/env-keys")
 def create_env_key(payload: dict, user: User = Depends(get_current_user), request: Request = None):
@@ -84,25 +106,33 @@ def create_env_key(payload: dict, user: User = Depends(get_current_user), reques
     
     if not key or not value:
         raise HTTPException(status_code=400, detail="Key and value are required")
-        
+
+    config_ref = _to_config_ref(key)
+    env_key = _to_env_key(key)
+    if not env_key:
+        raise HTTPException(status_code=400, detail="Invalid key")
+
     env_path = os.path.join(os.getcwd(), ".env")
     env_data = _read_env_file(env_path)
-    
-    if key in env_data:
+
+    # .env stores the canonical key without ENV_ prefix
+    if env_key in env_data:
         raise HTTPException(status_code=409, detail="Key already exists in .env")
-        
+
     mode = 'a' if os.path.exists(env_path) else 'w'
     with open(env_path, mode, encoding='utf-8') as f:
-        f.write(f"\n{key}={value}\n")
-        
+        f.write(f"\n{env_key}={value}\n")
+
     # Trigger hot-reload of config so env vars get picked up natively in process
     kernel = get_kernel(request)
     if kernel:
         import os as builtin_os
-        builtin_os.environ[key] = value # Inject immediately
+        builtin_os.environ[env_key] = value # Inject canonical env key immediately
+        # Backward compatibility for keys that were previously referenced as ENV_* directly
+        builtin_os.environ[config_ref] = value
         kernel.reload_config()
-        
-    return {"success": True, "key": key}
+
+    return {"success": True, "key": config_ref, "stored_key": env_key}
 
 @router.post("/pool/{modality}")
 def update_modality_pool(modality: str, pool: list = Body(...), user: User = Depends(get_current_user), request: Request = None):

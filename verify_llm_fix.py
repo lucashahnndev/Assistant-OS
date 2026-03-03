@@ -1,78 +1,67 @@
-
+import asyncio
+import json
+import logging
 import sys
 import os
-from unittest.mock import MagicMock
-
-# Create mock modules to avoid import errors
-mock_openai = MagicMock()
-sys.modules["openai"] = mock_openai
-
-mock_genai = MagicMock()
-sys.modules["google"] = MagicMock()
-sys.modules["google.genai"] = mock_genai
-sys.modules["google.genai.types"] = MagicMock()
-
-# Mock config manager
-mock_config = MagicMock()
-sys.modules["config"] = mock_config
-sys.modules["config.manager"] = MagicMock()
-
-# Mock logging
-mock_logging = MagicMock()
-sys.modules["utils.logging_config"] = mock_logging
 
 # Add src to path
-sys.path.append(os.path.abspath("src"))
+sys.path.append(os.path.join(os.getcwd(), 'src'))
 
-from drivers.llm.openai_driver import OpenAIChatProvider
-from drivers.llm.gemini_driver import GeminiProvider
-from drivers.llm.openrouter_driver import OpenRouterProvider
-from drivers.llm.ollama_driver import OllamaProvider
+from skills.browser_control.planner import BrowserSubagent
+from skills.browser_control.schemas import ToonResponse
 
-def verify_provider(provider_class, name):
-    print(f"Verifying {name} signature...")
-    try:
-        # Mock instance
-        instance = provider_class({"api_key": "test"})
-        # The key test: does it accept max_tokens?
-        instance.generate_intent(
-            user_input="oi",
-            history=[],
-            system_prompt="prompt",
-            max_tokens=100
-        )
-        print(f"  {name}: generate_intent accepts max_tokens OK")
+class MockLLMManager:
+    def __init__(self):
+        self.chat_pool = None
+        self.responses = [
+            # 1. Normal Markdown
+            "```json\n{\"thought\": \"Step 1\", \"action\": \"navigate\", \"args\": {\"url\": \"https://google.com\"}}\n```",
+            # 2. Talkative Markdown + extra text
+            "Sure, here is the JSON:\n```json\n{\"thought\": \"Searching...\", \"action\": \"type\", \"args\": {\"id\": \"1\", \"text\": \"test\"}}\n```\nHope that helps!",
+            # 3. No markdown, naked JSON (requires brace scan)
+            "I will click now. {\"thought\": \"Clicking\", \"action\": \"click\", \"args\": {\"id\": \"2\"}} That's it.",
+            # 4. JSON with non-string response_text (Pydantic fix test)
+            "{\"thought\": \"Done\", \"action\": \"answer\", \"args\": {\"text\": \"Result\"}, \"response_text\": {\"key\": \"value\"}}",
+            # 5. JSON with control characters
+            "{\"thought\": \"Cleaning\\x01\\x02...\", \"action\": \"wait\", \"args\": {\"seconds\": 2}}"
+        ]
+        self.current = 0
+
+    async def _execute_with_router(self, pool, method, prompt, system_prompt):
+        resp = self.responses[self.current % len(self.responses)]
+        self.current += 1
+        return resp, None
+
+async def dry_run():
+    logging.basicConfig(level=logging.INFO)
+    mock_runtime = type('MockRuntime', (), {'_trace_id': 'test_trace', '_viewport': {'w':1280, 'h':720}})
+    mock_llm = MockLLMManager()
+    
+    agent = BrowserSubagent(mock_runtime, mock_llm)
+    # Mock state
+    state = {
+        'nodes': [], 
+        'url': 'https://google.com', 
+        'markers': [],
+        'total_nodes': 0,
+        'viewport_count': 0,
+        'landmarks': []
+    }
+    
+    print("🚀 Starting 5-cycle Dry Run...")
+    for i in range(5):
+        print(f"\n--- Cycle {i+1} ---")
+        # Direct call to _think to test extraction
+        # Note: _think is private but we can call it for testing
+        result = await agent._think("test goal", state, [])
+        print(f"RAW INPUT: {mock_llm.responses[i]}")
+        print(f"EXTRACTED: {result}")
         
-        instance.generate_text(
-            prompt="oi",
-            max_tokens=50
-        )
-        print(f"  {name}: generate_text accepts max_tokens OK")
-        return True
-    except TypeError as e:
-        print(f"  {name}: FAILED - {e}")
-        return False
-    except Exception as e:
-        # Ignore other errors like failed requests since we mocked things
-        print(f"  {name}: Accepted signature (failed execution as expected: {type(e).__name__})")
-        return True
+        # Verify normalization
+        if 'response_text' in result:
+            assert isinstance(result['response_text'], str), f"response_text should be str, got {type(result['response_text'])}"
+        assert 'thought' in result, "Should have thought"
+        print("✅ Cycle Success")
 
 if __name__ == "__main__":
-    providers = [
-        (OpenAIChatProvider, "OpenAI"),
-        (GeminiProvider, "Gemini"),
-        (OpenRouterProvider, "OpenRouter"),
-        (OllamaProvider, "Ollama")
-    ]
-    
-    all_passed = True
-    for p_class, p_name in providers:
-        if not verify_provider(p_class, p_name):
-            all_passed = False
-            
-    if all_passed:
-        print("\nAll regression tests for signatures PASSED.")
-        sys.exit(0)
-    else:
-        print("\nSome regression tests FAILED.")
-        sys.exit(1)
+    asyncio.run(dry_run())

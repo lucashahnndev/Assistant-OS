@@ -68,6 +68,8 @@ class ConfigManager:
                     
                 # Migrate config to new Model Pool format if needed
                 data, changed = self._migrate_config(data)
+                data, legacy_changed = self._migrate_browser_legacy_keys(data)
+                changed = changed or legacy_changed
                 if changed:
                     with open(self.config_file, 'w', encoding='utf-8') as fw:
                         json.dump(data, fw, indent=4)
@@ -80,6 +82,51 @@ class ConfigManager:
         else:
             logger.warning(f"Config file not found: {self.config_file}")
             self.config_data = {}
+
+    def _migrate_browser_legacy_keys(self, data):
+        changed = False
+        if not isinstance(data, dict):
+            return data, changed
+
+        skills_cfg = data.get("skills")
+        if not isinstance(skills_cfg, dict):
+            skills_cfg = {}
+            data["skills"] = skills_cfg
+            changed = True
+
+        legacy_skill_key = "browser_" + "automator"
+        mapped_skill_key = "browser_" + "control"
+        legacy = skills_cfg.get(legacy_skill_key)
+        if isinstance(legacy, dict):
+            logger.warning("Legacy browser skill config key detected. Mapping to browser.control and disabling legacy skill.")
+            control = skills_cfg.get(mapped_skill_key)
+            if not isinstance(control, dict):
+                control = {}
+                skills_cfg[mapped_skill_key] = control
+                changed = True
+            st = control.get("step_timeout_ms")
+            if not isinstance(st, dict):
+                st = {}
+            timeout_ms = int(legacy.get("timeoutMs") or 30000)
+            st.setdefault("go", timeout_ms)
+            st.setdefault("ck", 10000)
+            st.setdefault("tp", 10000)
+            st.setdefault("ss", 5000)
+            st.setdefault("perceive", 10000)
+            control["step_timeout_ms"] = st
+            control.setdefault("enabled", True)
+            legacy["enabled"] = False
+            changed = True
+
+        # Guard against root-level legacy keys.
+        legacy_root_keys = ("browser_" + "automator", "browser." + "automator")
+        for key in legacy_root_keys:
+            if key in data:
+                logger.warning("Legacy browser key detected at root: %s (ignored).", key)
+                data.pop(key, None)
+                changed = True
+
+        return data, changed
 
     def _substitute_env_vars(self, data):
         """Recursively substitutes string values starting with ENV_ from os.environ."""
@@ -176,7 +223,7 @@ class ConfigManager:
         default_interfaces = {
             "voice": {
                 "enabled": True,
-                "wake_word": "atlas"
+                "wake_word": "assistant"
             },
             "telegram": {
                 "enabled": True, 

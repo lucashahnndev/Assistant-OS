@@ -1,0 +1,75 @@
+{
+    "name": "browser.control",
+    "description": "Abre e controla um navegador real (Chrome) via CDP. USE ESTA SKILL quando o usuário pedir para ABRIR o navegador, NAVEGAR em sites, CLICAR em elementos, PREENCHER formulários, ou realizar qualquer INTERAÇÃO VISUAL com páginas web. NÃO use web.search ou web.retrieve para esses casos.",
+    "version": "1.0.0",
+    "actions": {
+        "run": {
+            "description": "Abre o Chrome e executa uma tarefa completa no navegador: navegar, pesquisar, clicar, interagir com páginas. O campo 'goal' pode ficar vazio; nesse caso, o texto original do usuário será usado como objetivo.",
+            "risk_level": "medium",
+            "params": {
+                "goal": {
+                    "type": "string",
+                    "description": "Objetivo a ser atingido no navegador (ex: 'abra o google e pesquise sobre foguetes'). Se vazio, usa o input do usuário."
+                },
+                "headless": {
+                    "type": "boolean",
+                    "description": "Se true, abre o navegador em modo invisível (sem janela). Padrão: false (com janela visível).",
+                    "required": false
+                },
+                "muted": {
+                    "type": "boolean",
+                    "description": "Se true, abre o navegador sem som. Use quando o usuário pedir silêncio ou quando o som não for relevante. Padrão: false (com som).",
+                    "required": false
+                }
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "ok": {
+                        "type": "boolean"
+                    },
+                    "result": {
+                        "type": "string"
+                    },
+                    "error": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "step": {
+            "description": "Executa uma única instrução no navegador já aberto (ex: 'clique no botão login').",
+            "risk_level": "medium",
+            "params": {
+                "instruction": {
+                    "type": "string",
+                    "description": "Instrução específica (ex: 'clique no botão login')."
+                }
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "ok": {
+                        "type": "boolean"
+                    },
+                    "error": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "close": {
+            "description": "Fecha a instância do navegador.",
+            "risk_level": "low",
+            "params": {},
+            "output": {
+                "type": "object",
+                "properties": {
+                    "ok": {
+                        "type": "boolean"
+                    }
+                }
+            }
+        }
+    }
+}

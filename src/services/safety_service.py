@@ -1,9 +1,11 @@
+import os
 from typing import Dict, Any
 from services.i18n import I18nService
 
 class SafetyService:
     def __init__(self):
         self.i18n = I18nService(default_locale="en")
+        self.workspace_dir = ""
         # Legacy action aliases kept for backward compatibility.
         self.legacy_sensitive_actions = {
             "process_kill",
@@ -31,11 +33,44 @@ class SafetyService:
             "ls", "df", "free", "uptime", "whoami", "pwd", "date", "cat", "grep", "find", "echo"
         ]
 
+    def set_workspace_dir(self, workspace_dir: str) -> None:
+        try:
+            self.workspace_dir = os.path.abspath(str(workspace_dir or "").strip())
+        except Exception:
+            self.workspace_dir = ""
+
+    def _resolve_fs_target(self, raw_path: Any) -> str:
+        path_str = str(raw_path or "").strip()
+        if not path_str:
+            return ""
+        if os.path.isabs(path_str):
+            return os.path.abspath(path_str)
+        if self.workspace_dir:
+            return os.path.abspath(os.path.join(self.workspace_dir, path_str))
+        return os.path.abspath(path_str)
+
+    def _is_inside_workspace(self, target_path: str) -> bool:
+        if not target_path or not self.workspace_dir:
+            return False
+        try:
+            common = os.path.commonpath([self.workspace_dir, target_path])
+            return common == self.workspace_dir
+        except Exception:
+            return False
+
     def is_sensitive(self, action: str, params: Dict[str, Any], skill_registry: Any = None) -> bool:
         """
         Determines if an action is sensitive and requires HITL approval.
         """
         action = (action or "").lower().strip()
+
+        # File write/delete inside workspace is frictionless.
+        # Outside workspace should pause worker in HITL waiting approval.
+        if action in {"system.control.fs.write", "system.control.fs.delete", "fs_write", "fs_delete"}:
+            target_path = self._resolve_fs_target((params or {}).get("path"))
+            if not target_path:
+                return True
+            return not self._is_inside_workspace(target_path)
 
         if not self._is_high_risk_action(action, skill_registry):
             return False
@@ -73,6 +108,13 @@ class SafetyService:
             return self.i18n.t("safety.confirm_shell", command=params.get("command"))
         elif "service_" in action or "service.manage" in action:
             return self.i18n.t("safety.confirm_service", unit=params.get("unit"), action=action)
+        elif action in {"system.control.fs.write", "system.control.fs.delete", "fs_write", "fs_delete"}:
+            path = str((params or {}).get("path") or "").strip() or "<empty-path>"
+            return (
+                f"Sensitive filesystem action outside workspace detected: `{action}`.\n"
+                f"Target path: `{path}`.\n"
+                "Do you authorize execution?"
+            )
             
         return self.i18n.t("safety.confirm_generic", action=action)
 

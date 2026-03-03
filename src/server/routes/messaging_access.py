@@ -17,6 +17,7 @@ class InterfaceUpdate(BaseModel):
     allow_anyone_in_chats: Optional[List[str]] = None
     rate_limit_enabled: Optional[bool] = None
     max_msgs_per_min: Optional[int] = None
+    approval_decisions: Optional[Dict[str, Any]] = None
 
 class StatusUpdate(BaseModel):
     status: AccessStatus
@@ -65,7 +66,12 @@ async def update_interface(interface: str, update: InterfaceUpdate, request: Req
             "auto_approve_chat_group": "medium",
             "allow_anyone_in_chats": [],
             "rate_limit_enabled": True,
-            "max_msgs_per_min": 10
+            "max_msgs_per_min": 10,
+            "approval_decisions": {
+                "enabled": True,
+                "allowed_groups": ["master"],
+                "denied_groups": [],
+            },
         }
     
     current = service.policy["interfaces"][interface]
@@ -77,6 +83,35 @@ async def update_interface(interface: str, update: InterfaceUpdate, request: Req
         "auto_approve_chat_group",
     }
     for field, value in updates.items():
+        if field == "approval_decisions":
+            approval_payload = value if isinstance(value, dict) else {}
+            current_approval = current.get("approval_decisions")
+            if not isinstance(current_approval, dict):
+                current_approval = {}
+            merged_approval = dict(current_approval)
+            merged_approval.update(approval_payload)
+
+            for list_key in ("allowed_groups", "denied_groups"):
+                raw_list = merged_approval.get(list_key)
+                if raw_list is None:
+                    raw_list = []
+                if not isinstance(raw_list, list):
+                    raise HTTPException(status_code=400, detail=f"Field '{list_key}' must be a list")
+                normalized = []
+                for item in raw_list:
+                    token = str(item or "").strip().lower()
+                    if not token:
+                        continue
+                    if token in {"*", "all"}:
+                        token = "*"
+                    elif not service.get_permission_group(token):
+                        raise HTTPException(status_code=400, detail=f"Permission group '{token}' not found")
+                    if token not in normalized:
+                        normalized.append(token)
+                merged_approval[list_key] = normalized
+            merged_approval["enabled"] = bool(merged_approval.get("enabled", True))
+            current["approval_decisions"] = merged_approval
+            continue
         if field in group_fields and value:
             if not service.get_permission_group(value):
                 raise HTTPException(status_code=400, detail=f"Permission group '{value}' not found")
@@ -178,6 +213,70 @@ async def list_groups(request: Request, user: User = Depends(get_current_user)):
     kernel = request.app.state.kernel
     service = kernel.orchestrator.access_controller.identity_service
     return service.list_permission_groups()
+
+@router.get("/approval-audit")
+async def get_approval_audit(
+    request: Request,
+    interface: Optional[str] = None,
+    limit: int = 200,
+    command: Optional[str] = None,
+    user: User = Depends(get_current_user),
+):
+    kernel = request.app.state.kernel
+    scheduler = kernel.scheduler
+    command_filter = str(command or "").strip().lower()
+    if command_filter and command_filter not in {"approve", "deny"}:
+        raise HTTPException(status_code=400, detail="Invalid command filter. Use 'approve' or 'deny'.")
+    interface_filter = str(interface or "").strip().lower()
+
+    def _infer_interface_from_session_id(session_id: str) -> str:
+        sid = str(session_id or "").strip().lower()
+        if sid.startswith("telegram_"):
+            return "telegram"
+        if sid.startswith("voice"):
+            return "voice"
+        if sid.startswith("whatsapp_") or sid.startswith("wa_"):
+            return "whatsapp"
+        return "web" if sid else "unknown"
+
+    safe_limit = max(1, min(int(limit or 200), 1000))
+    works = scheduler.list_works(include_completed=True, limit=500, include_context=False)
+    records: List[Dict[str, Any]] = []
+    for work in works:
+        work_id = str(work.get("work_id") or "").strip()
+        if not work_id:
+            continue
+        events = scheduler.read_work_events(work_id, limit=400)
+        for event in events:
+            if str(event.get("event") or "").strip().lower() != "work_command":
+                continue
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            cmd = str(payload.get("command") or "").strip().lower()
+            if cmd not in {"approve", "deny"}:
+                continue
+            if command_filter and cmd != command_filter:
+                continue
+            source_session_id = str(payload.get("source_session_id") or "").strip()
+            source_interface = _infer_interface_from_session_id(source_session_id)
+            if interface_filter and source_interface != interface_filter:
+                continue
+            records.append(
+                {
+                    "ts": event.get("ts"),
+                    "command": cmd,
+                    "work_id": work_id,
+                    "work_status": work.get("status"),
+                    "work_label": work.get("label"),
+                    "work_key": work.get("key"),
+                    "target_session_id": work.get("session_id"),
+                    "owner_session_id": work.get("owner_session_id"),
+                    "owner_sender_id": work.get("owner_sender_id"),
+                    "source_session_id": source_session_id,
+                    "source_interface": source_interface,
+                }
+            )
+    records.sort(key=lambda r: str(r.get("ts") or ""), reverse=True)
+    return {"items": records[:safe_limit], "count": min(len(records), safe_limit)}
 
 @router.post("/groups")
 async def create_group(payload: GroupCreateRequest, request: Request, user_ctx: User = Depends(require_admin_user)):

@@ -4,6 +4,7 @@ import time
 import asyncio
 import signal
 import threading
+import re
 from dotenv import load_dotenv
 load_dotenv()
 from core.orchestrator import AgentOrchestrator
@@ -15,14 +16,14 @@ import queue
 import time
 import json
 import datetime
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from utils.logging_config import setup_logging, get_logger
 
 # Setup Logging
 setup_logging()
 logger = get_logger("Kernel")
 
-PID_FILE = "atlas.pid"
+PID_FILE = "kernel.pid"
 
 def check_single_instance():
     if os.path.exists(PID_FILE):
@@ -31,7 +32,7 @@ def check_single_instance():
                 old_pid = int(f.read().strip())
             # Check if process actually exists
             os.kill(old_pid, 0)
-            logger.error(f"❌ Another instance of Atlas is already running (PID: {old_pid}). Exiting.")
+            logger.error(f"❌ Another assistant instance is already running (PID: {old_pid}). Exiting.")
             sys.exit(1)
         except (ProcessLookupError, ValueError, FileNotFoundError):
             # Process not running or dead PID file, we can take over
@@ -117,35 +118,205 @@ class Kernel:
         self.system_driver = SystemDriver(self)
         self.drivers.append(self.system_driver)
 
-        # Initialize Browser Driver (Internal tool, linked to browser_automator skill)
-        browser_skill_config = self.config_manager.get_skill_config("browser_automator")
-        if browser_skill_config.get('enabled', False):
-            # Keep browser-use state inside project data dir to avoid permission issues in ~/.config.
-            os.environ.setdefault(
-                "BROWSER_USE_CONFIG_DIR",
-                os.path.join(self.base_data_dir, "browser_use"),
-            )
-            try:
-                from drivers.browser_driver import BrowserDriver
-                logger.info("Initializing Browser Driver (Playwright)...")
-                self.browser_driver = BrowserDriver(self)
-                self.drivers.append(self.browser_driver)
-                self.orchestrator.set_browser_driver(self.browser_driver)
-            except Exception as e:
-                logger.error(f"Browser Driver disabled due to initialization error: {e}")
-                self.browser_driver = None
-        else:
-            logger.info("Browser Driver disabled (browser_automator skill is inactive).")
-            self.browser_driver = None
+        self.browser_driver = None
+        self.web_automation_driver = None
+        
         
         self.sessions = {} # Dict[str, Session]
         self.session_locks = {} # Concurrency guards
         self.start_time = time.time()
         self.pending_approval_queue: Dict[str, List[Dict[str, Any]]] = {}
         self.last_approval_notification_ts: Dict[str, float] = {}
+        self.permission_grants: Dict[str, Any] = {
+            "global": {},
+            "session": {},
+            "worker": {},
+        }
 
         # Give Orchestrator access to drivers it might need to control
         self.orchestrator.set_system_driver(self.system_driver)
+
+    @staticmethod
+    def _normalize_interface_name(interface: str) -> str:
+        value = str(interface or "").strip().lower()
+        if value in {"browser", "server"}:
+            return "web"
+        if value in {"telegram_bot"}:
+            return "telegram"
+        if value in {"wa", "wpp"}:
+            return "whatsapp"
+        return value or "unknown"
+
+    def _infer_interface_from_session_id(self, session_id: str) -> str:
+        sid = str(session_id or "").strip().lower()
+        if not sid:
+            return "unknown"
+        if sid.startswith("telegram_"):
+            return "telegram"
+        if sid.startswith("voice"):
+            return "voice"
+        if sid.startswith("whatsapp_") or sid.startswith("wa_"):
+            return "whatsapp"
+        return "web"
+
+    def _resolve_session_interface(self, session_id: str) -> str:
+        session = self.orchestrator.get_session_robust(session_id) if session_id else None
+        if session and getattr(session, "source", None):
+            return self._normalize_interface_name(str(session.source))
+        return self._normalize_interface_name(self._infer_interface_from_session_id(session_id))
+
+    def can_interface_control_permissions(self, interface: str) -> bool:
+        normalized = self._normalize_interface_name(interface)
+        try:
+            service = self.orchestrator.access_controller.identity_service
+            interface_conf = service.get_interface_config(normalized)
+            approval_cfg = interface_conf.get("approval_decisions")
+            if isinstance(approval_cfg, dict):
+                # Per-interface policy: interface always eligible; group gating is checked later.
+                return True
+        except Exception:
+            pass
+
+        # Backward compatibility with older global policy.
+        cfg = self.config_manager.get("permission_controls", {}) if hasattr(self, "config_manager") else {}
+        if not isinstance(cfg, dict):
+            cfg = {}
+        approval_cfg = cfg.get("approval_decisions", {})
+        if not isinstance(approval_cfg, dict):
+            return True
+        allowed = approval_cfg.get("allowed_interfaces", ["*"])
+        denied = approval_cfg.get("denied_interfaces", [])
+        allowed_set = {self._normalize_interface_name(v) for v in (allowed or []) if str(v or "").strip()}
+        denied_set = {self._normalize_interface_name(v) for v in (denied or []) if str(v or "").strip()}
+        if normalized in denied_set:
+            return False
+        if "*" in allowed_set or "all" in allowed_set:
+            return True
+        return normalized in allowed_set
+
+    def can_principal_control_permissions(self, context: PrincipalContext) -> tuple[bool, str]:
+        interface = self._normalize_interface_name(getattr(context, "interface", "unknown"))
+        if not self.can_interface_control_permissions(interface):
+            return False, f"interface:{interface}"
+
+        approval_cfg = None
+        try:
+            service = self.orchestrator.access_controller.identity_service
+            interface_conf = service.get_interface_config(interface)
+            local_cfg = interface_conf.get("approval_decisions")
+            if isinstance(local_cfg, dict):
+                approval_cfg = local_cfg
+        except Exception:
+            approval_cfg = None
+
+        if not isinstance(approval_cfg, dict):
+            # Backward compatibility with older global policy.
+            cfg = self.config_manager.get("permission_controls", {}) if hasattr(self, "config_manager") else {}
+            global_cfg = cfg.get("approval_decisions", {}) if isinstance(cfg, dict) else {}
+            approval_cfg = global_cfg if isinstance(global_cfg, dict) else {}
+
+        if not bool(approval_cfg.get("enabled", True)):
+            return True, "policy_disabled"
+
+        allowed_groups = approval_cfg.get("allowed_groups", ["*"])
+        denied_groups = approval_cfg.get("denied_groups", [])
+        allowed_group_set = {str(v or "").strip().lower() for v in (allowed_groups or []) if str(v or "").strip()}
+        denied_group_set = {str(v or "").strip().lower() for v in (denied_groups or []) if str(v or "").strip()}
+
+        group_id = ""
+        try:
+            group_id = str(self.orchestrator.access_controller.resolve_principal_group_id(context) or "").strip().lower()
+        except Exception as e:
+            logger.debug(f"Failed to resolve principal group for approval policy: {e}")
+
+        if group_id and group_id in denied_group_set:
+            return False, f"group:{group_id}"
+
+        if "*" in allowed_group_set or "all" in allowed_group_set:
+            return True, "ok"
+
+        if not allowed_group_set:
+            # Empty allow-list means unrestricted by group.
+            return True, "ok"
+
+        if group_id and group_id in allowed_group_set:
+            return True, "ok"
+        return False, f"group:{group_id or 'unknown'}"
+
+    @staticmethod
+    def _permission_signature(action_id: str, args: Dict[str, Any]) -> str:
+        action = str(action_id or "").strip().lower()
+        if not action:
+            return ""
+        safe_args = args if isinstance(args, dict) else {}
+        try:
+            payload = json.dumps(safe_args, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            payload = str(safe_args)
+        return f"{action}|{payload}"
+
+    def has_permission_grant(
+        self,
+        *,
+        action_id: str,
+        args: Dict[str, Any],
+        session_id: Optional[str],
+        work_id: Optional[str],
+    ) -> bool:
+        sig = self._permission_signature(action_id, args)
+        if not sig:
+            return False
+        if sig in (self.permission_grants.get("global") or {}):
+            return True
+        if work_id:
+            by_worker = self.permission_grants.get("worker") or {}
+            if sig in ((by_worker.get(str(work_id)) or {})):
+                return True
+        if session_id:
+            by_session = self.permission_grants.get("session") or {}
+            if sig in ((by_session.get(str(session_id)) or {})):
+                return True
+        return False
+
+    def grant_permission(
+        self,
+        *,
+        scope: str,
+        action_id: str,
+        args: Dict[str, Any],
+        session_id: Optional[str],
+        work_id: Optional[str],
+        granted_by_session_id: Optional[str],
+        granted_by_sender_id: Optional[str],
+    ) -> None:
+        sig = self._permission_signature(action_id, args)
+        if not sig:
+            return
+        record = {
+            "granted_at": datetime.datetime.now().isoformat(),
+            "scope": str(scope or "worker"),
+            "action_id": str(action_id or ""),
+            "session_id": session_id,
+            "work_id": work_id,
+            "granted_by_session_id": granted_by_session_id,
+            "granted_by_sender_id": granted_by_sender_id,
+        }
+        normalized_scope = str(scope or "worker").strip().lower()
+        if normalized_scope == "global":
+            self.permission_grants.setdefault("global", {})[sig] = record
+            return
+        if normalized_scope == "session" and session_id:
+            bucket = self.permission_grants.setdefault("session", {}).setdefault(str(session_id), {})
+            bucket[sig] = record
+            return
+        if work_id:
+            bucket = self.permission_grants.setdefault("worker", {}).setdefault(str(work_id), {})
+            bucket[sig] = record
+            return
+
+    def _expose_reasoning_to_ui(self) -> bool:
+        ui_cfg = self.config_manager.get("ui", {}) if hasattr(self, "config_manager") else {}
+        return bool(ui_cfg.get("expose_reasoning_chunks", False))
 
     @staticmethod
     def _is_media_action(action_id: str) -> bool:
@@ -153,9 +324,8 @@ class Kernel:
         if not action:
             return False
         media_prefixes = (
-            "browser.automator.play_url",
-            "browser.automator.control",
-            "browser.automator.open",
+            "browser.control.run",
+            "browser.control.step",
             "youtube.search.",
             "deezer.search.",
             "spotify.search.",
@@ -195,11 +365,15 @@ class Kernel:
             for wid in blocker_ids:
                 self.scheduler.request_cancel(wid)
             return "allow", blocker_ids
+        if policy in {"allow", "parallel"}:
+            return "allow", blocker_ids
+        if policy == "queue":
+            # Runtime currently has no persisted queue dispatcher for chat-initiated works.
+            # Treat "queue" as non-blocking parallel admission instead of hard reject.
+            return "allow", blocker_ids
         if policy == "reject":
             return "reject", blocker_ids
-        # Current runtime has no persisted queue dispatcher for chat-initiated works.
-        # For now, "queue" behaves as safe reject to avoid session lock collisions.
-        return "reject", blocker_ids
+        return "allow", blocker_ids
 
     @staticmethod
     def _is_affirmative(text: str) -> bool:
@@ -361,11 +535,35 @@ class Kernel:
         if not work_id:
             return False
 
+        source_interface = self._resolve_session_interface(session_id)
+        sender_id = str(session.context.get("last_sender_id") or "").strip() if isinstance(session.context, dict) else ""
+        if not sender_id:
+            sender_id = session_id
+        approval_context = PrincipalContext(
+            interface=source_interface,
+            sender_id=sender_id,
+            sender_name=str(session.context.get("last_sender_name") or "") if isinstance(session.context, dict) else None,
+            chat_id=str(session.context.get("last_chat_id") or "") if isinstance(session.context, dict) else None,
+            chat_name=str(session.context.get("last_chat_name") or "") if isinstance(session.context, dict) else None,
+            is_group=bool(session.context.get("last_is_group")) if isinstance(session.context, dict) else False,
+            session_id=session_id,
+        )
+        can_decide, deny_reason = self.can_principal_control_permissions(approval_context)
+
         if self._is_affirmative(text):
+            if not can_decide:
+                driver_instance.send_response(
+                    f"This principal is not allowed to approve sensitive permission requests ({deny_reason}).",
+                    target=session_id,
+                    is_chunk=True,
+                )
+                if hasattr(driver_instance, "send_complete"):
+                    driver_instance.send_complete(session_id)
+                return True
             ok = self.scheduler.push_work_command(
                 work_id,
                 "approve",
-                payload={"note": text},
+                payload={"note": text, "scope": "worker"},
                 source_session_id=session_id,
             )
             session.pending_action = None
@@ -381,6 +579,15 @@ class Kernel:
             return True
 
         if self._is_negative(text):
+            if not can_decide:
+                driver_instance.send_response(
+                    f"This principal is not allowed to deny sensitive permission requests ({deny_reason}).",
+                    target=session_id,
+                    is_chunk=True,
+                )
+                if hasattr(driver_instance, "send_complete"):
+                    driver_instance.send_complete(session_id)
+                return True
             ok = self.scheduler.push_work_command(
                 work_id,
                 "deny",
@@ -400,6 +607,87 @@ class Kernel:
             return True
 
         return False
+
+    def _handle_explicit_approval_command(self, text: str, session_id: str, driver_instance, context: Optional[PrincipalContext]) -> bool:
+        raw = str(text or "").strip()
+        if not raw:
+            return False
+        match = re.match(r"^!approval\s+([a-zA-Z0-9_-]+)\s+(approve|deny)(?:\s+(worker|session|global))?\s*$", raw, flags=re.IGNORECASE)
+        if not match:
+            return False
+
+        work_id, decision, scope = match.group(1), match.group(2).lower(), (match.group(3) or "worker").lower()
+        work_row = self.scheduler.get_work_snapshot(work_id, include_context=True) if hasattr(self.scheduler, "get_work_snapshot") else None
+        if not work_row:
+            driver_instance.send_response(
+                f"Worker {work_id} was not found.",
+                target=session_id,
+                is_chunk=True,
+            )
+            if hasattr(driver_instance, "send_complete"):
+                driver_instance.send_complete(session_id)
+            return True
+
+        current_status = str(work_row.get("status") or "").strip().lower()
+        if current_status != "waiting_user":
+            driver_instance.send_response(
+                f"Worker {work_id} is no longer waiting for approval (status: {current_status or 'unknown'}).",
+                target=session_id,
+                is_chunk=True,
+            )
+            if hasattr(driver_instance, "send_complete"):
+                driver_instance.send_complete(session_id)
+            return True
+
+        principal = context if isinstance(context, PrincipalContext) else PrincipalContext(
+            interface=self._resolve_session_interface(session_id),
+            sender_id=session_id,
+            session_id=session_id,
+        )
+        can_decide, deny_reason = self.can_principal_control_permissions(principal)
+        if not can_decide:
+            driver_instance.send_response(
+                f"This principal is not allowed to control sensitive permission requests ({deny_reason}).",
+                target=session_id,
+                is_chunk=True,
+            )
+            if hasattr(driver_instance, "send_complete"):
+                driver_instance.send_complete(session_id)
+            return True
+
+        cmd = "approve" if decision == "approve" else "deny"
+        ok = self.scheduler.push_work_command(
+            work_id=work_id,
+            command=cmd,
+            payload={"scope": scope, "note": f"explicit:{raw}"},
+            source_session_id=session_id,
+        )
+        # Clear pending approval queue/session marker for this work to avoid stale reminders.
+        owner_session_id = str((work_row or {}).get("owner_session_id") or (work_row or {}).get("session_id") or session_id)
+
+        self._remove_approval_request(owner_session_id, work_id)
+        owner_session = self.orchestrator.get_session_robust(owner_session_id)
+        if owner_session and isinstance(owner_session.pending_action, dict):
+            pending_work_id = str(owner_session.pending_action.get("work_id") or "").strip()
+            if pending_work_id == str(work_id):
+                owner_session.pending_action = None
+                self.orchestrator._save_session(owner_session)
+
+        if ok:
+            driver_instance.send_response(
+                f"Decision sent to worker {work_id}: {decision.upper()} ({scope}).",
+                target=session_id,
+                is_chunk=True,
+            )
+        else:
+            driver_instance.send_response(
+                f"Worker {work_id} was not found.",
+                target=session_id,
+                is_chunk=True,
+            )
+        if hasattr(driver_instance, "send_complete"):
+            driver_instance.send_complete(session_id)
+        return True
 
     def reload_config(self):
         """Orchestrates a hot reload of all configuration-dependent services."""
@@ -555,7 +843,7 @@ class Kernel:
                     # Status updates are now real-time. No rate-limiting needed 
                     # as these are the agent's intermediate "thoughts" or step feedback.
                     msg = event.get('message')
-                    if hasattr(driver, 'send_reasoning_chunk'):
+                    if self._expose_reasoning_to_ui() and hasattr(driver, 'send_reasoning_chunk'):
                         driver.send_reasoning_chunk(target_session, msg)
                     elif hasattr(driver, 'send_status'):
                         driver.send_status(target_session, 'thinking', msg)
@@ -565,11 +853,16 @@ class Kernel:
                 
                 elif event_type == "work_status_change":
                     status = event.get("status")
+                    snapshot = self.scheduler.get_work_snapshot(work_id, include_context=True)
+                    summary = (snapshot or {}).get("context", {}).get("summary", {}) if snapshot else {}
+                    prompt = summary.get("approval_prompt") or "This worker needs your approval to continue."
+                    approval_action_id = str(summary.get("approval_action_id") or "").strip()
+                    approval_args = summary.get("approval_args") if isinstance(summary.get("approval_args"), dict) else {}
                     status_text = {
                         "queued": "Task queued.",
                         "running": "Task running.",
                         "paused": "Task paused.",
-                        "waiting_user": "Task waiting for your approval.",
+                        "waiting_user": prompt,
                         "succeeded": "Task completed successfully.",
                         "failed": "Task failed.",
                         "cancelled": "Task cancelled.",
@@ -580,7 +873,26 @@ class Kernel:
                             driver.send_status(
                                 target_session,
                                 "thinking" if status in {"queued", "running", "paused", "waiting_user"} else "complete",
-                                {"status": status, "message": status_text, "work_id": work_id},
+                                {
+                                    "status": status,
+                                    "message": status_text,
+                                    "work_id": work_id,
+                                    "approval_request": (
+                                        {
+                                            "prompt": prompt,
+                                            "action_id": approval_action_id,
+                                            "args": approval_args,
+                                            "options": [
+                                                {"id": "deny", "label": "Deny"},
+                                                {"id": "approve_worker", "label": "Allow this worker"},
+                                                {"id": "approve_session", "label": "Allow this session"},
+                                                {"id": "approve_global", "label": "Allow global"},
+                                            ],
+                                        }
+                                        if status == "waiting_user"
+                                        else None
+                                    ),
+                                },
                             )
                         except Exception as e:
                             logger.debug(f"Failed to forward work status to session {target_session}: {e}")
@@ -596,9 +908,6 @@ class Kernel:
                         driver.send_response(f"❌ Task error {work_id}: An internal problem occurred.", target=target_session)
                         self._remove_approval_request(target_session, work_id)
                     elif status == "waiting_user":
-                        snapshot = self.scheduler.get_work_snapshot(work_id, include_context=True)
-                        summary = (snapshot or {}).get("context", {}).get("summary", {}) if snapshot else {}
-                        prompt = summary.get("approval_prompt") or "This worker needs your approval to continue."
                         self._enqueue_approval_request(target_session, work_id, prompt)
                         session = self.orchestrator.get_session_robust(target_session)
                         idle_seconds = None
@@ -630,18 +939,10 @@ class Kernel:
 
         if self._handle_pending_work_control(text, session_id, driver_instance):
             return session_id
+        if self._handle_explicit_approval_command(text, session_id, driver_instance, context):
+            return session_id
 
-        pending_items = self.pending_approval_queue.get(session_id) or []
         effective_text = text
-        if pending_items and not self._is_affirmative(text) and not self._is_negative(text):
-            top = pending_items[0]
-            approval_context = (
-                "\n\n[PENDING_APPROVAL_CONTEXT]\n"
-                f"- work_id: {top.get('work_id')}\n"
-                f"- prompt: {top.get('prompt')}\n"
-                "- Ask the user naturally for approve/deny when appropriate."
-            )
-            effective_text = f"{text}{approval_context}"
         
         # Configurable preemption policy: keep main conversation responsive without
         # automatically canceling active background work unless explicitly enabled.
@@ -679,6 +980,17 @@ class Kernel:
 
             # 1. Get Initial Resolution (Reflex or Chain)
             plan, _, session = self.orchestrator.get_initial_intent(effective_text, session_id=session_id, user_data=user_data, context=context, attachments=attachments, name=user_name)
+
+            if session and isinstance(context, PrincipalContext):
+                session.context["last_interface"] = str(context.interface or "web")
+                session.context["last_sender_id"] = str(context.sender_id or session_id)
+                if context.sender_name:
+                    session.context["last_sender_name"] = str(context.sender_name)
+                if context.chat_id:
+                    session.context["last_chat_id"] = str(context.chat_id)
+                if context.chat_name:
+                    session.context["last_chat_name"] = str(context.chat_name)
+                session.context["last_is_group"] = bool(context.is_group)
             
             # ENSURE PERSISTENCE: Add user message to history before processing the plan
             # (unless it's an internal/hidden trigger which we don't have yet in this flow)
@@ -705,8 +1017,8 @@ class Kernel:
                 session.add_message("assistant", coached_response)
                 self.orchestrator._save_session(session)
 
-                # Send reasoning chunk if available
-                if hasattr(driver_instance, 'send_reasoning_chunk') and plan.thought:
+                # Keep thought/protocol hidden from user chat by default.
+                if self._expose_reasoning_to_ui() and hasattr(driver_instance, 'send_reasoning_chunk') and plan.thought:
                     driver_instance.send_reasoning_chunk(session_id, plan.thought)
 
                 # Send response as chunks to trigger the correct responding UI
@@ -812,7 +1124,8 @@ class Kernel:
                 callbacks['send_file'] = lambda path, cap=None: driver_instance.send_file(session_id, path, cap)
             
             callbacks['send_status'] = lambda phase, payload=None: driver_instance.send_status(session_id, phase, payload)
-            callbacks['send_reasoning_chunk'] = lambda content: driver_instance.send_reasoning_chunk(session_id, content)
+            if self._expose_reasoning_to_ui():
+                callbacks['send_reasoning_chunk'] = lambda content: driver_instance.send_reasoning_chunk(session_id, content)
             callbacks['send_complete'] = lambda: driver_instance.send_complete(session_id)
             callbacks['send_response'] = lambda text, is_chunk=False, attachments=None: driver_instance.send_response(text, target=session_id, is_chunk=is_chunk, attachments=attachments)
 
@@ -849,7 +1162,9 @@ class Kernel:
                 },
             )
             driver_instance.send_response(ack_msg, target=session_id, is_chunk=True)
-            session.add_message("assistant", ack_msg)
+            # Persist the initial assistant ack linked to this worker so refreshes
+            # can still render Work Details while execution is in progress.
+            session.add_message("assistant", ack_msg, work_id=work.work_id)
             self.orchestrator._save_session(session)
             
             return work.work_id

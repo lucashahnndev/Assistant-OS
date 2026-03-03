@@ -1,5 +1,5 @@
 {
-    "name": "youtube.search",
+    "name": "youtube",
     "description": "Busca vídeos, playlists e canais no YouTube (API oficial com fallback web).",
     "version": "1.0.0",
     "actions": {
@@ -47,6 +47,21 @@
                     },
                     "confidenceScore": {
                         "type": "number"
+                    },
+                    "error_code": {
+                        "type": ["string", "null"]
+                    },
+                    "error_message": {
+                        "type": ["string", "null"]
+                    },
+                    "retryable": {
+                        "type": "boolean"
+                    },
+                    "status_code": {
+                        "type": ["integer", "null"]
+                    },
+                    "elapsed_ms": {
+                        "type": "integer"
                     }
                 }
             }

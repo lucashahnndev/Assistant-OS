@@ -30,6 +30,7 @@ import {
 import { api } from '../hooks/api';
 import { toast } from 'react-hot-toast';
 import PageHeader from '../components/PageHeader';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 const API_BASE = '/messaging_access';
 const INTERFACE_META = {
@@ -82,12 +83,16 @@ const MessagingAccess = () => {
     const [chats, setChats] = useState([]);
     const [registry, setRegistry] = useState([]);
     const [groups, setGroups] = useState([]);
+    const [approvalAudit, setApprovalAudit] = useState([]);
+    const [approvalAuditFilter, setApprovalAuditFilter] = useState('all');
+    const [copyTargetInterface, setCopyTargetInterface] = useState('');
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
     const [filterStatus, setFilterStatus] = useState('all');
     const [activeTab, setActiveTab] = useState('config'); // 'config', 'groups', 'users', 'chats'
     const [editingOverrides, setEditingOverrides] = useState(null); // {type: 'user'|'chat', data: entity}
     const [editingGroup, setEditingGroup] = useState(null);
+    const [deletingGroup, setDeletingGroup] = useState(null);
     const [newGroup, setNewGroup] = useState({
         id: '',
         name: '',
@@ -131,18 +136,20 @@ const MessagingAccess = () => {
     const fetchData = async () => {
         setLoading(true);
         try {
-            const [intRes, userRes, chatRes, regRes, groupRes] = await Promise.all([
+            const [intRes, userRes, chatRes, regRes, groupRes, auditRes] = await Promise.all([
                 api.get(`${API_BASE}/interfaces`),
                 api.get(`${API_BASE}/users`),
                 api.get(`${API_BASE}/chats`),
                 api.get('/skills/registry'),
-                api.get(`${API_BASE}/groups`)
+                api.get(`${API_BASE}/groups`),
+                api.get(`${API_BASE}/approval-audit?limit=150`)
             ]);
             setInterfaces(intRes);
             setUsers(userRes);
             setChats(chatRes);
             setRegistry(regRes);
             setGroups(Array.isArray(groupRes) ? groupRes : []);
+            setApprovalAudit(Array.isArray(auditRes?.items) ? auditRes.items : []);
         } catch (error) {
             try {
                 const groupsRes = await api.get(`${API_BASE}/groups`);
@@ -150,6 +157,7 @@ const MessagingAccess = () => {
             } catch (_) {
                 setGroups([]);
             }
+            setApprovalAudit([]);
             toast.error("Failed to load messaging access data");
         } finally {
             setLoading(false);
@@ -164,6 +172,53 @@ const MessagingAccess = () => {
             toast.success(`Settings saved for ${label}`);
         } catch (error) {
             toast.error("Failed to update interface settings");
+        }
+    };
+
+    const handleCopyApprovalToInterface = async (targetInterface, approvalPolicy) => {
+        const target = String(targetInterface || '').trim().toLowerCase();
+        if (!target || target === String(activeInterface || '').toLowerCase()) {
+            toast.error("Select a different interface to copy");
+            return;
+        }
+        try {
+            const res = await api.patch(`${API_BASE}/interfaces/${target}`, { approval_decisions: approvalPolicy });
+            setInterfaces(prev => ({ ...prev, [target]: res }));
+            const fromLabel = INTERFACE_META[activeInterface]?.label || activeInterface;
+            const toLabel = INTERFACE_META[target]?.label || target;
+            toast.success(`Permission policy copied: ${fromLabel} -> ${toLabel}`);
+        } catch (error) {
+            toast.error("Failed to copy permission policy");
+        }
+    };
+
+    const handleCopyApprovalToAll = async (approvalPolicy) => {
+        const targets = visibleInterfaces.filter(
+            itf => String(itf || '').toLowerCase() !== String(activeInterface || '').toLowerCase()
+        );
+        if (targets.length === 0) {
+            toast.error("No target interfaces available");
+            return;
+        }
+        const fromLabel = INTERFACE_META[activeInterface]?.label || activeInterface;
+        const confirmed = window.confirm(
+            `Copy permission policy from ${fromLabel} to ${targets.length} interface(s)?`
+        );
+        if (!confirmed) return;
+        try {
+            const results = await Promise.all(
+                targets.map(itf => api.patch(`${API_BASE}/interfaces/${itf}`, { approval_decisions: approvalPolicy }))
+            );
+            setInterfaces(prev => {
+                const next = { ...prev };
+                targets.forEach((itf, idx) => {
+                    next[itf] = results[idx];
+                });
+                return next;
+            });
+            toast.success(`Permission policy copied to ${targets.length} interface(s)`);
+        } catch (error) {
+            toast.error("Failed to copy permission policy to all interfaces");
         }
     };
 
@@ -459,13 +514,19 @@ const MessagingAccess = () => {
             toast.error("System groups cannot be deleted");
             return;
         }
-        if (!window.confirm(`Delete group "${group.name}"?`)) return;
+        setDeletingGroup(group);
+    };
+
+    const confirmDeleteGroup = async () => {
+        if (!deletingGroup) return;
         try {
-            await api.delete(`${API_BASE}/groups/${group.id}`);
+            await api.delete(`${API_BASE}/groups/${deletingGroup.id}`);
             toast.success("Group deleted");
             fetchData();
         } catch (error) {
             toast.error("Failed to delete group");
+        } finally {
+            setDeletingGroup(null);
         }
     };
 
@@ -495,6 +556,43 @@ const MessagingAccess = () => {
     const groupOptions = groups.map(g => ({ value: g.id, label: `${g.name} (${g.id})` }));
     const newGroupAllowCount = splitPatterns(newGroup.allow_actions).length;
     const newGroupDenyCount = splitPatterns(newGroup.deny_actions).length;
+    const currentApproval = (() => {
+        const value = currentConf.approval_decisions;
+        if (!value || typeof value !== 'object') {
+            return { enabled: true, allowed_groups: ['master'], denied_groups: [] };
+        }
+        return {
+            enabled: Boolean(value.enabled ?? true),
+            allowed_groups: Array.isArray(value.allowed_groups) ? value.allowed_groups : ['master'],
+            denied_groups: Array.isArray(value.denied_groups) ? value.denied_groups : []
+        };
+    })();
+    const toggleApprovalGroup = (field, groupId) => {
+        const current = Array.isArray(currentApproval[field]) ? currentApproval[field] : [];
+        const set = new Set(current.map(v => String(v || '').trim().toLowerCase()).filter(Boolean));
+        const token = String(groupId || '').trim().toLowerCase();
+        if (!token) return;
+        if (set.has(token)) set.delete(token);
+        else set.add(token);
+        handleInterfaceUpdate({
+            approval_decisions: {
+                ...currentApproval,
+                [field]: Array.from(set)
+            }
+        });
+    };
+    const filteredApprovalAudit = (approvalAudit || []).filter(item => {
+        const sourceInterface = String(item?.source_interface || '').toLowerCase();
+        if (sourceInterface !== String(activeInterface || '').toLowerCase()) return false;
+        if (approvalAuditFilter === 'all') return true;
+        return String(item?.command || '').toLowerCase() === approvalAuditFilter;
+    });
+    const copyInterfaceOptions = visibleInterfaces.filter(
+        itf => String(itf || '').toLowerCase() !== String(activeInterface || '').toLowerCase()
+    );
+    const effectiveCopyTarget = copyInterfaceOptions.includes(copyTargetInterface)
+        ? copyTargetInterface
+        : (copyInterfaceOptions[0] || '');
 
     return (
         <div className="animate-in scroll-container" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -690,6 +788,243 @@ const MessagingAccess = () => {
                                         <button className="btn-ghost" style={{ width: '100%', marginTop: '12px', fontSize: '11px', fontWeight: '800', background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
                                             ACTIVATE LOCKDOWN
                                         </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div style={{ padding: '20px', borderRadius: '20px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--card-border)', gridColumn: '1 / -1' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                        <div className="flex-center" style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'rgba(56,189,248,0.1)', color: '#38bdf8' }}>
+                                            <ShieldAlert size={18} />
+                                        </div>
+                                        <div>
+                                            <h3 style={{ fontSize: '0.875rem', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Permission Decisions ({(INTERFACE_META[activeInterface]?.label || activeInterface).toUpperCase()})</h3>
+                                            <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>These rules apply only to the selected interface tab.</p>
+                                        </div>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                        <select
+                                            value={effectiveCopyTarget}
+                                            onChange={(e) => setCopyTargetInterface(e.target.value)}
+                                            className="input-field"
+                                            style={{ minWidth: '130px', fontSize: '11px', padding: '8px 10px', background: 'rgba(0,0,0,0.2)', borderRadius: '10px' }}
+                                        >
+                                            {copyInterfaceOptions.length === 0 ? (
+                                                <option value="">No target</option>
+                                            ) : copyInterfaceOptions.map(itf => (
+                                                <option key={`copy-target-${itf}`} value={itf}>
+                                                    {INTERFACE_META[itf]?.label || itf}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <button
+                                            className="btn-ghost"
+                                            style={{ fontSize: '11px', fontWeight: '800', padding: '8px 10px', borderRadius: '10px' }}
+                                            onClick={() => handleCopyApprovalToInterface(effectiveCopyTarget, currentApproval)}
+                                            disabled={!effectiveCopyTarget}
+                                        >
+                                            Copy To
+                                        </button>
+                                        <button
+                                            className="btn-ghost"
+                                            style={{ fontSize: '11px', fontWeight: '800', padding: '8px 10px', borderRadius: '10px' }}
+                                            onClick={() => handleCopyApprovalToAll(currentApproval)}
+                                        >
+                                            Copy To All
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '14px', marginBottom: '16px' }}>
+                                    <div style={{ padding: '12px', borderRadius: '12px', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--card-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                        <div>
+                                            <div style={{ fontSize: '12px', fontWeight: '800' }}>Decision Policy</div>
+                                            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Enable group restrictions for approve/deny actions.</div>
+                                        </div>
+                                        <div
+                                            onClick={() => handleInterfaceUpdate({ approval_decisions: { ...currentApproval, enabled: !currentApproval.enabled } })}
+                                            style={{
+                                                width: '44px',
+                                                height: '24px',
+                                                borderRadius: '12px',
+                                                background: currentApproval.enabled ? 'var(--accent-color)' : 'rgba(255,255,255,0.12)',
+                                                position: 'relative',
+                                                cursor: 'pointer',
+                                                transition: 'var(--transition-fast)'
+                                            }}
+                                        >
+                                            <div style={{
+                                                width: '18px',
+                                                height: '18px',
+                                                borderRadius: '50%',
+                                                background: '#fff',
+                                                position: 'absolute',
+                                                top: '3px',
+                                                left: currentApproval.enabled ? '23px' : '3px',
+                                                transition: 'var(--transition-fast)'
+                                            }} />
+                                        </div>
+                                    </div>
+
+                                    <div style={{ padding: '12px', borderRadius: '12px', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--card-border)' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                            <label style={{ fontSize: '10px', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Allowed Groups</label>
+                                            <button
+                                                className="btn-ghost"
+                                                style={{ fontSize: '10px', padding: '4px 8px', borderRadius: '8px' }}
+                                                onClick={() => handleInterfaceUpdate({ approval_decisions: { ...currentApproval, allowed_groups: ['*'] } })}
+                                            >
+                                                Allow *
+                                            </button>
+                                        </div>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
+                                            {groupOptions.map(g => {
+                                                const selected = (currentApproval.allowed_groups || []).includes(g.value);
+                                                return (
+                                                    <button
+                                                        key={`allow-group-${activeInterface}-${g.value}`}
+                                                        onClick={() => toggleApprovalGroup('allowed_groups', g.value)}
+                                                        style={{
+                                                            padding: '6px 10px',
+                                                            borderRadius: '8px',
+                                                            border: '1px solid',
+                                                            borderColor: selected ? 'rgba(74,222,128,0.8)' : 'var(--card-border)',
+                                                            background: selected ? 'rgba(16,185,129,0.14)' : 'rgba(255,255,255,0.02)',
+                                                            color: selected ? '#4ade80' : 'var(--text-muted)',
+                                                            fontSize: '10px',
+                                                            fontWeight: '800'
+                                                        }}
+                                                    >
+                                                        {g.value}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                        <input
+                                            className="input-field"
+                                            value={(currentApproval.allowed_groups || []).join(', ')}
+                                            onChange={(e) => handleInterfaceUpdate({
+                                                approval_decisions: {
+                                                    ...currentApproval,
+                                                    allowed_groups: e.target.value.split(',').map(v => v.trim()).filter(Boolean)
+                                                }
+                                            })}
+                                            style={{ width: '100%', fontSize: '11px', background: 'rgba(0,0,0,0.2)' }}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr', gap: '14px' }}>
+                                    <div style={{ padding: '12px', borderRadius: '12px', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--card-border)' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                            <label style={{ fontSize: '10px', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Denied Groups</label>
+                                            <button
+                                                className="btn-ghost"
+                                                style={{ fontSize: '10px', padding: '4px 8px', borderRadius: '8px', color: '#f87171' }}
+                                                onClick={() => handleInterfaceUpdate({ approval_decisions: { ...currentApproval, denied_groups: [] } })}
+                                            >
+                                                Clear
+                                            </button>
+                                        </div>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
+                                            {groupOptions.map(g => {
+                                                const selected = (currentApproval.denied_groups || []).includes(g.value);
+                                                return (
+                                                    <button
+                                                        key={`deny-group-${activeInterface}-${g.value}`}
+                                                        onClick={() => toggleApprovalGroup('denied_groups', g.value)}
+                                                        style={{
+                                                            padding: '6px 10px',
+                                                            borderRadius: '8px',
+                                                            border: '1px solid',
+                                                            borderColor: selected ? 'rgba(248,113,113,0.8)' : 'var(--card-border)',
+                                                            background: selected ? 'rgba(239,68,68,0.14)' : 'rgba(255,255,255,0.02)',
+                                                            color: selected ? '#f87171' : 'var(--text-muted)',
+                                                            fontSize: '10px',
+                                                            fontWeight: '800'
+                                                        }}
+                                                    >
+                                                        {g.value}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                        <input
+                                            className="input-field"
+                                            value={(currentApproval.denied_groups || []).join(', ')}
+                                            onChange={(e) => handleInterfaceUpdate({
+                                                approval_decisions: {
+                                                    ...currentApproval,
+                                                    denied_groups: e.target.value.split(',').map(v => v.trim()).filter(Boolean)
+                                                }
+                                            })}
+                                            style={{ width: '100%', fontSize: '11px', background: 'rgba(0,0,0,0.2)' }}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div style={{ marginTop: '16px', borderTop: '1px solid var(--card-border)', paddingTop: '14px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', gap: '8px', flexWrap: 'wrap' }}>
+                                        <label style={{ fontSize: '10px', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Approval Audit ({(INTERFACE_META[activeInterface]?.label || activeInterface).toUpperCase()})</label>
+                                        <div style={{ display: 'flex', gap: '6px' }}>
+                                            {['all', 'approve', 'deny'].map(mode => (
+                                                <button
+                                                    key={`audit-${mode}`}
+                                                    onClick={() => setApprovalAuditFilter(mode)}
+                                                    style={{
+                                                        padding: '5px 9px',
+                                                        borderRadius: '8px',
+                                                        border: '1px solid',
+                                                        borderColor: approvalAuditFilter === mode ? 'var(--accent-color)' : 'var(--card-border)',
+                                                        background: approvalAuditFilter === mode ? 'var(--accent-glow)' : 'rgba(255,255,255,0.02)',
+                                                        color: approvalAuditFilter === mode ? 'var(--accent-color)' : 'var(--text-muted)',
+                                                        fontSize: '10px',
+                                                        fontWeight: '800',
+                                                        textTransform: 'uppercase'
+                                                    }}
+                                                >
+                                                    {mode}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="custom-scrollbar" style={{ maxHeight: '220px', overflowY: 'auto', border: '1px solid var(--card-border)', borderRadius: '10px' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                            <thead>
+                                                <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
+                                                    <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Time</th>
+                                                    <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Decision</th>
+                                                    <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Worker</th>
+                                                    <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Source Session</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {filteredApprovalAudit.map((item, idx) => (
+                                                    <tr key={`approval-row-${idx}`} style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+                                                        <td style={{ padding: '8px 10px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                                                            {item?.ts ? new Date(item.ts).toLocaleString() : '-'}
+                                                        </td>
+                                                        <td style={{ padding: '8px 10px', fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', color: item?.command === 'approve' ? '#4ade80' : '#f87171' }}>
+                                                            {item?.command || '-'}
+                                                        </td>
+                                                        <td style={{ padding: '8px 10px', fontSize: '11px' }}>
+                                                            {item?.work_label || item?.work_key || item?.work_id || '-'}
+                                                        </td>
+                                                        <td style={{ padding: '8px 10px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                                                            {item?.source_session_id || '-'}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                                {filteredApprovalAudit.length === 0 && (
+                                                    <tr>
+                                                        <td colSpan={4} style={{ padding: '10px', fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                                                            No decisions for this interface yet.
+                                                        </td>
+                                                    </tr>
+                                                )}
+                                            </tbody>
+                                        </table>
                                     </div>
                                 </div>
                             </div>
@@ -1342,6 +1677,17 @@ const MessagingAccess = () => {
                     </div>
                 )
             }
+
+            <ConfirmDialog
+                isOpen={!!deletingGroup}
+                title="Delete Group"
+                message={deletingGroup ? `Are you sure you want to delete the group "${deletingGroup.name}"?` : ""}
+                confirmText="Yes, Delete"
+                cancelText="Cancel"
+                onConfirm={confirmDeleteGroup}
+                onCancel={() => setDeletingGroup(null)}
+                isDestructive={true}
+            />
         </div >
     );
 };

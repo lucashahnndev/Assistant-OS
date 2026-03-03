@@ -9,31 +9,8 @@ logger = get_logger("LocationService")
 class LocationService:
     def __init__(self):
         self.config_manager = ConfigManager()
-        
-    def get_current_location(self, context_data: Optional[Dict] = None) -> Dict:
-        """
-        Hierarchy of location sources:
-        1. Context Data (from Web/API)
-        2. Config Default (Manual cache)
-        3. IP Geolocation (Optional complement)
-        """
-        # 1. From Context (e.g. Browser GPS)
-        if isinstance(context_data, dict) and 'location' in context_data:
-            loc = context_data.get('location')
-            if isinstance(loc, dict):
-                lat = loc.get('latitude') or loc.get('lat')
-                lon = loc.get('longitude') or loc.get('lon')
-                if lat is not None and lon is not None:
-                    logger.debug(f"Location from context: {loc.get('city', 'Unknown')}")
-                    return {
-                        "city": loc.get("city"),
-                        "state": loc.get("state"),
-                        "country": loc.get("country"),
-                        "latitude": lat,
-                        "longitude": lon,
-                    }
 
-        # 2. From Config (manual cache fallback; preferred over IP)
+    def _read_config_default_location(self) -> Dict:
         location_cfg = self.config_manager.get_location_config()
         if not isinstance(location_cfg, dict):
             location_cfg = {}
@@ -43,6 +20,7 @@ class LocationService:
         if not isinstance(config_root, dict):
             config_root = {}
         config_loc = config_root.get('default', {})
+
         # Compatibility with legacy 'environment.location' if needed
         if not config_loc:
             env_root = self.config_manager.get('environment', {})
@@ -59,6 +37,37 @@ class LocationService:
             "latitude": config_loc.get("latitude") or config_loc.get("lat"),
             "longitude": config_loc.get("longitude") or config_loc.get("lon")
         }
+        return {"mode": mode, "cached": cached_loc}
+        
+    def get_current_location(self, context_data: Optional[Dict] = None) -> Dict:
+        """
+        Hierarchy of location sources:
+        1. Context Data (from Web/API)
+        2. Config Default (Manual cache)
+        3. IP Geolocation (Optional complement)
+        """
+        # 1. From Context (e.g. Browser GPS)
+        if isinstance(context_data, dict) and 'location' in context_data:
+            loc = context_data.get('location')
+            if isinstance(loc, dict):
+                lat = loc.get('latitude') or loc.get('lat')
+                lon = loc.get('longitude') or loc.get('lon')
+                if lat is not None and lon is not None:
+                    cfg = self._read_config_default_location()
+                    cached_loc = cfg["cached"]
+                    logger.debug(f"Location from context: {loc.get('city', 'Unknown')}")
+                    return {
+                        "city": loc.get("city") or cached_loc.get("city"),
+                        "state": loc.get("state") or cached_loc.get("state"),
+                        "country": loc.get("country") or cached_loc.get("country"),
+                        "latitude": lat,
+                        "longitude": lon,
+                    }
+
+        # 2. From Config (manual cache fallback; preferred over IP)
+        cfg = self._read_config_default_location()
+        mode = cfg["mode"]
+        cached_loc = cfg["cached"]
         if self._has_usable_location(cached_loc):
             logger.debug("Location from config cache")
             return cached_loc

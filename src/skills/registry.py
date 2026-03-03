@@ -13,6 +13,34 @@ class SkillRegistry:
         self.action_map: Dict[str, SkillBase] = {}
         self.schemas: Dict[str, dict] = {} # skill_name -> schema
 
+    def _is_legacy_blocked_action(self, action_id: str, skill: Optional[SkillBase] = None) -> bool:
+        if not action_id:
+            return False
+        aid = str(action_id).strip().lower()
+        parts = aid.split(".")
+        if len(parts) >= 3 and parts[0] == "browser" and parts[1] in {"automator", "controller"}:
+            return True
+        sk = skill or self.action_map.get(action_id)
+        contract = getattr(sk, "_contract", {}) if sk else {}
+        if isinstance(contract, dict):
+            if bool(contract.get("blocked", False)) and bool(contract.get("legacy", False)):
+                return True
+        return False
+
+    def _is_hidden_from_discovery(self, action_id: str, skill: Optional[SkillBase] = None) -> bool:
+        sk = skill or self.action_map.get(action_id)
+        contract = getattr(sk, "_contract", {}) if sk else {}
+        if not isinstance(contract, dict):
+            return False
+        if bool(contract.get("hidden_from_discovery", False)):
+            return True
+        if bool(contract.get("legacy", False)) and bool(contract.get("blocked", False)):
+            return True
+        return False
+
+    def _is_discoverable_action(self, action_id: str, skill: Optional[SkillBase] = None) -> bool:
+        return not self._is_hidden_from_discovery(action_id, skill) and not self._is_legacy_blocked_action(action_id, skill)
+
     def register(self, skill: SkillBase):
         self.skills[skill.name] = skill
         namespace = getattr(skill, "_namespace", None)
@@ -34,6 +62,14 @@ class SkillRegistry:
         return self.action_map.get(action_id)
 
     def dispatch(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
+        if self._is_legacy_blocked_action(action_id):
+            return {
+                "ok": False,
+                "status": "error",
+                "error": "SKILL_REMOVED_USE_BROWSER_CONTROL",
+                "error_code": "SKILL_REMOVED_USE_BROWSER_CONTROL",
+                "text": "Skill removed. Use browser.control.run or browser.control.step.",
+            }
         skill = self.get_skill_for_action(action_id)
         if skill:
             try:
@@ -45,7 +81,7 @@ class SkillRegistry:
         return f"Unknown action: {action_id}"
 
     def list_actions(self) -> List[str]:
-        return list(self.action_map.keys())
+        return [a for a, s in self.action_map.items() if self._is_discoverable_action(a, s)]
 
     def resolve_action_id(self, action_id: str) -> Optional[str]:
         """
@@ -87,7 +123,7 @@ class SkillRegistry:
         if not action_id:
             return []
         normalized = action_id.strip().lower().replace(" ", ".")
-        actions = list(self.action_map.keys())
+        actions = [a for a, s in self.action_map.items() if self._is_discoverable_action(a, s)]
         return difflib.get_close_matches(normalized, actions, n=max(1, limit), cutoff=0.5)
 
     def _find_action_contract_entry(self, action_id: str, skill: SkillBase) -> Optional[dict]:
@@ -167,6 +203,8 @@ class SkillRegistry:
         allowed_set = set(allowed_actions) if allowed_actions is not None else None
         summary = []
         for action_id, skill in self.action_map.items():
+            if not self._is_discoverable_action(action_id, skill):
+                continue
             if allowed_set is not None and action_id not in allowed_set:
                 continue
 
@@ -182,6 +220,9 @@ class SkillRegistry:
         actions: List[str] = []
         namespaces: set[str] = set()
         for action_id in sorted(self.action_map.keys()):
+            skill = self.action_map.get(action_id)
+            if not self._is_discoverable_action(action_id, skill):
+                continue
             if allowed_set is not None and action_id not in allowed_set:
                 continue
             actions.append(action_id)
@@ -208,6 +249,8 @@ class SkillRegistry:
         allowed_set = set(allowed_actions) if allowed_actions is not None else None
         ranked: List[Tuple[float, str, str]] = []
         for action_id, skill in self.action_map.items():
+            if not self._is_discoverable_action(action_id, skill):
+                continue
             if allowed_set is not None and action_id not in allowed_set:
                 continue
             desc = self._describe_action(action_id, skill)
@@ -237,6 +280,9 @@ class SkillRegistry:
         allowed_set = set(allowed_actions) if allowed_actions is not None else None
         out: List[Dict[str, Any]] = []
         for action_id in sorted(self.action_map.keys()):
+            skill = self.action_map.get(action_id)
+            if not self._is_discoverable_action(action_id, skill):
+                continue
             if allowed_set is not None and action_id not in allowed_set:
                 continue
             metadata = self.get_action_metadata(action_id)

@@ -267,9 +267,8 @@ class Scheduler:
         if not value:
             return False
         media_prefixes = (
-            "browser.automator.play_url",
-            "browser.automator.control",
-            "browser.automator.open",
+            "browser.control.run",
+            "browser.control.step",
             "youtube.search.",
             "deezer.search.",
             "spotify.search.",
@@ -625,8 +624,16 @@ class Scheduler:
                 if error: work.error = error
                 self._persist_work_status(work)
                 if work.controls_media:
-                    self._persist_work_context(
-                        work,
+                    # Preserve existing planner/data blocks when updating media control status.
+                    current_context = {}
+                    if work.context_file and os.path.exists(work.context_file):
+                        try:
+                            with open(work.context_file, "r", encoding="utf-8") as f:
+                                current_context = json.load(f)
+                        except Exception:
+                            current_context = {}
+                    merged_context = self._deep_merge_dict(
+                        current_context,
                         {
                             "summary": {
                                 "controls_media": True,
@@ -637,6 +644,7 @@ class Scheduler:
                             }
                         },
                     )
+                    self._persist_work_context(work, merged_context)
                 self._append_event(
                     work,
                     "status_change",
@@ -705,8 +713,105 @@ class Scheduler:
                 logger.error(f"Scheduler loop error: {e}")
             time.sleep(1)
 
+    @staticmethod
+    def _parse_dt(value: Any, fallback: Optional[datetime.datetime] = None) -> datetime.datetime:
+        if isinstance(value, datetime.datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.datetime.fromisoformat(value)
+            except Exception:
+                pass
+        return fallback or datetime.datetime.now()
+
+    @staticmethod
+    def _parse_work_status(value: Any) -> WorkStatus:
+        raw = str(value or "").strip().lower()
+        aliases = {
+            "completed": WorkStatus.SUCCEEDED,
+            "complete": WorkStatus.SUCCEEDED,
+            "success": WorkStatus.SUCCEEDED,
+            "error": WorkStatus.FAILED,
+            "stopped": WorkStatus.CANCELLED,
+        }
+        if raw in aliases:
+            return aliases[raw]
+        try:
+            return WorkStatus(raw)
+        except Exception:
+            return WorkStatus.QUEUED
+
+    def _load_works_from_disk(self):
+        loaded = 0
+        candidates: List[str] = []
+
+        # Global works
+        if os.path.isdir(self.global_works_dir):
+            for entry in os.listdir(self.global_works_dir):
+                candidates.append(os.path.join(self.global_works_dir, entry, "work.json"))
+
+        # Session-scoped works
+        if os.path.isdir(self.sessions_dir):
+            for owner in os.listdir(self.sessions_dir):
+                works_root = os.path.join(self.sessions_dir, owner, "works")
+                if not os.path.isdir(works_root):
+                    continue
+                for entry in os.listdir(works_root):
+                    candidates.append(os.path.join(works_root, entry, "work.json"))
+
+        for status_path in candidates:
+            if not os.path.exists(status_path):
+                continue
+            try:
+                with open(status_path, "r", encoding="utf-8") as f:
+                    row = json.load(f)
+                work_id = str(row.get("work_id") or "").strip()
+                if not work_id:
+                    continue
+                if work_id in self.registry:
+                    continue
+
+                work_dir = os.path.dirname(status_path)
+                context_file = os.path.join(work_dir, "context.json")
+                events_file = os.path.join(work_dir, "events.jsonl")
+
+                work = Work(
+                    work_id=work_id,
+                    session_id=str(row.get("session_id") or "default"),
+                    input_text=str(row.get("input_text") or ""),
+                    status=self._parse_work_status(row.get("status")),
+                    created_at=self._parse_dt(row.get("created_at")),
+                    started_at=self._parse_dt(row.get("started_at"), fallback=None) if row.get("started_at") else None,
+                    updated_at=self._parse_dt(row.get("updated_at")),
+                    result=row.get("result"),
+                    error=row.get("error"),
+                    progress_updates=list(row.get("progress_updates") or []),
+                    cancel_requested=bool(row.get("cancel_requested", False)),
+                    label=row.get("label"),
+                    key=row.get("key"),
+                    owner_session_id=row.get("owner_session_id"),
+                    favorite_session_id=row.get("favorite_session_id"),
+                    owner_sender_id=row.get("owner_sender_id"),
+                    favorite_sender_id=row.get("favorite_sender_id"),
+                    scope=str(row.get("scope") or "global"),
+                    work_dir=work_dir,
+                    context_file=context_file,
+                    status_file=status_path,
+                    events_file=events_file,
+                    controls_media=bool(row.get("controls_media", False)),
+                )
+                self.registry[work_id] = work
+                loaded += 1
+            except Exception as e:
+                logger.warning(f"Skipping invalid persisted work file {status_path}: {e}")
+
+        if loaded:
+            logger.info(f"Loaded {loaded} persisted works from disk.")
+
     def load_data(self):
         if not os.path.exists(self.jobs_file):
+            # Even without scheduler_data.json, persisted works may exist on disk.
+            self._load_works_from_disk()
             return
         
         try:
@@ -732,6 +837,8 @@ class Scheduler:
                     for t in data["executions"]:
                         obj = TaskExecution.from_dict(t)
                         self.executions[obj.execution_id] = obj
+
+                self._load_works_from_disk()
 
         except Exception as e:
             logger.error(f"Failed to load scheduler data: {e}")

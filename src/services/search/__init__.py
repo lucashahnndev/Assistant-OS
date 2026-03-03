@@ -1,3 +1,1 @@
-from .query_semantics import QuerySemantics
-
-__all__ = ["QuerySemantics"]
+__all__: list[str] = []

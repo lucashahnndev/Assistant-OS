@@ -223,8 +223,75 @@ else
     echo "✅ $DATA_DIR/.env already exists."
 fi
 
+# 7. Ensure encryption key for external OAuth token vault
+ensure_external_accounts_key() {
+    local env_file="$1"
+    [ -f "$env_file" ] || return 0
+
+    local existing_line existing_value generated_key
+    existing_line="$(grep -E '^EXTERNAL_ACCOUNTS_ENCRYPTION_KEY=' "$env_file" 2>/dev/null || true)"
+    existing_value="${existing_line#EXTERNAL_ACCOUNTS_ENCRYPTION_KEY=}"
+
+    if [ -n "$existing_line" ] && [ -n "$existing_value" ]; then
+        echo "✅ EXTERNAL_ACCOUNTS_ENCRYPTION_KEY already set in $env_file"
+        return 0
+    fi
+
+    generated_key="$(python3 - <<'PY'
+import os, base64
+print(base64.urlsafe_b64encode(os.urandom(32)).decode())
+PY
+)"
+
+    if [ -z "$generated_key" ]; then
+        echo "⚠️  Could not generate EXTERNAL_ACCOUNTS_ENCRYPTION_KEY for $env_file"
+        return 0
+    fi
+
+    if [ -n "$existing_line" ]; then
+        # Replace empty/invalid existing line
+        sed -i "s|^EXTERNAL_ACCOUNTS_ENCRYPTION_KEY=.*$|EXTERNAL_ACCOUNTS_ENCRYPTION_KEY=$generated_key|g" "$env_file"
+    else
+        printf "\nEXTERNAL_ACCOUNTS_ENCRYPTION_KEY=%s\n" "$generated_key" >> "$env_file"
+    fi
+
+    echo "🔐 Generated EXTERNAL_ACCOUNTS_ENCRYPTION_KEY in $env_file"
+}
+
+ensure_external_accounts_key "$DATA_DIR/.env"
+if [ -f ".env" ]; then
+    ensure_external_accounts_key ".env"
+fi
+
 echo ""
 echo "✨ Setup complete! ✨"
+
+CLI_ENTRY="agent.py"
+
+if [ "${AOSD_SKIP_PRIVILEGED_SETUP:-0}" != "1" ] && [ -x "./env/bin/python" ] && [ -f "$CLI_ENTRY" ]; then
+    echo ""
+    echo "🔐 Optional: enable safe sudo execution for approved commands."
+    if [ -t 0 ]; then
+        read -r -p "Configure now? [y/N]: " _priv_setup_ans
+        case "${_priv_setup_ans}" in
+            y|Y|yes|YES)
+                echo "Running privileged setup..."
+                ./env/bin/python "$CLI_ENTRY" doctor --setup-privileged || echo "⚠️  Privileged setup was not completed."
+                ;;
+            *)
+                echo "Skipped privileged setup. You can run later:"
+                echo "  ./env/bin/python $CLI_ENTRY doctor --setup-privileged"
+                ;;
+        esac
+    elif [ "${AOSD_AUTO_PRIVILEGED_SETUP:-0}" = "1" ]; then
+        echo "Non-interactive mode: running privileged setup (AOSD_AUTO_PRIVILEGED_SETUP=1)..."
+        ./env/bin/python "$CLI_ENTRY" doctor --setup-privileged || echo "⚠️  Privileged setup was not completed."
+    else
+        echo "Tip: run this once to allow approved sudo commands without password prompt:"
+        echo "  ./env/bin/python $CLI_ENTRY doctor --setup-privileged"
+    fi
+fi
+
 echo "Next steps:
 1. Configure your API keys in the $DATA_DIR/.env file.
 2. Start the full system (Backend + Frontend) with: ./start.sh

@@ -1,42 +1,43 @@
 import logging
 import re
-from typing import Dict, Any, List
+from time import perf_counter
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
-import requests
-from services.search.query_semantics import QuerySemantics
 from ..base import SkillBase
+from ..shared.chunking import chunk_text
+from ..shared.error_contract import error_envelope, success_envelope
+from ..shared.retrieval import fetch_and_read
+from ..shared.search_providers import SearchRouter
 
 logger = logging.getLogger("WebSearchSkill")
 
-try:
-    from bs4 import BeautifulSoup
-except Exception:  # pragma: no cover - optional dependency fallback
-    BeautifulSoup = None  # type: ignore
-
-try:
-    # New package name
-    from ddgs import DDGS  # type: ignore
-except Exception:  # pragma: no cover - fallback for older environments
-    from duckduckgo_search import DDGS  # type: ignore
-
 
 class WebSearchSkill(SkillBase):
-    USER_AGENT = (
-        "Mozilla/5.0 (X11; Linux x86_64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/123.0.0.0 Safari/537.36"
-    )
-
     def __init__(self, kernel=None, config=None):
         self.kernel = kernel
         self.config = config or {}
         self._namespace = "web"
+        self._router = SearchRouter(config=self._router_config())
 
     @property
-    def name(self) -> str: return "web_search"
+    def name(self) -> str:
+        return "web_search"
 
     @property
-    def actions(self) -> List[str]: return ["discover"]
+    def actions(self) -> List[str]:
+        return ["discover"]
+
+    def _router_config(self) -> Dict[str, Any]:
+        cfg = self.config if isinstance(self.config, dict) else {}
+        router_cfg = cfg.get("search_router") if isinstance(cfg.get("search_router"), dict) else {}
+        defaults = cfg.get("defaults") if isinstance(cfg.get("defaults"), dict) else {}
+        out = dict(router_cfg)
+        if "timeout_ms" not in out and defaults.get("timeout_ms") is not None:
+            out["timeout_ms"] = defaults.get("timeout_ms")
+        if "retries" not in out and defaults.get("retries") is not None:
+            out["retries"] = defaults.get("retries")
+        return out
 
     @staticmethod
     def _clamp_limit(value: Any, default: int = 5) -> int:
@@ -44,7 +45,7 @@ class WebSearchSkill(SkillBase):
             n = int(value)
         except Exception:
             n = default
-        return max(1, min(n, 10))
+        return max(1, min(n, 20))
 
     @staticmethod
     def _clamp_knowledge_limit(value: Any, default: int = 2) -> int:
@@ -52,7 +53,7 @@ class WebSearchSkill(SkillBase):
             n = int(value)
         except Exception:
             n = default
-        return max(1, min(n, 5))
+        return max(1, min(n, 8))
 
     @staticmethod
     def _clamp_chars(value: Any, default: int = 2500) -> int:
@@ -79,6 +80,14 @@ class WebSearchSkill(SkillBase):
         return max(0, min(n, 500))
 
     @staticmethod
+    def _clamp_recency_days(value: Any) -> int:
+        try:
+            n = int(value)
+        except Exception:
+            return 0
+        return max(0, min(n, 3650))
+
+    @staticmethod
     def _sanitize_text(text: Any) -> str:
         return re.sub(r"\s+", " ", str(text or "")).strip()
 
@@ -91,242 +100,156 @@ class WebSearchSkill(SkillBase):
         return ""
 
     @staticmethod
+    def _to_domains(value: Any) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        domains: List[str] = []
+        for item in value:
+            val = str(item or "").strip().lower()
+            if not val:
+                continue
+            if val.startswith("http://") or val.startswith("https://"):
+                val = (urlsplit(val).netloc or "").lower()
+            val = val.split(":", 1)[0]
+            if val:
+                domains.append(val)
+        return domains
+
+    @staticmethod
+    def _normalize_locale(locale: str) -> str:
+        raw = str(locale or "").strip().replace("_", "-")
+        if not raw:
+            return "en"
+        return raw
+
+    @staticmethod
+    def _country_from_locale(locale: str) -> str:
+        value = str(locale or "").strip()
+        if "-" in value:
+            maybe = value.split("-", 1)[1].strip()
+            if len(maybe) == 2:
+                return maybe.upper()
+        return ""
+
+    @staticmethod
+    def _extract_location_from_dict(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(data, dict):
+            return None
+        location = data.get("location") if isinstance(data.get("location"), dict) else data
+        if not isinstance(location, dict):
+            return None
+        city = str(location.get("city") or "").strip()
+        state = str(location.get("state") or "").strip()
+        country = str(location.get("country") or "").strip()
+        lat = location.get("latitude")
+        if lat is None:
+            lat = location.get("lat")
+        lon = location.get("longitude")
+        if lon is None:
+            lon = location.get("lon")
+        if not any([city, state, country, lat is not None and lon is not None]):
+            return None
+        return {
+            "city": city or None,
+            "state": state or None,
+            "country": country or None,
+            "latitude": lat,
+            "longitude": lon,
+        }
+
+    def _resolve_language(self, params: Dict[str, Any], context: Dict[str, Any]) -> str:
+        candidates = [
+            params.get("language"),
+            params.get("lang"),
+            params.get("locale"),
+            context.get("language"),
+            context.get("lang"),
+            context.get("locale"),
+        ]
+        session = context.get("session")
+        if session is not None and hasattr(session, "context") and isinstance(session.context, dict):
+            candidates.extend(
+                [
+                    session.context.get("user_language"),
+                    session.context.get("language"),
+                    session.context.get("locale"),
+                ]
+            )
+
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate.strip():
+                return self._normalize_locale(candidate)
+
+        kernel = self.kernel
+        cfg_manager = getattr(kernel, "config_manager", None) if kernel else None
+        if cfg_manager and hasattr(cfg_manager, "get_i18n_config"):
+            i18n_cfg = cfg_manager.get_i18n_config()
+            if isinstance(i18n_cfg, dict):
+                default_locale = str(i18n_cfg.get("default_locale") or "").strip()
+                if default_locale:
+                    return self._normalize_locale(default_locale)
+
+        defaults = self.config.get("defaults", {}) if isinstance(self.config, dict) else {}
+        return self._normalize_locale(str(defaults.get("language") or "en"))
+
+    def _resolve_location(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        # 1) explicit params from app/web call
+        loc = self._extract_location_from_dict(params)
+        if loc:
+            return loc
+
+        # 2) direct context payload from web app
+        loc = self._extract_location_from_dict(context)
+        if loc:
+            return loc
+
+        # 3) session context
+        session = context.get("session")
+        if session is not None and hasattr(session, "context") and isinstance(session.context, dict):
+            loc = self._extract_location_from_dict(session.context)
+            if loc:
+                return loc
+
+        # 4) fallback from config manager location default
+        kernel = self.kernel
+        cfg_manager = getattr(kernel, "config_manager", None) if kernel else None
+        if cfg_manager and hasattr(cfg_manager, "get_location_config"):
+            loc_cfg = cfg_manager.get_location_config()
+            if isinstance(loc_cfg, dict):
+                default = loc_cfg.get("default") if isinstance(loc_cfg.get("default"), dict) else {}
+                loc = self._extract_location_from_dict(default)
+                if loc:
+                    return loc
+        return {}
+
+    @staticmethod
     def _truncate(text: str, max_chars: int) -> str:
         if len(text) <= max_chars:
             return text
         return text[: max_chars - 1].rstrip() + "…"
 
     @classmethod
-    def _is_knowledge_query(cls, query: str) -> bool:
-        q = (query or "").strip().lower()
-        if not q:
-            return False
-        if "?" in q:
-            return True
-
-        knowledge_markers = [
-            "o que",
-            "oque",
-            "quem",
-            "quando",
-            "onde",
-            "como",
-            "por que",
-            "porque",
-            "qual",
-            "quais",
-            "what is",
-            "who is",
-            "when",
-            "where",
-            "how",
-            "explique",
-            "explain",
-            "história",
-            "historia",
-            "definição",
-            "definicao",
-            "conceito",
-        ]
-        return any(marker in q for marker in knowledge_markers)
-
-    @classmethod
-    def _resolve_mode(cls, requested_mode: Any, query: str) -> str:
+    def _resolve_mode(cls, requested_mode: Any) -> str:
         mode = str(requested_mode or "links").strip().lower()
         if mode not in {"links", "knowledge", "auto"}:
             mode = "links"
         if mode == "auto":
-            return "knowledge" if cls._is_knowledge_query(query) else "links"
+            return "links"
         return mode
 
-    @classmethod
-    def _chunk_text(cls, text: str, chunk_size: int, overlap: int) -> List[Dict[str, Any]]:
-        clean = cls._sanitize_text(text)
-        if not clean:
-            return []
-
-        if overlap >= chunk_size:
-            overlap = max(0, chunk_size // 4)
-        step = max(1, chunk_size - overlap)
-
-        chunks: List[Dict[str, Any]] = []
-        cursor = 0
-        idx = 1
-        while cursor < len(clean):
-            end = min(len(clean), cursor + chunk_size)
-            piece = clean[cursor:end].strip()
-            if piece:
-                chunks.append(
-                    {
-                        "chunk_id": idx,
-                        "text": piece,
-                        "start": cursor,
-                        "end": end,
-                    }
-                )
-                idx += 1
-            if end >= len(clean):
-                break
-            cursor += step
-        return chunks
-
-    @staticmethod
-    def _normalize_result_item(raw: Dict[str, Any], rank: int) -> Dict[str, Any]:
-        title = raw.get("title") or raw.get("heading") or "Untitled"
-        url = raw.get("href") or raw.get("url") or ""
-        snippet = raw.get("body") or raw.get("snippet") or raw.get("text") or ""
-        return {
-            "rank": rank,
-            "title": str(title).strip(),
-            "snippet": str(snippet).strip(),
-            "url": str(url).strip(),
-            "source": "duckduckgo",
-        }
-
-    @staticmethod
-    def _render_summary_text(query: str, results: List[Dict[str, Any]]) -> str:
-        if not results:
-            return f"Nenhum resultado encontrado para '{query}'."
-
-        lines = [f"Resultados para '{query}' ({len(results)} itens):"]
-        for item in results:
-            rank = item.get("rank", 0)
-            title = item.get("title", "Untitled")
-            snippet = item.get("snippet", "")
-            url = item.get("url", "")
-            lines.append(f"{rank}. {title}")
-            if snippet:
-                lines.append(f"   {snippet}")
-            if url:
-                lines.append(f"   URL: {url}")
-        return "\n".join(lines)
-
-    def _ddg_search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
-        try:
-            with DDGS() as ddgs:
-                results = []
-                ddgs_gen = ddgs.text(query, max_results=limit)
-                for idx, item in enumerate(ddgs_gen, start=1):
-                    if not isinstance(item, dict):
-                        continue
-                    normalized = self._normalize_result_item(item, idx)
-                    if normalized["url"]:
-                        results.append(normalized)
-                    if len(results) >= limit:
-                        break
-                return results
-        except Exception as e:
-            logger.error(f"DuckDuckGo Search Error: {e}")
-        return []
-
-    def _extract_page_content(self, url: str, max_chars_per_doc: int) -> Dict[str, Any]:
-        if not url:
-            return {"ok": False, "error": "EMPTY_URL", "message": "URL vazia."}
-
-        if BeautifulSoup is None:
-            return {
-                "ok": False,
-                "error": "BS4_UNAVAILABLE",
-                "message": "BeautifulSoup indisponível para extração de conteúdo.",
-            }
-
-        try:
-            response = requests.get(
-                url,
-                timeout=10,
-                headers={"User-Agent": self.USER_AGENT},
-                allow_redirects=True,
-            )
-            if response.status_code >= 400:
-                return {
-                    "ok": False,
-                    "error": "HTTP_ERROR",
-                    "message": f"HTTP {response.status_code}",
-                }
-
-            content_type = (response.headers.get("Content-Type") or "").lower()
-            if "text/html" not in content_type and "application/xhtml+xml" not in content_type:
-                raw_text = self._sanitize_text(response.text)
-                if not raw_text:
-                    return {
-                        "ok": False,
-                        "error": "UNSUPPORTED_CONTENT",
-                        "message": f"Tipo de conteúdo não suportado: {content_type or 'unknown'}",
-                    }
-                return {
-                    "ok": True,
-                    "title": url,
-                    "content": self._truncate(raw_text, max_chars_per_doc),
-                }
-
-            soup = BeautifulSoup(response.text, "html.parser")
-            for tag_name in ["script", "style", "noscript", "svg", "header", "footer", "nav"]:
-                for node in soup.find_all(tag_name):
-                    node.decompose()
-
-            title = self._sanitize_text(soup.title.string if soup.title and soup.title.string else "")
-            body = soup.body or soup
-            candidates = body.find_all(["article", "main", "section"]) if body else []
-
-            best_text = ""
-            for candidate in candidates:
-                text = self._sanitize_text(candidate.get_text(" ", strip=True))
-                if len(text) > len(best_text):
-                    best_text = text
-
-            if not best_text and body:
-                best_text = self._sanitize_text(body.get_text(" ", strip=True))
-
-            if not best_text:
-                return {
-                    "ok": False,
-                    "error": "EMPTY_CONTENT",
-                    "message": "Página sem conteúdo textual útil.",
-                }
-
-            return {
-                "ok": True,
-                "title": title or url,
-                "content": self._truncate(best_text, max_chars_per_doc),
-            }
-        except requests.RequestException as e:
-            logger.warning(f"Web knowledge fetch failed for {url}: {e}")
-            return {
-                "ok": False,
-                "error": "NETWORK_ERROR",
-                "message": str(e),
-            }
-        except Exception as e:
-            logger.warning(f"Web knowledge parse failed for {url}: {e}")
-            return {
-                "ok": False,
-                "error": "PARSE_ERROR",
-                "message": str(e),
-            }
-
-    @staticmethod
-    def _render_knowledge_text(query: str, docs: List[Dict[str, Any]], warnings: List[str]) -> str:
-        if not docs:
-            base = f"I could not extrair conteúdo de conhecimento para '{query}'."
-            if warnings:
-                base += " Mantive os links para referência."
-            return base
-        lines = [f"Base de conhecimento para '{query}' ({len(docs)} fonte(s) extraídas):"]
-        for doc in docs:
-            lines.append(f"- {doc.get('title', 'Untitled')} ({doc.get('url', 'sem URL')})")
-        if warnings:
-            lines.append(f"Avisos: {len(warnings)} ocorrência(s) durante extração.")
-        return "\n".join(lines)
-
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
+        started = perf_counter()
         action = action_id.split(".")[-1]
         query = self._resolve_query(params)
         limit = self._clamp_limit(
-            params.get("limit") or params.get("max_results") or params.get("maxResults") or self.config.get("defaults", {}).get("limit", 5),
+            params.get("limit")
+            or params.get("max_results")
+            or params.get("maxResults")
+            or self.config.get("defaults", {}).get("limit", 5),
             default=5,
         )
         requested_mode = params.get("mode") or self.config.get("defaults", {}).get("mode", "links")
-        mode = self._resolve_mode(requested_mode, str(query or ""))
+        mode = self._resolve_mode(requested_mode)
         knowledge_limit = self._clamp_knowledge_limit(
             params.get("knowledge_limit") or self.config.get("defaults", {}).get("knowledge_limit", 2),
             default=2,
@@ -343,132 +266,139 @@ class WebSearchSkill(SkillBase):
             params.get("chunk_overlap") or self.config.get("defaults", {}).get("chunk_overlap", 100),
             default=100,
         )
+        recency_days = self._clamp_recency_days(params.get("recency_days"))
+        domains_allow = self._to_domains(params.get("domains_allow"))
+        domains_deny = self._to_domains(params.get("domains_deny"))
+        language = self._resolve_language(params, context)
+        location = self._resolve_location(params, context)
+        country = str(location.get("country") or "").strip().upper() if location else ""
+        if not country:
+            country = self._country_from_locale(language)
 
         if not query:
-            return {
-                "ok": False,
-                "status": "error",
-                "error": "MISSING_QUERY",
-                "message": "Missing query for web discovery.",
-                "provider": "duckduckgo",
-                "query": "",
-                "mode": mode,
-                "count": 0,
-                "results": [],
-                "knowledge_docs": [],
-                "chunks": [],
-                "warnings": [],
-                "text": "Error: parameter 'query' is required para web.search.discover.",
-            }
-
-        if action == "discover":
-            query_variants = QuerySemantics.web_variants(query, limit=3)
-            results: List[Dict[str, Any]] = []
-            effective_query = query
-            for candidate_query in query_variants:
-                candidate_results = self._ddg_search(candidate_query, limit=limit)
-                if candidate_results:
-                    results = candidate_results
-                    effective_query = candidate_query
-                    break
-
-            if not results:
-                effective_query = query_variants[0] if query_variants else query
-            warnings: List[str] = []
-            knowledge_docs: List[Dict[str, Any]] = []
-            chunks: List[Dict[str, Any]] = []
-            text = self._render_summary_text(effective_query, results)
-
-            if mode == "knowledge" and results:
-                candidates = results[:knowledge_limit]
-                for entry in candidates:
-                    url = entry.get("url") or ""
-                    extraction = self._extract_page_content(url, max_chars_per_doc=max_chars_per_doc)
-                    if not extraction.get("ok"):
-                        warnings.append(
-                            f"{url or 'sem_url'}: {extraction.get('error') or extraction.get('message') or 'erro desconhecido'}"
-                        )
-                        continue
-
-                    content = self._sanitize_text(extraction.get("content"))
-                    if not content:
-                        warnings.append(f"{url or 'sem_url'}: conteúdo vazio após limpeza.")
-                        continue
-
-                    doc_chunks = self._chunk_text(content, chunk_size=chunk_size, overlap=chunk_overlap)
-                    doc = {
-                        "rank": entry.get("rank"),
-                        "title": extraction.get("title") or entry.get("title") or "Untitled",
-                        "url": url,
-                        "excerpt": self._truncate(content, 280),
-                        "content": content,
-                        "chunks": doc_chunks,
-                        "source": entry.get("source", "duckduckgo"),
-                    }
-                    knowledge_docs.append(doc)
-
-                    for chunk in doc_chunks:
-                        chunks.append(
-                            {
-                                "doc_rank": doc.get("rank"),
-                                "title": doc.get("title"),
-                                "url": url,
-                                "chunk_id": chunk.get("chunk_id"),
-                                "text": chunk.get("text"),
-                                "start": chunk.get("start"),
-                                "end": chunk.get("end"),
-                            }
-                        )
-
-                text = self._render_knowledge_text(effective_query, knowledge_docs, warnings)
-
-            if not results:
-                return {
-                    "ok": True,
-                    "status": "empty",
-                    "provider": "duckduckgo",
-                    "query": effective_query,
-                    "query_original": query,
-                    "queries_executed": query_variants,
+            payload = error_envelope(
+                provider="search_router",
+                error_code="MISSING_QUERY",
+                error_message="Missing query for web discovery.",
+                retryable=False,
+                elapsed=max(1, int((perf_counter() - started) * 1000)),
+            )
+            payload.update(
+                {
+                    "query": "",
                     "mode": mode,
                     "count": 0,
                     "results": [],
-                    "best": None,
                     "knowledge_docs": [],
                     "chunks": [],
-                    "warnings": warnings,
-                    "text": text,
                 }
+            )
+            return payload
 
-            return {
-                "ok": True,
-                "status": "success",
-                "provider": "duckduckgo",
-                "query": effective_query,
+        if action != "discover":
+            payload = error_envelope(
+                provider="search_router",
+                error_code="UNKNOWN_ACTION",
+                error_message=f"Unknown web_search action: {action_id}",
+                retryable=False,
+                elapsed=max(1, int((perf_counter() - started) * 1000)),
+            )
+            payload.update(
+                {
+                    "query": query,
+                    "mode": mode,
+                    "count": 0,
+                    "results": [],
+                    "knowledge_docs": [],
+                    "chunks": [],
+                }
+            )
+            return payload
+
+        routed = self._router.search(
+            query=query,
+            limit=limit,
+            recency_days=recency_days,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            language=language,
+            country=country,
+            location=location,
+        )
+        results = routed.get("results") if isinstance(routed.get("results"), list) else []
+        warnings: List[str] = [str(w) for w in (routed.get("warnings") or []) if str(w).strip()]
+        provider = str(routed.get("provider") or "search_router")
+        providers_tried = routed.get("providers_tried") if isinstance(routed.get("providers_tried"), list) else []
+
+        knowledge_docs: List[Dict[str, Any]] = []
+        chunks: List[Dict[str, Any]] = []
+
+        if mode == "knowledge" and results:
+            candidates = results[:knowledge_limit]
+            for entry in candidates:
+                url = str(entry.get("url") or "").strip()
+                extraction = fetch_and_read(
+                    url=url,
+                    mode="main",
+                    max_chars=max_chars_per_doc,
+                    timeout_ms=10000,
+                    retries=1,
+                )
+                if not extraction.get("ok"):
+                    warnings.append(
+                        f"{url or 'sem_url'}: {extraction.get('error_code') or extraction.get('error') or extraction.get('message') or 'erro desconhecido'}"
+                    )
+                    continue
+
+                content = self._sanitize_text(extraction.get("text_md"))
+                if not content:
+                    warnings.append(f"{url or 'sem_url'}: conteúdo vazio após limpeza.")
+                    continue
+
+                doc_chunks = chunk_text(content, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+                doc = {
+                    "rank": entry.get("rank"),
+                    "title": extraction.get("title") or entry.get("title") or "Untitled",
+                    "url": url,
+                    "excerpt": self._truncate(content, 280),
+                    "content": content,
+                    "chunks": doc_chunks,
+                    "source": entry.get("source", provider),
+                    "provider": entry.get("provider", provider),
+                }
+                knowledge_docs.append(doc)
+
+                for chunk in doc_chunks:
+                    chunks.append(
+                        {
+                            "doc_rank": doc.get("rank"),
+                            "title": doc.get("title"),
+                            "url": url,
+                            "chunk_id": chunk.get("id"),
+                            "text": chunk.get("text"),
+                            "start": chunk.get("start"),
+                            "end": chunk.get("end"),
+                        }
+                    )
+
+        elapsed = max(1, int((perf_counter() - started) * 1000))
+        payload = success_envelope(provider=provider, elapsed=elapsed, warnings=warnings)
+        payload.update(
+            {
+                "query": query,
                 "query_original": query,
-                "queries_executed": query_variants,
+                "queries_executed": [query],
+                "providers_tried": providers_tried,
+                "language": language,
+                "location": location if location else None,
                 "mode": mode,
                 "count": len(results),
                 "results": results,
-                "best": results[0],
+                "best": results[0] if results else None,
                 "knowledge_docs": knowledge_docs,
                 "chunks": chunks,
-                "warnings": warnings,
-                "text": text,
             }
-
-        return {
-            "ok": False,
-            "status": "error",
-            "error": "UNKNOWN_ACTION",
-            "message": f"Unknown web_search action: {action_id}",
-            "provider": "duckduckgo",
-            "query": query or "",
-            "mode": mode,
-            "count": 0,
-            "results": [],
-            "knowledge_docs": [],
-            "chunks": [],
-            "warnings": [],
-            "text": f"Error: ação desconhecida '{action_id}' para web_search.",
-        }
+        )
+        if not results:
+            payload["status"] = "empty"
+        return payload

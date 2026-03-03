@@ -2,8 +2,10 @@ import os
 import requests
 import asyncio
 import logging
-from telegram import Update, constants
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import html
+import re
+from telegram import Update, constants, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import threading
 
 # Configure logging
@@ -39,7 +41,7 @@ class TelegramInterface:
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.is_authorized(update):
             return
-        await update.message.reply_text("Olá! Eu sou o Atlas Bot no Telegram. Envie comandos de texto ou arquivos.")
+        await update.message.reply_text("Olá! Eu sou o assistant bot no Telegram. Envie comandos de texto ou arquivos.")
 
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.is_authorized(update):
@@ -72,6 +74,54 @@ class TelegramInterface:
         except Exception as e:
             logger.error(f"Error processing command: {e}")
             await update.message.reply_text("Ocorreu um erro ao processar seu comando.")
+
+    async def handle_approval_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self.is_authorized(update):
+            return
+        query = update.callback_query
+        if not query:
+            return
+        await query.answer()
+
+        data = str(query.data or "").strip()
+        if not data.startswith("apr|"):
+            return
+
+        parts = data.split("|")
+        if len(parts) < 3:
+            return
+
+        work_id = str(parts[1] or "").strip()
+        decision = str(parts[2] or "").strip().lower()
+        scope = str(parts[3] or "worker").strip().lower() if len(parts) > 3 else "worker"
+        if not work_id:
+            await query.answer("Work inválida.", show_alert=True)
+            return
+
+        if decision == "deny":
+            bridge_message = f"!approval {work_id} deny"
+        else:
+            if scope not in {"worker", "session", "global"}:
+                scope = "worker"
+            bridge_message = f"!approval {work_id} approve {scope}"
+
+        try:
+            chat = update.effective_chat
+            user = update.effective_user
+            self.router_process(
+                user.id,
+                bridge_message,
+                user.first_name or "Unknown",
+                chat.id if chat else None,
+                (chat.title or chat.username or chat.first_name) if chat else None,
+                bool(chat and chat.type in ["group", "supergroup"]),
+                query.message.message_id if query.message else None,
+                attachments=None
+            )
+            await query.answer("Decisão enviada.")
+        except Exception as e:
+            logger.error(f"Approval callback processing failed: {e}")
+            await query.answer("Falha ao enviar decisão.", show_alert=True)
 
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.is_authorized(update):
@@ -127,6 +177,7 @@ class TelegramInterface:
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
         self.application.add_handler(MessageHandler(filters.Document.ALL, self.handle_document))
         self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
+        self.application.add_handler(CallbackQueryHandler(self.handle_approval_callback, pattern=r"^apr\|"))
 
         async def _start():
             # Explicitly initialize to avoid ExtBot errors during startup/race conditions
@@ -243,6 +294,69 @@ class TelegramInterface:
                 logger.info(f"Chat action '{action}' sent to {chat_id}")
             except Exception as e:
                 logger.error(f"Failed to send chat action to {chat_id}: {e}")
+
+        asyncio.run_coroutine_threadsafe(_send(), self.loop)
+
+    def send_approval_request(self, chat_id, work_id, prompt, options=None):
+        """
+        Thread-safe method to send approval request with inline buttons.
+        """
+        if not self.loop or not self.application:
+            logger.error("Cannot send approval request: Bot loop not running.")
+            return
+
+        work_id = str(work_id or "").strip()
+        if not work_id:
+            logger.error("Cannot send approval request without work_id.")
+            return
+
+        prompt_text = str(prompt or "This worker needs your approval to continue.").strip()
+        def _to_html_with_code_blocks(text: str) -> str:
+            # Convert `code` spans to Telegram HTML <pre> blocks for better visibility.
+            chunks = re.split(r"`([^`]+)`", text or "")
+            out = []
+            for idx, chunk in enumerate(chunks):
+                if idx % 2 == 1:
+                    code = html.escape(str(chunk or "").strip())
+                    if code:
+                        out.append(f"\n<pre>{code}</pre>\n")
+                else:
+                    plain = html.escape(str(chunk or ""))
+                    if plain:
+                        out.append(plain)
+            rendered = "".join(out).strip()
+            return rendered or html.escape(text or "")
+
+        prompt_html = _to_html_with_code_blocks(prompt_text)
+        pretty_prompt = (
+            "⚠️ <b>Permission approval required</b>\n\n"
+            f"{prompt_html}\n\n"
+            "<i>Choose one option below to continue.</i>"
+        )
+        provided = options if isinstance(options, list) else []
+        label_map = {str(o.get("id")): str(o.get("label")) for o in provided if isinstance(o, dict)}
+
+        buttons = [
+            InlineKeyboardButton(f"❌ {label_map.get('deny', 'Deny')}", callback_data=f"apr|{work_id}|deny"),
+            InlineKeyboardButton(f"✅ {label_map.get('approve_worker', 'Allow this worker')}", callback_data=f"apr|{work_id}|approve|worker"),
+        ]
+        buttons_row2 = [
+            InlineKeyboardButton(f"🧩 {label_map.get('approve_session', 'Allow this session')}", callback_data=f"apr|{work_id}|approve|session"),
+            InlineKeyboardButton(f"🌍 {label_map.get('approve_global', 'Allow global')}", callback_data=f"apr|{work_id}|approve|global"),
+        ]
+        markup = InlineKeyboardMarkup([buttons, buttons_row2])
+
+        async def _send():
+            try:
+                await self.application.bot.send_message(
+                    chat_id=chat_id,
+                    text=pretty_prompt,
+                    parse_mode="HTML",
+                    reply_markup=markup,
+                )
+                logger.info(f"Approval request sent to {chat_id} for work {work_id}")
+            except Exception as e:
+                logger.error(f"Failed to send approval request to {chat_id}: {e}")
 
         asyncio.run_coroutine_threadsafe(_send(), self.loop)
 

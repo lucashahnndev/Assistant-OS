@@ -67,6 +67,23 @@ if ! "$PYTHON_BIN" -c "import dotenv" >/dev/null 2>&1; then
     exit 1
 fi
 
+# Optional privileged setup health check (sudo/NOPASSWD helper for approved shell commands)
+CLI_ENTRY="agent.py"
+
+if [ "${AOSD_SKIP_PRIVILEGED_CHECK:-0}" != "1" ] && [ -f "$CLI_ENTRY" ]; then
+    if "$PYTHON_BIN" "$CLI_ENTRY" doctor --check-privileged >/dev/null 2>&1; then
+        echo -e "${GREEN}[Security]${NC} Privileged sudo setup detected."
+    else
+        echo -e "${YELLOW}[Security]${NC} Privileged sudo setup not active."
+        echo -e "${YELLOW}[Hint]${NC} Run once: $PYTHON_BIN $CLI_ENTRY doctor --setup-privileged"
+        if [ "${AOSD_AUTO_PRIVILEGED_SETUP:-0}" = "1" ]; then
+            echo -e "${BLUE}[Security]${NC} AOSD_AUTO_PRIVILEGED_SETUP=1 enabled. Attempting setup now..."
+            "$PYTHON_BIN" "$CLI_ENTRY" doctor --setup-privileged || \
+                echo -e "${YELLOW}[Security]${NC} Auto-setup failed or was cancelled."
+        fi
+    fi
+fi
+
 # 1. Read Configuration for Ports
 echo -e "${GREEN}[System]${NC} Reading configuration..."
 BACKEND_PORT=$("$PYTHON_BIN" -c "import json,os; conf=json.load(open('data/config.json')); print(conf.get('interfaces', {}).get('server', {}).get('port', 8000))")

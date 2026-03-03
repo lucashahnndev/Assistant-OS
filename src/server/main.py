@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .core.database import init_db
-from .routes import auth, system, skills, memory, sessions, tasks, messaging_access, link_preview, models
+from .routes import auth, system, skills, memory, sessions, tasks, messaging_access, link_preview, models, external_accounts
 from utils.event_bus import global_event_bus
 import logging
 import asyncio
@@ -71,6 +71,7 @@ def create_app(kernel=None) -> FastAPI:
     app.include_router(messaging_access.router, tags=["access"])
     app.include_router(link_preview.router, tags=["link_preview"])
     app.include_router(models.router, tags=["models"])
+    app.include_router(external_accounts.router, tags=["external_accounts"])
 
     from fastapi.staticfiles import StaticFiles
     import os

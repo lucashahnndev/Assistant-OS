@@ -1,4 +1,4 @@
-# Assistant-OS (Atlas)
+# Assistant-OS
 
 Modular agent platform focused on:
 - skill-based action orchestration;

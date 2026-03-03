@@ -1,0 +1,23 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+        "enabled": {
+            "type": "boolean",
+            "default": true
+        },
+        "defaults": {
+            "type": "object",
+            "properties": {
+                "max_points": {
+                    "type": "integer",
+                    "minimum": 4,
+                    "maximum": 200,
+                    "default": 24
+                }
+            },
+            "additionalProperties": true
+        }
+    },
+    "additionalProperties": true
+}

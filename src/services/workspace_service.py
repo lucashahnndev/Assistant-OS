@@ -86,7 +86,7 @@ class WorkspaceService:
                         if files:
                             outputs.append(f"{sub}/: {', '.join(files)}")
                 if outputs:
-                    summary.append(f"Atlas Outputs:\n" + "\n".join(outputs))
+                    summary.append(f"Assistant Outputs:\n" + "\n".join(outputs))
             
         return "\n\n".join(summary) if summary else "No context available."
 

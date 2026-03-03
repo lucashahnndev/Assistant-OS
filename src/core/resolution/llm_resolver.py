@@ -17,7 +17,7 @@ class LLMResolver(IntentResolver):
         if not session:
             logger.warning("No session provided for LLMResolver")
             return None
-        
+
         # Get limits from active instance in manager
         active_config = self.llm_manager.get_active_config()
         max_context = int(active_config.get("max_context", 8000))
@@ -36,7 +36,7 @@ class LLMResolver(IntentResolver):
             intent = self.llm_manager.generate_intent(user_input, history, system_prompt, attachments=attachments)
             if not intent:
                 return None
-            
+
             confidence, notes = self._estimate_confidence(intent, local_context)
             
             if confidence < self.threshold:
@@ -90,99 +90,6 @@ class LLMResolver(IntentResolver):
             if intent.response_text:
                 score += 0.35
                 notes.append("reply_with_text")
-                # Downgrade operational "progress stub" replies for action-oriented prompts.
-                text = str(intent.response_text or "").strip().lower()
-                user_input = str(context.get("user_input") or "").strip().lower()
-                progress_prefixes = (
-                    "searching",
-                    "looking for",
-                    "opening",
-                    "running",
-                    "please wait",
-                    "one moment",
-                    "pesquisando",
-                    "procurando",
-                    "buscando",
-                    "abrindo",
-                    "executando",
-                    "aguarde",
-                    "um momento",
-                )
-                command_cues = (
-                    "open",
-                    "play",
-                    "search",
-                    "song",
-                    "music",
-                    "abre",
-                    "abrir",
-                    "toca",
-                    "tocar",
-                    "play",
-                    "reproduz",
-                    "reproduzir",
-                    "busca",
-                    "buscar",
-                    "pesquisa",
-                    "musica",
-                    "música",
-                    "deezer",
-                    "spotify",
-                    "youtube",
-                )
-                if text.startswith(progress_prefixes) and any(c in user_input for c in command_cues):
-                    score -= 0.45
-                    notes.append("reply_progress_stub_for_operational_request")
-
-                # Harder guardrail: for clearly operational requests, avoid accepting
-                # a plain reply as first choice. Let semantic/reflex resolvers pick an action.
-                operational_cues = (
-                    "open",
-                    "play",
-                    "search",
-                    "find",
-                    "run",
-                    "execute",
-                    "take screenshot",
-                    "screen capture",
-                    "abre",
-                    "abrir",
-                    "toca",
-                    "tocar",
-                    "reproduz",
-                    "reproduzir",
-                    "busca",
-                    "buscar",
-                    "pesquisa",
-                    "pesquisar",
-                    "captura de tela",
-                    "print da tela",
-                    "screenshot",
-                    "wikipedia",
-                    "youtube",
-                    "spotify",
-                    "deezer",
-                )
-                informative_cues = (
-                    "o que é",
-                    "what is",
-                    "explique",
-                    "explain",
-                    "resuma",
-                    "summary",
-                    "resumo",
-                    "descreva",
-                    "describe",
-                    "liste",
-                    "list",
-                    "quais",
-                    "which",
-                )
-                is_operational_request = any(c in user_input for c in operational_cues)
-                is_informational_request = any(c in user_input for c in informative_cues)
-                if is_operational_request and not is_informational_request:
-                    score -= 0.45
-                    notes.append("reply_for_operational_request")
             else:
                 has_attachments = isinstance(getattr(intent, "attachments", None), list) and len(intent.attachments) > 0
                 if has_attachments:

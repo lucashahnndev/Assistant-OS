@@ -100,12 +100,13 @@ def _setup_service_logs(log_dir, formatter, service_levels):
     """Configures specific loggers to output to their own files."""
     
     mapping = {
-        "llm": ["LLMManager", "AgentOrchestrator", "LLMResolver", "SemanticResolver", "LLMService"],
+        "llm": ["LLMManager", "AgentOrchestrator", "LLMResolver", "LLMService"],
         "telegram": ["TelegramDriver", "drivers.telegram.telegram_bot", "TelegramBot"],
         "web": ["ServerDriver"],
         "api": ["PortalServer", "SystemRoutes", "AuthRoutes", "SkillRoutes", "MemoryRoutes", "SessionRoutes", "TaskRoutes"],
         "skills": ["SkillLoader", "SkillRegistry"],
-        "interface": ["VoiceDriver", "BrowserDriver", "SystemDriver", "Kernel"]
+        "interface": ["VoiceDriver", "BrowserDriver", "SystemDriver", "Kernel"],
+        "browser_automation": ["WebPlanner", "WebLoop", "AtomicExecutor", "DomEye", "VisionEye", "PlannerStateMachine", "PerceptionRouter", "PerceptionPolicy"]
     }
 
     # Add individual skill loggers to the skills category

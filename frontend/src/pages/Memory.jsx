@@ -18,6 +18,7 @@ import {
     AlertCircle
 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 const Memory = () => {
     const [tab, setTab] = useState('semantic');
@@ -207,7 +208,7 @@ const Memory = () => {
                                 <textarea
                                     value={newItem.content}
                                     onChange={(e) => setNewItem({ ...newItem, content: e.target.value })}
-                                    placeholder="What would you like Atlas to remember?"
+                                    placeholder="What would you like the assistant to remember?"
                                     className="glass-input"
                                     style={{ width: '100%', height: '120px', resize: 'none' }}
                                 />
@@ -222,26 +223,16 @@ const Memory = () => {
                     </div>
                 )}
 
-                {deletingItem && (
-                    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-                        <div className="glass animate-fade-in" style={{ width: 'min(90%, 400px)', padding: '32px', display: 'flex', flexDirection: 'column', gap: '20px', border: '1px solid var(--error)' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <h3 style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--error)' }}><Trash2 size={20} /> Confirm Deletion</h3>
-                                <button onClick={() => setDeletingItem(null)} className="btn-ghost" style={{ padding: '8px' }}><X size={20} /></button>
-                            </div>
-                            <p>Are you sure you want to permanently delete this memory?</p>
-                            <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '8px', fontSize: '13px', fontStyle: 'italic' }}>
-                                "{deletingItem.content.substring(0, 100)}{deletingItem.content.length > 100 ? '...' : ''}"
-                            </div>
-                            <div style={{ display: 'flex', gap: '12px' }}>
-                                <button onClick={() => setDeletingItem(null)} className="btn-ghost" style={{ flex: 1 }}>Cancel</button>
-                                <button onClick={confirmDelete} className="btn-primary" style={{ flex: 1, background: 'var(--error)', borderColor: 'var(--error)' }}>
-                                    Yes, Delete
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
+                <ConfirmDialog
+                    isOpen={!!deletingItem}
+                    title="Confirm Deletion"
+                    message={deletingItem ? `Are you sure you want to permanently delete this memory?\n\n"${deletingItem.content.substring(0, 100)}${deletingItem.content.length > 100 ? '...' : ''}"` : ""}
+                    confirmText="Yes, Delete"
+                    cancelText="Cancel"
+                    onConfirm={confirmDelete}
+                    onCancel={() => setDeletingItem(null)}
+                    isDestructive={true}
+                />
             </div>
         </div>
     );

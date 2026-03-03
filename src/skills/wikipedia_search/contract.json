@@ -70,8 +70,20 @@
                     "warnings": {
                         "type": "array"
                     },
-                    "text": {
-                        "type": "string"
+                    "error_code": {
+                        "type": ["string", "null"]
+                    },
+                    "error_message": {
+                        "type": ["string", "null"]
+                    },
+                    "retryable": {
+                        "type": "boolean"
+                    },
+                    "status_code": {
+                        "type": ["integer", "null"]
+                    },
+                    "elapsed_ms": {
+                        "type": "integer"
                     }
                 }
             }

@@ -1,9 +1,14 @@
 import logging
-import requests
 import os
-from urllib.parse import quote_plus, urlparse, parse_qs
-from typing import Dict, Any, List, Optional
+from time import perf_counter
+from typing import Any, Dict, List, Optional
+from urllib.parse import parse_qs, quote_plus, urlparse
+
+import requests
+
 from ..base import SkillBase
+from ..shared.error_contract import error_envelope, success_envelope
+from ..shared.google_auth import resolve_google_request_auth
 
 logger = logging.getLogger("YouTubeSearchSkill")
 
@@ -20,10 +25,12 @@ class YouTubeSearchSkill(SkillBase):
         self._namespace = "youtube"
 
     @property
-    def name(self) -> str: return "youtube_search"
+    def name(self) -> str:
+        return "youtube_search"
 
     @property
-    def actions(self) -> List[str]: return ["find"]
+    def actions(self) -> List[str]:
+        return ["search.find"]
 
     @staticmethod
     def _clamp_limit(value: Any, default: int = 5) -> int:
@@ -50,12 +57,14 @@ class YouTubeSearchSkill(SkillBase):
     def _calculate_confidence(self, query: str, title: str, channel: str) -> float:
         query_lower = query.lower()
         title_lower = title.lower()
-        
-        if query_lower == title_lower: return 1.0
-        if query_lower in title_lower: return 0.9
-        
-        # If query mentions channel
-        if channel.lower() in query_lower: return 0.85
+
+        if query_lower == title_lower:
+            return 1.0
+        if query_lower in title_lower:
+            return 0.9
+
+        if channel.lower() in query_lower:
+            return 0.85
 
         return 0.6
 
@@ -133,46 +142,29 @@ class YouTubeSearchSkill(SkillBase):
                         continue
                     title = (item.get("title") or "YouTube result").strip()
                     snippet = (item.get("body") or "").strip()
-                    results.append({
-                        "videoId": entry_id if search_type == "video" else None,
-                        "playlistId": entry_id if search_type == "playlist" else None,
-                        "channelId": entry_id if search_type == "channel" else None,
-                        "url": url,
-                        "title": title,
-                        "channel": None,
-                        "descriptionSnippet": snippet,
-                        "confidenceScore": 0.55,
-                        "matchReason": "Web fallback result",
-                        "source": "duckduckgo_fallback",
-                    })
+                    results.append(
+                        {
+                            "videoId": entry_id if search_type == "video" else None,
+                            "playlistId": entry_id if search_type == "playlist" else None,
+                            "channelId": entry_id if search_type == "channel" else None,
+                            "url": url,
+                            "title": title,
+                            "channel": None,
+                            "descriptionSnippet": snippet,
+                            "confidenceScore": 0.55,
+                            "matchReason": "Web fallback result",
+                            "source": "duckduckgo_fallback",
+                        }
+                    )
                     if len(results) >= limit:
                         break
             return results
         except Exception as e:
-            logger.error(f"YouTube fallback search error: {e}")
+            logger.error("YouTube fallback search error: %s", e)
             return []
 
-    @staticmethod
-    def _render_text(query: str, results: List[Dict[str, Any]], provider: str) -> str:
-        if not results:
-            return f"No YouTube results for '{query}'."
-        lines = [f"YouTube results for '{query}' via {provider} ({len(results)} items):"]
-        for i, item in enumerate(results, start=1):
-            title = item.get("title") or "Untitled"
-            channel = item.get("channel")
-            score = item.get("confidenceScore")
-            url = item.get("url")
-            head = f"{i}. {title}"
-            if channel:
-                head += f" - {channel}"
-            if score is not None:
-                head += f" (score {score:.2f})"
-            lines.append(head)
-            if url:
-                lines.append(f"   URL: {url}")
-        return "\n".join(lines)
-
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
+        started = perf_counter()
         action = action_id.split(".")[-1]
         query = self._resolve_query(params)
         limit = self._clamp_limit(
@@ -187,136 +179,188 @@ class YouTubeSearchSkill(SkillBase):
         if isinstance(search_type, str) and search_type.strip().lower() == "music":
             search_type = "video"
 
+        if action != "find":
+            payload = error_envelope(
+                provider="youtube",
+                error_code="UNKNOWN_ACTION",
+                error_message=f"Unknown YouTube action: {action_id}",
+                retryable=False,
+                elapsed=int((perf_counter() - started) * 1000),
+            )
+            payload.update({"query": query, "count": 0, "results": [], "best": None})
+            return payload
+
         if not query:
-            return {
-                "ok": False,
-                "status": "error",
-                "error": "MISSING_QUERY",
-                "message": "Missing query for YouTube search.",
-                "provider": "youtube",
-                "query": "",
-                "count": 0,
-                "results": [],
-                "best": None,
-                "text": "Error: parameter 'query' is required for youtube.search.find.",
-            }
+            payload = error_envelope(
+                provider="youtube",
+                error_code="MISSING_QUERY",
+                error_message="Missing query for YouTube search.",
+                retryable=False,
+                elapsed=int((perf_counter() - started) * 1000),
+            )
+            payload.update({"query": "", "count": 0, "results": [], "best": None})
+            return payload
 
         if search_type not in {"video", "playlist", "channel"}:
-            return {
-                "ok": False,
-                "status": "error",
-                "error": "INVALID_TYPE",
-                "message": f"Unsupported YouTube search type: {search_type}",
-                "provider": "youtube",
-                "query": query,
-                "count": 0,
-                "results": [],
-                "best": None,
-                "text": f"Error: type '{search_type}' is not supported in youtube.search.find.",
-            }
-
-        # 1. Check Config
-        api_key = self._get_api_key()
-        if not api_key:
-            fallback_results = self._fallback_search_web(query, limit, search_type)
-            text = self._render_text(query, fallback_results, "duckduckgo_fallback")
-            return {
-                "ok": True,
-                "status": "success" if fallback_results else "empty",
-                "provider": "youtube_fallback_web",
-                "query": query,
-                "count": len(fallback_results),
-                "results": fallback_results,
-                "best": fallback_results[0] if fallback_results else None,
-                "fallback": True,
-                "warning": "YouTube API key not configured. Using web fallback search.",
-                "text": text,
-            }
-
-        # 2. Search API
-        try:
-            query_qs = quote_plus(str(query))
-            url = (
-                "https://www.googleapis.com/youtube/v3/search"
-                f"?part=snippet&maxResults={limit}&q={query_qs}&key={api_key}&type={search_type}"
+            payload = error_envelope(
+                provider="youtube",
+                error_code="INVALID_TYPE",
+                error_message=f"Unsupported YouTube search type: {search_type}",
+                retryable=False,
+                elapsed=int((perf_counter() - started) * 1000),
             )
-            response = requests.get(url, timeout=4)
-            data = response.json()
+            payload.update({"query": query, "count": 0, "results": [], "best": None})
+            return payload
 
-            if response.status_code >= 400 or "error" in data:
-                error_msg = data.get("error", {}).get("message", f"HTTP {response.status_code}")
-                fallback_results = self._fallback_search_web(query, limit, search_type)
-                text = self._render_text(query, fallback_results, "duckduckgo_fallback") if fallback_results else "Provider unavailable for YouTube search."
-                return {
-                    "ok": bool(fallback_results),
-                    "status": "success" if fallback_results else "error",
-                    "provider": "youtube_fallback_web" if fallback_results else "youtube",
+        api_key = self._get_api_key()
+        auth = resolve_google_request_auth(
+            context=context or {},
+            kernel=self.kernel,
+            api_key_fallback=api_key,
+        )
+        if auth.get("mode") == "none":
+            fallback_results = self._fallback_search_web(query, limit, search_type)
+            payload = success_envelope(
+                provider="youtube_fallback_web",
+                elapsed=int((perf_counter() - started) * 1000),
+                warnings=[f"YouTube auth unavailable ({auth.get('reason')}). Using web fallback search."],
+            )
+            payload.update(
+                {
+                    "status": "success" if fallback_results else "empty",
                     "query": query,
                     "count": len(fallback_results),
                     "results": fallback_results,
                     "best": fallback_results[0] if fallback_results else None,
                     "fallback": True,
-                    "warning": f"YouTube API error: {error_msg}",
-                    "text": text,
                 }
+            )
+            payload["warning"] = f"YouTube auth unavailable ({auth.get('reason')}). Using web fallback search."
+            return payload
+
+        try:
+            query_qs = quote_plus(str(query))
+            url = (
+                "https://www.googleapis.com/youtube/v3/search"
+                f"?part=snippet&maxResults={limit}&q={query_qs}&type={search_type}"
+            )
+            response = requests.get(
+                url,
+                params=auth.get("params") or {},
+                headers=auth.get("headers") or {},
+                timeout=4,
+            )
+            data = response.json()
+
+            if response.status_code >= 400 or "error" in data:
+                error_msg = data.get("error", {}).get("message", f"HTTP {response.status_code}")
+                fallback_results = self._fallback_search_web(query, limit, search_type)
+                if fallback_results:
+                    payload = success_envelope(
+                        provider="youtube_fallback_web",
+                        elapsed=int((perf_counter() - started) * 1000),
+                        warnings=[f"YouTube API error: {error_msg}"],
+                        status_code=response.status_code,
+                    )
+                    payload.update(
+                        {
+                            "query": query,
+                            "count": len(fallback_results),
+                            "results": fallback_results,
+                            "best": fallback_results[0],
+                            "fallback": True,
+                        }
+                    )
+                    payload["warning"] = f"YouTube API error: {error_msg}"
+                    return payload
+
+                payload = error_envelope(
+                    provider="youtube",
+                    error_code="HTTP_ERROR",
+                    error_message=f"YouTube API error: {error_msg}",
+                    retryable=response.status_code in {408, 425, 429, 500, 502, 503, 504},
+                    elapsed=int((perf_counter() - started) * 1000),
+                    status_code=response.status_code,
+                )
+                payload.update({"query": query, "count": 0, "results": [], "best": None, "fallback": True})
+                return payload
 
             items = data.get("items", [])
             results = []
-            
+
             for item in items:
                 item_id = item.get("id") or {}
                 entity_url = self._youtube_url_from_id(item_id, search_type, surface)
                 if not entity_url:
                     continue
-                
+
                 snippet = item.get("snippet") or {}
                 title = snippet.get("title") or "YouTube result"
                 channel = snippet.get("channelTitle") or ""
                 score = self._calculate_confidence(query, title, channel)
-                
-                results.append({
-                    "videoId": item_id.get("videoId"),
-                    "playlistId": item_id.get("playlistId"),
-                    "channelId": item_id.get("channelId"),
-                    "url": entity_url,
-                    "title": title,
-                    "channel": channel,
-                    "descriptionSnippet": snippet.get("description"),
-                    "publishedAt": snippet.get("publishedAt"),
-                    "confidenceScore": score,
-                    "matchReason": "High relevance" if score >= 0.9 else "Search result",
-                    "source": "youtube_api",
-                })
+
+                results.append(
+                    {
+                        "videoId": item_id.get("videoId"),
+                        "playlistId": item_id.get("playlistId"),
+                        "channelId": item_id.get("channelId"),
+                        "url": entity_url,
+                        "title": title,
+                        "channel": channel,
+                        "descriptionSnippet": snippet.get("description"),
+                        "publishedAt": snippet.get("publishedAt"),
+                        "confidenceScore": score,
+                        "matchReason": "High relevance" if score >= 0.9 else "Search result",
+                        "source": "youtube_api",
+                    }
+                )
 
             results.sort(key=lambda x: x["confidenceScore"], reverse=True)
             best = results[0] if results else None
 
-            text = self._render_text(query, results, "youtube_api")
-            return {
-                "ok": True,
-                "status": "success" if results else "empty",
-                "results": results,
-                "best": best,
-                "provider": "youtube",
-                "query": query,
-                "count": len(results),
-                "surfaceHint": surface
-                ,
-                "text": text
-            }
+            payload = success_envelope(
+                provider="youtube_oauth" if auth.get("mode") == "oauth" else "youtube",
+                elapsed=int((perf_counter() - started) * 1000),
+                status_code=response.status_code,
+            )
+            payload.update(
+                {
+                    "status": "success" if results else "empty",
+                    "results": results,
+                    "best": best,
+                    "query": query,
+                    "count": len(results),
+                    "surfaceHint": surface,
+                }
+            )
+            return payload
         except Exception as e:
-            logger.error(f"YouTube Search Execution Error: {e}")
+            logger.error("YouTube Search Execution Error: %s", e)
             fallback_results = self._fallback_search_web(query, limit, search_type)
-            text = self._render_text(query, fallback_results, "duckduckgo_fallback") if fallback_results else "Provider unavailable for YouTube search."
-            return {
-                "ok": bool(fallback_results),
-                "status": "success" if fallback_results else "error",
-                "provider": "youtube_fallback_web" if fallback_results else "youtube",
-                "query": query,
-                "count": len(fallback_results),
-                "results": fallback_results,
-                "best": fallback_results[0] if fallback_results else None,
-                "fallback": True,
-                "warning": f"YouTube exception: {str(e)}",
-                "text": text,
-            }
+            if fallback_results:
+                payload = success_envelope(
+                    provider="youtube_fallback_web",
+                    elapsed=int((perf_counter() - started) * 1000),
+                    warnings=[f"YouTube exception: {str(e)}"],
+                )
+                payload.update(
+                    {
+                        "query": query,
+                        "count": len(fallback_results),
+                        "results": fallback_results,
+                        "best": fallback_results[0],
+                        "fallback": True,
+                    }
+                )
+                payload["warning"] = f"YouTube exception: {str(e)}"
+                return payload
+
+            payload = error_envelope(
+                provider="youtube",
+                error_code="SEARCH_ERROR",
+                error_message=f"YouTube exception: {str(e)}",
+                retryable=True,
+                elapsed=int((perf_counter() - started) * 1000),
+            )
+            payload.update({"query": query, "count": 0, "results": [], "best": None, "fallback": True})
+            return payload

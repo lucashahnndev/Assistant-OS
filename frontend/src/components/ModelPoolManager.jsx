@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../hooks/api';
 import toast from 'react-hot-toast';
 import { Plus, Trash2, ArrowUp, ArrowDown, Settings2, Shield, AlertCircle } from 'lucide-react';
+import ConfirmDialog from './ConfirmDialog';
 
 const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
     const [pool, setPool] = useState(currentPool || []);
@@ -14,6 +15,7 @@ const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
     // Form state for creating/editing an instance
     const [editingIndex, setEditingIndex] = useState(-1);
     const [formData, setFormData] = useState({});
+    const [deletingIndex, setDeletingIndex] = useState(-1);
 
     // New Key Creation State
     const [isCreatingKey, setIsCreatingKey] = useState(false);
@@ -85,10 +87,15 @@ const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
     };
 
     const deleteItem = (index) => {
-        if (!window.confirm("Remove this model instance?")) return;
-        const newPool = pool.filter((_, i) => i !== index);
+        setDeletingIndex(index);
+    };
+
+    const confirmDeleteItem = () => {
+        if (deletingIndex < 0) return;
+        const newPool = pool.filter((_, i) => i !== deletingIndex);
         setPool(newPool);
         savePool(newPool);
+        setDeletingIndex(-1);
     };
 
     const savePool = async (updatedPool) => {
@@ -329,6 +336,17 @@ const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
                     </div>
                 </div>
             )}
+
+            <ConfirmDialog
+                isOpen={deletingIndex >= 0}
+                title="Remove Instance"
+                message="Are you sure you want to remove this model instance from the pool?"
+                confirmText="Yes, Remove"
+                cancelText="Cancel"
+                onConfirm={confirmDeleteItem}
+                onCancel={() => setDeletingIndex(-1)}
+                isDestructive={true}
+            />
         </div>
     );
 };

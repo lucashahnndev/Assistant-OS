@@ -39,6 +39,9 @@ class WorkNote(BaseModel):
     note: str
     requester_session_id: Optional[str] = None
 
+class WorkRestartRequest(BaseModel):
+    requester_session_id: Optional[str] = None
+
 # --- Helpers ---
 def get_scheduler(request: Request):
     if not request.app.state.kernel:
@@ -64,6 +67,15 @@ def _assert_work_access(request: Request, user: User, work_snapshot: dict, opera
     principal = _build_web_principal(user, requester_session_id=requester_session_id)
     if not ac.can_access_work(principal, work_snapshot, operation=operation):
         raise HTTPException(status_code=403, detail="You are not allowed to access this worker.")
+
+def _assert_permission_decision_allowed(request: Request, principal: PrincipalContext):
+    kernel = request.app.state.kernel
+    allowed, reason = kernel.can_principal_control_permissions(principal)
+    if not allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=f"This principal is not allowed to control sensitive permission approvals ({reason}).",
+        )
 
 # --- Task Definitions ---
 @router.get("/definitions")
@@ -249,6 +261,11 @@ def send_work_command(work_id: str, body: WorkCommand, request: Request, user: U
     if not row:
         raise HTTPException(status_code=404, detail="Work not found")
     _assert_work_access(request, user, row, operation="control", requester_session_id=body.requester_session_id)
+    if str(body.command or "").strip().lower() in {"approve", "deny"}:
+        _assert_permission_decision_allowed(
+            request,
+            _build_web_principal(user, requester_session_id=body.requester_session_id),
+        )
 
     source = body.source_session_id or body.requester_session_id or f"user_{user.id}"
     ok = scheduler.push_work_command(
@@ -288,6 +305,62 @@ def resume_work(work_id: str, request: Request, requester_session_id: Optional[s
         source_session_id=requester_session_id or f"user_{user.id}",
     )
     return {"status": "accepted", "work_id": work_id, "command": "resume"}
+
+@router.post("/works/{work_id}/restart")
+def restart_work(work_id: str, body: WorkRestartRequest, request: Request, user: User = Depends(get_current_user)):
+    scheduler = get_scheduler(request)
+    row = scheduler.get_work_snapshot(work_id, include_context=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Work not found")
+
+    requester_session_id = body.requester_session_id
+    _assert_work_access(request, user, row, operation="control", requester_session_id=requester_session_id)
+
+    input_text = str(row.get("input_text") or "").strip()
+    if not input_text:
+        ctx = row.get("context") if isinstance(row.get("context"), dict) else {}
+        input_text = str(ctx.get("input_text") or "").strip()
+    if not input_text:
+        raise HTTPException(status_code=400, detail="This work has no input text to restart")
+
+    session_id = str(row.get("session_id") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="This work has no target session to restart")
+
+    kernel = request.app.state.kernel
+    if not kernel:
+        raise HTTPException(status_code=503, detail="Kernel not initialized")
+
+    server_driver = next((d for d in kernel.drivers if hasattr(d, "app")), None)
+    if not server_driver:
+        raise HTTPException(status_code=500, detail="ServerDriver not found to restart work")
+
+    principal = PrincipalContext(
+        interface="web",
+        sender_id=f"user_{user.id}",
+        sender_name=user.username,
+        session_id=session_id,
+    )
+
+    new_work_id = kernel.process_input(
+        input_text,
+        server_driver,
+        user_id=session_id,
+        user_data={
+            "user_name": user.display_name or user.username,
+            "portal_user_id": user.id,
+            "portal_username": user.username,
+            "restart_from_work_id": work_id,
+        },
+        context=principal,
+    )
+
+    return {
+        "status": "accepted",
+        "work_id": work_id,
+        "restarted_work_id": new_work_id,
+        "session_id": session_id,
+    }
 
 @router.post("/works/{work_id}/queue_message")
 def queue_work_message(work_id: str, body: WorkNote, request: Request, user: User = Depends(get_current_user)):
@@ -382,6 +455,7 @@ def get_work_overwatch(
         "skills_used": data.get("skills_used", []),
         "actions_used": data.get("actions_used", []),
         "media_used": data.get("media_used", []),
+        "sources_used": data.get("sources_used", []),
         "queued_messages": data.get("queued_messages", []),
         "origin": {
             "session_id": row.get("session_id"),

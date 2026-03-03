@@ -6,7 +6,7 @@ class ActionPlan:
     action_id: str
     args: Dict[str, Any] = field(default_factory=dict)
     confidence: float = 0.0
-    source: str = "unknown" # "llm" | "semantic" | "reflex"
+    source: str = "unknown" # "llm" | "reflex"
     response_text: Optional[str] = None
     thought: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)

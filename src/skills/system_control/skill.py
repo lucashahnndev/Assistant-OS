@@ -169,8 +169,19 @@ class SystemSkill(SkillBase):
             )
 
         if local == "time":
-            now = datetime.datetime.now().strftime("%H:%M:%S")
-            return self._result(ok=True, status="success", text=f"Current time is {now}.", time=now)
+            now_dt = datetime.datetime.now()
+            now = now_dt.strftime("%H:%M:%S")
+            today = now_dt.strftime("%Y-%m-%d")
+            include_date = bool(params.get("include_date"))
+            if include_date:
+                return self._result(
+                    ok=True,
+                    status="success",
+                    text=f"Current date is {today} and time is {now}.",
+                    date=today,
+                    time=now,
+                )
+            return self._result(ok=True, status="success", text=f"Current time is {now}.", date=today, time=now)
 
         if local in {"skills.list", "skills.list.ai", "skills.list.ui"}:
             orch = getattr(self.kernel, "orchestrator", None) if self.kernel else None

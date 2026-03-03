@@ -8,7 +8,7 @@ export const ProtectedRoute = ({ children }) => {
     if (loading) {
         return (
             <div className="flex-center" style={{ height: '100vh', width: '100vw' }}>
-                <div className="gradient-text" style={{ fontSize: '24px', fontWeight: 'bold' }}>Atlas OS</div>
+                <div className="gradient-text" style={{ fontSize: '24px', fontWeight: 'bold' }}>Assistant OS</div>
             </div>
         );
     }

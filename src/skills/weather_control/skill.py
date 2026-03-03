@@ -10,7 +10,7 @@ class WeatherSkill(SkillBase):
     def __init__(self, kernel=None, config=None):
         self.kernel = kernel
         self.config = config or {}
-        self._namespace = "weather"
+        self._namespace = "weather.control"
         self.location_service = LocationService()
 
     @property
@@ -40,24 +40,6 @@ class WeatherSkill(SkillBase):
         lat = params.get("lat") or current_loc.get("latitude")
         lon = params.get("lon") or current_loc.get("longitude")
         return {"city": city, "lat": lat, "lon": lon}
-
-    @staticmethod
-    def _render_current_text(city: str, temp: Any, desc: str, feels_like: Any = None) -> str:
-        base = f"Agora em {city} faz {temp}°C com {desc}."
-        if feels_like is not None:
-            base += f" Feels like: {feels_like}°C."
-        return base
-
-    @staticmethod
-    def _render_forecast_text(city: str, days: List[Dict[str, Any]]) -> str:
-        if not days:
-            return f"I could not obter previsão para {city}."
-        lines = [f"Forecast for {city} ({len(days)} dias):"]
-        for day in days:
-            lines.append(
-                f"- {day.get('date')}: {day.get('description')} | min {day.get('temp_min')}°C | max {day.get('temp_max')}°C"
-            )
-        return "\n".join(lines)
 
     @staticmethod
     def _group_openweather_daily(items: List[Dict[str, Any]], days: int) -> List[Dict[str, Any]]:
@@ -141,7 +123,6 @@ class WeatherSkill(SkillBase):
                 "humidity": humidity,
                 "wind_speed": wind,
             },
-            "text": self._render_current_text(name, temp, desc, feels_like=feels),
         }
 
     def _get_openweather_forecast(self, api_key: str, city: str, lat: Any, lon: Any, days: int) -> Dict[str, Any]:
@@ -176,7 +157,6 @@ class WeatherSkill(SkillBase):
             "location": name,
             "days": len(daily),
             "forecast": daily,
-            "text": self._render_forecast_text(name, daily),
         }
 
     def _get_wttr_payload(self, city=None, lat=None, lon=None, days: int = 3) -> Dict[str, Any]:
@@ -237,12 +217,6 @@ class WeatherSkill(SkillBase):
                 "days": len(forecast_days),
                 "forecast": forecast_days,
             }
-            payload["text"] = self._render_current_text(
-                area_name,
-                payload["current"]["temp"],
-                payload["current"]["description"],
-                feels_like=payload["current"]["feels_like"],
-            )
             return payload
         except Exception as e:
             logger.error(f"wttr.in error: {e}")
@@ -279,14 +253,12 @@ class WeatherSkill(SkillBase):
                     "location": fallback.get("location"),
                     "current": fallback.get("current"),
                     "fallback": True,
-                    "text": fallback.get("text"),
                 }
             return {
                 "ok": False,
                 "status": "error",
                 "error": "WEATHER_UNAVAILABLE",
                 "message": fallback.get("message", "Weather service unavailable."),
-                "text": "I could not obter clima atual no momento.",
             }
 
         if action == "forecast":
@@ -298,7 +270,6 @@ class WeatherSkill(SkillBase):
 
             fallback = self._get_wttr_payload(city, lat, lon, days=days)
             if fallback.get("ok"):
-                text = self._render_forecast_text(fallback.get("location", "your region"), fallback.get("forecast") or [])
                 return {
                     "ok": True,
                     "status": fallback.get("status", "success"),
@@ -307,14 +278,12 @@ class WeatherSkill(SkillBase):
                     "days": len(fallback.get("forecast") or []),
                     "forecast": fallback.get("forecast") or [],
                     "fallback": True,
-                    "text": text,
                 }
             return {
                 "ok": False,
                 "status": "error",
                 "error": "FORECAST_UNAVAILABLE",
                 "message": fallback.get("message", "Forecast service unavailable."),
-                "text": "I could not obter previsão no momento.",
             }
 
         return {
@@ -322,5 +291,4 @@ class WeatherSkill(SkillBase):
             "status": "error",
             "error": "UNKNOWN_ACTION",
             "message": f"Unknown action: {action_id}",
-            "text": f"Unknown action: {action_id}",
         }

@@ -1,9 +1,19 @@
 import { useState, useEffect, useRef, useMemo, memo } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
+import {
+    WeatherAssistCard,
+    SystemHealthAssistCard,
+    DataChartAssistCard,
+    WikiAssistCard,
+    MapAssistCard,
+} from '../components/AssistCards';
+import { useAssistCards } from '../hooks/useAssistCards';
 
 import { api } from '../hooks/api';
 import PlaybackCard from '../components/PlaybackCard';
 import LinkPreviewCard from '../components/LinkPreviewCard';
+import ConfirmDialog from '../components/ConfirmDialog';
 import toast from 'react-hot-toast';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -44,7 +54,14 @@ import {
     Archive,
     Table,
     Download,
-    Monitor
+    Monitor,
+    Maximize2,
+    ArrowUpRight,
+    Square,
+    CloudSun,
+    HeartPulse,
+    BarChart3,
+    BookOpen
 } from 'lucide-react';
 
 const SessionIcon = ({ source, size = 16 }) => {
@@ -161,6 +178,10 @@ const CodeBlock = ({ node, inline, className, children, ...props }) => {
     const match = /language-(\w+)/.exec(className || '');
     const language = match ? match[1] : '';
 
+    // Force block rendering if the content has newlines, even if parsed as inline markdown
+    const hasNewlines = String(children).includes('\n');
+    const isInline = (inline || !className) && !hasNewlines;
+
     const handleCopy = () => {
         const text = codeRef.current?.innerText || children.toString();
         navigator.clipboard.writeText(text);
@@ -169,8 +190,8 @@ const CodeBlock = ({ node, inline, className, children, ...props }) => {
         toast.success("Code copied!");
     };
 
-    if (inline) {
-        return <code style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 4px', borderRadius: '4px' }} {...props}>{children}</code>;
+    if (isInline) {
+        return <code style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 4px', borderRadius: '4px', fontFamily: 'monospace', fontSize: '13px' }} {...props}>{children}</code>;
     }
 
     return (
@@ -355,10 +376,11 @@ const looksLikeInternalMonologue = (content) => {
 };
 
 const normalizeHistoryMessageType = (msg) => {
-    const explicitType = String(msg?.type || 'default').toLowerCase();
+    const explicitType = String(msg?.type || msg?.msg_type || 'default').toLowerCase();
     if (explicitType !== 'default') return explicitType;
     if (msg?.role === 'assistant') {
-        if (tryParseIntentPayload(msg?.content)) return 'reasoning';
+        const payload = tryParseIntentPayload(msg?.content);
+        if (payload && (payload.thought || payload.action)) return 'reasoning';
         if (looksLikeInternalMonologue(msg?.content)) return 'reasoning';
     }
     return explicitType;
@@ -370,7 +392,8 @@ const extractReasoningLine = (msg) => {
         const thought = typeof payload.thought === 'string' ? payload.thought.trim() : '';
         if (thought) return thought;
         const action = typeof payload.action === 'string' ? payload.action.trim() : '';
-        if (action && action !== 'reply') return `Planned action: ${action}`;
+        if (action && action !== 'reply' && action !== 'none') return `Planned action: ${action}`;
+        if (action === 'reply' && payload.thought) return payload.thought;
     }
     if (looksLikeInternalMonologue(msg?.content)) {
         return String(msg.content || '').trim();
@@ -378,64 +401,1255 @@ const extractReasoningLine = (msg) => {
     return null;
 };
 
-const groupHistoryWithReasoning = (rawHistory = []) => {
-    const processedHistory = [];
-    let currentReasoning = [];
-
-    rawHistory.forEach((msg) => {
-        const normalizedType = normalizeHistoryMessageType(msg);
-        if (normalizedType === 'reasoning') {
-            const reasoningLine = extractReasoningLine(msg) || (typeof msg.content === 'string' ? msg.content.trim() : '');
-            if (reasoningLine) currentReasoning.push(reasoningLine);
-            return;
-        }
-
-        if (msg.role === 'assistant' && currentReasoning.length > 0) {
-            processedHistory.push({
-                ...msg,
-                reasoningLines: currentReasoning
-            });
-            currentReasoning = [];
-            return;
-        }
-
-        if (currentReasoning.length > 0) {
-            processedHistory.push({
-                role: 'assistant',
-                content: '',
-                reasoningLines: currentReasoning,
-                isComplete: true
-            });
-            currentReasoning = [];
-        }
-
-        processedHistory.push(msg);
-    });
-
-    if (currentReasoning.length > 0) {
-        processedHistory.push({
-            role: 'assistant',
-            content: '',
-            reasoningLines: currentReasoning,
-            isComplete: true
-        });
-    }
-
-    return processedHistory;
+const toReasoningEntry = (line, ts = null) => {
+    const text = String(line || '').trim();
+    if (!text) return null;
+    return { text, ts: ts || null };
 };
 
-const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agentName }) => {
-    const [isCognitiveCollapsed, setIsCognitiveCollapsed] = useState(true);
-    const [isExpanded, setIsExpanded] = useState(false);
-    const isUser = msg.role === 'user';
-    const hasReasoning = !isUser && msg.reasoningLines && msg.reasoningLines.length > 0;
-    const showInlineThoughtToggle = hasReasoning && !isStreaming && isCognitiveCollapsed;
+const normalizeReasoningTimeline = (msg) => {
+    if (Array.isArray(msg?.reasoningTimeline) && msg.reasoningTimeline.length > 0) {
+        return msg.reasoningTimeline
+            .map((entry) => {
+                if (typeof entry === 'string') return toReasoningEntry(entry, msg?.timestamp);
+                if (entry && typeof entry === 'object') return toReasoningEntry(entry.text || entry.line || entry.content, entry.ts || entry.timestamp || msg?.timestamp);
+                return null;
+            })
+            .filter(Boolean);
+    }
+    if (Array.isArray(msg?.reasoningLines) && msg.reasoningLines.length > 0) {
+        return msg.reasoningLines.map((line) => toReasoningEntry(line, msg?.timestamp)).filter(Boolean);
+    }
+    return [];
+};
+
+const groupHistoryWithReasoning = (rawHistory = []) => {
+    const mergeUniqueStrings = (base = [], incoming = []) => {
+        const out = [];
+        const seen = new Set();
+        [...(Array.isArray(base) ? base : []), ...(Array.isArray(incoming) ? incoming : [])].forEach((value) => {
+            const s = String(value || '').trim();
+            if (!s) return;
+            const key = s.toLowerCase();
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push(s);
+        });
+        return out;
+    };
+    // Infer missing work_id for assistant/system messages that are immediately
+    // followed by a same-turn assistant message that does carry work_id.
+    const history = rawHistory.map((msg) => ({ ...msg }));
+    for (let i = 0; i < history.length; i += 1) {
+        const current = history[i];
+        if (!current || current.work_id || current.role === 'user') continue;
+        if (current.role !== 'assistant' && current.role !== 'system') continue;
+        for (let j = i + 1; j < history.length; j += 1) {
+            const next = history[j];
+            if (!next) break;
+            if (next.role === 'user') break;
+            if ((next.role === 'assistant' || next.role === 'system') && next.work_id) {
+                current.work_id = next.work_id;
+                break;
+            }
+        }
+    }
+
+    // Pass 1: collect all work units preserving insertion order
+    const workUnitMap = new Map(); // work_id -> unit object
+    const orderedKeys = [];        // work_ids in first-seen order (to preserve timeline)
+
+    history.forEach((msg, rawIdx) => {
+        const workId = msg.work_id;
+        const role = msg.role;
+        const type = normalizeHistoryMessageType(msg);
+
+        // User messages always get their own bubble
+        if (role === 'user') {
+            const key = `__user_${rawIdx}`;
+            orderedKeys.push(key);
+            workUnitMap.set(key, msg);
+            return;
+        }
+
+        // Assistant / system messages with a work_id → merge into Work Unit
+        if (workId) {
+            if (!workUnitMap.has(workId)) {
+                // New work unit
+                const unit = {
+                    ...msg,
+                    reasoningLines: [],
+                    reasoningTimeline: [],
+                    contentSegments: []
+                };
+                if (type === 'reasoning') {
+                    const line = extractReasoningLine(msg);
+                    if (line) {
+                        unit.reasoningLines.push(line);
+                        const entry = toReasoningEntry(line, msg.timestamp);
+                        if (entry) unit.reasoningTimeline.push(entry);
+                    }
+                } else {
+                    unit.contentSegments.push({
+                        content: msg.content || '',
+                        playback: msg.playback,
+                        attachments: msg.attachments,
+                        type
+                    });
+                }
+                orderedKeys.push(workId);
+                workUnitMap.set(workId, unit);
+            } else {
+                // Enrich existing unit
+                const unit = workUnitMap.get(workId);
+                if (type === 'reasoning') {
+                    const line = extractReasoningLine(msg);
+                    if (line && !unit.reasoningLines.includes(line)) {
+                        unit.reasoningLines.push(line);
+                        const entry = toReasoningEntry(line, msg.timestamp);
+                        if (entry) unit.reasoningTimeline.push(entry);
+                    }
+                } else {
+                    const segContent = msg.content || '';
+                    if (segContent || msg.playback || (msg.attachments && msg.attachments.length > 0)) {
+                        unit.contentSegments.push({
+                            content: segContent,
+                            playback: msg.playback,
+                            attachments: msg.attachments,
+                            type
+                        });
+                    }
+                }
+                // Keep latest timestamp / status
+                if (msg.timestamp) unit.timestamp = msg.timestamp;
+                if (msg.statusPhase) unit.statusPhase = msg.statusPhase;
+                if (msg.statusMessage) unit.statusMessage = msg.statusMessage;
+                if (msg.approvalRequest) unit.approvalRequest = msg.approvalRequest;
+                if (msg.playback && !unit.playback) unit.playback = msg.playback;
+                if (msg.isStreaming !== undefined) unit.isStreaming = msg.isStreaming;
+                unit.skills_used = mergeUniqueStrings(unit.skills_used, msg.skills_used);
+                unit.actions_used = mergeUniqueStrings(unit.actions_used, msg.actions_used);
+            }
+            return;
+        }
+
+        // Standalone assistant message (no work_id)
+        const key = `__standalone_${rawIdx}`;
+        orderedKeys.push(key);
+        workUnitMap.set(key, { ...msg, reasoningLines: [], reasoningTimeline: [], contentSegments: [] });
+    });
+
+    // Pass 2: build output in timeline order (deduplicated)
+    const seen = new Set();
+    return orderedKeys.filter(k => {
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+    }).map(k => workUnitMap.get(k));
+};
+
+const SegmentDivider = () => (
+    <div style={{
+        padding: '12px 0',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '12px',
+        opacity: 0.15
+    }}>
+        <div style={{ flex: 1, height: '1px', background: 'var(--card-border)' }} />
+        <span style={{ fontSize: '8px', fontWeight: '900', letterSpacing: '0.4em', color: 'var(--text-muted)', textTransform: 'uppercase' }}>_____</span>
+        <div style={{ flex: 1, height: '1px', background: 'var(--card-border)' }} />
+    </div>
+);
+
+const TypewriterMarkdown = ({ text, isStreaming, isComplete, isUser }) => {
+    const [displayedText, setDisplayedText] = useState(text);
 
     useEffect(() => {
-        if (msg.isComplete) {
+        if (!isStreaming || isComplete) {
+            setDisplayedText(text);
+            return;
+        }
+        if (text.length < displayedText.length) {
+            setDisplayedText(text);
+            return;
+        }
+        if (displayedText.length === text.length) return;
+
+        const timeout = setTimeout(() => {
+            setDisplayedText(prev => text.slice(0, prev.length + 2)); // Slightly faster reveal
+        }, 8);
+
+        return () => clearTimeout(timeout);
+    }, [text, isStreaming, isComplete, displayedText]);
+
+    return (
+        <div className="markdown-content" style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
+            <ReactMarkdown
+                remarkPlugins={[remarkGfm, remarkBreaks]}
+                rehypePlugins={[rehypeRaw]}
+                components={{
+                    code: CodeBlock,
+                    p: ({ node, children, ...props }) => <div style={{ marginBottom: '12px' }} {...props}>{children}</div>,
+                    ul: ({ node, ...props }) => <ul style={{ paddingLeft: '24px', marginBottom: '16px' }} {...props} />,
+                    ol: ({ node, ...props }) => <ol style={{ paddingLeft: '24px', marginBottom: '16px', listStyleType: 'decimal' }} {...props} />,
+                    li: ({ node, ...props }) => <li style={{ marginBottom: '8px' }} {...props} />,
+                    strong: ({ node, ...props }) => <strong style={{ color: isUser ? '#fff' : 'var(--accent-color)', fontWeight: '800' }} {...props} />,
+                    a: ({ node, ...props }) => <a style={{ color: isUser ? '#fff' : 'var(--accent-color)', textDecoration: 'underline', fontWeight: 'bold' }} target="_blank" rel="noreferrer" {...props} />
+                }}
+            >
+                {displayedText}
+            </ReactMarkdown>
+            {isStreaming && !isComplete && displayedText.length > 0 && (
+                <span style={{
+                    display: 'inline-block',
+                    width: '6px',
+                    height: '14px',
+                    background: 'var(--accent-color)',
+                    marginLeft: '4px',
+                    verticalAlign: 'middle',
+                    animation: 'pulse 1s infinite'
+                }} />
+            )}
+        </div>
+    );
+};
+
+// ─── Work Unit Inspector ──────────────────────────────────────────────────────
+const INSPECTOR_TABS = [
+    { id: 'plan', label: 'Plan', emoji: '📋' },
+    { id: 'thought', label: 'Thought', emoji: '🧠' },
+    { id: 'terminal', label: 'Terminal', emoji: '🖥️' },
+    { id: 'skills', label: 'Skills', emoji: '🛠️' },
+    { id: 'media', label: 'Media', emoji: '📦' },
+    { id: 'sources', label: 'Sources', emoji: '🔗' },
+];
+
+const stepStatusIcon = (status) => {
+    switch (status) {
+        case 'done': return { icon: '✓', color: '#10b981' };
+        case 'in_progress': return { icon: '◉', color: 'var(--accent-color)' };
+        case 'blocked': return { icon: '✕', color: '#ef4444' };
+        default: return { icon: '○', color: 'var(--text-muted)' };
+    }
+};
+
+const normalizeInspectorList = (value) => {
+    if (!Array.isArray(value)) return [];
+    return value
+        .map((item) => {
+            if (typeof item === 'string') return item;
+            if (item && typeof item === 'object') {
+                return item.name || item.id || item.key || item.path || item.file || JSON.stringify(item);
+            }
+            return String(item || '');
+        })
+        .map((entry) => String(entry || '').trim())
+        .filter(Boolean);
+};
+
+const URL_EXTRACT_RE = /https?:\/\/[^\s<>)"'\]]+/gi;
+
+const extractUrlsFromAny = (value) => {
+    const text = typeof value === 'string' ? value : JSON.stringify(value || {});
+    return [...new Set((String(text).match(URL_EXTRACT_RE) || []).map((u) => u.replace(/[.,;!?]+$/, '')))];
+};
+
+const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: controlledOpen, onToggle, hideButton = false, hidePanel = false }) => {
+    const [open, setOpen] = useState(false);
+    const [activeTab, setActiveTab] = useState('plan');
+    const [context, setContext] = useState(null);
+    const [overwatch, setOverwatch] = useState(null);
+    const [sessionPlaybackRuns, setSessionPlaybackRuns] = useState([]);
+    const [expandedPlaybackRunId, setExpandedPlaybackRunId] = useState(null);
+    const [fullscreenTerminalId, setFullscreenTerminalId] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const hasLoadedOnceRef = useRef(false);
+    const fullscreenTerminalBodyRef = useRef(null);
+
+    const uniqueStrings = (items = []) => {
+        const seen = new Set();
+        const out = [];
+        for (const item of items) {
+            const value = String(item || '').trim();
+            if (!value || seen.has(value)) continue;
+            seen.add(value);
+            out.push(value);
+        }
+        return out;
+    };
+
+    const isEqualObject = (a, b) => {
+        if (a === b) return true;
+        try {
+            return JSON.stringify(a) === JSON.stringify(b);
+        } catch {
+            return false;
+        }
+    };
+
+    const mergeContextIncremental = (prev, next) => {
+        if (!next || typeof next !== 'object') return prev || null;
+        if (!prev || typeof prev !== 'object') return next;
+
+        const prevPlanner = prev.planner && typeof prev.planner === 'object' ? prev.planner : {};
+        const nextPlanner = next.planner && typeof next.planner === 'object' ? next.planner : {};
+        const prevData = prev.data && typeof prev.data === 'object' ? prev.data : {};
+        const nextData = next.data && typeof next.data === 'object' ? next.data : {};
+
+        const mergedPlanLines = uniqueStrings([
+            ...(Array.isArray(prevPlanner.plan) ? prevPlanner.plan : []),
+            ...(Array.isArray(nextPlanner.plan) ? nextPlanner.plan : []),
+        ]);
+        const prevSteps = Array.isArray(prevPlanner.steps) ? prevPlanner.steps : [];
+        const nextSteps = Array.isArray(nextPlanner.steps) ? nextPlanner.steps : [];
+        const stepMap = new Map();
+        prevSteps.forEach((s, i) => {
+            const key = String(s?.id || `prev-${i}`);
+            stepMap.set(key, s);
+        });
+        nextSteps.forEach((s, i) => {
+            const key = String(s?.id || `next-${i}`);
+            if (!stepMap.has(key)) {
+                stepMap.set(key, s);
+            }
+        });
+        const mergedSteps = [...stepMap.values()];
+
+        const mergedData = {
+            ...prevData,
+            ...nextData,
+            actions_used: uniqueStrings([
+                ...(Array.isArray(prevData.actions_used) ? prevData.actions_used : []),
+                ...(Array.isArray(nextData.actions_used) ? nextData.actions_used : []),
+            ]),
+            skills_used: uniqueStrings([
+                ...(Array.isArray(prevData.skills_used) ? prevData.skills_used : []),
+                ...(Array.isArray(nextData.skills_used) ? nextData.skills_used : []),
+            ]),
+            media_used: uniqueStrings([
+                ...(Array.isArray(prevData.media_used) ? prevData.media_used : []),
+                ...(Array.isArray(nextData.media_used) ? nextData.media_used : []),
+            ]),
+            sources_used: (() => {
+                const all = [
+                    ...(Array.isArray(prevData.sources_used) ? prevData.sources_used : []),
+                    ...(Array.isArray(nextData.sources_used) ? nextData.sources_used : []),
+                ];
+                const seen = new Set();
+                const out = [];
+                for (const src of all) {
+                    const url = String(src?.url || '').trim();
+                    if (!url || seen.has(url)) continue;
+                    seen.add(url);
+                    out.push(src);
+                }
+                return out;
+            })(),
+        };
+
+        const merged = {
+            ...prev,
+            ...next,
+            planner: {
+                ...prevPlanner,
+                ...nextPlanner,
+                plan: mergedPlanLines,
+                steps: mergedSteps,
+            },
+            data: mergedData,
+        };
+
+        return isEqualObject(prev, merged) ? prev : merged;
+    };
+
+    const mergeOverwatchIncremental = (prev, next) => {
+        if (!next || typeof next !== 'object') return prev || null;
+        if (!prev || typeof prev !== 'object') return next;
+
+        const prevEvents = Array.isArray(prev.events) ? prev.events : [];
+        const nextEvents = Array.isArray(next.events) ? next.events : [];
+        const seen = new Set(prevEvents.map((e) => `${e?.ts || ''}|${e?.event || ''}|${JSON.stringify(e?.payload || {})}`));
+        const mergedEvents = [...prevEvents];
+        for (const event of nextEvents) {
+            const fp = `${event?.ts || ''}|${event?.event || ''}|${JSON.stringify(event?.payload || {})}`;
+            if (seen.has(fp)) continue;
+            seen.add(fp);
+            mergedEvents.push(event);
+        }
+
+        const merged = {
+            ...prev,
+            ...next,
+            events: mergedEvents,
+        };
+        return isEqualObject(prev, merged) ? prev : merged;
+    };
+
+    const load = async (force = false, silent = false) => {
+        if (!force && (context || loading)) return;
+        if (!silent) {
+            if (!hasLoadedOnceRef.current) setLoading(true);
+            setError(null);
+        }
+        try {
+            const [ctxRes, owRes] = await Promise.allSettled([
+                api.get(`/system/works/${workId}/context`),
+                api.get(`/tasks/works/${workId}/overwatch?events_limit=400`),
+            ]);
+            if (ctxRes.status === 'fulfilled') {
+                const nextContext = ctxRes.value?.context || ctxRes.value || {};
+                setContext(prev => mergeContextIncremental(prev, nextContext));
+                hasLoadedOnceRef.current = true;
+            }
+            if (owRes.status === 'fulfilled') {
+                const nextOw = owRes.value || null;
+                setOverwatch(prev => mergeOverwatchIncremental(prev, nextOw));
+            }
+            if (ctxRes.status !== 'fulfilled' && owRes.status !== 'fulfilled') {
+                throw new Error('both context and overwatch failed');
+            }
+        } catch (e) {
+            if (!silent) setError('Could not load work details.');
+        } finally {
+            if (!silent) setLoading(false);
+        }
+    };
+
+    const isOpen = typeof controlledOpen === 'boolean' ? controlledOpen : open;
+
+    const toggle = () => {
+        if (!isOpen && !hidePanel) load(true);
+        if (onToggle) onToggle(!isOpen);
+        else setOpen(v => !v);
+    };
+
+    useEffect(() => {
+        if (!isOpen || !workId || hidePanel) return undefined;
+
+        load(true, false);
+        const interval = setInterval(() => {
+            load(true, true);
+        }, 1000);
+
+        return () => clearInterval(interval);
+    }, [isOpen, workId]);
+
+    useEffect(() => {
+        if (!isOpen || !sessionId || hidePanel) return undefined;
+        let cancelled = false;
+        const fetchSessionPlaybackRuns = async () => {
+            try {
+                const response = await api.get(`/sessions/${sessionId}/playback`);
+                if (cancelled) return;
+                setSessionPlaybackRuns(Array.isArray(response?.runs) ? response.runs : []);
+            } catch {
+                if (!cancelled) setSessionPlaybackRuns([]);
+            }
+        };
+        fetchSessionPlaybackRuns();
+        return () => {
+            cancelled = true;
+        };
+    }, [isOpen, sessionId, hidePanel]);
+
+    const planner = context?.planner || {};
+    const data = context?.data || {};
+    const summary = context?.summary || {};
+    const events = Array.isArray(overwatch?.events) ? overwatch.events : [];
+    const steps = Array.isArray(planner.steps) ? planner.steps : [];
+    const plan = Array.isArray(planner.plan) ? planner.plan : [];
+    const skills = normalizeInspectorList(data.skills_used);
+    const actions = normalizeInspectorList(data.actions_used);
+    const media = normalizeInspectorList(data.media_used);
+    const playbackRunIds = (() => {
+        const ids = new Set();
+        const fromContext = Array.isArray(data?.playback_runs) ? data.playback_runs : [];
+        fromContext.forEach((id) => {
+            const value = String(id || '').trim();
+            if (value) ids.add(value);
+        });
+        const lastRun = String(data?.last_playback_run_id || '').trim();
+        if (lastRun) ids.add(lastRun);
+        return [...ids];
+    })();
+    const relatedPlaybackRuns = (() => {
+        if (!Array.isArray(sessionPlaybackRuns) || sessionPlaybackRuns.length === 0) return [];
+        if (playbackRunIds.length === 0) return [];
+        const wanted = new Set(playbackRunIds);
+        return sessionPlaybackRuns.filter((run) => wanted.has(String(run?.run_id || '').trim()));
+    })();
+    const thoughtTimeline = (() => {
+        const entries = [];
+        events.forEach((event) => {
+            const payload = event?.payload || {};
+            const thought = payload?.summary?.last_thought || payload?.thought || payload?.details;
+            if (typeof thought === 'string' && thought.trim()) {
+                entries.push({ text: thought.trim(), ts: event?.ts || null });
+            }
+        });
+        if (entries.length === 0 && typeof summary?.last_thought === 'string' && summary.last_thought.trim()) {
+            entries.push({ text: summary.last_thought.trim(), ts: context?.updated_at || null });
+        }
+        const dedup = [];
+        entries.forEach((entry) => {
+            if (!dedup.some((d) => d.text === entry.text)) dedup.push(entry);
+        });
+        return dedup;
+    })();
+    const sources = (() => {
+        const set = new Set();
+        extractUrlsFromAny(plan).forEach((u) => set.add(u));
+        extractUrlsFromAny(data).forEach((u) => set.add(u));
+        events.forEach((event) => extractUrlsFromAny(event?.payload || {}).forEach((u) => set.add(u)));
+        return [...set];
+    })();
+    const shellTerminals = (() => {
+        const terminalsMap = data?.shell?.terminals;
+        if (!terminalsMap || typeof terminalsMap !== 'object') return [];
+        return Object.values(terminalsMap)
+            .filter((item) => item && typeof item === 'object')
+            .sort((a, b) => {
+                const ta = Number(a?.started_at || 0);
+                const tb = Number(b?.started_at || 0);
+                return tb - ta;
+            });
+    })();
+    const fullscreenTerminal = shellTerminals.find((term) => String(term?.id || '') === String(fullscreenTerminalId || '')) || null;
+
+    useEffect(() => {
+        if (!fullscreenTerminalBodyRef.current || !fullscreenTerminalId) return;
+        fullscreenTerminalBodyRef.current.scrollTop = fullscreenTerminalBodyRef.current.scrollHeight;
+    }, [fullscreenTerminalId, shellTerminals]);
+
+    const renderPlan = () => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {steps.length > 0 ? steps.map((s, i) => {
+                const { icon, color } = stepStatusIcon(s.status);
+                return (
+                    <div key={s.id || i} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                        <span style={{ color, fontWeight: '900', fontSize: '12px', flexShrink: 0, minWidth: '12px', marginTop: '1px' }}>{icon}</span>
+                        <span style={{ fontSize: '12px', color: s.status === 'done' ? 'var(--text-muted)' : 'var(--text-primary)', textDecoration: s.status === 'done' ? 'line-through' : 'none', opacity: s.status === 'done' ? 0.6 : 1 }}>
+                            {s.title}
+                        </span>
+                    </div>
+                );
+            }) : plan.length > 0 ? plan.map((line, i) => (
+                <div key={i} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '12px', flexShrink: 0 }}>{'›'}</span>
+                    <span style={{ fontSize: '12px', color: 'var(--text-primary)' }}>{String(line).replace(/^\[.\]\s*/, '')}</span>
+                </div>
+            )) : <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No plan recorded.</span>}
+        </div>
+    );
+
+    const renderSkills = () => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {skills.length > 0 && (
+                <div>
+                    <p style={{ fontSize: '9px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-muted)', marginBottom: '6px' }}>Skills</p>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                        {skills.map((s, i) => (
+                            <span key={i} style={{ padding: '3px 10px', background: 'var(--accent-glow)', border: '1px solid var(--accent-color)', borderRadius: '20px', fontSize: '11px', color: 'var(--accent-color)', fontWeight: '700' }}>
+                                {s}
+                            </span>
+                        ))}
+                    </div>
+                </div>
+            )}
+            {actions.length > 0 && (
+                <div>
+                    <p style={{ fontSize: '9px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-muted)', marginBottom: '6px' }}>Actions performed</p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        {[...new Set(actions)].map((a, i) => (
+                            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: 'var(--text-muted)', flexShrink: 0 }} />
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{a}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+            {skills.length === 0 && actions.length === 0 && (
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No skills recorded.</span>
+            )}
+        </div>
+    );
+
+    const renderThought = () => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {thoughtTimeline.length > 0 ? thoughtTimeline.map((entry, i) => (
+                <div key={i} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '8px', border: '1px solid var(--card-border)', borderRadius: '8px', background: 'rgba(0,0,0,0.04)' }}>
+                    <span style={{ fontSize: '14px', lineHeight: 1 }}>🧠</span>
+                    <div style={{ minWidth: 0 }}>
+                        <p style={{ fontSize: '12px', color: 'var(--text-primary)' }}>{entry.text}</p>
+                        {entry.ts && <p style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '3px' }}>{formatTime(entry.ts)}</p>}
+                    </div>
+                </div>
+            )) : <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No thought timeline recorded.</span>}
+        </div>
+    );
+
+    const renderTerminal = () => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {shellTerminals.length > 0 ? shellTerminals.map((term, i) => {
+                const status = String(term?.status || '').toLowerCase();
+                const termId = String(term?.id || `terminal-${i}`);
+                const cmd = String(term?.command || '').trim();
+                const lines = Number(term?.line_count || 0);
+                const description = cmd || termId;
+                const statusLabel = status === 'running'
+                    ? 'running'
+                    : (status === 'success' ? 'completed' : (status || 'error'));
+                const statusColor = status === 'running' ? '#10b981' : status === 'success' ? '#22c55e' : status === 'timeout' ? '#f59e0b' : '#ef4444';
+                return (
+                    <div key={termId} style={{ border: '1px solid var(--card-border)', borderRadius: '8px', background: 'rgba(0,0,0,0.05)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '7px 9px' }}>
+                            <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace', minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={description}>
+                                {description}
+                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                                <span style={{ fontSize: '9px', fontWeight: 800, color: statusColor, textTransform: 'lowercase', letterSpacing: '0.01em' }}>
+                                    {statusLabel}
+                                </span>
+                                <button
+                                    className="btn-ghost"
+                                    style={{ padding: '2px', borderRadius: '6px' }}
+                                    title="Open terminal fullscreen"
+                                    onClick={() => setFullscreenTerminalId(termId)}
+                                >
+                                    <ArrowUpRight size={12} />
+                                </button>
+                            </div>
+                        </div>
+                        <div style={{ padding: '0 9px 7px', fontSize: '9px', color: 'var(--text-muted)' }}>
+                            {lines} lines
+                        </div>
+                    </div>
+                );
+            }) : <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No terminal activity recorded.</span>}
+        </div>
+    );
+
+    const renderMedia = () => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {relatedPlaybackRuns.length > 0 && (
+                <div style={{ marginBottom: '6px' }}>
+                    <p style={{ fontSize: '9px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-muted)', marginBottom: '6px' }}>Playback</p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {relatedPlaybackRuns.map((run) => (
+                            <div key={run.run_id} style={{ border: '1px solid var(--card-border)', borderRadius: '8px', background: 'rgba(0,0,0,0.04)' }}>
+                                {expandedPlaybackRunId === run.run_id ? (
+                                    <div style={{ padding: '8px' }}>
+                                        <button
+                                            className="btn-ghost"
+                                            style={{ marginBottom: '8px', padding: '4px 8px', fontSize: '10px', fontWeight: '700', color: 'var(--accent-color)' }}
+                                            onClick={() => setExpandedPlaybackRunId(null)}
+                                        >
+                                            ← Back
+                                        </button>
+                                        <PlaybackCard runId={run.run_id} sessionId={sessionId} />
+                                    </div>
+                                ) : (
+                                    <button
+                                        onClick={() => setExpandedPlaybackRunId(run.run_id)}
+                                        style={{
+                                            width: '100%',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '10px',
+                                            padding: '8px',
+                                            background: 'transparent',
+                                            border: 'none',
+                                            textAlign: 'left',
+                                            cursor: 'pointer',
+                                        }}
+                                    >
+                                        {run.thumbnail ? (
+                                            <img
+                                                src={run.thumbnail}
+                                                alt=""
+                                                style={{
+                                                    width: '48px',
+                                                    height: '34px',
+                                                    borderRadius: '6px',
+                                                    objectFit: 'cover',
+                                                    border: '1px solid rgba(255,255,255,0.06)',
+                                                    flexShrink: 0,
+                                                }}
+                                            />
+                                        ) : (
+                                            <div style={{
+                                                width: '48px',
+                                                height: '34px',
+                                                borderRadius: '6px',
+                                                border: '1px solid rgba(255,255,255,0.06)',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                flexShrink: 0,
+                                            }}>
+                                                <Monitor size={12} color="var(--text-muted)" />
+                                            </div>
+                                        )}
+                                        <div style={{ minWidth: 0, flex: 1 }}>
+                                            <p style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                {run.title || 'Browser Session'}
+                                            </p>
+                                            <p style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                                                {run.total_steps || 0} frames · {run.status === 'running' ? 'LIVE' : run.status === 'completed' || run.status === 'success' ? '✓' : '—'}
+                                            </p>
+                                        </div>
+                                        <ChevronRight size={12} className="text-muted" />
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+            {media.length > 0 ? media.map((m, i) => {
+                const name = String(m).split('/').pop();
+                const ext = name.split('.').pop()?.toLowerCase();
+                const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext);
+                const url = getFileUrl({ path: m, name, type: isImg ? 'image' : 'file' }, sessionId);
+                return (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px', background: 'rgba(0,0,0,0.05)', borderRadius: '8px', border: '1px solid var(--card-border)' }}>
+                        <div style={{ width: '42px', height: '42px', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--card-border)', background: 'rgba(0,0,0,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                            {isImg ? (
+                                <img src={url} alt={name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            ) : (
+                                <span style={{ fontSize: '18px', flexShrink: 0 }}>{ext === 'mp4' ? '🎬' : ext === 'mp3' ? '🎵' : ext === 'pdf' ? '📄' : '📎'}</span>
+                            )}
+                        </div>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                            <p style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</p>
+                            <p style={{ fontSize: '10px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m}</p>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                            {isImg && (
+                                <button
+                                    className="btn-ghost"
+                                    style={{ padding: '6px', borderRadius: '8px' }}
+                                    title="Expand"
+                                    onClick={() => onExpand?.({ type: 'image', name, previewUrl: url, path: m })}
+                                >
+                                    <Maximize2 size={12} />
+                                </button>
+                            )}
+                            <a
+                                href={url}
+                                download={name}
+                                className="btn-ghost"
+                                style={{ padding: '6px', borderRadius: '8px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                                title="Download"
+                            >
+                                <Download size={12} />
+                            </a>
+                        </div>
+                    </div>
+                );
+            }) : <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No media recorded.</span>}
+        </div>
+    );
+
+    const renderSources = () => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {sources.length > 0 ? sources.map((url, i) => (
+                <a
+                    key={i}
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '8px',
+                        borderRadius: '8px',
+                        border: '1px solid var(--card-border)',
+                        background: 'rgba(0,0,0,0.04)',
+                        fontSize: '11px',
+                        color: 'var(--accent-color)',
+                        textDecoration: 'underline',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                    }}
+                    title={url}
+                >
+                    <span
+                        style={{
+                            position: 'relative',
+                            width: '14px',
+                            height: '14px',
+                            borderRadius: '4px',
+                            overflow: 'hidden',
+                            flexShrink: 0,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            background: 'rgba(255,255,255,0.08)',
+                        }}
+                    >
+                        <span style={{ fontSize: '9px', lineHeight: 1, opacity: 0.75 }}>🌐</span>
+                        <img
+                            src={`/api/favicon?url=${encodeURIComponent(url)}`}
+                            alt=""
+                            loading="lazy"
+                            style={{
+                                position: 'absolute',
+                                inset: 0,
+                                width: '100%',
+                                height: '100%',
+                                objectFit: 'cover',
+                            }}
+                            onError={(e) => {
+                                e.currentTarget.style.display = 'none';
+                            }}
+                        />
+                    </span>
+                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {url}
+                    </span>
+                </a>
+            )) : <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No sources recorded.</span>}
+        </div>
+    );
+
+    const tabRenderers = { plan: renderPlan, thought: renderThought, terminal: renderTerminal, skills: renderSkills, media: renderMedia, sources: renderSources };
+
+    return (
+        <>
+        <div style={{ marginTop: (inline || hideButton) ? '0' : '12px', position: 'relative', display: inline ? 'inline-flex' : 'block' }}>
+            {!hideButton && (
+                <button
+                    onClick={toggle}
+                    title="Work Unit Details"
+                    style={{
+                        display: 'inline-flex', alignItems: 'center', gap: '6px',
+                        padding: '2px 2px',
+                        background: 'transparent',
+                        border: 'none',
+                        borderRadius: '0',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                    }}
+                >
+                    <span style={{ fontSize: '12px' }}>⚡</span>
+                    <span style={{ fontSize: '9px', fontWeight: '800', color: isOpen ? 'var(--accent-color)' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                        {isOpen ? 'Hide Details' : 'Work Details'}
+                    </span>
+                </button>
+            )}
+
+            {/* Panel */}
+            {isOpen && !hidePanel && (
+                <div style={{
+                    marginTop: inline ? '0' : '10px',
+                    position: inline ? 'absolute' : 'relative',
+                    top: inline ? 'calc(100% + 8px)' : 'auto',
+                    left: 0,
+                    zIndex: inline ? 40 : 'auto',
+                    minWidth: inline ? '320px' : 'auto',
+                    border: '1px solid var(--card-border)',
+                    borderRadius: '10px',
+                    overflow: 'hidden',
+                    background: 'rgba(0,0,0,0.03)',
+                    animation: 'fadeIn 0.2s ease'
+                }}>
+                    {/* Tab Bar */}
+                    <div style={{ display: 'flex', borderBottom: '1px solid var(--card-border)', background: 'rgba(0,0,0,0.04)' }}>
+                        {INSPECTOR_TABS.map(tab => (
+                            <button
+                                key={tab.id}
+                                onClick={() => setActiveTab(tab.id)}
+                                style={{
+                                    flex: 1, padding: '8px 4px',
+                                    background: 'transparent', border: 'none', cursor: 'pointer',
+                                    borderBottom: activeTab === tab.id ? '2px solid var(--accent-color)' : '2px solid transparent',
+                                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px',
+                                    transition: 'background 0.15s',
+                                }}
+                            >
+                                <span style={{ fontSize: '14px' }}>{tab.emoji}</span>
+                                <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.06em', color: activeTab === tab.id ? 'var(--accent-color)' : 'var(--text-muted)' }}>
+                                    {tab.label}
+                                </span>
+                            </button>
+                        ))}
+                    </div>
+
+                    {/* Tab Content */}
+                    <div style={{ padding: '14px', maxHeight: '260px', minHeight: '130px', overflowY: 'auto' }}>
+                        {loading && !context && <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px', padding: '12px' }}>Loading…</div>}
+                        {error && <div style={{ color: '#ef4444', fontSize: '12px' }}>{error}</div>}
+                        {!loading && !error && context && tabRenderers[activeTab]?.()}
+                    </div>
+                </div>
+            )}
+        </div>
+        {fullscreenTerminal && createPortal((
+            <div
+                style={{
+                    position: 'fixed',
+                    inset: 0,
+                    zIndex: 1200,
+                    background: 'rgba(0,0,0,0.78)',
+                    backdropFilter: 'blur(3px)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '20px',
+                }}
+                onClick={() => setFullscreenTerminalId(null)}
+            >
+                <div
+                    style={{
+                        width: 'min(1200px, 100%)',
+                        height: 'min(86vh, 860px)',
+                        border: '1px solid var(--card-border)',
+                        borderRadius: '12px',
+                        overflow: 'hidden',
+                        background: 'rgba(2,6,18,0.98)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '10px 12px', borderBottom: '1px solid var(--card-border)', background: 'rgba(255,255,255,0.03)' }}>
+                        <div style={{ minWidth: 0 }}>
+                            <p style={{ fontSize: '12px', color: 'var(--text-primary)', fontFamily: 'monospace', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {String(fullscreenTerminal?.command || fullscreenTerminal?.id || 'terminal')}
+                            </p>
+                            <p style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {String(fullscreenTerminal?.cwd || '')}
+                            </p>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{Number(fullscreenTerminal?.line_count || 0)} lines</span>
+                            <button className="btn-ghost" style={{ padding: '6px', borderRadius: '8px' }} onClick={() => setFullscreenTerminalId(null)} title="Close">
+                                <X size={14} />
+                            </button>
+                        </div>
+                    </div>
+                    <div ref={fullscreenTerminalBodyRef} className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px', background: 'rgba(4,7,20,0.8)' }}>
+                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '12px', lineHeight: 1.5, color: '#d9e1ff', fontFamily: '"JetBrains Mono","Fira Code",monospace' }}>
+                            {String(fullscreenTerminal?.transcript || fullscreenTerminal?.output_full || fullscreenTerminal?.output_tail || `$ ${String(fullscreenTerminal?.command || 'shell command')}\n(waiting for output...)`)}
+                        </pre>
+                    </div>
+                </div>
+            </div>
+        ), document.body)}
+        </>
+    );
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TERMINAL_WORK_STATUSES = new Set(['complete', 'succeeded', 'failed', 'cancelled']);
+const ACTIVE_WORK_STATUSES = new Set(['queued', 'running', 'waiting_user', 'paused', 'thinking', 'responding']);
+
+const WorkControlButton = memo(({ workId, sessionId, isStreaming, statusPhase }) => {
+    const [busy, setBusy] = useState(false);
+    const [workStatus, setWorkStatus] = useState(null);
+
+    const fetchWorkStatus = async () => {
+        if (!workId) return;
+        try {
+            const data = await api.get(`/tasks/works/${workId}`);
+            const nextStatus = String(data?.status || '').toLowerCase();
+            if (nextStatus) setWorkStatus(nextStatus);
+        } catch {
+            // Keep UX resilient even if status fetch fails.
+        }
+    };
+
+    useEffect(() => {
+        fetchWorkStatus();
+    }, [workId]);
+
+    const phase = String(statusPhase || '').toLowerCase();
+    const effectiveStatus = workStatus || (isStreaming ? 'running' : phase);
+    const isLikelyActive = isStreaming || ACTIVE_WORK_STATUSES.has(effectiveStatus) || ACTIVE_WORK_STATUSES.has(phase);
+    const isTerminal = TERMINAL_WORK_STATUSES.has(effectiveStatus) || TERMINAL_WORK_STATUSES.has(phase) || !isLikelyActive;
+    const canShow = !!workId;
+    if (!canShow) return null;
+
+    const onClick = async () => {
+        if (busy) return;
+        setBusy(true);
+        try {
+            if (isTerminal) {
+                const data = await api.post(`/tasks/works/${workId}/restart`, { requester_session_id: sessionId });
+                const restartedId = data?.restarted_work_id ? ` (${String(data.restarted_work_id).slice(0, 8)})` : '';
+                toast.success(`Worker restarted${restartedId}`);
+            } else {
+                await api.post(`/tasks/works/${workId}/commands`, {
+                    command: 'cancel',
+                    payload: { reason: 'Stopped from chat' },
+                    requester_session_id: sessionId,
+                    source_session_id: sessionId,
+                });
+                toast.success('Stop signal sent');
+                setTimeout(() => fetchWorkStatus(), 700);
+            }
+        } catch (err) {
+            toast.error(err?.message || 'Failed to control worker');
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <button
+            onClick={onClick}
+            className="btn-ghost"
+            title={isTerminal ? 'Restart worker' : 'Stop worker'}
+            disabled={busy}
+            style={{
+                padding: '4px 8px',
+                borderRadius: '8px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                minHeight: '24px',
+                opacity: busy ? 0.7 : 1,
+                border: isTerminal ? '1px solid var(--card-border)' : '1px solid rgba(239,68,68,0.35)',
+                color: isTerminal ? 'var(--text-muted)' : '#ef4444'
+            }}
+        >
+            {isTerminal ? (
+                <RefreshCw size={12} style={busy ? { animation: 'spin 1s linear infinite' } : undefined} />
+            ) : (
+                <Square size={12} fill="currentColor" />
+            )}
+            <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                {isTerminal ? 'Reload' : 'Stop'}
+            </span>
+        </button>
+    );
+});
+
+const InlineApprovalBar = memo(({ workId, sessionId, statusPhase, approvalRequest, statusMessage }) => {
+    const [busy, setBusy] = useState(false);
+    const [snapshot, setSnapshot] = useState(null);
+    const [localDecision, setLocalDecision] = useState(null); // { type: 'approved'|'denied', scope, ts }
+
+    const fetchSnapshot = async () => {
+        if (!workId) return;
+        try {
+            const data = await api.get(`/tasks/works/${workId}?requester_session_id=${encodeURIComponent(sessionId || '')}`);
+            setSnapshot(data || null);
+        } catch {
+            // Keep silent to avoid noisy UI.
+        }
+    };
+
+    useEffect(() => {
+        fetchSnapshot();
+    }, [workId, sessionId]);
+
+    const statusPhaseNorm = String(statusPhase || '').toLowerCase();
+    const terminalStatuses = new Set(['complete', 'succeeded', 'failed', 'cancelled']);
+    const snapshotStatus = String(snapshot?.status || '').toLowerCase();
+    const runtimeStatus = (() => {
+        if (statusPhaseNorm === 'waiting_user' || snapshotStatus === 'waiting_user') return 'waiting_user';
+        if (terminalStatuses.has(statusPhaseNorm)) return statusPhaseNorm;
+        if (terminalStatuses.has(snapshotStatus)) return snapshotStatus;
+        return snapshotStatus || statusPhaseNorm || '';
+    })();
+    const summary = snapshot?.context?.summary && typeof snapshot.context.summary === 'object' ? snapshot.context.summary : {};
+    const snapshotApproval = (snapshot?.approval_request && typeof snapshot.approval_request === 'object')
+        ? snapshot.approval_request
+        : (summary?.approval_request && typeof summary.approval_request === 'object' ? summary.approval_request : null);
+    const effectiveApprovalRequest = (approvalRequest && typeof approvalRequest === 'object')
+        ? approvalRequest
+        : snapshotApproval;
+    const resolvedPrompt = String(
+        effectiveApprovalRequest?.prompt
+        || summary?.approval_prompt
+        || statusMessage
+        || 'Sensitive action detected. Do you authorize execution?'
+    ).trim();
+    const approvalKey = JSON.stringify({
+        workId: String(workId || ''),
+        prompt: resolvedPrompt,
+        action: String(effectiveApprovalRequest?.action_id || effectiveApprovalRequest?.action || summary?.approval_action || ''),
+        args: effectiveApprovalRequest?.args || summary?.approval_args || null,
+    });
+    const waitingUser = runtimeStatus === 'waiting_user' || (
+        !!effectiveApprovalRequest
+        && !terminalStatuses.has(runtimeStatus)
+    );
+    const hasLocalDecision = !!localDecision && localDecision.approvalKey === approvalKey;
+
+    useEffect(() => {
+        if (!workId) return undefined;
+        if (waitingUser || !!effectiveApprovalRequest || hasLocalDecision) {
+            const t = setInterval(fetchSnapshot, 1000);
+            return () => clearInterval(t);
+        }
+        return undefined;
+    }, [workId, waitingUser, effectiveApprovalRequest, hasLocalDecision]);
+
+    useEffect(() => {
+        // New approval request arrived -> clear previous local decision marker.
+        if (!localDecision) return;
+        if (localDecision.approvalKey !== approvalKey) {
+            setLocalDecision(null);
+        }
+    }, [approvalKey, localDecision]);
+
+    if (!waitingUser && !hasLocalDecision) return null;
+
+    const sendApprovalDecision = async (decision, scope = 'worker') => {
+        if (!workId || busy) return;
+        setBusy(true);
+        try {
+            await api.post(`/tasks/works/${workId}/commands`, {
+                command: decision === 'deny' ? 'deny' : 'approve',
+                payload: { scope },
+                requester_session_id: sessionId,
+                source_session_id: sessionId,
+            });
+            setLocalDecision({
+                type: decision === 'deny' ? 'denied' : 'approved',
+                scope,
+                ts: Date.now(),
+                approvalKey,
+            });
+            toast.success(
+                decision === 'deny' ? 'Denied' : `Allowed (${scope})`
+            );
+            setTimeout(() => { fetchSnapshot(); }, 350);
+            setTimeout(() => { fetchSnapshot(); }, 1200);
+        } catch (err) {
+            toast.error(err?.message || 'Failed to send decision');
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <div style={{
+            marginBottom: '12px',
+            padding: '10px 12px',
+            borderRadius: '10px',
+            border: waitingUser
+                ? '1px solid rgba(245,158,11,0.35)'
+                : (localDecision?.type === 'approved' ? '1px solid rgba(16,185,129,0.35)' : '1px solid rgba(239,68,68,0.35)'),
+            background: waitingUser
+                ? 'rgba(245,158,11,0.08)'
+                : (localDecision?.type === 'approved' ? 'rgba(16,185,129,0.10)' : 'rgba(239,68,68,0.10)'),
+        }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-primary)', marginBottom: '8px' }}>
+                {hasLocalDecision
+                    ? (localDecision?.type === 'approved'
+                        ? `Approval sent (${localDecision.scope}). Worker resumed.`
+                        : 'Denied. Worker will stop the sensitive action.')
+                    : resolvedPrompt}
+            </div>
+            {waitingUser && !hasLocalDecision && (
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    <button className="btn-ghost" disabled={busy} onClick={() => sendApprovalDecision('deny')} style={{ fontSize: '10px', padding: '5px 8px', color: '#f87171', border: '1px solid rgba(248,113,113,0.4)' }}>
+                        Deny
+                    </button>
+                    <button className="btn-ghost" disabled={busy} onClick={() => sendApprovalDecision('approve', 'worker')} style={{ fontSize: '10px', padding: '5px 8px' }}>
+                        Allow Worker
+                    </button>
+                    <button className="btn-ghost" disabled={busy} onClick={() => sendApprovalDecision('approve', 'session')} style={{ fontSize: '10px', padding: '5px 8px' }}>
+                        Allow Session
+                    </button>
+                    <button className="btn-ghost" disabled={busy} onClick={() => sendApprovalDecision('approve', 'global')} style={{ fontSize: '10px', padding: '5px 8px' }}>
+                        Allow Global
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+});
+
+const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agentName, latestPlaybackEvent }) => {
+    const [isCognitiveCollapsed, setIsCognitiveCollapsed] = useState(true);
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [isWorkDetailsOpen, setIsWorkDetailsOpen] = useState(false);
+    const isUser = msg.role === 'user';
+    const reasoningTimeline = normalizeReasoningTimeline(msg);
+    const hasReasoning = !isUser && reasoningTimeline.length > 0;
+    const showInlineThoughtToggle = hasReasoning && !isStreaming && isCognitiveCollapsed;
+    const statusPhaseNormalized = String(msg?.statusPhase || '').toLowerCase();
+    const isTerminalPhase = ['complete', 'completed', 'succeeded', 'success', 'done', 'failed', 'error', 'aborted', 'cancelled', 'canceled'].includes(statusPhaseNormalized);
+    const isActivelyStreaming = isStreaming && !isTerminalPhase;
+    const previewMessageContent = useMemo(() => {
+        if (Array.isArray(msg?.contentSegments) && msg.contentSegments.length > 0) {
+            return msg.contentSegments
+                .map((segment) => String(segment?.content || '').trim())
+                .filter(Boolean)
+                .join('\n');
+        }
+        return String(msg?.content || '').trim();
+    }, [msg?.contentSegments, msg?.content]);
+    const cardDetectionText = useMemo(() => {
+        if (Array.isArray(msg?.contentSegments) && msg.contentSegments.length > 0) {
+            const lastNonEmpty = [...msg.contentSegments]
+                .reverse()
+                .map((segment) => String(segment?.content || '').trim())
+                .find(Boolean);
+            if (lastNonEmpty) return lastNonEmpty;
+        }
+        return String(msg?.content || '').trim();
+    }, [msg?.contentSegments, msg?.content]);
+    const skillHints = useMemo(() => {
+        const contextSkills = msg?.context?.data?.skills_used;
+        return [
+            ...(Array.isArray(msg?.skills_used) ? msg.skills_used : []),
+            ...(Array.isArray(contextSkills) ? contextSkills : []),
+        ];
+    }, [msg?.skills_used, msg?.context?.data?.skills_used]);
+    const actionHints = useMemo(() => {
+        const contextActions = msg?.context?.data?.actions_used;
+        return [
+            ...(Array.isArray(msg?.actions_used) ? msg.actions_used : []),
+            ...(Array.isArray(contextActions) ? contextActions : []),
+        ];
+    }, [msg?.actions_used, msg?.context?.data?.actions_used]);
+    const sourceHints = useMemo(() => {
+        const contextSources = msg?.context?.data?.sources_used;
+        return [
+            ...(Array.isArray(msg?.sources_used) ? msg.sources_used : []),
+            ...(Array.isArray(contextSources) ? contextSources : []),
+        ];
+    }, [msg?.sources_used, msg?.context?.data?.sources_used]);
+    const {
+        anchorId,
+        shouldTryWeatherCard,
+        shouldTrySystemHealthCard,
+        shouldTryWikiCard,
+        shouldTryMapCard,
+        wikiCardData,
+        mapCardData,
+        parsedDataChart,
+        weatherCardLoading,
+        weatherCardData,
+        systemHealthLoading,
+        systemHealthData,
+    } = useAssistCards({
+        sessionId,
+        workId: msg?.work_id,
+        text: cardDetectionText,
+        isUser,
+        isStreaming: isActivelyStreaming,
+        skillsUsed: skillHints,
+        actionsUsed: actionHints,
+        sourcesUsed: sourceHints,
+    });
+
+    useEffect(() => {
+        if (msg.isComplete || msg.statusPhase === 'complete') {
             setIsCognitiveCollapsed(true);
         }
-    }, [msg.isComplete]);
+    }, [msg.isComplete, msg.statusPhase]);
 
     return (
         <div className="animate-fade-in" style={{
@@ -448,69 +1662,257 @@ const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agent
                 width: isUser ? 'auto' : '100%',
                 maxWidth: isUser ? '85%' : 'min(92%, 56rem)',
                 overflowWrap: 'anywhere',
-                wordBreak: 'break-word'
+                wordBreak: 'break-word',
+                padding: '16px'
             }}>
                 <div style={{
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
                     gap: '8px',
-                    marginBottom: '8px',
+                    marginBottom: '12px',
                     paddingBottom: '8px',
-                    borderBottom: isUser ? '1px solid rgba(255,255,255,0.1)' : '1px solid var(--card-border)'
+                    borderBottom: isUser ? '1px solid rgba(255,255,255,0.1)' : '1px solid var(--card-border)',
+                    minHeight: '24px'
                 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                        <p style={{ fontSize: '11px', fontWeight: 'bold', color: isUser ? '#fff' : 'var(--text-primary)' }}>{isUser ? 'You' : agentName}</p>
-                        {msg.timestamp && <p style={{ fontSize: '10px', color: isUser ? 'rgba(255,255,255,0.7)' : 'var(--text-muted)' }}>{formatTime(msg.timestamp)}</p>}
-                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, overflow: 'hidden' }}>
+                        <p style={{ fontSize: '11px', fontWeight: 'bold', color: isUser ? '#fff' : 'var(--text-primary)', flexShrink: 0 }}>{isUser ? 'You' : agentName}</p>
+                        {msg.timestamp && <p style={{ fontSize: '10px', color: isUser ? 'rgba(255,255,255,0.7)' : 'var(--text-muted)', flexShrink: 0 }}>{formatTime(msg.timestamp)}</p>}
+                        {!isUser && msg.work_id && (
+                            <WorkUnitInspector
+                                workId={msg.work_id}
+                                sessionId={sessionId}
+                                onExpand={onExpand}
+                                inline
+                                open={isWorkDetailsOpen}
+                                onToggle={setIsWorkDetailsOpen}
+                                hidePanel
+                            />
+                        )}
 
-                    {showInlineThoughtToggle && (
-                        <button
-                            onClick={() => setIsCognitiveCollapsed(false)}
-                            title="Expand Thought"
-                            style={{
+                        {!isUser && isActivelyStreaming && msg.statusPhase && (
+                            <div style={{
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 gap: '6px',
-                                cursor: 'pointer',
-                                padding: '4px 10px',
-                                background: 'var(--bg-color)',
-                                border: '1px solid var(--card-border)',
-                                borderRadius: '8px',
-                                boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
-                                flexShrink: 0
-                            }}
-                        >
-                            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} />
-                            <span style={{ fontSize: '9px', fontWeight: '800', color: 'var(--text-primary)', opacity: 0.7, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Thought</span>
-                        </button>
-                    )}
-                </div>
-                {isUser && msg.isSending && (
-                    <div style={{ position: 'absolute', right: '-25px', top: '50%', transform: 'translateY(-50%)' }}>
-                        <RefreshCw size={14} className="animate-spin" color="var(--accent-color)" />
+                                padding: '2px 4px',
+                                marginLeft: '4px',
+                                minWidth: 0,
+                                flexShrink: 1,
+                                minHeight: '18px',
+                                lineHeight: '1'
+                            }}>
+                                <div style={{
+                                    width: '10px', height: '10px',
+                                    border: '1.5px solid rgba(0,0,0,0.1)',
+                                    borderTopColor: 'var(--accent-color)',
+                                    borderRadius: '50%',
+                                    animation: 'spin 1s linear infinite',
+                                    flexShrink: 0
+                                }} />
+                                <span style={{
+                                    fontSize: '9px',
+                                    fontWeight: '800',
+                                    textTransform: 'uppercase',
+                                    color: 'var(--accent-color)',
+                                    letterSpacing: '0.05em',
+                                    whiteSpace: 'nowrap'
+                                }}>
+                                    {msg.statusPhase}
+                                </span>
+                                {msg.statusMessage && (
+                                    <span
+                                        title={String(msg.statusMessage)}
+                                        style={{
+                                            fontSize: '9px',
+                                            fontWeight: '700',
+                                            color: 'var(--text-muted)',
+                                            maxWidth: '280px',
+                                            overflow: 'hidden',
+                                            textOverflow: 'ellipsis',
+                                            whiteSpace: 'nowrap',
+                                            lineHeight: 1.2,
+                                            opacity: 0.9,
+                                        }}
+                                    >
+                                        {String(msg.statusMessage)}
+                                    </span>
+                                )}
+                            </div>
+                        )}
                     </div>
-                )}
-                {!isUser && (isStreaming) && msg.statusPhase && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px', padding: '10px 14px', background: 'rgba(0,0,0,0.05)', borderRadius: '10px', border: '1px solid var(--card-border)' }}>
-                        <div style={{ width: '14px', height: '14px', border: '2px solid rgba(0,0,0,0.1)', borderTopColor: 'var(--accent-color)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
-                        <span style={{ fontSize: '12px', fontWeight: '800', textTransform: 'uppercase', color: 'var(--accent-color)', letterSpacing: '0.05em' }}>{msg.statusPhase}</span>
-                        {msg.statusMessage && <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: '500' }}>{msg.statusMessage}</span>}
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                        {!isUser && msg.work_id && (
+                            <WorkControlButton
+                                workId={msg.work_id}
+                                sessionId={sessionId}
+                                isStreaming={isStreaming}
+                                statusPhase={msg.statusPhase}
+                            />
+                        )}
+                        {showInlineThoughtToggle && (
+                            <button
+                                onClick={() => setIsCognitiveCollapsed(false)}
+                                title="Expand Thought"
+                                style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '6px',
+                                    cursor: 'pointer',
+                                    padding: '2px 8px',
+                                    background: 'var(--bg-color)',
+                                    border: '1px solid var(--card-border)',
+                                    borderRadius: '6px',
+                                    flexShrink: 0
+                                }}
+                            >
+                                <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} />
+                                <span style={{ fontSize: '9px', fontWeight: '800', color: 'var(--text-primary)', opacity: 0.7, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Thought</span>
+                            </button>
+                        )}
+                    </div>
+                </div>
+
+                {!isUser && msg.work_id && isWorkDetailsOpen && (
+                    <div style={{ marginBottom: '12px' }}>
+                        <WorkUnitInspector
+                            workId={msg.work_id}
+                            sessionId={sessionId}
+                            onExpand={onExpand}
+                            open={isWorkDetailsOpen}
+                            onToggle={setIsWorkDetailsOpen}
+                            hideButton
+                        />
                     </div>
                 )}
 
+                {!isUser && msg.work_id && (
+                    <InlineApprovalBar
+                        workId={msg.work_id}
+                        sessionId={sessionId}
+                        statusPhase={msg.statusPhase}
+                        approvalRequest={msg.approvalRequest}
+                        statusMessage={msg.statusMessage}
+                    />
+                )}
+
+                {!isUser && shouldTryWeatherCard && (
+                    <>
+                        {weatherCardLoading && (
+                            <ChatCollapsibleAssistCard
+                                sessionId={sessionId}
+                                anchorId={anchorId}
+                                cardType="weather"
+                                title="Weather"
+                                defaultOpen={true}
+                            >
+                                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Loading weather data...</div>
+                            </ChatCollapsibleAssistCard>
+                        )}
+                        {!weatherCardLoading && weatherCardData?.ok && (
+                            <ChatCollapsibleAssistCard
+                                sessionId={sessionId}
+                                anchorId={anchorId}
+                                cardType="weather"
+                                title="Weather"
+                                defaultOpen={true}
+                            >
+                                <WeatherAssistCard data={weatherCardData} />
+                            </ChatCollapsibleAssistCard>
+                        )}
+                    </>
+                )}
+
+                {!isUser && shouldTrySystemHealthCard && (
+                    <>
+                        {systemHealthLoading && (
+                            <ChatCollapsibleAssistCard
+                                sessionId={sessionId}
+                                anchorId={anchorId}
+                                cardType="system-health"
+                                title="System Health"
+                                defaultOpen={true}
+                            >
+                                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Loading system metrics...</div>
+                            </ChatCollapsibleAssistCard>
+                        )}
+                        {!systemHealthLoading && systemHealthData?.ok && (
+                            <ChatCollapsibleAssistCard
+                                sessionId={sessionId}
+                                anchorId={anchorId}
+                                cardType="system-health"
+                                title="System Health"
+                                defaultOpen={true}
+                            >
+                                <SystemHealthAssistCard data={systemHealthData} />
+                            </ChatCollapsibleAssistCard>
+                        )}
+                        {!systemHealthLoading && systemHealthData && !systemHealthData?.ok && (
+                            <ChatCollapsibleAssistCard
+                                sessionId={sessionId}
+                                anchorId={anchorId}
+                                cardType="system-health"
+                                title="System Health"
+                                defaultOpen={true}
+                            >
+                                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                    Unable to load system metrics now.
+                                    {systemHealthData?.message ? ` ${String(systemHealthData.message)}` : ''}
+                                </div>
+                            </ChatCollapsibleAssistCard>
+                        )}
+                    </>
+                )}
+
+                {!isUser && parsedDataChart && (
+                    <ChatCollapsibleAssistCard
+                        sessionId={sessionId}
+                        anchorId={anchorId}
+                        cardType={`data-chart:${parsedDataChart?.yLabel || 'default'}`}
+                        title="Data Chart"
+                        defaultOpen={true}
+                    >
+                        <DataChartAssistCard chart={parsedDataChart} />
+                    </ChatCollapsibleAssistCard>
+                )}
+
+                {!isUser && shouldTryWikiCard && wikiCardData && (
+                    <ChatCollapsibleAssistCard
+                        sessionId={sessionId}
+                        anchorId={anchorId}
+                        cardType="wikipedia"
+                        title="Wikipedia"
+                        defaultOpen={true}
+                    >
+                        <WikiAssistCard data={wikiCardData} />
+                    </ChatCollapsibleAssistCard>
+                )}
+
+                {!isUser && shouldTryMapCard && mapCardData && (
+                    <ChatCollapsibleAssistCard
+                        sessionId={sessionId}
+                        anchorId={anchorId}
+                        cardType="maps"
+                        title="Maps"
+                        defaultOpen={true}
+                    >
+                        <MapAssistCard data={mapCardData} />
+                    </ChatCollapsibleAssistCard>
+                )}
+
                 {hasReasoning && (
-                    !isStreaming && isCognitiveCollapsed ? null : (
+                    (!isStreaming && isCognitiveCollapsed) ? null : (
                         <div style={{
-                            marginBottom: 'var(--space-4)',
+                            marginBottom: '16px',
                             border: '1px solid var(--card-border)',
-                            borderRadius: 'var(--radius-md)',
+                            borderRadius: '8px',
                             overflow: 'hidden',
                             background: 'rgba(0,0,0,0.02)',
                             fontFamily: '"JetBrains Mono", "Fira Code", monospace'
                         }}>
                             <div style={{
-                                padding: 'var(--space-3) var(--space-4)',
+                                padding: '8px 12px',
                                 background: 'rgba(0,0,0,0.04)',
                                 borderBottom: '1px solid var(--card-border)',
                                 display: 'flex',
@@ -518,157 +1920,193 @@ const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agent
                                 alignItems: 'center',
                                 cursor: 'pointer'
                             }} onClick={() => setIsCognitiveCollapsed(!isCognitiveCollapsed)}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                     <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: !isStreaming ? '#10b981' : 'var(--accent-color)', animation: !isStreaming ? 'none' : 'pulse 2s infinite' }} />
-                                    <span style={{ fontSize: '0.625rem', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                                        Cognitive Process // {msg.reasoningLines.length} OP_STEPS
+                                    <span style={{ fontSize: '10px', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                                        Thinking Process {isStreaming ? '...' : ''}
                                     </span>
                                 </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    <button
-                                        onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
-                                        className="btn-ghost"
-                                        style={{ fontSize: '0.625rem', fontWeight: '800', padding: '2px 8px', height: 'auto', borderRadius: '4px' }}
-                                    >
-                                        {isExpanded ? 'HIDE_RAW' : 'SHOW_RAW'}
-                                    </button>
-                                    {isCognitiveCollapsed ? <ChevronDown size={14} className="text-muted" /> : <ChevronUp size={14} className="text-muted" />}
-                                </div>
+                                {isCognitiveCollapsed ? <ChevronDown size={14} className="text-muted" /> : <ChevronUp size={14} className="text-muted" />}
                             </div>
 
-                            {isCognitiveCollapsed && isStreaming && msg.reasoningLines.length > 0 && (
-                                <div style={{ padding: '8px 16px', borderTop: '1px solid rgba(0,0,0,0.03)' }}>
-                                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                                        <span style={{ color: 'var(--accent-color)', fontWeight: 'bold', fontSize: '0.75rem' }}>{'>'}</span>
-                                        <span style={{
-                                            color: 'var(--text-primary)',
-                                            fontSize: '0.75rem',
-                                            whiteSpace: 'nowrap',
-                                            overflow: 'hidden',
-                                            textOverflow: 'ellipsis',
-                                            opacity: 0.8
-                                        }}>
-                                            {msg.reasoningLines[msg.reasoningLines.length - 1]}
-                                        </span>
-                                    </div>
-                                </div>
-                            )}
-
                             {!isCognitiveCollapsed && (
-                                <>
-                                    <div style={{ padding: 'var(--space-4)', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-                                        {/* Simplified Timeline View */}
-                                        {msg.reasoningLines.slice(-3).map((line, idx) => (
-                                            <div key={idx} style={{ display: 'flex', gap: 'var(--space-3)', opacity: idx === (msg.reasoningLines.slice(-3).length - 1) ? 1 : 0.5 }}>
-                                                <span style={{ color: 'var(--accent-color)', fontWeight: 'bold' }}>{'>'}</span>
-                                                <span style={{ color: 'var(--text-primary)' }}>{line}</span>
+                                <div style={{ padding: '12px', fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    {reasoningTimeline.map((entry, idx) => (
+                                        <div key={idx} style={{ display: 'flex', gap: '12px', opacity: idx === (reasoningTimeline.length - 1) ? 1 : 0.6 }}>
+                                            <span style={{ color: 'var(--accent-color)', fontWeight: 'bold' }}>{'>'}</span>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                                <span style={{ color: 'var(--text-primary)' }}>{entry.text}</span>
+                                                {entry.ts && (
+                                                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', opacity: 0.9 }}>
+                                                        {formatTime(entry.ts)}
+                                                    </span>
+                                                )}
                                             </div>
-                                        ))}
-                                    </div>
-
-                                    {isExpanded && (
-                                        <div style={{
-                                            padding: 'var(--space-4)',
-                                            fontSize: '0.7rem',
-                                            background: 'rgba(0,0,0,0.2)',
-                                            maxHeight: '200px',
-                                            overflowY: 'auto',
-                                            borderTop: '1px solid var(--card-border)',
-                                            color: 'var(--text-muted)'
-                                        }}>
-                                            {msg.reasoningLines.map((line, idx) => (
-                                                <div key={idx} style={{ marginBottom: '4px' }}>
-                                                    <span style={{ opacity: 0.3 }}>[{idx.toString().padStart(2, '0')}]</span> {line}
-                                                </div>
-                                            ))}
                                         </div>
-                                    )}
-                                </>
+                                    ))}
+                                </div>
                             )}
                         </div>
                     )
                 )}
 
-                <div style={{ position: 'relative' }}>
-                    <MessageAttachments msg={msg} sessionId={sessionId} onExpand={onExpand} />
-                    {msg.content ? (
-                        <>
-                            <div className="markdown-content" style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
-                                <ReactMarkdown
-                                    remarkPlugins={[remarkGfm, remarkBreaks]}
-                                    rehypePlugins={[rehypeRaw]}
-                                    components={{
-                                        code: CodeBlock,
-                                        p: ({ node, children, ...props }) => <div style={{ marginBottom: '12px' }} {...props}>{children}</div>,
-                                        ul: ({ node, ...props }) => <ul style={{ paddingLeft: '24px', marginBottom: '16px' }} {...props} />,
-                                        ol: ({ node, ...props }) => <ol style={{ paddingLeft: '24px', marginBottom: '16px', listStyleType: 'decimal' }} {...props} />,
-                                        li: ({ node, ...props }) => <li style={{ marginBottom: '8px' }} {...props} />,
-                                        strong: ({ node, ...props }) => <strong style={{ color: isUser ? '#fff' : 'var(--accent-color)', fontWeight: '800' }} {...props} />,
-                                        a: ({ node, ...props }) => <a style={{ color: isUser ? '#fff' : 'var(--accent-color)', textDecoration: 'underline', fontWeight: 'bold' }} target="_blank" rel="noreferrer" {...props} />
-                                    }}
-                                >
-                                    {msg.content}
-                                </ReactMarkdown>
-                            </div>
-                            {!isUser && isStreaming && (
-                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '8px', opacity: 0.75 }}>
-                                    <span style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--accent-color)' }}>
-                                        Typing
-                                    </span>
-                                    {[0, 1, 2].map(i => (
-                                        <span
-                                            key={`typing-dot-${i}`}
-                                            style={{
-                                                width: '4px',
-                                                height: '4px',
-                                                borderRadius: '50%',
-                                                background: 'var(--accent-color)',
-                                                animation: `fadeIn 1s infinite ${i * 0.15}s`
-                                            }}
-                                        />
-                                    ))}
-                                    <span
-                                        style={{
-                                            display: 'inline-block',
-                                            width: '8px',
-                                            height: '12px',
-                                            marginLeft: '2px',
-                                            borderRight: '2px solid var(--accent-color)',
-                                            animation: 'pulse 1s infinite'
-                                        }}
+                {/* Segments (Playback, Response, etc.) */}
+                {msg.contentSegments && msg.contentSegments.length > 0 ? (
+                    msg.contentSegments.map((segment, idx) => (
+                        <div key={idx} style={{ position: 'relative' }}>
+                            {(idx > 0 || hasReasoning) && <SegmentDivider />}
+
+                            {segment.playback && (
+                                <div style={{ marginBottom: '16px' }}>
+                                    <PlaybackCard
+                                        runId={segment.playback.run_id}
+                                        sessionId={sessionId}
+                                        liveEvent={latestPlaybackEvent}
                                     />
                                 </div>
                             )}
-                        </>
-                    ) : (
-                        !isUser && isStreaming && <div style={{ display: 'flex', gap: '6px', padding: '8px 0' }}>
-                            {[0, 1, 2].map(i => (
-                                <div key={i} style={{ width: '6px', height: '6px', background: 'var(--accent-color)', borderRadius: '50%', animation: `fadeIn 1s infinite ${i * 0.2}s` }} />
-                            ))}
+
+                            {segment.content ? (
+                                <TypewriterMarkdown
+                                    text={segment.content}
+                                    isStreaming={!isUser && isStreaming && idx === msg.contentSegments.length - 1}
+                                    isComplete={msg.statusPhase === 'complete'}
+                                    isUser={isUser}
+                                />
+                            ) : null}
+
+                            {segment.attachments && segment.attachments.length > 0 && (
+                                <div style={{ marginTop: '12px' }}>
+                                    <MessageAttachments msg={{ attachments: segment.attachments }} sessionId={sessionId} onExpand={onExpand} />
+                                </div>
+                            )}
                         </div>
-                    )}
-                </div>
-                {!isUser && msg.content && !isStreaming && (
+                    ))
+                ) : (
+                    /* Fallback for standalone messages */
+                    <>
+                        {hasReasoning && <SegmentDivider />}
+                        {msg.playback && (
+                            <div style={{ marginBottom: '16px' }}>
+                                <PlaybackCard runId={msg.playback.run_id} sessionId={sessionId} liveEvent={latestPlaybackEvent} />
+                            </div>
+                        )}
+                        {msg.content ? (
+                            <TypewriterMarkdown
+                                text={msg.content}
+                                isStreaming={!isUser && isStreaming}
+                                isComplete={msg.statusPhase === 'complete'}
+                                isUser={isUser}
+                            />
+                        ) : null}
+                        <MessageAttachments msg={msg} sessionId={sessionId} onExpand={onExpand} />
+                    </>
+                )}
+
+                {!isUser && previewMessageContent && !isStreaming && (
                     <div style={{ display: 'flex', justifyContent: 'center', marginTop: 'var(--space-3)' }}>
-                        <LinkPreviewCard messageContent={msg.content} />
+                        <LinkPreviewCard messageContent={previewMessageContent} />
                     </div>
                 )}
+
             </div>
-        </div >
+        </div>
+    );
+});
+
+const ChatCollapsibleAssistCard = memo(({
+    sessionId,
+    anchorId,
+    cardType,
+    title,
+    defaultOpen = true,
+    children,
+}) => {
+    const storageKey = useMemo(
+        () => `assistant_chat_card:${sessionId || 'global'}:${anchorId || 'unknown'}:${cardType || 'card'}`,
+        [sessionId, anchorId, cardType]
+    );
+
+    const [isOpen, setIsOpen] = useState(() => {
+        try {
+            const raw = localStorage.getItem(storageKey);
+            if (raw === '0') return false;
+            if (raw === '1') return true;
+        } catch {
+            // ignore localStorage failures
+        }
+        return defaultOpen;
+    });
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(storageKey, isOpen ? '1' : '0');
+        } catch {
+            // ignore localStorage failures
+        }
+    }, [storageKey, isOpen]);
+
+    const headerMeta = useMemo(() => {
+        const key = String(cardType || title || '').toLowerCase();
+        if (key.includes('weather') || key.includes('clima')) return { Icon: CloudSun, color: '#facc15' };
+        if (key.includes('system') || key.includes('health')) return { Icon: HeartPulse, color: '#34d399' };
+        if (key.includes('chart') || key.includes('data')) return { Icon: BarChart3, color: '#f59e0b' };
+        if (key.includes('wiki') || key.includes('wikipedia')) return { Icon: BookOpen, color: '#cbd5e1' };
+        if (key.includes('map')) return { Icon: Globe, color: '#34d399' };
+        if (key.includes('youtube')) return { Icon: Video, color: '#ef4444' };
+        if (key.includes('playback') || key.includes('music') || key.includes('audio')) return { Icon: Music, color: '#a78bfa' };
+        if (key.includes('video')) return { Icon: Video, color: '#f87171' };
+        return { Icon: FileText, color: 'var(--text-muted)' };
+    }, [cardType, title]);
+    const HeaderIcon = headerMeta.Icon;
+
+    return (
+        <div style={{ marginBottom: '16px', border: '1px solid var(--card-border)', borderRadius: '10px', overflow: 'hidden', background: 'var(--card-bg)' }}>
+            <button
+                type="button"
+                onClick={() => setIsOpen((prev) => !prev)}
+                style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '8px',
+                    border: 'none',
+                    borderBottom: isOpen ? '1px solid var(--card-border)' : 'none',
+                    background: 'transparent',
+                    padding: '10px 12px',
+                    cursor: 'pointer',
+                }}
+            >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '10px', fontWeight: 900, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                    {!isOpen && <HeaderIcon size={12} color={headerMeta.color} />}
+                    <span>{title}</span>
+                </span>
+                {isOpen ? <ChevronUp size={14} className="text-muted" /> : <ChevronDown size={14} className="text-muted" />}
+            </button>
+            {isOpen && <div style={{ padding: '10px 12px' }}>{children}</div>}
+        </div>
     );
 });
 
 const MessageList = memo(({ messages, sessionId, streamingMessage, onExpand, scrollRef, agentName, onScroll, latestPlaybackEvent, playbackRuns }) => {
-    const filteredMessages = useMemo(() =>
-        messages.filter(msg => !msg.content.includes('[SYSTEM_NOTIFICATION]')),
-        [messages]
-    );
+    const combinedMessages = useMemo(() => {
+        const history = (Array.isArray(messages) ? messages : [])
+            .filter((msg) => msg && typeof msg === 'object')
+            .filter((msg) => !String(msg.content || '').includes('[SYSTEM_NOTIFICATION]'));
+        if (streamingMessage) {
+            return [...history, streamingMessage];
+        }
+        return history;
+    }, [messages, streamingMessage]);
+
+    const groupedHistory = useMemo(() => groupHistoryWithReasoning(combinedMessages), [combinedMessages]);
 
     const renderMessagesWithDateDividers = () => {
         const result = [];
         let lastDateStr = null;
 
-        filteredMessages.forEach((msg, i) => {
+        groupedHistory.forEach((msg, i) => {
             if (msg.timestamp) {
                 const dateStr = formatDate(msg.timestamp);
 
@@ -692,48 +2130,30 @@ const MessageList = memo(({ messages, sessionId, streamingMessage, onExpand, scr
                     lastDateStr = dateStr;
                 }
             }
-            result.push(<MessageItem key={msg.id || `msg-${i}`} msg={msg} sessionId={sessionId} onExpand={onExpand} agentName={agentName} />);
-        });
 
-        // Add live playback card at the end of messages
-        if (latestPlaybackEvent) {
-            result.push(
-                <div key="live-playback" style={{ padding: '8px 16px', maxWidth: '500px', width: '100%' }}>
-                    <PlaybackCard
-                        runId={latestPlaybackEvent.run_id}
-                        sessionId={sessionId}
-                        liveEvent={latestPlaybackEvent}
-                    />
-                </div>
+            const isLatestStreaming = streamingMessage && (
+                (msg.work_id && msg.work_id === streamingMessage.work_id) ||
+                msg.id === streamingMessage.id ||
+                msg === streamingMessage
             );
-        }
 
-        // Render completed (historical) playback runs as compact chips
-        if (!latestPlaybackEvent && playbackRuns && playbackRuns.length > 0) {
-            // Show the most recent completed playback inline
-            const recentRun = playbackRuns[0];
-            if (recentRun && recentRun.status !== 'running') {
-                result.push(
-                    <div key={`playback-${recentRun.run_id}`} style={{ padding: '8px 16px', maxWidth: '500px', width: '100%' }}>
-                        <PlaybackCard
-                            runId={recentRun.run_id}
-                            sessionId={sessionId}
-                        />
-                    </div>
-                );
-            }
-        }
-
-        if (streamingMessage) {
-            result.push(<MessageItem key="streaming" msg={streamingMessage} sessionId={sessionId} isStreaming={true} onExpand={onExpand} agentName={agentName} />);
-        }
+            result.push(<MessageItem
+                key={msg.id || `msg-${i}`}
+                msg={msg}
+                sessionId={sessionId}
+                isStreaming={!!isLatestStreaming}
+                onExpand={onExpand}
+                agentName={agentName}
+                latestPlaybackEvent={latestPlaybackEvent}
+            />);
+        });
 
         return result;
     };
 
     return (
         <div ref={scrollRef} onScroll={onScroll} className="custom-scrollbar h-full chat-container-bg" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            {filteredMessages.length === 0 && !streamingMessage ? (
+            {combinedMessages.length === 0 ? (
                 <div style={{ margin: 'auto', textAlign: 'center', opacity: 0.8, maxWidth: '400px' }}>
                     <div style={{ width: '64px', height: '64px', background: 'var(--accent-glow)', borderRadius: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 24px', color: 'var(--accent-color)' }}>
                         <Bot size={32} />
@@ -867,6 +2287,7 @@ const Chat = () => {
     const { agentName } = useAuth();
     const [sessions, setSessions] = useState([]);
     const [selectedId, setSelectedId] = useState(null);
+    const [deletingSessionId, setDeletingSessionId] = useState(null);
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
@@ -881,6 +2302,8 @@ const Chat = () => {
     const [isSending, setIsSending] = useState(false);
     const [latestPlaybackEvent, setLatestPlaybackEvent] = useState(null);
     const [playbackRuns, setPlaybackRuns] = useState([]);
+    const [activeProfileTab, setActiveProfileTab] = useState('media'); // 'media' | 'docs' | 'links' | 'playback' | 'metrics'
+    const [expandedProfilePlayback, setExpandedProfilePlayback] = useState(null); // run_id of currently expanded playback
     const [isSessionsCollapsed, setIsSessionsCollapsed] = useState(() => {
         return localStorage.getItem('assistant_chat_sessions_collapsed') === 'true';
     });
@@ -917,15 +2340,20 @@ const Chat = () => {
     const completeFlushTimeoutRef = useRef(null);
     const skipResetRef = useRef(false); // Flag to skip state clearing during lazy session creation
     const prevLastMsgIdRef = useRef(null); // Tracks last message to intelligently auto-scroll
-    const pendingReasoningRef = useRef([]); // Accumulates reasoning lines until the next assistant final message
+    const pendingReasoningRef = useRef([]); // Accumulates reasoning timeline entries until the next assistant final message
+    const streamingMessageRef = useRef(null);
 
-    const pushPendingReasoning = (line) => {
-        const normalized = String(line || '').trim();
-        if (!normalized) return;
+    useEffect(() => {
+        streamingMessageRef.current = streamingMessage;
+    }, [streamingMessage]);
+
+    const pushPendingReasoning = (line, ts = null) => {
+        const entry = toReasoningEntry(line, ts);
+        if (!entry) return;
 
         const existing = pendingReasoningRef.current || [];
-        if (existing[existing.length - 1] === normalized) return;
-        pendingReasoningRef.current = [...existing, normalized];
+        if (existing[existing.length - 1]?.text === entry.text) return;
+        pendingReasoningRef.current = [...existing, entry];
     };
 
     useEffect(() => {
@@ -1086,25 +2514,43 @@ const Chat = () => {
 
                 if (data.type === 'status') {
                     setIsSending(false); // Backend acknowledged and started processing
+                    const playbackData = data.payload?.playback;
+                    const payloadWorkId = data.payload?.work_id || data.work_id;
+                    const payloadStatus = String(data.payload?.status || '').toLowerCase();
+                    if (playbackData) {
+                        setLatestPlaybackEvent({
+                            ...playbackData,
+                            type: 'playback.run_update'
+                        });
+                    }
                     setStreamingMessage(prev => ({
                         ...(prev || { content: '', reasoningLines: [], role: 'assistant' }),
-                        statusPhase: data.phase,
+                        work_id: payloadWorkId || prev?.work_id,
+                        statusPhase: payloadStatus || data.phase,
                         statusMessage: data.message,
+                        approvalRequest: data.payload?.approval_request || prev?.approvalRequest || null,
+                        playback: playbackData || prev?.playback,
                         isComplete: false
                     }));
                 }
 
 
                 if (data.type === 'reasoning_chunk') {
-                    pushPendingReasoning(data.content);
+                    pushPendingReasoning(data.content, data.timestamp || Date.now());
                     setStreamingMessage(prev => ({
-                        ...(prev || { content: '', reasoningLines: [], role: 'assistant', statusPhase: 'thinking' }),
+                        ...(prev || { content: '', reasoningLines: [], reasoningTimeline: [], role: 'assistant', statusPhase: 'thinking' }),
                         reasoningLines: (() => {
                             const next = [...(prev?.reasoningLines || [])];
                             const line = String(data.content || '').trim();
                             if (line && next[next.length - 1] !== line) next.push(line);
                             return next;
-                        })()
+                        })(),
+                        reasoningTimeline: (() => {
+                            const next = [...(prev?.reasoningTimeline || [])];
+                            const entry = toReasoningEntry(data.content, data.timestamp || Date.now());
+                            if (entry && next[next.length - 1]?.text !== entry.text) next.push(entry);
+                            return next;
+                        })(),
                     }));
                 }
 
@@ -1123,7 +2569,8 @@ const Chat = () => {
                         const pendingReasoning = pendingReasoningRef.current || [];
                         return {
                             ...prev,
-                            reasoningLines: (prev?.reasoningLines?.length ? prev.reasoningLines : pendingReasoning),
+                            reasoningLines: (prev?.reasoningLines?.length ? prev.reasoningLines : pendingReasoning.map((r) => r.text)),
+                            reasoningTimeline: (prev?.reasoningTimeline?.length ? prev.reasoningTimeline : pendingReasoning),
                             isComplete: true,
                             statusPhase: 'complete'
                         };
@@ -1219,15 +2666,21 @@ const Chat = () => {
                             if (incomingType === 'reasoning') {
                                 const reasoningLine = extractReasoningLine(incoming) || (typeof incoming.content === 'string' ? incoming.content.trim() : '');
                                 if (reasoningLine) {
-                                    pushPendingReasoning(reasoningLine);
+                                    pushPendingReasoning(reasoningLine, incoming.timestamp || Date.now());
                                 }
                                 setStreamingMessage(prev => ({
-                                    ...(prev || { content: '', reasoningLines: [], role: 'assistant', statusPhase: 'thinking' }),
+                                    ...(prev || { content: '', reasoningLines: [], reasoningTimeline: [], role: 'assistant', statusPhase: 'thinking' }),
                                     reasoningLines: (() => {
                                         const next = [...(prev?.reasoningLines || [])];
                                         if (reasoningLine && next[next.length - 1] !== reasoningLine) next.push(reasoningLine);
                                         return next;
-                                    })()
+                                    })(),
+                                    reasoningTimeline: (() => {
+                                        const next = [...(prev?.reasoningTimeline || [])];
+                                        const entry = toReasoningEntry(reasoningLine, incoming.timestamp || Date.now());
+                                        if (entry && next[next.length - 1]?.text !== entry.text) next.push(entry);
+                                        return next;
+                                    })(),
                                 }));
                             }
                             return;
@@ -1240,11 +2693,20 @@ const Chat = () => {
                         const incomingForHistory = (() => {
                             if (incomingRole !== 'assistant') return incoming;
                             const pendingReasoning = pendingReasoningRef.current || [];
-                            if (pendingReasoning.length === 0) return incoming;
-                            return {
+                            const streamSnapshot = streamingMessageRef.current || {};
+                            const enriched = {
                                 ...incoming,
-                                reasoningLines: [...pendingReasoning]
+                                work_id: incoming.work_id || streamSnapshot.work_id,
+                                playback: incoming.playback || streamSnapshot.playback,
+                                statusPhase: incoming.statusPhase || streamSnapshot.statusPhase,
+                                statusMessage: incoming.statusMessage || streamSnapshot.statusMessage,
+                                approvalRequest: incoming.approvalRequest || streamSnapshot.approvalRequest,
                             };
+                            if (pendingReasoning.length > 0) {
+                                enriched.reasoningLines = pendingReasoning.map((entry) => entry.text);
+                                enriched.reasoningTimeline = [...pendingReasoning];
+                            }
+                            return enriched;
                         })();
 
                         if (incomingRole === 'assistant') {
@@ -1389,9 +2851,7 @@ const Chat = () => {
                 setHistoryOffset(15);
 
                 const rawHistory = data.history || [];
-                const processedHistory = groupHistoryWithReasoning(rawHistory);
-
-                setMessages(processedHistory);
+                setMessages(rawHistory);
                 setCurrentSession(data);
 
                 // Scroll to bottom on initial load
@@ -1461,10 +2921,7 @@ const Chat = () => {
         }
     }, [selectedId]);
 
-    const ChatProfile = ({ desktopFullWidth = false }) => {
-        const [activeTab, setActiveTab] = useState('media'); // 'media' | 'docs' | 'links' | 'playback' | 'metrics'
-        const [expandedPlayback, setExpandedPlayback] = useState(null); // run_id of currently expanded playback
-
+    const renderChatProfile = ({ desktopFullWidth = false }) => {
         const normalizeAssetPath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
         const profilePicturePath = normalizeAssetPath(currentSession?.profile_picture || '');
         const profilePictureName = profilePicturePath ? profilePicturePath.split('/').pop() : '';
@@ -1541,15 +2998,15 @@ const Chat = () => {
                         {['media', 'docs', 'links', 'metrics'].map(tab => (
                             <button
                                 key={tab}
-                                onClick={() => setActiveTab(tab)}
+                                onClick={() => setActiveProfileTab(tab)}
                                 style={{
                                     flex: 1,
                                     padding: '8px',
                                     fontSize: '12px',
                                     fontWeight: 'bold',
                                     borderRadius: '8px',
-                                    background: activeTab === tab ? 'var(--accent-glow)' : 'transparent',
-                                    color: activeTab === tab ? 'var(--accent-color)' : 'var(--text-muted)',
+                                    background: activeProfileTab === tab ? 'var(--accent-glow)' : 'transparent',
+                                    color: activeProfileTab === tab ? 'var(--accent-color)' : 'var(--text-muted)',
                                     textTransform: 'uppercase',
                                     transition: '0.2s'
                                 }}
@@ -1559,15 +3016,15 @@ const Chat = () => {
                         ))}
                         {playbackRuns.length > 0 && (
                             <button
-                                onClick={() => setActiveTab('playback')}
+                                onClick={() => setActiveProfileTab('playback')}
                                 style={{
                                     flex: 1,
                                     padding: '8px',
                                     fontSize: '12px',
                                     fontWeight: 'bold',
                                     borderRadius: '8px',
-                                    background: activeTab === 'playback' ? 'var(--accent-glow)' : 'transparent',
-                                    color: activeTab === 'playback' ? 'var(--accent-color)' : 'var(--text-muted)',
+                                    background: activeProfileTab === 'playback' ? 'var(--accent-glow)' : 'transparent',
+                                    color: activeProfileTab === 'playback' ? 'var(--accent-color)' : 'var(--text-muted)',
                                     textTransform: 'uppercase',
                                     transition: '0.2s'
                                 }}
@@ -1583,7 +3040,7 @@ const Chat = () => {
                         </div>
                     ) : (
                         <div style={{ minHeight: '200px' }}>
-                            {activeTab === 'media' && (
+                            {activeProfileTab === 'media' && (
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
                                     {photos.length > 0 ? photos.map((f, i) => (
                                         <div key={i} className="aspect-square cursor-pointer overflow-hidden rounded-lg border border-white/5 hover:border-accent" onClick={() => setPreviewFile({ ...f, previewUrl: `/api/sessions/${selectedId}/files/${f.path}` })}>
@@ -1595,7 +3052,7 @@ const Chat = () => {
                                 </div>
                             )}
 
-                            {activeTab === 'docs' && (
+                            {activeProfileTab === 'docs' && (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                     {docs.length > 0 ? docs.map((f, i) => (
                                         <div key={i} className="doc-item" onClick={() => setPreviewFile({ ...f, previewUrl: `/api/sessions/${selectedId}/files/${f.path}` })}>
@@ -1612,7 +3069,7 @@ const Chat = () => {
                                 </div>
                             )}
 
-                            {activeTab === 'links' && (
+                            {activeProfileTab === 'links' && (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                     {links.length > 0 ? links.map((l, i) => (
                                         <a key={i} href={l.url} target="_blank" rel="noreferrer" style={{
@@ -1641,14 +3098,14 @@ const Chat = () => {
                                 </div>
                             )}
 
-                            {activeTab === 'playback' && (
+                            {activeProfileTab === 'playback' && (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                     {playbackRuns.length > 0 ? playbackRuns.map((run) => (
                                         <div key={run.run_id}>
-                                            {expandedPlayback === run.run_id ? (
+                                            {expandedProfilePlayback === run.run_id ? (
                                                 <div>
                                                     <button
-                                                        onClick={() => setExpandedPlayback(null)}
+                                                        onClick={() => setExpandedProfilePlayback(null)}
                                                         className="btn-ghost"
                                                         style={{ marginBottom: '8px', fontSize: '11px', fontWeight: '700', color: 'var(--accent-color)' }}
                                                     >
@@ -1661,7 +3118,7 @@ const Chat = () => {
                                                 </div>
                                             ) : (
                                                 <div
-                                                    onClick={() => setExpandedPlayback(run.run_id)}
+                                                    onClick={() => setExpandedProfilePlayback(run.run_id)}
                                                     style={{
                                                         display: 'flex',
                                                         alignItems: 'center',
@@ -1720,7 +3177,7 @@ const Chat = () => {
                                 </div>
                             )}
 
-                            {activeTab === 'metrics' && (
+                            {activeProfileTab === 'metrics' && (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                                     <div style={{ padding: '12px', borderRadius: '10px', border: '1px solid var(--card-border)', background: 'rgba(255,255,255,0.02)' }}>
                                         <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>Prompt</div>
@@ -1771,7 +3228,6 @@ const Chat = () => {
                 setHasMoreHistory(data.has_more);
 
                 const rawHistory = data.history;
-                const processedHistory = groupHistoryWithReasoning(rawHistory);
 
                 // Save current scroll metrics before state update
                 const container = scrollRef.current;
@@ -1781,7 +3237,7 @@ const Chat = () => {
                 setMessages(prev => {
                     // Filter out duplicates using stable IDs
                     const existingIds = new Set(prev.map(m => m.id).filter(id => !!id));
-                    const newUnique = processedHistory.filter(m => !m.id || !existingIds.has(m.id));
+                    const newUnique = rawHistory.filter(m => !m.id || !existingIds.has(m.id));
                     return [...newUnique, ...prev];
                 });
 
@@ -1843,11 +3299,14 @@ const Chat = () => {
 
     const deleteSession = async (e, id) => {
         e.stopPropagation();
-        if (!window.confirm("Do you really want to delete this session and all its files?")) return;
+        setDeletingSessionId(id);
+    };
 
+    const confirmDeleteSession = async () => {
+        if (!deletingSessionId) return;
         try {
-            await api.delete(`/sessions/${id}`);
-            if (selectedId === id) {
+            await api.delete(`/sessions/${deletingSessionId}`);
+            if (selectedId === deletingSessionId) {
                 setSelectedId(null);
                 setMessages([]);
                 setCurrentSession(null);
@@ -1855,6 +3314,8 @@ const Chat = () => {
             fetchSessions();
         } catch (err) {
             toast.error("Error deleting session.");
+        } finally {
+            setDeletingSessionId(null);
         }
     };
 
@@ -1919,6 +3380,7 @@ const Chat = () => {
             role: 'assistant',
             content: '',
             reasoningLines: [],
+            reasoningTimeline: [],
             statusPhase: 'thinking',
             statusMessage: 'Starting sequence...',
             isComplete: false
@@ -2208,7 +3670,7 @@ const Chat = () => {
                                     setSelectedId(s.session_id);
                                     if (isMobile) setMobileView('chat');
                                 }}
-                                className={`btn-ghost ${selectedId === s.session_id ? 'active' : ''}`}
+                                className={`btn-ghost session-item ${selectedId === s.session_id ? 'active' : ''}`}
                                 style={{
                                     padding: '12px',
                                     borderRadius: '8px',
@@ -2227,33 +3689,36 @@ const Chat = () => {
                                 {(!isSessionsCollapsed || isMobile) && (
                                     <>
                                         <div style={{ flex: 1, overflow: 'hidden' }}>
-                                            <p style={{ fontSize: '13px', fontWeight: '600', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{s.name ? s.name : s.session_id.substring(0, 18) + "..."}</p>
-                                            <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{new Date(s.updated_at || s.last_active || Date.now()).toLocaleString()}</p>
+                                            <p style={{ fontSize: '13px', fontWeight: '600', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{s.name ? s.name : s.session_id.substring(0, 18) + "..."}</p>
+                                            <p style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{new Date(s.updated_at || s.last_active || Date.now()).toLocaleString()}</p>
                                         </div>
-                                        {s.unread_count > 0 && (
-                                            <div style={{
-                                                background: 'var(--error)',
-                                                color: '#fff',
-                                                fontSize: '10px',
-                                                fontWeight: 'bold',
-                                                minWidth: '18px',
-                                                height: '18px',
-                                                borderRadius: '9px',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                padding: '0 5px'
-                                            }}>
-                                                {s.unread_count}
-                                            </div>
-                                        )}
-                                        <button
-                                            onClick={(e) => deleteSession(e, s.session_id)}
-                                            className="btn-ghost delete-session-btn"
-                                            style={{ padding: '4px', opacity: isMobile ? 1 : 0, transition: '0.2s', color: 'var(--error)', position: 'absolute', right: '4px' }}
-                                        >
-                                            <Trash2 size={14} />
-                                        </button>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                                            {s.unread_count > 0 && (
+                                                <div className="unread-badge" style={{
+                                                    background: 'var(--error)',
+                                                    color: '#fff',
+                                                    fontSize: '10px',
+                                                    fontWeight: 'bold',
+                                                    minWidth: '18px',
+                                                    height: '18px',
+                                                    borderRadius: '9px',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    padding: '0 5px',
+                                                    transition: '0.2s'
+                                                }}>
+                                                    {s.unread_count}
+                                                </div>
+                                            )}
+                                            <button
+                                                onClick={(e) => deleteSession(e, s.session_id)}
+                                                className="btn-ghost delete-session-btn"
+                                                style={{ padding: '4px', opacity: isMobile ? 1 : 0, transition: '0.2s', color: 'var(--error)' }}
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
                                     </>
                                 )}
                             </div>
@@ -2564,11 +4029,22 @@ const Chat = () => {
                                 </div>
                             </div>
                         )}
-                        {!isMobile && showChatProfile && <ChatProfile desktopFullWidth={shouldUseFullProfileDesktop} />}
+                        {!isMobile && showChatProfile && renderChatProfile({ desktopFullWidth: shouldUseFullProfileDesktop })}
                     </div>
-                    {isMobile && showChatProfile && <ChatProfile />}
+                    {isMobile && showChatProfile && renderChatProfile({ desktopFullWidth: false })}
                 </div>
             </div>
+
+            <ConfirmDialog
+                isOpen={!!deletingSessionId}
+                title="Delete Session"
+                message="Do you really want to delete this session and all its files? This action cannot be undone."
+                confirmText="Yes, Delete"
+                cancelText="Cancel"
+                onConfirm={confirmDeleteSession}
+                onCancel={() => setDeletingSessionId(null)}
+                isDestructive={true}
+            />
         </div>
     );
 };

@@ -83,7 +83,9 @@ class VoiceDriver(BaseDriver):
         self.assistant.initialize_voice_recognition_engine()
         
         # Initialize UI
-        self.interface = AssistantInterface(name='Atlas')
+        agent_cfg = cm.get("agent", {}) if hasattr(cm, "get") else {}
+        agent_name = str(agent_cfg.get("agent_name", "Assistant")).strip() or "Assistant"
+        self.interface = AssistantInterface(name=agent_name)
 
     def start(self):
         self._initialize_components()
@@ -189,4 +191,3 @@ class VoiceDriver(BaseDriver):
             "voice_only": True,
             "streaming": True
         }
-

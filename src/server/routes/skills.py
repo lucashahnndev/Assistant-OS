@@ -101,8 +101,6 @@ def _infer_risk_level(action_id: str) -> str:
         return "high"
 
     medium_risk_prefixes = [
-        "browser.",
-        "browser.automator.",
         "web.search.",
         "maps.search.",
         "youtube.search.",

@@ -92,9 +92,6 @@
                     "status": {
                         "type": "string"
                     },
-                    "text": {
-                        "type": "string"
-                    },
                     "places": {
                         "type": "array"
                     },

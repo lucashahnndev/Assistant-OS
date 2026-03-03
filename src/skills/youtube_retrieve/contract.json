@@ -1,0 +1,82 @@
+{
+  "name": "youtube",
+  "description": "Recupera metadados de vídeo do YouTube e transcript opcional sem LLM.",
+  "version": "1.0.0",
+  "actions": {
+    "get": {
+      "description": "Obtém metadados de vídeo (e transcript opcional) usando yt-dlp.",
+      "risk_level": "low",
+      "params": {
+        "url": {
+          "type": "string",
+          "description": "URL do vídeo no YouTube."
+        },
+        "video_id": {
+          "type": "string",
+          "description": "ID do vídeo (alternativa a url)."
+        },
+        "include_transcript": {
+          "type": "boolean",
+          "default": false
+        },
+        "max_chars": {
+          "type": "integer",
+          "default": 12000
+        },
+        "transcript_timeout_ms": {
+          "type": "integer",
+          "default": 8000
+        }
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "ok": {"type": "boolean"},
+          "status": {"type": "string"},
+          "provider": {"type": "string"},
+          "url": {"type": "string"},
+          "video_id": {"type": "string"},
+          "title": {"type": "string"},
+          "channel": {"type": "string"},
+          "published_at": {"type": "string"},
+          "language": {"type": "string"},
+          "description": {"type": "string"},
+          "transcript": {"type": "string"},
+          "transcript_available": {"type": "boolean"},
+          "transcript_error_code": {"type": "string"},
+          "warnings": {"type": "array"},
+          "error_code": {"type": ["string", "null"]},
+          "error_message": {"type": ["string", "null"]},
+          "retryable": {"type": "boolean"},
+          "status_code": {"type": ["integer", "null"]},
+          "elapsed_ms": {"type": "integer"}
+        }
+      },
+      "examples": [
+        {
+          "input": {
+            "video_id": "dQw4w9WgXcQ",
+            "include_transcript": true,
+            "max_chars": 5000
+          }
+        }
+      ]
+    }
+  },
+  "config": {
+    "defaults": {
+      "include_transcript": {
+        "type": "boolean",
+        "default": false
+      },
+      "max_chars": {
+        "type": "integer",
+        "default": 12000
+      },
+      "transcript_timeout_ms": {
+        "type": "integer",
+        "default": 8000
+      }
+    }
+  }
+}

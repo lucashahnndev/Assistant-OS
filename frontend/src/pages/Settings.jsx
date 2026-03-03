@@ -21,12 +21,18 @@ import {
     Eye,
     EyeOff,
     Monitor,
+    Building2,
     Zap,
     Puzzle,
     ExternalLink,
     ChevronLeft,
     ChevronRight,
-    Plus
+    ChevronDown,
+    ChevronUp,
+    Plus,
+    Trash2,
+    Link2,
+    Settings2
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -43,6 +49,14 @@ const Settings = () => {
         return localStorage.getItem('assistant_settings_tabs_collapsed') === 'true';
     });
     const [envData, setEnvData] = useState({});
+    const [envKeys, setEnvKeys] = useState([]);
+    const [externalCatalog, setExternalCatalog] = useState([]);
+    const [externalCatalogLoading, setExternalCatalogLoading] = useState(false);
+    const [externalTab, setExternalTab] = useState('accounts');
+    const [editingProviderKey, setEditingProviderKey] = useState('');
+    const [externalSecretEditor, setExternalSecretEditor] = useState({ target: '', key: '', value: '' });
+    const [selectedConnectProvider, setSelectedConnectProvider] = useState('');
+    const [connectingProvider, setConnectingProvider] = useState('');
     const [isMobile, setIsMobile] = useState(window.innerWidth <= 640);
     const [isTablet, setIsTablet] = useState(window.innerWidth > 640 && window.innerWidth <= 1024);
 
@@ -67,11 +81,111 @@ const Settings = () => {
     const editorRef = useRef(null);
     const eventSourceRef = useRef(null);
 
+    const withExternalAccountsDefaults = (sourceConfig) => {
+        const next = sourceConfig && typeof sourceConfig === 'object' ? { ...sourceConfig } : {};
+        const external = next.external_accounts && typeof next.external_accounts === 'object' ? { ...next.external_accounts } : {};
+        const providers = external.providers && typeof external.providers === 'object' ? { ...external.providers } : {};
+        const accounts = Array.isArray(external.accounts) ? [...external.accounts] : [];
+
+        next.external_accounts = {
+            enabled: external.enabled ?? true,
+            providers,
+            accounts
+        };
+        return next;
+    };
+
     useEffect(() => {
         fetchConfig();
         fetchEnv();
         fetchLogSources();
         return () => stopLogStream();
+    }, []);
+
+    useEffect(() => {
+        if (activeTab === 'external_accounts') {
+            fetchExternalProviders();
+            fetchEnvKeys();
+            fetchLinkedAccounts();
+        }
+    }, [activeTab]);
+
+    useEffect(() => {
+        const onOAuthMessage = (event) => {
+            const data = event?.data;
+            if (!data || data.type !== 'external-oauth-callback') return;
+
+            const providerKey = String(data.provider || '').trim().toLowerCase();
+            if (!providerKey) return;
+
+            setConfig((prev) => {
+                if (!prev || typeof prev !== 'object') return prev;
+                const next = { ...prev };
+                if (!next.external_accounts || typeof next.external_accounts !== 'object') {
+                    next.external_accounts = { enabled: true, providers: {}, accounts: [] };
+                }
+                const list = Array.isArray(next.external_accounts.accounts) ? [...next.external_accounts.accounts] : [];
+                const status = String(data.status || '').toLowerCase();
+                const pendingIndex = list.findIndex(
+                    (item) =>
+                        String(item?.provider || '').toLowerCase() === providerKey &&
+                        String(item?.status || '').toLowerCase() === 'pending'
+                );
+
+                if (pendingIndex >= 0) {
+                    const profile = data?.profile || {};
+                    const accountLabel =
+                        profile?.email ||
+                        profile?.name ||
+                        (status === 'success' ? 'OAuth account connected' : (data.error || 'OAuth failed'));
+                    list[pendingIndex] = {
+                        ...list[pendingIndex],
+                        status: status === 'success' ? 'connected' : 'error',
+                        account: accountLabel,
+                        profile: status === 'success' ? {
+                            name: profile?.name || '',
+                            email: profile?.email || '',
+                            picture: profile?.picture || '',
+                            locale: profile?.locale || ''
+                        } : undefined,
+                        connected_at: new Date().toISOString()
+                    };
+                } else {
+                    const profile = data?.profile || {};
+                    const accountLabel =
+                        profile?.email ||
+                        profile?.name ||
+                        (status === 'success' ? 'OAuth account connected' : (data.error || 'OAuth failed'));
+                    list.push({
+                        id: `acc_${providerKey}_${Date.now()}`,
+                        provider: providerKey,
+                        account: accountLabel,
+                        status: status === 'success' ? 'connected' : 'error',
+                        profile: status === 'success' ? {
+                            name: profile?.name || '',
+                            email: profile?.email || '',
+                            picture: profile?.picture || '',
+                            locale: profile?.locale || ''
+                        } : undefined,
+                        connected_at: new Date().toISOString()
+                    });
+                }
+
+                next.external_accounts.accounts = list;
+                setRawJson(JSON.stringify(next, null, 2));
+                return next;
+            });
+
+            if (String(data.status || '').toLowerCase() === 'success') {
+                toast.success(`${providerKey} connected successfully.`);
+                fetchLinkedAccounts();
+            } else {
+                toast.error(`OAuth failed for ${providerKey}: ${data.error || 'unknown error'}`);
+            }
+        };
+
+        window.addEventListener('message', onOAuthMessage);
+        return () => window.removeEventListener('message', onOAuthMessage);
     }, []);
 
     useEffect(() => {
@@ -125,8 +239,9 @@ const Settings = () => {
     const fetchConfig = async () => {
         try {
             const data = await api.get('/system/config');
-            setConfig(data);
-            setRawJson(JSON.stringify(data, null, 2));
+            const normalized = withExternalAccountsDefaults(data);
+            setConfig(normalized);
+            setRawJson(JSON.stringify(normalized, null, 2));
         } catch (err) {
             console.error(err);
             toast.error("Failed to load configuration");
@@ -139,6 +254,51 @@ const Settings = () => {
             const data = await api.get('/system/env');
             setEnvData(data);
         } catch (err) { console.error(err); }
+    };
+
+    const fetchEnvKeys = async () => {
+        try {
+            const data = await api.get('/models/env-keys');
+            setEnvKeys(Array.isArray(data?.keys) ? data.keys : []);
+        } catch (err) {
+            console.error(err);
+            setEnvKeys([]);
+        }
+    };
+
+    const fetchExternalProviders = async () => {
+        setExternalCatalogLoading(true);
+        try {
+            const data = await api.get('/external-accounts/providers');
+            setExternalCatalog(Array.isArray(data?.providers) ? data.providers : []);
+        } catch (err) {
+            console.error(err);
+            setExternalCatalog([]);
+        } finally {
+            setExternalCatalogLoading(false);
+        }
+    };
+
+    const fetchLinkedAccounts = async () => {
+        try {
+            const data = await api.get('/external-accounts/connections');
+            const linked = Array.isArray(data?.connections) ? data.connections : [];
+            setConfig((prev) => {
+                if (!prev || typeof prev !== 'object') return prev;
+                const next = { ...prev };
+                if (!next.external_accounts || typeof next.external_accounts !== 'object') {
+                    next.external_accounts = { enabled: true, providers: {}, accounts: [] };
+                }
+                const pending = Array.isArray(next.external_accounts.accounts)
+                    ? next.external_accounts.accounts.filter((item) => String(item?.status || '').toLowerCase() === 'pending')
+                    : [];
+                next.external_accounts.accounts = [...linked, ...pending];
+                setRawJson(JSON.stringify(next, null, 2));
+                return next;
+            });
+        } catch (err) {
+            console.error(err);
+        }
     };
 
     const handleSaveEnv = async () => {
@@ -202,6 +362,7 @@ const Settings = () => {
         { id: 'interfaces', label: 'Interfaces', icon: Monitor },
         { id: 'media', label: 'Media', icon: Play },
         { id: 'network', label: 'Network', icon: Globe },
+        { id: 'external_accounts', label: 'External Accounts', icon: Link2 },
         { id: 'llm', label: 'Intelligence', icon: Cpu },
         { id: 'stt', label: 'Voice', icon: Mic },
         { id: 'skills', label: 'Skills', icon: Puzzle },
@@ -287,7 +448,7 @@ const Settings = () => {
                             className="input-field"
                             value={config.agent?.agent_name || ''}
                             onChange={(e) => updateNestedValue('agent.agent_name', e.target.value)}
-                            placeholder="e.g. Atlas, Jarvis..."
+                            placeholder="e.g. Assistant, Jarvis..."
                         />
                     </div>
                     <div className="form-group">
@@ -303,44 +464,6 @@ const Settings = () => {
                 </div>
             </section>
 
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
-                <h3 className="section-title">
-                    <Zap size={20} /> Intent Resolution
-                </h3>
-                <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : '1fr 1fr', gap: '24px' }}>
-
-                    <div className="form-group">
-                        <label>Resolution Mode</label>
-                        <select
-                            className="input-field"
-                            value={config.intent_resolution?.mode || 'llm_first'}
-                            onChange={(e) => updateNestedValue('intent_resolution.mode', e.target.value)}
-                        >
-                            <option value="llm_first">LLM First (Reasoning)</option>
-                            <option value="semantic_first">Semantic First (High Precision)</option>
-                        </select>
-                    </div>
-                    <div className="form-group">
-                        <label>LLM Confidence Threshold</label>
-                        <input
-                            type="number"
-                            step="0.05"
-                            className="input-field"
-                            value={config.intent_resolution?.llm_confidence_threshold || 0.65}
-                            onChange={(e) => updateNestedValue('intent_resolution.llm_confidence_threshold', parseFloat(e.target.value))}
-                        />
-                    </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '16px' }}>
-                    <input
-                        type="checkbox"
-                        className="luxury-checkbox"
-                        checked={config.intent_resolution?.semantic_fallback || false}
-                        onChange={(e) => updateNestedValue('intent_resolution.semantic_fallback', e.target.checked)}
-                    />
-                    <span style={{ fontSize: '14px', color: '#cbd5e1' }}>Enable Semantic Fallback</span>
-                </div>
-            </section>
         </div>
     );
 
@@ -737,6 +860,613 @@ const Settings = () => {
         </div>
     );
 
+    const renderExternalAccounts = () => {
+        const providers = config.external_accounts?.providers || {};
+        const entries = Object.entries(providers);
+        const accounts = Array.isArray(config.external_accounts?.accounts) ? config.external_accounts.accounts : [];
+        const temporarilyHiddenProviders = new Set(['microsoft', 'aws', 'cloudflare']);
+        const visibleExternalCatalog = (externalCatalog || []).filter(
+            (item) => !temporarilyHiddenProviders.has(String(item?.key || '').toLowerCase())
+        );
+        const providerCatalogByKey = (externalCatalog || []).reduce((acc, item) => {
+            const key = String(item?.key || '').toLowerCase();
+            if (key) acc[key] = item;
+            return acc;
+        }, {});
+        const getProviderVisual = (providerKey) => {
+            const key = String(providerKey || '').toLowerCase();
+            if (key === 'google') return { color: '#34d399', iconUrl: 'https://www.google.com/s2/favicons?domain=google.com&sz=64' };
+            if (key === 'youtube') return { color: '#ef4444', iconUrl: 'https://www.google.com/s2/favicons?domain=youtube.com&sz=64' };
+            if (key === 'maps' || key === 'google_maps') return { color: '#22c55e', iconUrl: 'https://www.google.com/s2/favicons?domain=maps.google.com&sz=64' };
+            if (key === 'microsoft') return { color: '#60a5fa', iconUrl: 'https://www.google.com/s2/favicons?domain=microsoft.com&sz=64' };
+            if (key === 'aws') return { color: '#f59e0b', iconUrl: 'https://www.google.com/s2/favicons?domain=aws.amazon.com&sz=64' };
+            if (key === 'cloudflare') return { color: '#f97316', iconUrl: 'https://www.google.com/s2/favicons?domain=cloudflare.com&sz=64' };
+            return { color: '#a78bfa', iconUrl: '' };
+        };
+        const ProviderBrandIcon = ({ providerKey, size = 14 }) => {
+            const visual = getProviderVisual(providerKey);
+            if (visual.iconUrl) {
+                return (
+                    <img
+                        src={visual.iconUrl}
+                        alt={`${providerKey} icon`}
+                        width={size}
+                        height={size}
+                        style={{ width: `${size}px`, height: `${size}px`, borderRadius: '4px', objectFit: 'cover' }}
+                        onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                        }}
+                    />
+                );
+            }
+            return <Link2 size={size} color={visual.color} />;
+        };
+        const configuredProviderKeys = entries.map(([key]) => key);
+        const connectProviders = configuredProviderKeys
+            .map((key) => ({ key, meta: providerCatalogByKey[String(key).toLowerCase()] || null }))
+            .filter((item) => {
+                const key = String(item?.key || '').toLowerCase();
+                const modes = Array.isArray(item?.meta?.auth_modes) ? item.meta.auth_modes.map((m) => String(m).toLowerCase()) : [];
+                if (temporarilyHiddenProviders.has(key)) return false;
+                if (!item?.meta) return false; // only providers backed by plugins
+                if (key === 'youtube') return false; // YouTube OAuth flows should piggyback Google account
+                return modes.includes('oauth2');
+            });
+        const secretFieldMap = {
+            client_id: { label: 'Client ID Ref', placeholder: 'ENV_PROVIDER_CLIENT_ID' },
+            client_secret: { label: 'Client Secret Ref', placeholder: 'ENV_PROVIDER_CLIENT_SECRET' },
+            api_key_ref: { label: 'API Key Ref', placeholder: 'ENV_PROVIDER_API_KEY' }
+        };
+        const getProviderExtraFields = (providerKey) => {
+            const key = String(providerKey || '').toLowerCase();
+            if (key === 'microsoft') {
+                return [
+                    { name: 'tenant', label: 'Tenant', placeholder: 'common | organizations | <tenant-id>' }
+                ];
+            }
+            if (key === 'aws') {
+                return [
+                    { name: 'region', label: 'Region', placeholder: 'us-east-1' },
+                    { name: 'role_arn', label: 'Role ARN', placeholder: 'arn:aws:iam::123456789012:role/MyRole' }
+                ];
+            }
+            if (key === 'cloudflare') {
+                return [
+                    { name: 'account_id', label: 'Account ID', placeholder: 'Cloudflare account id' }
+                ];
+            }
+            return [];
+        };
+
+        const addProvider = () => {
+            const providerKey = prompt("Provider key (example: google_drive):");
+            if (!providerKey) return;
+            const trimmed = providerKey.trim().toLowerCase();
+            if (!trimmed) return;
+            if (providers[trimmed]) {
+                toast.error("Provider already exists.");
+                return;
+            }
+
+            updateNestedValue(`external_accounts.providers.${trimmed}`, {
+                enabled: false,
+                auth_mode: "oauth2",
+                client_id: "",
+                client_secret: "",
+                scopes: [],
+                redirect_uri: ""
+            });
+        };
+
+        const addProviderFromPlugin = (plugin) => {
+            if (!plugin?.key) return;
+            if (providers[plugin.key]) {
+                toast.error("Provider already exists.");
+                return;
+            }
+            updateNestedValue(`external_accounts.providers.${plugin.key}`, {
+                enabled: false,
+                auth_mode: Array.isArray(plugin.auth_modes) && plugin.auth_modes.length > 0 ? plugin.auth_modes[0] : "oauth2",
+                client_id: "",
+                client_secret: "",
+                scopes: Array.isArray(plugin.default_scopes) ? plugin.default_scopes : [],
+                redirect_uri: "",
+                tenant: plugin.key === "microsoft" ? "common" : ""
+            });
+        };
+
+        const removeProvider = (providerKey) => {
+            const nextProviders = { ...providers };
+            delete nextProviders[providerKey];
+            updateNestedValue('external_accounts.providers', nextProviders);
+        };
+
+        const suggestedEnvName = (providerKey, fieldName) => {
+            const providerToken = String(providerKey || 'provider').toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+            const fieldToken = String(fieldName || 'KEY').toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+            return `ENV_${providerToken}_${fieldToken}`;
+        };
+
+        const openSecretEditor = (target, providerKey, fieldName) => {
+            const current = providers?.[providerKey]?.[fieldName];
+            setExternalSecretEditor({
+                target,
+                key: typeof current === 'string' && current.startsWith('ENV_') ? current : suggestedEnvName(providerKey, fieldName),
+                value: ''
+            });
+        };
+
+        const createSecretAndBind = async (targetPath) => {
+            const key = String(externalSecretEditor.key || '').trim();
+            const value = String(externalSecretEditor.value || '').trim();
+            if (!key || !value) {
+                toast.error("Key and value are required.");
+                return;
+            }
+            try {
+                const res = await api.post('/models/env-keys', { key, value });
+                if (res?.success) {
+                    updateNestedValue(targetPath, key);
+                    setEnvData(prev => ({ ...(prev || {}), [key]: value }));
+                    await fetchEnvKeys();
+                    setExternalSecretEditor({ target: '', key: '', value: '' });
+                    toast.success(`Secret ${key} created and linked.`);
+                }
+            } catch (err) {
+                toast.error(err.message || 'Failed to create secret');
+            }
+        };
+
+        const renderSecretRefField = (providerKey, provider, fieldName) => {
+            const targetPath = `external_accounts.providers.${providerKey}.${fieldName}`;
+            const fieldMeta = secretFieldMap[fieldName] || { label: fieldName, placeholder: 'ENV_KEY' };
+            const currentValue = provider?.[fieldName] || '';
+            const options = Array.from(new Set([...(envKeys || []), ...(currentValue ? [currentValue] : [])]));
+            const creating = externalSecretEditor.target === targetPath;
+
+            return (
+                <div key={`${providerKey}_${fieldName}`} className="form-group" style={{ background: 'rgba(var(--accent-rgb), 0.05)', padding: '14px', borderRadius: '10px', border: '1px solid rgba(var(--accent-rgb), 0.2)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <Shield size={14} color="var(--accent-color)" /> {fieldMeta.label}
+                        </label>
+                        <button
+                            onClick={() => creating ? setExternalSecretEditor({ target: '', key: '', value: '' }) : openSecretEditor(targetPath, providerKey, fieldName)}
+                            className="btn-ghost"
+                            style={{ fontSize: '11px', padding: '2px 8px', color: 'var(--accent-color)' }}
+                        >
+                            {creating ? 'Cancel' : '+ Create New Key'}
+                        </button>
+                    </div>
+
+                    {!creating && (
+                        <select
+                            className="input-field"
+                            value={currentValue}
+                            onChange={(e) => updateNestedValue(targetPath, e.target.value)}
+                        >
+                            <option value="">-- Select Environment Key --</option>
+                            {options.map((key) => (
+                                <option key={key} value={key}>{key}</option>
+                            ))}
+                        </select>
+                    )}
+
+                    {creating && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '8px' }}>
+                            <input
+                                type="text"
+                                className="input-field"
+                                value={externalSecretEditor.key}
+                                placeholder={fieldMeta.placeholder}
+                                onChange={(e) => setExternalSecretEditor(prev => ({ ...prev, key: e.target.value }))}
+                            />
+                            <input
+                                type="password"
+                                className="input-field"
+                                value={externalSecretEditor.value}
+                                placeholder="Paste the secret value here..."
+                                onChange={(e) => setExternalSecretEditor(prev => ({ ...prev, value: e.target.value }))}
+                            />
+                            <button
+                                onClick={() => createSecretAndBind(targetPath)}
+                                className="btn-primary"
+                                style={{ alignSelf: 'flex-start', fontSize: '12px', padding: '6px 12px' }}
+                            >
+                                Save to Vault
+                            </button>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const startOAuthConnection = async () => {
+            const providerKey = String(selectedConnectProvider || '').trim().toLowerCase();
+            if (!providerKey) {
+                toast.error("Select a provider first.");
+                return;
+            }
+            const providerDraft = providers?.[providerKey] || {};
+            const authMode = String(providerDraft?.auth_mode || '').trim().toLowerCase();
+            const redirectUri = String(providerDraft?.redirect_uri || '').trim();
+            const clientRef = String(providerDraft?.client_id || '').trim();
+            if (authMode && authMode !== 'oauth2') {
+                toast.error(`Provider ${providerKey} is not in oauth2 mode.`);
+                return;
+            }
+            if (!redirectUri || !clientRef) {
+                toast.error(`Configure ${providerKey} client_id and redirect_uri in Providers before connecting.`);
+                return;
+            }
+            setConnectingProvider(providerKey);
+            try {
+                // Persist latest in-memory settings so auth/start uses the same config shown in UI.
+                await api.post('/system/config', config);
+                const data = await api.post('/external-accounts/auth/start', {
+                    provider_key: providerKey,
+                    state: `settings_${Date.now()}`
+                });
+                const url = data?.authorize_url;
+                if (!url) {
+                    throw new Error("Provider did not return authorize URL.");
+                }
+                const popup = window.open(url, `oauth_${providerKey}`, 'popup=yes,width=560,height=760');
+                if (!popup) {
+                    // Fallback: open in same tab to avoid losing opener communication.
+                    window.location.href = url;
+                    return;
+                }
+
+                const hasPending = accounts.some(
+                    (item) => String(item?.provider || '').toLowerCase() === providerKey && String(item?.status || '').toLowerCase() === 'pending'
+                );
+                if (!hasPending) {
+                    const next = [...accounts, {
+                        id: `acc_${providerKey}_${Date.now()}`,
+                        provider: providerKey,
+                        account: 'OAuth authorization pending',
+                        status: 'pending',
+                        connected_at: new Date().toISOString()
+                    }];
+                    updateNestedValue('external_accounts.accounts', next);
+                }
+                toast.success(`OAuth started for ${providerKey}. Complete it in the opened window.`);
+            } catch (err) {
+                toast.error(err.message || `Failed to start OAuth for ${providerKey}.`);
+            } finally {
+                setConnectingProvider('');
+            }
+        };
+
+        const removeLinkedAccount = async (accountId) => {
+            try {
+                if (typeof accountId === 'number') {
+                    await api.delete(`/external-accounts/connections/${accountId}`);
+                    await fetchLinkedAccounts();
+                    toast.success('Linked account removed.');
+                    return;
+                }
+            } catch (err) {
+                toast.error(err.message || 'Failed to remove linked account');
+                return;
+            }
+
+            const next = accounts.filter((item) => item?.id !== accountId);
+            updateNestedValue('external_accounts.accounts', next);
+        };
+
+        return (
+            <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                        <h3 className="section-title" style={{ marginBottom: 0 }}>
+                            <Link2 size={20} /> External Accounts
+                        </h3>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                            <button
+                                onClick={() => setExternalTab('accounts')}
+                                className="btn-ghost"
+                                style={{ fontSize: '12px', padding: '6px 12px', borderColor: externalTab === 'accounts' ? 'var(--accent-color)' : undefined, color: externalTab === 'accounts' ? 'var(--accent-color)' : undefined }}
+                            >
+                                Accounts
+                            </button>
+                            <button
+                                onClick={() => setExternalTab('providers')}
+                                className="btn-ghost"
+                                style={{ fontSize: '12px', padding: '6px 12px', borderColor: externalTab === 'providers' ? 'var(--accent-color)' : undefined, color: externalTab === 'providers' ? 'var(--accent-color)' : undefined }}
+                            >
+                                Providers
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="toggle-item luxury" style={{ marginBottom: '16px' }}>
+                        <div className="toggle-info">
+                            <span className="toggle-label">Enable External Accounts</span>
+                            <span className="toggle-desc">Master switch for OAuth/API integrations.</span>
+                        </div>
+                        <input
+                            type="checkbox"
+                            className="luxury-checkbox"
+                            checked={config.external_accounts?.enabled ?? true}
+                            onChange={(e) => updateNestedValue('external_accounts.enabled', e.target.checked)}
+                        />
+                    </div>
+
+                    {externalTab === 'accounts' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px', padding: '14px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                                    <strong style={{ fontSize: '13px' }}>Connect New Account</strong>
+                                    <button
+                                        onClick={startOAuthConnection}
+                                        className="btn-primary"
+                                        disabled={!selectedConnectProvider || connectingProvider !== ''}
+                                        style={{ fontSize: '12px', padding: '6px 12px' }}
+                                    >
+                                        {connectingProvider ? 'Connecting...' : 'Connect with OAuth'}
+                                    </button>
+                                </div>
+                                {connectProviders.length === 0 && (
+                                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                                        No configured providers found. Configure one in the Providers tab first.
+                                    </div>
+                                )}
+                                {connectProviders.length > 0 && (
+                                    <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
+                                        {connectProviders.map((item) => {
+                                            const isSelected = selectedConnectProvider === item.key;
+                                            const visual = getProviderVisual(item.key);
+                                            const Icon = visual.icon;
+                                            return (
+                                                <button
+                                                    key={item.key}
+                                                    onClick={() => setSelectedConnectProvider(item.key)}
+                                                    className="btn-ghost"
+                                                    style={{
+                                                        border: isSelected ? `1px solid ${visual.color}` : '1px solid rgba(255,255,255,0.08)',
+                                                        background: isSelected ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.02)',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'space-between',
+                                                        gap: '10px',
+                                                        padding: '10px 12px',
+                                                        borderRadius: '8px'
+                                                    }}
+                                                >
+                                                    <span style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                                                        <ProviderBrandIcon providerKey={item.key} size={14} />
+                                                        <span style={{ textTransform: 'capitalize', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                            {item.meta?.display_name || item.key}
+                                                        </span>
+                                                    </span>
+                                                    {isSelected && <CheckCircle size={14} color={visual.color} />}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <strong style={{ fontSize: '13px' }}>Linked Accounts</strong>
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Managed via OAuth flow</span>
+                            </div>
+                            {accounts.length === 0 && (
+                                <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
+                                    No linked accounts yet. Use this area for Google account links.
+                                </div>
+                            )}
+                            {accounts.length > 0 && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                    {accounts.map((account, idx) => (
+                                        <div key={account?.id || `acc_${idx}`} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px', padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                {account?.profile?.picture && (
+                                                    <img
+                                                        src={account.profile.picture}
+                                                        alt="profile"
+                                                        width={28}
+                                                        height={28}
+                                                        style={{ width: '28px', height: '28px', borderRadius: '999px', objectFit: 'cover', border: '1px solid rgba(255,255,255,0.15)' }}
+                                                    />
+                                                )}
+                                                <div>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                    <ProviderBrandIcon providerKey={account?.provider} size={13} />
+                                                    <strong style={{ textTransform: 'capitalize', fontSize: '13px' }}>{account?.provider || 'provider'}</strong>
+                                                </div>
+                                                <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{account?.account || 'account'}</div>
+                                                {account?.profile?.name && account?.profile?.email && (
+                                                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                                        {account.profile.name}
+                                                    </div>
+                                                )}
+                                                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{account?.status || 'connected'}</div>
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={() => removeLinkedAccount(account?.id)}
+                                                className="icon-btn"
+                                                style={{ padding: '6px' }}
+                                                title="Remove linked account"
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {externalTab === 'providers' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                <button onClick={addProvider} className="btn-ghost" style={{ fontSize: '12px', padding: '6px 12px' }}>
+                                    <Plus size={14} style={{ marginRight: '6px' }} /> Add Provider
+                                </button>
+                            </div>
+                            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px', padding: '14px', marginBottom: '4px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                                    <strong style={{ fontSize: '13px' }}>Provider Plugins</strong>
+                                    <button onClick={fetchExternalProviders} className="btn-ghost" style={{ fontSize: '11px', padding: '4px 8px' }}>
+                                        <RefreshCw size={12} style={{ marginRight: '6px' }} /> Refresh
+                                    </button>
+                                </div>
+                                {externalCatalogLoading && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loading plugins...</div>}
+                                {!externalCatalogLoading && visibleExternalCatalog.length === 0 && (
+                                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No plugins discovered.</div>
+                                )}
+                                {!externalCatalogLoading && visibleExternalCatalog.length > 0 && (
+                                    <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
+                                        {visibleExternalCatalog.map((plugin) => (
+                                            <div key={plugin.key} style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', padding: '10px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                                                    <div>
+                                                        <strong style={{ fontSize: '12px' }}>{plugin.display_name || plugin.key}</strong>
+                                                        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{plugin.description || 'External provider plugin'}</div>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => addProviderFromPlugin(plugin)}
+                                                        className="btn-ghost"
+                                                        disabled={Boolean(providers[plugin.key])}
+                                                        style={{ fontSize: '11px', padding: '4px 8px', whiteSpace: 'nowrap' }}
+                                                    >
+                                                        {providers[plugin.key] ? 'Added' : 'Add'}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
+                            {entries.length === 0 && (
+                                <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
+                                    No providers configured yet.
+                                </div>
+                            )}
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                {entries.map(([providerKey, provider]) => (
+                                    <div key={providerKey} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px', padding: '12px 14px' }}>
+                                        <div style={{ minWidth: 0 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <span style={{ width: '8px', height: '8px', borderRadius: '999px', background: provider?.enabled ? '#22c55e' : '#ef4444', display: 'inline-block' }} />
+                                                <strong style={{ textTransform: 'capitalize', fontSize: '14px' }}>{providerKey.replace(/_/g, ' ')}</strong>
+                                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{provider?.auth_mode || 'oauth2'}</span>
+                                            </div>
+                                            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                                                {provider?.redirect_uri || 'No redirect URI configured'}
+                                            </div>
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '12px' }}>
+                                            <input
+                                                type="checkbox"
+                                                className="luxury-checkbox"
+                                                checked={provider?.enabled ?? false}
+                                                onChange={(e) => updateNestedValue(`external_accounts.providers.${providerKey}.enabled`, e.target.checked)}
+                                            />
+                                            <button
+                                                onClick={() => setEditingProviderKey(editingProviderKey === providerKey ? '' : providerKey)}
+                                                className="icon-btn"
+                                                title={editingProviderKey === providerKey ? 'Collapse editor' : 'Expand editor'}
+                                                style={{ padding: '7px' }}
+                                            >
+                                                {editingProviderKey === providerKey ? <ChevronUp size={14} /> : <Settings2 size={14} />}
+                                            </button>
+                                            <button
+                                                onClick={() => removeProvider(providerKey)}
+                                                className="icon-btn"
+                                                title={`Remove ${providerKey}`}
+                                                style={{ padding: '7px' }}
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+
+                                {editingProviderKey && providers?.[editingProviderKey] && (
+                                    <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '16px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                                            <strong style={{ textTransform: 'capitalize' }}>
+                                                Edit Provider: {editingProviderKey.replace(/_/g, ' ')}
+                                            </strong>
+                                            <button
+                                                onClick={() => setEditingProviderKey('')}
+                                                className="btn-ghost"
+                                                style={{ fontSize: '11px', padding: '4px 8px' }}
+                                            >
+                                                <ChevronDown size={12} style={{ marginRight: '6px' }} /> Collapse
+                                            </button>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : '1fr 1fr', gap: '12px' }}>
+                                            {(() => {
+                                                const currentAuthMode = String(providers?.[editingProviderKey]?.auth_mode || '').trim().toLowerCase();
+                                                const showsApiKey = currentAuthMode.includes('api') || currentAuthMode === 'custom' || currentAuthMode === '';
+                                                return (
+                                                    <>
+                                            <div className="form-group">
+                                                <label>Auth Mode</label>
+                                                <input
+                                                    type="text"
+                                                    className="input-field"
+                                                    value={providers?.[editingProviderKey]?.auth_mode || ''}
+                                                    onChange={(e) => updateNestedValue(`external_accounts.providers.${editingProviderKey}.auth_mode`, e.target.value)}
+                                                    placeholder="oauth2 | api_key | custom"
+                                                />
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Redirect URI</label>
+                                                <input
+                                                    type="text"
+                                                    className="input-field"
+                                                    value={providers?.[editingProviderKey]?.redirect_uri || ''}
+                                                    onChange={(e) => updateNestedValue(`external_accounts.providers.${editingProviderKey}.redirect_uri`, e.target.value)}
+                                                    placeholder="http://localhost:8000/api/auth/callback"
+                                                />
+                                            </div>
+                                            {renderSecretRefField(editingProviderKey, providers?.[editingProviderKey], 'client_id')}
+                                            {renderSecretRefField(editingProviderKey, providers?.[editingProviderKey], 'client_secret')}
+                                            {showsApiKey && renderSecretRefField(editingProviderKey, providers?.[editingProviderKey], 'api_key_ref')}
+                                            <div className="form-group">
+                                                <label>Scopes (comma separated)</label>
+                                                <input
+                                                    type="text"
+                                                    className="input-field"
+                                                    value={Array.isArray(providers?.[editingProviderKey]?.scopes) ? providers[editingProviderKey].scopes.join(', ') : ''}
+                                                    onChange={(e) => updateNestedValue(`external_accounts.providers.${editingProviderKey}.scopes`, e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
+                                                    placeholder="openid, email, profile"
+                                                />
+                                            </div>
+                                            {getProviderExtraFields(editingProviderKey).map((field) => (
+                                                <div className="form-group" key={`${editingProviderKey}_${field.name}`}>
+                                                    <label>{field.label}</label>
+                                                    <input
+                                                        type="text"
+                                                        className="input-field"
+                                                        value={providers?.[editingProviderKey]?.[field.name] || ''}
+                                                        onChange={(e) => updateNestedValue(`external_accounts.providers.${editingProviderKey}.${field.name}`, e.target.value)}
+                                                        placeholder={field.placeholder}
+                                                    />
+                                                </div>
+                                            ))}
+                                                    </>
+                                                );
+                                            })()}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </section>
+            </div>
+        );
+    };
+
     const renderLLM = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
@@ -849,6 +1579,7 @@ const Settings = () => {
                     {activeTab === 'interfaces' && renderInterfaces()}
                     {activeTab === 'media' && renderMedia()}
                     {activeTab === 'network' && renderNetwork()}
+                    {activeTab === 'external_accounts' && renderExternalAccounts()}
                     {activeTab === 'llm' && renderLLM()}
                     {activeTab === 'skills' && renderSkills()}
                     {activeTab === 'stt' && (

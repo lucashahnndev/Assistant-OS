@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
-import { Play, Pause, SkipBack, SkipForward, Monitor, ExternalLink, Download, Maximize2, Minimize2, X } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Monitor, ExternalLink, Download, Maximize2, Minimize2 } from 'lucide-react';
 
 const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = null }) => {
     const [manifest, setManifest] = useState(initialManifest);
@@ -10,7 +9,8 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
     const playbackTimerRef = useRef(null);
     const [isLive, setIsLive] = useState(!initialManifest || initialManifest.status === 'running');
     const manifestPollRef = useRef(null);
-    const [isFullscreen, setIsFullscreen] = useState(false);
+    const cardRef = useRef(null);
+    const [isSystemFullscreen, setIsSystemFullscreen] = useState(false);
     const [isMinimized, setIsMinimized] = useState(false);
 
     // Fetch manifest if not provided
@@ -116,26 +116,34 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
     }, [isPlaying, isLive, playbackSpeed, manifest]);
 
     useEffect(() => {
-        if (!isFullscreen) return undefined;
-
-        const originalOverflow = document.body.style.overflow;
-        document.body.style.overflow = 'hidden';
-
-        const onKeyDown = (event) => {
-            if (event.key === 'Escape') setIsFullscreen(false);
+        const onFullscreenChange = () => {
+            const active = document.fullscreenElement === cardRef.current
+                || document.webkitFullscreenElement === cardRef.current;
+            setIsSystemFullscreen(Boolean(active));
         };
-        window.addEventListener('keydown', onKeyDown);
-
+        document.addEventListener('fullscreenchange', onFullscreenChange);
+        document.addEventListener('webkitfullscreenchange', onFullscreenChange);
         return () => {
-            document.body.style.overflow = originalOverflow;
-            window.removeEventListener('keydown', onKeyDown);
+            document.removeEventListener('fullscreenchange', onFullscreenChange);
+            document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
         };
-    }, [isFullscreen]);
+    }, []);
+
+    const requestSystemFullscreen = async () => {
+        const el = cardRef.current;
+        if (!el) return;
+        try {
+            if (el.requestFullscreen) await el.requestFullscreen();
+            else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen();
+        } catch (err) {
+            console.error('Failed to enter fullscreen:', err);
+        }
+    };
 
     if (!manifest || !manifest.steps || manifest.steps.length === 0) {
         return (
-            <div className="playback-card glass loading" style={{ margin: '12px 0', borderRadius: '16px', border: '1px solid var(--card-border)', background: 'rgba(0,0,0,0.4)' }}>
-                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '200px', flexDirection: 'column', gap: '12px' }}>
+            <div className="playback-card glass loading" style={{ margin: '10px auto', borderRadius: '14px', border: '1px solid var(--card-border)', background: 'rgba(0,0,0,0.4)', maxWidth: '420px', width: '100%' }}>
+                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '170px', flexDirection: 'column', gap: '12px' }}>
                     <div className="loader-spin" style={{ width: '24px', height: '24px', border: '2px solid rgba(255,255,255,0.1)', borderTopColor: 'var(--accent-color)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
                     <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Aguardando interação visual...</span>
                 </div>
@@ -204,30 +212,31 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
     }
 
     return (
-        <div className="playback-card glass" style={{
-            borderRadius: '16px',
+        <div ref={cardRef} className="playback-card glass" style={{
+            borderRadius: '14px',
             overflow: 'hidden',
             border: '1px solid var(--card-border)',
             background: 'rgba(15, 23, 42, 0.6)',
-            margin: '16px 0',
-            maxWidth: '100%',
+            margin: '10px auto',
+            maxWidth: isSystemFullscreen ? '100vw' : '420px',
+            width: isSystemFullscreen ? '100vw' : '100%',
             boxShadow: 'var(--shadow-lg)',
             animation: 'fadeIn 0.3s ease-out'
         }}>
             {/* Header */}
-            <div style={{ padding: '12px 16px', background: 'rgba(0,0,0,0.3)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ padding: '10px 14px', background: 'rgba(0,0,0,0.3)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
                     <Monitor size={14} color="var(--accent-color)" />
-                    <span style={{ fontSize: '12px', fontWeight: '700', letterSpacing: '0.5px' }}>{manifest.title || 'Browser Session'}</span>
+                    <span style={{ fontSize: '12px', fontWeight: '700', letterSpacing: '0.5px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{manifest.title || 'Browser Session'}</span>
                     {isLive && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: '8px', padding: '2px 8px', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '12px', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginLeft: '8px', padding: '2px 8px', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '12px', border: '1px solid rgba(239, 68, 68, 0.2)', flexShrink: 0, whiteSpace: 'nowrap' }}>
                             <div style={{ width: '6px', height: '6px', background: '#ef4444', borderRadius: '50%', animation: 'pulse 1.5s infinite' }} />
-                            <span style={{ fontSize: '9px', color: '#ef4444', fontWeight: '800', textTransform: 'uppercase' }}>Live</span>
+                            <span style={{ fontSize: '9px', color: '#ef4444', fontWeight: '800', textTransform: 'uppercase', lineHeight: 1 }}>Live</span>
                         </div>
                     )}
                 </div>
-                <div style={{ display: 'flex', gap: '4px' }}>
-                    <button onClick={() => setIsFullscreen(true)} style={{ padding: '6px', borderRadius: '8px' }} className="btn-ghost" title="Fullscreen"><Maximize2 size={14} /></button>
+                <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                    <button onClick={requestSystemFullscreen} style={{ padding: '6px', borderRadius: '8px' }} className="btn-ghost" title="Fullscreen"><Maximize2 size={14} /></button>
                     <button onClick={() => setIsMinimized(true)} style={{ padding: '6px', borderRadius: '8px' }} className="btn-ghost" title="Minimize"><Minimize2 size={14} /></button>
                 </div>
             </div>
@@ -269,7 +278,7 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
             </div>
 
             {/* Controls */}
-            <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                     <button
                         onClick={() => setIsPlaying(!isPlaying)}
@@ -331,135 +340,6 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
                 }
             `}} />
 
-            {/* Fullscreen Modal */}
-            {isFullscreen && typeof document !== 'undefined' && createPortal((
-                <div
-                    onClick={() => setIsFullscreen(false)}
-                    style={{
-                        position: 'fixed',
-                        inset: 0,
-                        background: 'rgba(0, 0, 0, 0.9)',
-                        backdropFilter: 'blur(12px)',
-                        WebkitBackdropFilter: 'blur(12px)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        zIndex: 10000,
-                        animation: 'fadeIn 0.25s ease',
-                    }}
-                >
-                    <div
-                        onClick={e => e.stopPropagation()}
-                        style={{
-                            position: 'relative',
-                            width: '90vw',
-                            maxWidth: '1200px',
-                            background: 'var(--card-bg)',
-                            border: '1px solid var(--card-border)',
-                            borderRadius: 'var(--radius-md)',
-                            overflow: 'hidden',
-                            boxShadow: 'var(--shadow-xl)',
-                        }}
-                    >
-                        {/* Fullscreen Header */}
-                        <div style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            padding: '10px 16px',
-                            borderBottom: '1px solid var(--card-border)',
-                            background: 'rgba(0,0,0,0.3)',
-                        }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <Monitor size={14} color="var(--accent-color)" />
-                                <span style={{ fontSize: '12px', fontWeight: '700' }}>{manifest.title || 'Browser Session'}</span>
-                                {isLive && (
-                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '12px', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
-                                        <div style={{ width: '6px', height: '6px', background: '#ef4444', borderRadius: '50%', animation: 'pulse 1.5s infinite' }} />
-                                        <span style={{ fontSize: '9px', color: '#ef4444', fontWeight: '800', textTransform: 'uppercase' }}>Live</span>
-                                    </div>
-                                )}
-                                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-                                    {(currentStepIndex + 1).toString().padStart(2, '0')} / {manifest.steps.length.toString().padStart(2, '0')}
-                                </span>
-                            </div>
-                            <button
-                                onClick={() => setIsFullscreen(false)}
-                                className="vp-btn"
-                                title="Close fullscreen"
-                            >
-                                <X size={14} />
-                            </button>
-                        </div>
-
-                        {/* Fullscreen Frame */}
-                        <div style={{ width: '100%', background: '#000' }}>
-                            <img
-                                src={frameUrl}
-                                alt={`Step ${currentStepIndex}`}
-                                style={{ width: '100%', height: 'auto', maxHeight: '80vh', objectFit: 'contain', display: 'block' }}
-                            />
-                            {currentStep.action && (
-                                <div style={{
-                                    position: 'absolute',
-                                    bottom: '80px',
-                                    left: '16px',
-                                    right: '16px',
-                                    background: 'rgba(15, 23, 42, 0.85)',
-                                    backdropFilter: 'blur(8px)',
-                                    padding: '10px 14px',
-                                    borderRadius: '12px',
-                                    fontSize: '12px',
-                                    color: '#fff',
-                                    border: '1px solid rgba(255,255,255,0.1)',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '10px',
-                                    boxShadow: 'var(--shadow-md)',
-                                }}>
-                                    <div style={{ width: '8px', height: '8px', background: 'var(--accent-color)', borderRadius: '2px' }} />
-                                    <span style={{ color: 'var(--accent-color)', fontWeight: '800', textTransform: 'uppercase' }}>{currentStep.action.name}</span>
-                                    <span style={{ opacity: 0.8, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentStep.action.target}</span>
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Fullscreen Controls */}
-                        <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '16px', borderTop: '1px solid var(--card-border)' }}>
-                            <button
-                                onClick={() => setIsPlaying(!isPlaying)}
-                                disabled={isLive}
-                                style={{
-                                    background: isPlaying ? 'rgba(255,255,255,0.1)' : 'var(--accent-color)',
-                                    width: '36px',
-                                    height: '36px',
-                                    borderRadius: '50%',
-                                    display: 'flex',
-                                    justifyContent: 'center',
-                                    alignItems: 'center',
-                                    border: 'none',
-                                    cursor: isLive ? 'not-allowed' : 'pointer',
-                                    opacity: isLive ? 0.5 : 1,
-                                }}
-                            >
-                                {isPlaying ? <Pause size={18} color="white" fill="white" /> : <Play size={18} color="white" fill="white" style={{ marginLeft: '2px' }} />}
-                            </button>
-                            <input
-                                type="range"
-                                min="0"
-                                max={manifest.steps.length - 1}
-                                value={currentStepIndex}
-                                disabled={isLive}
-                                onChange={e => { setCurrentStepIndex(parseInt(e.target.value)); setIsPlaying(false); }}
-                                style={{ flex: 1, accentColor: 'var(--accent-color)', cursor: isLive ? 'not-allowed' : 'pointer', height: '4px', borderRadius: '2px' }}
-                            />
-                            <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: '600', fontFamily: 'monospace' }}>
-                                {(currentStepIndex + 1).toString().padStart(2, '0')} / {manifest.steps.length.toString().padStart(2, '0')}
-                            </span>
-                        </div>
-                    </div>
-                </div>
-            ), document.body)}
         </div>
     );
 };

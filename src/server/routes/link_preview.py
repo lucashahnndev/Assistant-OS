@@ -2,7 +2,7 @@
 Link Preview API endpoint.
 Fetches OpenGraph metadata from URLs with SSRF protection and caching.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from ..auth import get_current_user
 from ..core.models import User
@@ -26,6 +26,11 @@ _cache_lock = Lock()
 CACHE_TTL = 12 * 3600  # 12 hours
 CACHE_MAX = 500
 
+_favicon_cache: dict = {}  # host -> { content, media_type, ts }
+_favicon_cache_lock = Lock()
+FAVICON_CACHE_TTL = 7 * 24 * 3600  # 7 days
+FAVICON_CACHE_MAX = 1000
+
 def _cache_get(url: str):
     with _cache_lock:
         entry = _cache.get(url)
@@ -42,6 +47,26 @@ def _cache_set(url: str, data: dict):
             oldest_key = min(_cache, key=lambda k: _cache[k]["ts"])
             del _cache[oldest_key]
         _cache[url] = {"data": data, "ts": time.time()}
+
+def _favicon_cache_get(host: str):
+    with _favicon_cache_lock:
+        entry = _favicon_cache.get(host)
+        if entry and (time.time() - entry["ts"]) < FAVICON_CACHE_TTL:
+            return entry
+        if entry:
+            del _favicon_cache[host]
+    return None
+
+def _favicon_cache_set(host: str, content: bytes, media_type: str):
+    with _favicon_cache_lock:
+        if len(_favicon_cache) >= FAVICON_CACHE_MAX and host not in _favicon_cache:
+            oldest_key = min(_favicon_cache, key=lambda k: _favicon_cache[k]["ts"])
+            del _favicon_cache[oldest_key]
+        _favicon_cache[host] = {
+            "content": content,
+            "media_type": media_type or "image/x-icon",
+            "ts": time.time(),
+        }
 
 
 # ── SSRF Protection ─────────────────────────────────────────────────────
@@ -152,7 +177,7 @@ def fetch_link_preview(
             url,
             timeout=4,
             headers={
-                "User-Agent": "Mozilla/5.0 (compatible; AtlasBot/1.0; +http://localhost)",
+                "User-Agent": "Mozilla/5.0 (compatible; AssistantOSBot/1.0; +http://localhost)",
                 "Accept": "text/html",
             },
             allow_redirects=True,
@@ -209,3 +234,61 @@ def fetch_link_preview(
     _cache_set(url, result)
 
     return result
+
+@router.get("/favicon")
+def fetch_favicon(
+    url: str = Query(..., description="Absolute http/https URL"),
+    user: User = Depends(get_current_user),
+):
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Invalid URL")
+
+    host = parsed.hostname.strip().lower()
+    if _is_private_ip(host):
+        raise HTTPException(status_code=400, detail="URL points to a private/reserved network")
+
+    cached = _favicon_cache_get(host)
+    if cached:
+        return Response(content=cached["content"], media_type=cached["media_type"])
+
+    candidates = [
+        f"https://{host}/favicon.ico",
+        f"http://{host}/favicon.ico",
+    ]
+
+    for candidate in candidates:
+        try:
+            resp = requests.get(
+                candidate,
+                timeout=3,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (compatible; AssistantOSBot/1.0; +http://localhost)",
+                    "Accept": "image/*,*/*;q=0.8",
+                },
+                allow_redirects=True,
+                stream=True,
+            )
+
+            final_parsed = urlparse(resp.url or candidate)
+            if final_parsed.hostname and _is_private_ip(final_parsed.hostname):
+                continue
+
+            if resp.status_code != 200:
+                continue
+
+            content_type = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+            if not content_type.startswith("image/") and "icon" not in content_type:
+                continue
+
+            content = resp.content[:64 * 1024]
+            if not content:
+                continue
+
+            media_type = content_type if content_type else "image/x-icon"
+            _favicon_cache_set(host, content, media_type)
+            return Response(content=content, media_type=media_type)
+        except requests.exceptions.RequestException:
+            continue
+
+    return Response(status_code=204)

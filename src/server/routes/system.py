@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from ..auth import get_current_user
-from ..core.models import User
+from ..core.models import User, AuditLog
 from ..core.database import get_db
 from sqlalchemy.orm import Session
 import json
@@ -101,7 +101,21 @@ def get_config(user: User = Depends(get_current_user), request: Request = None):
         with open(config_path, "r") as f:
             return json.load(f)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read config: {str(e)}")
+        logger.error(f"Failed to read config: {e}")
+        return {}
+
+@router.get("/activity")
+def get_activity(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """
+    Returns recent system audit logs.
+    """
+    try:
+        # Query last 10 audit logs
+        logs = db.query(AuditLog).order_by(AuditLog.timestamp.desc()).limit(10).all()
+        return logs
+    except Exception as e:
+        logger.error(f"Error fetching activity: {e}")
+        return []
 
 @router.post("/config")
 def update_config(config: dict, user: User = Depends(get_current_user), request: Request = None):
@@ -265,3 +279,41 @@ async def stream_logs(request: Request, source: str = "assistant.log", user: Use
             yield f"data: {json.dumps({'type': 'error', 'msg': f'Log file {source} not found'})}\n\n"
 
     return StreamingResponse(log_generator(), media_type="text/event-stream")
+
+@router.get("/works/{work_id}/context")
+async def get_work_context(work_id: str, request: Request, user: User = Depends(get_current_user)):
+    """
+    Returns the context.json snapshot for a given work_id.
+    Used by the frontend WorkUnitInspector panel.
+    """
+    kernel = get_kernel(request)
+    scheduler = getattr(kernel, "scheduler", None)
+    if not scheduler:
+        raise HTTPException(status_code=503, detail="Scheduler not available")
+
+    snapshot = scheduler.get_work_snapshot(work_id, include_context=True)
+    if snapshot is None:
+        # Work may have been evicted from in-memory registry; try reading disk directly
+        from config.manager import ConfigManager
+        data_dir = ConfigManager.get_data_dir()
+        # Try session-scoped first, then global
+        import glob
+        patterns = [
+            os.path.join(data_dir, "works", work_id, "context.json"),
+            os.path.join(data_dir, "sessions", "*", "works", work_id, "context.json"),
+        ]
+        context = None
+        for pattern in patterns:
+            matches = glob.glob(pattern)
+            if matches:
+                try:
+                    with open(matches[0], "r", encoding="utf-8") as f:
+                        context = json.load(f)
+                    break
+                except Exception:
+                    pass
+        if context is None:
+            raise HTTPException(status_code=404, detail=f"Work {work_id} not found")
+        return {"work_id": work_id, "context": context}
+
+    return {"work_id": work_id, "context": snapshot.get("context", {}), "status": snapshot.get("status")}

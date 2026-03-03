@@ -188,7 +188,7 @@ body::after {
     color: var(--text-main);
 }
 
-.btn-ghost:hover .delete-session-btn {
+.session-item:hover .delete-session-btn {
     opacity: 1 !important;
 }
 
@@ -1121,6 +1121,15 @@ select option {
     transition: var(--transition-fast);
     overflow: hidden;
     max-width: 420px;
+    width: 100%;
+}
+
+.link-preview-card.is-stage {
+    max-width: none;
+    height: 100%;
+    background: transparent;
+    border: none;
+    padding: 0;
 }
 
 .link-preview-card:hover {
@@ -1289,6 +1298,12 @@ select option {
     background: #000;
     max-width: 480px;
     width: 100%;
+}
+
+.yt-inline-player.is-stage {
+    max-width: none;
+    border: none;
+    background: transparent;
 }
 
 .yt-inline-header {

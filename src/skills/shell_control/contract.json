@@ -16,8 +16,8 @@
                     },
                     "timeout_sec": {
                         "type": "integer",
-                        "description": "Timeout em segundos para o comando (5-120).",
-                        "default": 30
+                        "description": "Timeout em segundos para o comando (5-10800).",
+                        "default": 600
                     }
                 },
                 "required": [

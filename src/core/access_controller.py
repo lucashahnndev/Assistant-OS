@@ -77,7 +77,6 @@ class IdentityService:
                     "deezer.*",
                     "spotify.*",
                     "vision.*",
-                    "browser.automator.*",
                     "system_logs.*",
                     "system.apps.*",
                     "system.control.info",
@@ -106,13 +105,18 @@ class IdentityService:
                 description="Somente observabilidade e ações de baixo risco.",
                 allow_actions=[
                     "web.search.discover",
+                    "web.retrieve.read",
+                    "web.retrieve.extract",
                     "wikipedia.search",
                     "memory.recall",
                     "task.notes",
                     "task.specialist",
                     "weather.control.get",
+                    "weather.control.forecast",
                     "maps.search.search",
                     "youtube.search.find",
+                    "youtube.retrieve.get",
+                    "research.retrieve.run",
                     "deezer.search.search",
                     "system_logs.*",
                     "system.control.info",
@@ -145,7 +149,12 @@ class IdentityService:
                     "auto_approve_chat_group": "medium",
                     "allow_anyone_in_chats": [],
                     "rate_limit_enabled": True,
-                    "max_msgs_per_min": 20
+                    "max_msgs_per_min": 20,
+                    "approval_decisions": {
+                        "enabled": True,
+                        "allowed_groups": ["master"],
+                        "denied_groups": [],
+                    },
                 },
                 "web": {
                     "dm_mode": "anyone",
@@ -156,7 +165,12 @@ class IdentityService:
                     "auto_approve_chat_group": "master",
                     "allow_anyone_in_chats": [],
                     "rate_limit_enabled": False,
-                    "max_msgs_per_min": 60
+                    "max_msgs_per_min": 60,
+                    "approval_decisions": {
+                        "enabled": True,
+                        "allowed_groups": ["*"],
+                        "denied_groups": [],
+                    },
                 },
                 "cli": {
                     "dm_mode": "anyone",
@@ -167,7 +181,12 @@ class IdentityService:
                     "auto_approve_chat_group": "master",
                     "allow_anyone_in_chats": [],
                     "rate_limit_enabled": False,
-                    "max_msgs_per_min": 100
+                    "max_msgs_per_min": 100,
+                    "approval_decisions": {
+                        "enabled": True,
+                        "allowed_groups": ["master"],
+                        "denied_groups": [],
+                    },
                 }
             },
             "permission_groups": self._default_permission_groups(),
@@ -203,6 +222,13 @@ class IdentityService:
             current = policy["interfaces"].setdefault(interface_name, {})
             for key, value in interface_defaults.items():
                 current.setdefault(key, value)
+            current_approval = current.get("approval_decisions")
+            default_approval = interface_defaults.get("approval_decisions", {})
+            if not isinstance(current_approval, dict):
+                current_approval = {}
+                current["approval_decisions"] = current_approval
+            for key, value in default_approval.items():
+                current_approval.setdefault(key, value)
 
         if "permission_groups" not in policy or not isinstance(policy["permission_groups"], dict):
             policy["permission_groups"] = {}
@@ -233,7 +259,12 @@ class IdentityService:
             "auto_approve_chat_group": "medium",
             "allow_anyone_in_chats": [],
             "rate_limit_enabled": True,
-            "max_msgs_per_min": 10
+            "max_msgs_per_min": 10,
+            "approval_decisions": {
+                "enabled": True,
+                "allowed_groups": ["master"],
+                "denied_groups": [],
+            },
         })
 
     def list_permission_groups(self) -> List[Dict[str, Any]]:
@@ -706,6 +737,15 @@ class AccessController:
         if control_scope not in valid:
             control_scope = "owner_identity"
         return {"view_scope": view_scope, "control_scope": control_scope}
+
+    def resolve_principal_group_id(self, context: PrincipalContext) -> str:
+        """
+        Resolves effective group_id for a principal.
+        This is useful for cross-cutting policies (e.g., permission approval governance).
+        """
+        user, chat, _ = self._resolve_context_entities(context)
+        target_entity = chat if (context.is_group and chat) else user
+        return str(target_entity.group_id or user.group_id or "").strip()
 
     def can_access_work(self, context: PrincipalContext, work_snapshot: Dict[str, Any], operation: str = "view") -> bool:
         """

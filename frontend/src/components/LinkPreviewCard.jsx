@@ -7,7 +7,7 @@ import { useVideoPlayer } from '../context/VideoPlayerContext';
 const URL_RE = /https?:\/\/[^\s<>)"'\]]+/gi;
 
 const YOUTUBE_RE =
-    /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/)|youtu\.be\/)([\w-]{11})/i;
+    /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/)|youtu\.be\/|\[RESOURCE\]\?v=)([\w-]{11})/i;
 
 function extractUrls(text) {
     if (!text || typeof text !== 'string') return [];
@@ -20,13 +20,13 @@ function extractYouTubeId(url) {
 }
 
 // ── YouTube Inline Player ───────────────────────────────────────────────
-const YouTubeInlinePlayer = memo(({ videoId }) => {
+const YouTubeInlinePlayer = memo(({ videoId, isStage }) => {
     const { openFullscreen, stopVideo } = useVideoPlayer();
     const embedUrl = `https://www.youtube-nocookie.com/embed/${videoId}?rel=0&modestbranding=1`;
     const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
     return (
-        <div className="yt-inline-player">
+        <div className={`yt-inline-player ${isStage ? 'is-stage' : ''}`}>
             <div className="yt-inline-header">
                 <span className="yt-inline-label">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}>
@@ -76,13 +76,20 @@ const YouTubeInlinePlayer = memo(({ videoId }) => {
 });
 
 // ── YouTube Preview Card (thumbnail + play button) ──────────────────────
-const YouTubePreviewCard = memo(({ videoId }) => {
+const YouTubePreviewCard = memo(({ videoId, isStage }) => {
     const { playVideo, activeVideoId } = useVideoPlayer();
     const thumbUrl = `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
 
+    // Dashboard Stage optimization: Always auto-play the video if in stage mode
+    useEffect(() => {
+        if (isStage && activeVideoId !== videoId) {
+            playVideo(videoId);
+        }
+    }, [isStage, videoId, activeVideoId, playVideo]);
+
     // If THIS video is the active one, render the inline player instead
-    if (activeVideoId === videoId) {
-        return <YouTubeInlinePlayer videoId={videoId} />;
+    if (activeVideoId === videoId || isStage) {
+        return <YouTubeInlinePlayer videoId={videoId} isStage={isStage} />;
     }
 
     return (
@@ -114,7 +121,7 @@ const YouTubePreviewCard = memo(({ videoId }) => {
 });
 
 // ── Generic Link Preview Card ───────────────────────────────────────────
-const GenericPreviewCard = memo(({ url }) => {
+const GenericPreviewCard = memo(({ url, isStage }) => {
     const [state, setState] = useState('loading'); // loading | ready | error
     const [data, setData] = useState(null);
 
@@ -154,9 +161,15 @@ const GenericPreviewCard = memo(({ url }) => {
                 target="_blank"
                 rel="noopener noreferrer"
                 className="link-preview-card link-preview-fallback"
+                style={{ width: '420px', maxWidth: '100%', alignItems: 'center' }}
             >
-                <Globe size={14} style={{ flexShrink: 0, opacity: 0.5 }} />
-                <span className="link-preview-domain">{domain}</span>
+                <img
+                    src={`/api/favicon?url=${encodeURIComponent(url)}`}
+                    alt=""
+                    style={{ width: '16px', height: '16px', flexShrink: 0, borderRadius: '4px' }}
+                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                />
+                <span className="link-preview-domain" style={{ fontSize: '11px', fontWeight: '800', opacity: 0.8 }}>{domain}</span>
             </a>
         );
     }
@@ -166,14 +179,19 @@ const GenericPreviewCard = memo(({ url }) => {
             href={data.url || url}
             target="_blank"
             rel="noopener noreferrer"
-            className="link-preview-card"
+            className={`link-preview-card ${isStage ? 'is-stage' : ''}`}
         >
             {data.image && (
                 <img src={data.image} alt="" className="link-preview-thumb" loading="lazy" />
             )}
             <div className="link-preview-info">
                 <span className="link-preview-domain">
-                    <Globe size={12} style={{ flexShrink: 0, opacity: 0.6 }} />
+                    <img
+                        src={`/api/favicon?url=${encodeURIComponent(data.url || url)}`}
+                        alt=""
+                        style={{ width: '12px', height: '12px', marginRight: '4px', flexShrink: 0, borderRadius: '2px' }}
+                        onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                    />
                     {data.domain}
                 </span>
                 {data.title && <span className="link-preview-title">{data.title}</span>}
@@ -184,7 +202,7 @@ const GenericPreviewCard = memo(({ url }) => {
 });
 
 // ── Main Component ──────────────────────────────────────────────────────
-const LinkPreviewCard = memo(({ messageContent }) => {
+const LinkPreviewCard = memo(({ messageContent, isStage }) => {
     const urls = extractUrls(messageContent);
     if (urls.length === 0) return null;
 
@@ -193,11 +211,11 @@ const LinkPreviewCard = memo(({ messageContent }) => {
     const ytId = extractYouTubeId(firstUrl);
 
     return (
-        <div className="link-preview-wrapper">
+        <div className={`link-preview-wrapper ${isStage ? 'is-stage' : ''}`}>
             {ytId ? (
-                <YouTubePreviewCard videoId={ytId} />
+                <YouTubePreviewCard videoId={ytId} isStage={isStage} />
             ) : (
-                <GenericPreviewCard url={firstUrl} />
+                <GenericPreviewCard url={firstUrl} isStage={isStage} />
             )}
             {extraCount > 0 && (
                 <span className="link-preview-more">

@@ -75,10 +75,29 @@ class GeminiProvider(ILLMProvider):
             data = {}
             try:
                 start = content.find('{')
-                end = content.rfind('}')
-                if start != -1 and end != -1:
-                    json_str = content[start:end+1]
-                    data = json.loads(json_str)
+                if start != -1:
+                    # Attempt to parse from start to the end of the first valid JSON object
+                    # We use a greedy approach for the last brace first
+                    end = content.rfind('}')
+                    if end != -1:
+                        json_str = content[start:end+1]
+                        try:
+                            data = json.loads(json_str)
+                        except json.JSONDecodeError as je:
+                            # If it fails with "Extra data", try to truncate at the specific position
+                            # JSONDecodeError.pos is 0-indexed position in the input string
+                            # but we need to find it within our sliced json_str
+                            msg = str(je)
+                            if "Extra data" in msg:
+                                # Simple truncation attempt if the error tells us where the extra data starts
+                                try:
+                                    # je.pos is the index in json_str where extra data begins
+                                    data = json.loads(json_str[:je.pos])
+                                except:
+                                    logger.warning("Recursive JSON fix failed.")
+                                    raise je
+                            else:
+                                raise je
                 else:
                     logger.warning("No JSON braces found in Gemini response. Falling back to text.")
                     return AgentIntent(

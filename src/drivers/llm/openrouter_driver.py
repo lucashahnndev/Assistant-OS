@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 import json
 import os
 import re
@@ -71,7 +71,7 @@ class OpenRouterProvider(ILLMProvider):
                 timeout=self.timeout,
                 extra_headers={
                     "HTTP-Referer": "https://github.com/lucas-openclaw/aosd", # Optional: Change to your site
-                    "X-Title": "Atlas Bot"
+                    "X-Title": "Assistant OS"
                 },
                 max_tokens=max_tokens
             )
@@ -122,14 +122,6 @@ class OpenRouterProvider(ILLMProvider):
             
             data = self._extract_json(content)
             if data is None:
-                recovered_intent = self._recover_from_plain_text(user_input=user_input, content=content)
-                if recovered_intent:
-                    logger.warning(
-                        "Could not parse JSON intent. Recovered plain-text output into structured intent | Action: %s",
-                        recovered_intent.action,
-                    )
-                    return recovered_intent
-
                 logger.warning("Could not parse JSON intent. Falling back to plain-text reply.")
                 return AgentIntent(
                     thought="Model returned non-JSON output.",
@@ -159,32 +151,10 @@ class OpenRouterProvider(ILLMProvider):
             else:
                 response_text = str(response_text_raw)
 
-            # When malformed JSON is partially parsed (e.g., only "thought"),
-            # avoid defaulting blindly to "reply" with empty text.
             if not action:
-                hint_chunks = [thought, str(response_text or "")]
-                try:
-                    if isinstance(params, dict) and params:
-                        hint_chunks.append(json.dumps(params, ensure_ascii=False))
-                except Exception:
-                    pass
-                hint_text = " ".join([chunk for chunk in hint_chunks if chunk]).strip()
-                inferred_action, inferred_params = self._infer_action_and_params(user_input, hint_text)
-                if inferred_action:
-                    action = inferred_action
-                    if not isinstance(params, dict) or not params:
-                        params = inferred_params
-                else:
-                    action = "reply"
-
-            # Additional guard: "reply" with no user-facing text but with operational thought.
-            # Try recovering an action from thought/user_input to keep tasks progressing.
+                action = "reply"
             if action == "reply" and not response_text:
-                inferred_action, inferred_params = self._infer_action_and_params(user_input, thought)
-                if inferred_action and inferred_action != "reply":
-                    action = inferred_action
-                    if not isinstance(params, dict) or not params:
-                        params = inferred_params
+                response_text = thought
             
             normalized_plan = self._normalize_plan_field(data.get("plan", []))
             state_summary = data.get("state_summary", {})
@@ -288,168 +258,6 @@ class OpenRouterProvider(ILLMProvider):
             except json.JSONDecodeError:
                 continue
         return None
-
-    @staticmethod
-    def _looks_like_internal_reasoning(content: str) -> bool:
-        text = (content or "").strip().lower()
-        if not text:
-            return False
-
-        # Typical private chain-of-thought style markers
-        if text.startswith("o usuário") or text.startswith("o usuario") or text.startswith("the user"):
-            return True
-
-        # Progress/operation stubs are not final user-facing replies.
-        if text.startswith(("searching", "looking for", "opening", "running", "please wait", "one moment", "pesquisando", "procurando", "buscando", "abrindo", "executando", "aguarde", "um momento")):
-            return True
-
-        reasoning_cues = [
-            "vou usar",
-            "i will use",
-            "my plan",
-            "plano:",
-            "action:",
-            "action",
-            "ação",
-            "acao",
-            "params",
-        ]
-        return any(cue in text for cue in reasoning_cues)
-
-    @staticmethod
-    def _looks_like_user_facing_final(content: str) -> bool:
-        text = (content or "").strip().lower()
-        if not text:
-            return False
-        # Typical final-answer markers (tables/lists/markdown/reporting style).
-        markers = [
-            "**title",
-            "**título",
-            "**titulo",
-            "**artista",
-            "**album",
-            "**álbum",
-            "**album",
-            "veja os detalhes",
-            "the song",
-            "a música",
-            "a musica",
-            "is now playing",
-            "está sendo reproduzida",
-            "esta sendo reproduzida",
-            "resultado",
-            "link:",
-            "url:",
-        ]
-        if any(m in text for m in markers):
-            return True
-        if "\n- " in text or "\n1." in text:
-            return True
-        return False
-
-    @staticmethod
-    def _extract_query_from_text(user_input: str, content: str) -> str:
-        # Prefer explicit query fields if the model included one in plain text.
-        for pattern in (
-            r'["\']query["\']\s*:\s*["\']([^"\']+)["\']',
-            r'["\']q["\']\s*:\s*["\']([^"\']+)["\']',
-        ):
-            match = re.search(pattern, content or "", flags=re.IGNORECASE)
-            if match and match.group(1).strip():
-                return match.group(1).strip()
-
-        return (user_input or "").strip()
-
-    @classmethod
-    def _infer_action_and_params(cls, user_input: str, content: str) -> Tuple[Optional[str], Dict[str, Any]]:
-        text = (content or "").strip()
-        lower_text = text.lower()
-        lower_user = (user_input or "").strip().lower()
-        combined = f"{lower_user} {lower_text}".strip()
-
-        # Explicit action id in plain text (e.g. "action: youtube.search.find")
-        explicit_action = re.search(
-            r"(?:action|ação|acao)\s*[:=]?\s*['\"`]?([a-z0-9_]+(?:\.[a-z0-9_]+){1,})['\"`]?",
-            lower_text,
-            flags=re.IGNORECASE,
-        )
-        if explicit_action:
-            action_id = explicit_action.group(1)
-            if action_id in {"reply", "error"}:
-                return action_id, {}
-            if action_id == "browser.automator.control":
-                query_text = cls._extract_query_from_text(user_input, text).lower()
-                if any(token in query_text for token in ("pause", "pausa", "pausar")):
-                    return action_id, {"action": "pause"}
-                if any(token in query_text for token in ("next", "próxima", "proxima", "avançar", "avancar")):
-                    return action_id, {"action": "next"}
-                if any(token in query_text for token in ("mute", "mudo", "silenciar")):
-                    return action_id, {"action": "mute"}
-                if any(token in query_text for token in ("fullscreen", "tela cheia")):
-                    return action_id, {"action": "fullscreen"}
-                return action_id, {"action": "play"}
-            return action_id, {"query": cls._extract_query_from_text(user_input, text)}
-
-        search_cues = ("buscar", "busca", "search", "procur", "encontr", "pesquis")
-        has_search_cue = any(cue in combined for cue in search_cues)
-        media_open_cues = ("abre", "abrir", "abrindo", "toca", "tocar", "play", "reproduz", "reproduzir", "música", "musica")
-        has_media_open_cue = any(cue in combined for cue in media_open_cues)
-
-        provider_routes = [
-            ("youtube", "youtube.search.find"),
-            ("deezer", "deezer.search.search"),
-            ("spotify", "spotify.search.search"),
-            ("wikipedia", "wikipedia.search"),
-            ("wikipédia", "wikipedia.search"),
-            ("wiki", "wikipedia.search"),
-            ("web", "web.search.discover"),
-            ("google", "web.search.discover"),
-        ]
-
-        for token, action_id in provider_routes:
-            if token in combined and has_search_cue:
-                return action_id, {"query": cls._extract_query_from_text(user_input, text)}
-
-        # Media-intent fallback: user asked to open/play media on provider, even if model answered only "Pesquisando..."
-        if "deezer" in combined and has_media_open_cue:
-            return "deezer.search.search", {"query": cls._extract_query_from_text(user_input, text)}
-        if "spotify" in combined and has_media_open_cue:
-            return "spotify.search.search", {"query": cls._extract_query_from_text(user_input, text)}
-        if ("youtube" in combined or "yt" in combined) and has_media_open_cue:
-            return "youtube.search.find", {"query": cls._extract_query_from_text(user_input, text)}
-
-        return None, {}
-
-    @classmethod
-    def _recover_from_plain_text(cls, user_input: str, content: str) -> Optional[AgentIntent]:
-        text = (content or "").strip()
-        if not text:
-            return None
-
-        # If model already produced a user-facing final answer, don't force it back into tool actions.
-        if cls._looks_like_user_facing_final(text):
-            return None
-
-        action_id, params = cls._infer_action_and_params(user_input, text)
-        if action_id:
-            return AgentIntent(
-                thought=text,
-                action=action_id,
-                params=params,
-                response_text=None,
-            )
-
-        # If model output is user-facing plain text and no action could be inferred, keep old behavior.
-        if not cls._looks_like_internal_reasoning(text):
-            return None
-
-        # Mark as unknown to trigger resolver fallback instead of exposing internal monologue as final reply.
-        return AgentIntent(
-            thought=text,
-            action="unknown",
-            params={"fallback_reason": "non_json_internal_reasoning"},
-            response_text=None,
-        )
 
     def analyze_image(self, image_path: str, prompt: str) -> str:
         """

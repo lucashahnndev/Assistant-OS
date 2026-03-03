@@ -12,7 +12,10 @@ pystray
 unidecode
 pydantic
 requests
+httpx
 beautifulsoup4
+trafilatura
+readability-lxml
 wikipedia
 pyautogui
 pytz

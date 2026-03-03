@@ -36,11 +36,18 @@ class SkillLoader:
         """Propagates the kernel reference to all currently registered skills."""
         logger.info(f"Propagating kernel to {len(self.registry.skills)} skills.")
         for skill in self.registry.skills.values():
+            propagated = False
             if hasattr(skill, "kernel"):
                 skill.kernel = kernel
+                propagated = True
+            elif hasattr(skill, "_kernel"):
+                skill._kernel = kernel
+                propagated = True
+            
+            if propagated:
                 logger.info(f"Propagated kernel (id={id(kernel)}) to skill: {skill.name} (id={id(skill)})")
             else:
-                logger.warning(f"Skill {skill.name} does not have 'kernel' attribute.")
+                logger.warning(f"Skill {skill.name} does not have 'kernel' or '_kernel' attribute.")
 
     def load_from_directory(self, directory: str):
         """Loads modular skills from a directory."""

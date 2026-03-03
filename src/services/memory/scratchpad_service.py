@@ -46,5 +46,5 @@ class ScratchpadService:
             logger.error(f"Error updating scratchpad at {path}: {e}")
 
     def clear(self, session_id: str = None):
-        msg = "# Atlas Agentic Scratchpad\n\nNotes cleared.\n"
+        msg = "# Agentic Scratchpad\n\nNotes cleared.\n"
         self.update(msg, session_id)

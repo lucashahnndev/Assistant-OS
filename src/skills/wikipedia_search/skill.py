@@ -1,11 +1,13 @@
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from time import perf_counter
+from typing import Any, Dict, List
 
 import requests
 
 from ..base import SkillBase
-from services.search.query_semantics import QuerySemantics
+from ..shared.chunking import chunk_text
+from ..shared.error_contract import error_envelope, success_envelope
 
 logger = logging.getLogger("WikipediaSearchSkill")
 
@@ -76,37 +78,6 @@ class WikipediaSearchSkill(SkillBase):
             return text
         return text[: max_chars - 1].rstrip() + "…"
 
-    @classmethod
-    def _chunk_text(cls, text: str, chunk_size: int, overlap: int) -> List[Dict[str, Any]]:
-        clean = cls._sanitize_text(text)
-        if not clean:
-            return []
-
-        if overlap >= chunk_size:
-            overlap = max(0, chunk_size // 4)
-        step = max(1, chunk_size - overlap)
-
-        chunks: List[Dict[str, Any]] = []
-        cursor = 0
-        index = 1
-        while cursor < len(clean):
-            end = min(len(clean), cursor + chunk_size)
-            piece = clean[cursor:end].strip()
-            if piece:
-                chunks.append(
-                    {
-                        "chunk_id": index,
-                        "text": piece,
-                        "start": cursor,
-                        "end": end,
-                    }
-                )
-                index += 1
-            if end >= len(clean):
-                break
-            cursor += step
-        return chunks
-
     def _search_titles(self, query: str, language: str, limit: int) -> List[Dict[str, Any]]:
         endpoint = f"https://{language}.wikipedia.org/w/api.php"
         params = {
@@ -151,17 +122,6 @@ class WikipediaSearchSkill(SkillBase):
         data = response.json()
         return data.get("query", {}).get("pages", []) or []
 
-    @staticmethod
-    def _summary_text(query: str, language: str, docs: List[Dict[str, Any]], warnings: List[str]) -> str:
-        if not docs:
-            return f"Nenhum conteúdo encontrado na Wikipedia para '{query}' (idioma: {language})."
-        lines = [f"Wikipedia: {len(docs)} artigo(s) para '{query}' (idioma: {language})."]
-        for doc in docs[:5]:
-            lines.append(f"- {doc.get('title', 'Untitled')} ({doc.get('url', 'sem URL')})")
-        if warnings:
-            lines.append(f"Avisos: {len(warnings)} ocorrência(s).")
-        return "\n".join(lines)
-
     def _build_docs(
         self,
         pages: List[Dict[str, Any]],
@@ -192,7 +152,7 @@ class WikipediaSearchSkill(SkillBase):
 
             url = page.get("fullurl") or f"https://wikipedia.org/wiki/{title.replace(' ', '_')}"
             content = self._truncate(content, max_chars_per_page)
-            chunks = self._chunk_text(content, chunk_size=chunk_size, overlap=chunk_overlap)
+            chunks = chunk_text(content, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
             doc = {
                 "rank": rank,
@@ -211,7 +171,7 @@ class WikipediaSearchSkill(SkillBase):
                         "doc_rank": rank,
                         "title": title,
                         "url": url,
-                        "chunk_id": chunk.get("chunk_id"),
+                        "chunk_id": chunk.get("id"),
                         "text": chunk.get("text"),
                         "start": chunk.get("start"),
                         "end": chunk.get("end"),
@@ -236,40 +196,62 @@ class WikipediaSearchSkill(SkillBase):
             language = "pt"
         return language, explicit is not None
 
-    def _result_error(self, query: str, language: str, error: str, message: str) -> Dict[str, Any]:
-        return {
-            "ok": False,
-            "status": "error",
-            "provider": "wikipedia",
-            "query": query,
-            "language": language,
-            "count": 0,
-            "results": [],
-            "best": None,
-            "chunks": [],
-            "warnings": [],
-            "error": error,
-            "message": message,
-            "text": message,
-        }
+    def _error_result(
+        self,
+        *,
+        query: str,
+        language: str,
+        error_code: str,
+        message: str,
+        elapsed: int,
+        retryable: bool,
+        status_code: int | None = None,
+        warnings: List[str] | None = None,
+    ) -> Dict[str, Any]:
+        payload = error_envelope(
+            provider="wikipedia",
+            error_code=error_code,
+            error_message=message,
+            retryable=retryable,
+            status_code=status_code,
+            elapsed=elapsed,
+            warnings=warnings,
+        )
+        payload.update(
+            {
+                "query": query,
+                "language": language,
+                "count": 0,
+                "results": [],
+                "best": None,
+                "chunks": [],
+            }
+        )
+        return payload
 
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
+        _ = context
+        started = perf_counter()
         action = action_id.split(".")[-1]
         if action != "search":
-            return self._result_error(
+            return self._error_result(
                 query=self._sanitize_text(self._resolve_query(params)),
                 language="pt",
-                error="UNKNOWN_ACTION",
+                error_code="UNKNOWN_ACTION",
                 message=f"Unknown action para wikipedia_search: {action_id}",
+                elapsed=int((perf_counter() - started) * 1000),
+                retryable=False,
             )
 
-        query = QuerySemantics.rewrite_for_wikipedia(self._sanitize_text(self._resolve_query(params)))
+        query = self._sanitize_text(self._resolve_query(params))
         if not query:
-            return self._result_error(
+            return self._error_result(
                 query="",
                 language="pt",
-                error="MISSING_QUERY",
+                error_code="MISSING_QUERY",
                 message="Error: parameter 'query' is required para wikipedia.search.",
+                elapsed=int((perf_counter() - started) * 1000),
+                retryable=False,
             )
 
         language, explicit_language = self._resolve_language(params)
@@ -295,18 +277,24 @@ class WikipediaSearchSkill(SkillBase):
         try:
             titles_data = self._search_titles(query, language, limit)
         except requests.RequestException as e:
-            return self._result_error(
+            status_code = int(e.response.status_code) if getattr(e, "response", None) is not None else None
+            return self._error_result(
                 query=query,
                 language=language,
-                error="NETWORK_ERROR",
+                error_code="NETWORK_ERROR",
                 message=f"Falha de rede ao consultar Wikipedia: {e}",
+                elapsed=int((perf_counter() - started) * 1000),
+                retryable=True,
+                status_code=status_code,
             )
         except Exception as e:
-            return self._result_error(
+            return self._error_result(
                 query=query,
                 language=language,
-                error="SEARCH_ERROR",
+                error_code="SEARCH_ERROR",
                 message=f"Erro ao buscar na Wikipedia: {e}",
+                elapsed=int((perf_counter() - started) * 1000),
+                retryable=True,
             )
 
         # Fallback para EN quando idioma não foi explicitado e PT não retornou resultados.
@@ -319,23 +307,23 @@ class WikipediaSearchSkill(SkillBase):
                     titles_data = fallback_titles
                     warnings.append("Sem resultados em pt; usando fallback automático para en.")
             except Exception:
-                # Ignora erro de fallback, mantendo comportamento empty abaixo.
                 pass
 
         if not titles_data:
-            return {
-                "ok": True,
-                "status": "empty",
-                "provider": "wikipedia",
-                "query": query,
-                "language": language,
-                "count": 0,
-                "results": [],
-                "best": None,
-                "chunks": [],
-                "warnings": warnings,
-                "text": f"Nenhum resultado encontrado na Wikipedia para '{query}' (idioma: {language}).",
-            }
+            elapsed = int((perf_counter() - started) * 1000)
+            payload = success_envelope(provider="wikipedia", elapsed=elapsed, warnings=warnings)
+            payload.update(
+                {
+                    "status": "empty",
+                    "query": query,
+                    "language": language,
+                    "count": 0,
+                    "results": [],
+                    "best": None,
+                    "chunks": [],
+                }
+            )
+            return payload
 
         titles: List[str] = []
         seen = set()
@@ -354,18 +342,24 @@ class WikipediaSearchSkill(SkillBase):
         try:
             pages = self._fetch_pages(titles, language)
         except requests.RequestException as e:
-            return self._result_error(
+            status_code = int(e.response.status_code) if getattr(e, "response", None) is not None else None
+            return self._error_result(
                 query=query,
                 language=language,
-                error="NETWORK_ERROR",
+                error_code="NETWORK_ERROR",
                 message=f"Falha de rede ao obter páginas da Wikipedia: {e}",
+                elapsed=int((perf_counter() - started) * 1000),
+                retryable=True,
+                status_code=status_code,
             )
         except Exception as e:
-            return self._result_error(
+            return self._error_result(
                 query=query,
                 language=language,
-                error="PAGE_FETCH_ERROR",
+                error_code="PAGE_FETCH_ERROR",
                 message=f"Erro ao obter conteúdo da Wikipedia: {e}",
+                elapsed=int((perf_counter() - started) * 1000),
+                retryable=True,
             )
 
         docs, chunks, page_warnings = self._build_docs(
@@ -376,31 +370,30 @@ class WikipediaSearchSkill(SkillBase):
         )
         warnings.extend(page_warnings)
 
+        elapsed = int((perf_counter() - started) * 1000)
+        payload = success_envelope(provider="wikipedia", elapsed=elapsed, warnings=warnings)
         if not docs:
-            return {
-                "ok": True,
-                "status": "empty",
-                "provider": "wikipedia",
+            payload.update(
+                {
+                    "status": "empty",
+                    "query": query,
+                    "language": language,
+                    "count": 0,
+                    "results": [],
+                    "best": None,
+                    "chunks": [],
+                }
+            )
+            return payload
+
+        payload.update(
+            {
                 "query": query,
                 "language": language,
-                "count": 0,
-                "results": [],
-                "best": None,
-                "chunks": [],
-                "warnings": warnings,
-                "text": f"Nenhum conteúdo textual útil foi encontrado para '{query}' na Wikipedia.",
+                "count": len(docs),
+                "results": docs,
+                "best": docs[0],
+                "chunks": chunks,
             }
-
-        return {
-            "ok": True,
-            "status": "success",
-            "provider": "wikipedia",
-            "query": query,
-            "language": language,
-            "count": len(docs),
-            "results": docs,
-            "best": docs[0],
-            "chunks": chunks,
-            "warnings": warnings,
-            "text": self._summary_text(query, language, docs, warnings),
-        }
+        )
+        return payload

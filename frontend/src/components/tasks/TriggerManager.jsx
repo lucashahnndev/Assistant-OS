@@ -10,11 +10,13 @@ import {
     XCircle
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import ConfirmDialog from '../ConfirmDialog';
 
 const TriggerManager = ({ taskId }) => {
     const [triggers, setTriggers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showAddModal, setShowAddModal] = useState(false);
+    const [deletingTriggerId, setDeletingTriggerId] = useState(null);
 
     // Form State
     const [scheduleType, setScheduleType] = useState('interval');
@@ -109,13 +111,19 @@ const TriggerManager = ({ taskId }) => {
     };
 
     const handleDelete = async (triggerId) => {
-        if (!confirm("Delete this trigger?")) return;
+        setDeletingTriggerId(triggerId);
+    };
+
+    const confirmDeleteTrigger = async () => {
+        if (!deletingTriggerId) return;
         try {
-            await api.delete(`/tasks/triggers/${triggerId}`);
+            await api.delete(`/tasks/triggers/${deletingTriggerId}`);
             toast.success("Trigger deleted");
             fetchTriggers();
         } catch (error) {
             toast.error("Failed to delete trigger");
+        } finally {
+            setDeletingTriggerId(null);
         }
     };
 
@@ -391,6 +399,17 @@ const TriggerManager = ({ taskId }) => {
                     </div>
                 </div>
             )}
+
+            <ConfirmDialog
+                isOpen={!!deletingTriggerId}
+                title="Delete Trigger"
+                message="Are you sure you want to delete this trigger?"
+                confirmText="Yes, Delete"
+                cancelText="Cancel"
+                onConfirm={confirmDeleteTrigger}
+                onCancel={() => setDeletingTriggerId(null)}
+                isDestructive={true}
+            />
         </div>
     );
 };

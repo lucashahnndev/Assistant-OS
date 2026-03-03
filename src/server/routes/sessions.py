@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, File, UploadFile
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from core.identity import PrincipalContext
+from skills.weather_control.skill import WeatherSkill
 from ..auth import get_current_user
 from ..core.models import User, AuditLog
 from ..core.database import get_db
@@ -9,14 +10,153 @@ import logging
 import json
 import os
 import shutil
+import subprocess
+import time
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 logger = logging.getLogger("SessionsRoutes")
+_NET_RATE_SAMPLES = {}
+
+
+def _read_meminfo_bytes() -> dict:
+    total = None
+    available = None
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    total = int(line.split()[1]) * 1024
+                elif line.startswith("MemAvailable:"):
+                    available = int(line.split()[1]) * 1024
+                if total is not None and available is not None:
+                    break
+    except Exception:
+        return {"total": None, "available": None}
+    return {"total": total, "available": available}
+
+
+def _read_uptime_human() -> str:
+    try:
+        with open("/proc/uptime", "r", encoding="utf-8") as f:
+            seconds = int(float((f.read().split() or ["0"])[0]))
+        days = seconds // 86400
+        hours = (seconds % 86400) // 3600
+        minutes = (seconds % 3600) // 60
+        if days > 0:
+            return f"{days}d {hours:02d}:{minutes:02d}"
+        return f"{hours:02d}:{minutes:02d}"
+    except Exception:
+        return "--"
+
+
+def _read_cpu_percent() -> float:
+    # Lightweight fallback based on load average.
+    try:
+        load1 = os.getloadavg()[0]
+        cpus = max(1, os.cpu_count() or 1)
+        return max(0.0, min(100.0, (load1 / cpus) * 100.0))
+    except Exception:
+        return 0.0
+
+
+def _read_top_processes(limit: int = 5) -> list:
+    try:
+        proc = subprocess.run(
+            ["ps", "-eo", "pcpu,pmem,pid,comm", "--sort=-pcpu"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=2.5,
+        )
+        lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+        # Skip header
+        rows = lines[1:] if len(lines) > 1 else []
+        out = []
+        for ln in rows[: max(1, limit)]:
+            parts = ln.split(None, 3)
+            if len(parts) < 4:
+                continue
+            cpu_s, mem_s, pid_s, name = parts
+            try:
+                out.append(
+                    {
+                        "cpu_percent": float(cpu_s.replace(",", ".")),
+                        "memory_percent": float(mem_s.replace(",", ".")),
+                        "pid": int(pid_s),
+                        "name": name,
+                    }
+                )
+            except Exception:
+                continue
+        return out
+    except Exception:
+        return []
+
+
+def _read_network_totals() -> tuple[int, int]:
+    rx_total = 0
+    tx_total = 0
+    try:
+        with open("/proc/net/dev", "r", encoding="utf-8") as f:
+            for line in f.readlines()[2:]:
+                if ":" not in line:
+                    continue
+                iface, raw = line.split(":", 1)
+                iface = iface.strip()
+                if iface == "lo":
+                    continue
+                cols = raw.split()
+                if len(cols) < 16:
+                    continue
+                rx_total += int(cols[0])
+                tx_total += int(cols[8])
+    except Exception:
+        return (0, 0)
+    return (rx_total, tx_total)
+
+
+def _read_network_rates(session_id: str) -> dict:
+    now = time.time()
+    rx_now, tx_now = _read_network_totals()
+    prev = _NET_RATE_SAMPLES.get(session_id)
+    _NET_RATE_SAMPLES[session_id] = {"ts": now, "rx": rx_now, "tx": tx_now}
+
+    if not prev:
+        return {"rx_kbps": 0.0, "tx_kbps": 0.0, "total_kbps": 0.0, "percent": 0.0}
+
+    dt = max(0.001, now - float(prev.get("ts") or now))
+    rx_delta = max(0, rx_now - int(prev.get("rx") or rx_now))
+    tx_delta = max(0, tx_now - int(prev.get("tx") or tx_now))
+
+    # kB/s (not kbps bits)
+    rx_kbps = rx_delta / dt / 1024.0
+    tx_kbps = tx_delta / dt / 1024.0
+    total = rx_kbps + tx_kbps
+
+    # Heuristic utilization: 100% at >= 2 MB/s aggregate.
+    percent = max(0.0, min(100.0, (total / 2048.0) * 100.0))
+    return {
+        "rx_kbps": round(rx_kbps, 1),
+        "tx_kbps": round(tx_kbps, 1),
+        "total_kbps": round(total, 1),
+        "percent": round(percent, 1),
+    }
 
 def get_kernel(request: Request):
     if not hasattr(request.app.state, "kernel") or not request.app.state.kernel:
         raise HTTPException(status_code=503, detail="Kernel not initialized")
     return request.app.state.kernel
+
+
+def _user_visible_history(history: list) -> list:
+    visible = []
+    for msg in history or []:
+        if not isinstance(msg, dict):
+            continue
+        if str(msg.get("type") or "").strip().lower() == "reasoning":
+            continue
+        visible.append(msg)
+    return visible
 
 @router.get("")
 @router.get("/")
@@ -92,7 +232,7 @@ def get_session(session_id: str, request: Request, user: User = Depends(get_curr
         return {"id": session_id, "source": "web", "name": "", "history": [], "is_new": True}
 
     # Timeline source of truth must be chat.json (not session.json context snapshot).
-    history = orch.get_chat_history(session_id)
+    history = _user_visible_history(orch.get_chat_history(session_id))
 
     return {
         "id": session.session_id,
@@ -171,7 +311,7 @@ def get_session_history(session_id: str, offset: int = 0, limit: int = 15, reque
         raise HTTPException(status_code=404, detail="Session not found")
 
     # Timeline source of truth must be chat.json (not session.json context snapshot).
-    history = orch.get_chat_history(session_id)
+    history = _user_visible_history(orch.get_chat_history(session_id))
     total = len(history)
     
     # Calculate indices from the end
@@ -204,6 +344,8 @@ def send_message(session_id: str, payload: dict, request: Request, user: User = 
     if not isinstance(user_data, dict):
         user_data = {}
     user_data.setdefault("user_name", user.display_name or user.username)
+    user_data.setdefault("portal_user_id", user.id)
+    user_data.setdefault("portal_username", user.username)
         
     kernel = get_kernel(request)
     
@@ -468,6 +610,115 @@ def list_playback_runs(session_id: str, request: Request, user: User = Depends(g
             continue
     
     return {"runs": runs}
+
+
+@router.get("/{session_id}/cards/weather")
+def get_weather_card(
+    session_id: str,
+    request: Request,
+    days: int = 3,
+    user: User = Depends(get_current_user),
+):
+    """
+    Returns structured weather data for assistive chat cards.
+    Uses weather skill + current session context (location fallback included).
+    """
+    kernel = get_kernel(request)
+    orch = kernel.orchestrator
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    skills_cfg = kernel.config_manager.get("skills", {}) if hasattr(kernel, "config_manager") else {}
+    weather_cfg = skills_cfg.get("weather_control", {}) if isinstance(skills_cfg, dict) else {}
+    weather_skill = WeatherSkill(kernel=kernel, config=weather_cfg)
+    safe_days = max(1, min(int(days or 3), 5))
+    ctx = {"session": session}
+
+    current_payload = weather_skill.execute("weather.control.get", {}, ctx)
+    if not isinstance(current_payload, dict) or not current_payload.get("ok"):
+        return {
+            "ok": False,
+            "card_type": "weather",
+            "error": (current_payload or {}).get("error", "WEATHER_UNAVAILABLE"),
+            "message": (current_payload or {}).get("message", "Weather data unavailable."),
+        }
+
+    forecast_payload = weather_skill.execute("weather.control.forecast", {"days": safe_days}, ctx)
+    if not isinstance(forecast_payload, dict) or not forecast_payload.get("ok"):
+        forecast_payload = {"ok": False, "forecast": [], "days": 0}
+
+    return {
+        "ok": True,
+        "card_type": "weather",
+        "provider": current_payload.get("provider") or forecast_payload.get("provider") or "unknown",
+        "location": current_payload.get("location") or forecast_payload.get("location") or "Unknown",
+        "current": current_payload.get("current", {}),
+        "forecast": forecast_payload.get("forecast", []),
+        "days": int(forecast_payload.get("days") or 0),
+    }
+
+
+@router.get("/{session_id}/cards/system-health")
+def get_system_health_card(
+    session_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+):
+    """
+    Returns structured host/system health data for assistive chat cards.
+    """
+    kernel = get_kernel(request)
+    orch = kernel.orchestrator
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    mem = _read_meminfo_bytes()
+    total_mem = mem.get("total")
+    avail_mem = mem.get("available")
+    mem_percent = None
+    if isinstance(total_mem, int) and total_mem > 0 and isinstance(avail_mem, int):
+        mem_percent = max(0.0, min(100.0, ((total_mem - avail_mem) / total_mem) * 100.0))
+
+    try:
+        du = shutil.disk_usage("/")
+        disk_total = int(du.total)
+        disk_free = int(du.free)
+        disk_percent = max(0.0, min(100.0, ((disk_total - disk_free) / max(1, disk_total)) * 100.0))
+    except Exception:
+        disk_total = None
+        disk_free = None
+        disk_percent = None
+
+    try:
+        load_avg = [float(v) for v in os.getloadavg()]
+    except Exception:
+        load_avg = []
+    net = _read_network_rates(session_id)
+
+    payload = {
+        "ok": True,
+        "card_type": "system_health",
+        "provider": "local_system",
+        "cpu_usage_percent": round(_read_cpu_percent(), 1),
+        "memory_percent": round(mem_percent or 0.0, 1),
+        "disk_percent": round(disk_percent or 0.0, 1),
+        "network_percent": round(float(net.get("percent") or 0.0), 1),
+        "load_avg": load_avg,
+        "temperature_c": None,
+        "uptime": _read_uptime_human(),
+        "memory_total": total_mem,
+        "memory_available": avail_mem,
+        "disk_total": disk_total,
+        "disk_free": disk_free,
+        "network_rx_kbps": float(net.get("rx_kbps") or 0.0),
+        "network_tx_kbps": float(net.get("tx_kbps") or 0.0),
+        "network_total_kbps": float(net.get("total_kbps") or 0.0),
+        "top_processes": _read_top_processes(limit=6),
+        "ts": int(time.time()),
+    }
+    return payload
 
 @router.get("/{session_id}/playback/{run_id}/manifest")
 def get_playback_manifest(session_id: str, run_id: str, request: Request, user: User = Depends(get_current_user)):

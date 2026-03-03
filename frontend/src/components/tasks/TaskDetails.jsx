@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import NoteManager from './NoteManager';
 import TriggerManager from './TriggerManager';
 import ExecutionHistory from './ExecutionHistory';
+import ConfirmDialog from '../ConfirmDialog';
 
 const TaskDetails = ({ taskId, onDelete }) => {
     const [task, setTask] = useState(null);
@@ -14,6 +15,7 @@ const TaskDetails = ({ taskId, onDelete }) => {
     const [liveExecution, setLiveExecution] = useState(null);
     const [overwatch, setOverwatch] = useState(null);
     const [latestTaskWork, setLatestTaskWork] = useState(null);
+    const [isDeleting, setIsDeleting] = useState(false);
 
     const fetchTask = async () => {
         try {
@@ -119,14 +121,18 @@ const TaskDetails = ({ taskId, onDelete }) => {
     };
 
     const handleDeleteTask = async () => {
-        const confirmed = window.confirm("Delete this task definition and its triggers?");
-        if (!confirmed) return;
+        setIsDeleting(true);
+    };
+
+    const confirmDeleteTask = async () => {
         try {
             await api.delete(`/tasks/definitions/${taskId}`);
             toast.success("Task deleted");
             if (typeof onDelete === 'function') onDelete(taskId);
         } catch (error) {
             toast.error("Failed to delete task");
+        } finally {
+            setIsDeleting(false);
         }
     };
 
@@ -298,6 +304,17 @@ const TaskDetails = ({ taskId, onDelete }) => {
                     </div>
                 )}
             </div>
+
+            <ConfirmDialog
+                isOpen={isDeleting}
+                title="Delete Task"
+                message="Are you sure you want to delete this task definition and its triggers?"
+                confirmText="Yes, Delete"
+                cancelText="Cancel"
+                onConfirm={confirmDeleteTask}
+                onCancel={() => setIsDeleting(false)}
+                isDestructive={true}
+            />
         </div>
     );
 };

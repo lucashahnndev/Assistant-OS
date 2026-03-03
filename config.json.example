@@ -47,6 +47,9 @@
         "port": 5173,
         "public_mode": true
     },
+    "chat": {
+        "cards_enabled": false
+    },
     "i18n": {
         "default_locale": "en",
         "supported_locales": [
@@ -64,10 +67,39 @@
         "idle_notify_after_sec": 120,
         "digest_cooldown_sec": 120
     },
+    "permission_controls": {
+        "approval_decisions": {
+            "enabled": true,
+            "allowed_interfaces": [
+                "*"
+            ],
+            "denied_interfaces": [],
+            "allowed_groups": [
+                "*"
+            ],
+            "denied_groups": []
+        }
+    },
     "planner": {
         "base_max_steps": 15,
         "hard_max_steps": 60,
         "replan_budget": 4
+    },
+    "decision_policy": {
+        "media_override_mode": "hard"
+    },
+    "browser.control": {
+        "engine": "playwright_headless",
+        "headless": false,
+        "goto_retries": 3,
+        "goto_timeout_ms": 30000,
+        "step_timeout_ms": {
+            "go": 30000,
+            "ck": 10000,
+            "tp": 10000,
+            "ss": 5000,
+            "perceive": 10000
+        }
     },
     "memory": {
         "consolidation_threshold_tokens": 1600,
@@ -79,7 +111,7 @@
         "default_scope": "global"
     },
     "work_feedback": {
-        "progress_updates_enabled": true,
+        "progress_updates_enabled": false,
         "progress_update_every_loops": 6,
         "progress_min_interval_sec": 12,
         "max_progress_notes": 4
@@ -182,11 +214,27 @@
             "lon": "-51.190630"
         }
     },
-    "intent_resolution": {
-        "mode": "llm_first",
-        "semantic_fallback": true,
-        "semantic_first_threshold": 0.92,
-        "llm_confidence_threshold": 0.65
+    "planner": {
+        "policy": {
+            "max_retries_per_step": 2,
+            "retry_on": [
+                "TIMEOUT",
+                "BROWSER_CLOSED"
+            ],
+            "abort_on": [
+                "NAVIGATION_ERROR",
+                "MISSING_TARGET"
+            ],
+            "retry_http_status": {
+                "500": 1,
+                "503": 2
+            },
+            "abort_http_status": {
+                "404": true,
+                "401": true
+            },
+            "max_total_steps": 20
+        }
     },
     "prompt_context": {
         "actions_mode": "on_demand",
@@ -207,22 +255,8 @@
         "vision": {
             "enabled": true
         },
-        "browser_automator": {
-            "enabled": true,
-            "profilePath": "data/browser/profile",
-            "headless": false,
-            "cdp_url": null,
-            "keep_alive": true,
-            "media_app_mode": true,
-            "replace_media_tab_on_provider_change": true,
-            "dom_only_fallback_enabled": true,
-            "dom_only_strategy": "llm",
-            "dom_only_force": false,
-            "viewport": {
-                "width": 1280,
-                "height": 720
-            },
-            "timeoutMs": 30000
+        "browser_control": {
+            "enabled": true
         },
         "spotify_search": {
             "enabled": false,
@@ -277,14 +311,29 @@
             "enabled": true,
             "api_key": "ENV_WEATHER_API_KEY"
         },
+        "data_analysis": {
+            "enabled": true,
+            "defaults": {
+                "max_points": 24
+            }
+        },
         "system_apps": {
             "enabled": true
         },
         "shell_control": {
-            "enabled": true
+            "enabled": true,
+            "timeout_sec": 600,
+            "max_timeout_sec": 10800,
+            "max_output_chars": 120000
         },
         "reflex_skill": {
             "enabled": true
         }
+    },
+    "agentic_web": {
+        "vision_enabled": false
+    },
+    "web_planner": {
+        "max_provider_attempts_per_call": 1
     }
 }
