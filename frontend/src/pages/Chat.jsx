@@ -2490,7 +2490,7 @@ const Chat = () => {
 
         // Connect
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.hostname}:8000/ws/${selectedId}`;
+        const wsUrl = `${protocol}//${window.location.host}/ws/${selectedId}`;
 
         console.log("Connecting to WS:", wsUrl);
         const ws = new WebSocket(wsUrl);
@@ -2956,6 +2956,8 @@ const Chat = () => {
         const promptMetrics = runtimeMetrics.prompt || {};
         const turnMetrics = runtimeMetrics.turn || {};
         const obsMetrics = runtimeMetrics.latest_observation || {};
+        const contextResetReplyBlocked = runtimeMetrics.context_reset_reply_blocked || 0;
+        const llmReplyWithoutTextRecovered = runtimeMetrics.llm_reply_without_text_recovered || 0;
         const desktopSplitProfileWidth = chatPaneWidth > 0
             ? Math.min(Math.max(Math.round(chatPaneWidth * 0.5), 440), 900)
             : 540;
@@ -3190,6 +3192,38 @@ const Chat = () => {
                                         <div style={{ fontSize: '13px', color: 'var(--text-main)' }}>Latency: {turnMetrics.duration_ms || 0} ms</div>
                                         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loops: {turnMetrics.loops || 0} · Lock wait: {turnMetrics.lock_wait_ms || 0} ms</div>
                                         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Last action: {turnMetrics.last_action || '-'}</div>
+                                        <div style={{ marginTop: '8px' }}>
+                                            <span style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '6px',
+                                                fontSize: '11px',
+                                                fontWeight: '700',
+                                                padding: '4px 8px',
+                                                borderRadius: '999px',
+                                                color: contextResetReplyBlocked > 0 ? '#7f1d1d' : 'var(--text-muted)',
+                                                background: contextResetReplyBlocked > 0 ? 'rgba(248, 113, 113, 0.2)' : 'rgba(255,255,255,0.04)',
+                                                border: contextResetReplyBlocked > 0 ? '1px solid rgba(248, 113, 113, 0.45)' : '1px solid var(--card-border)',
+                                            }}>
+                                                Context-reset replies blocked: {contextResetReplyBlocked}
+                                            </span>
+                                        </div>
+                                        <div style={{ marginTop: '8px' }}>
+                                            <span style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '6px',
+                                                fontSize: '11px',
+                                                fontWeight: '700',
+                                                padding: '4px 8px',
+                                                borderRadius: '999px',
+                                                color: llmReplyWithoutTextRecovered > 0 ? '#78350f' : 'var(--text-muted)',
+                                                background: llmReplyWithoutTextRecovered > 0 ? 'rgba(251, 191, 36, 0.2)' : 'rgba(255,255,255,0.04)',
+                                                border: llmReplyWithoutTextRecovered > 0 ? '1px solid rgba(245, 158, 11, 0.45)' : '1px solid var(--card-border)',
+                                            }}>
+                                                LLM reply recovered: {llmReplyWithoutTextRecovered}
+                                            </span>
+                                        </div>
                                     </div>
 
                                     <div style={{ padding: '12px', borderRadius: '10px', border: '1px solid var(--card-border)', background: 'rgba(255,255,255,0.02)' }}>

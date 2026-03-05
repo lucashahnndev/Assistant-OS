@@ -15,6 +15,7 @@
   "reply.decision_forwarded": "Acknowledged. I sent your decision to the running worker.",
   "reply.step_budget_exceeded": "Sorry, I could not process your request after the current step budget.",
   "reply.no_plan_resolved": "I could not conclude safely from this context. I can retry with a different strategy if you want.",
+  "reply.voice_rephrase": "I did not fully catch that. Could you repeat it in one short sentence?",
   "reply.unknown_action_template": "Action '{action_id}' does not exist in the current runtime. Nearby suggestions: {suggestions}. Please rephrase with more context.",
   "reply.error_during_processing": "Sorry, there was an error during processing: {details}",
   "reply.technical_issue": "Sorry, I had a technical issue while processing your request: {details}",

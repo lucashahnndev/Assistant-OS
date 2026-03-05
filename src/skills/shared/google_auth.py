@@ -147,19 +147,47 @@ def resolve_google_request_auth(
 
     user_id = _extract_portal_user_id(context or {})
 
-    if source in {"auto", "linked_account"} and user_id is not None:
+    if source in {"auto", "linked_account"}:
         db = SessionLocal()
         try:
-            conn = (
-                db.query(ExternalAccountConnection)
-                .filter(
-                    ExternalAccountConnection.user_id == int(user_id),
-                    ExternalAccountConnection.provider == "google",
-                    ExternalAccountConnection.is_active == True,
+            conn = None
+            if user_id is not None:
+                conn = (
+                    db.query(ExternalAccountConnection)
+                    .filter(
+                        ExternalAccountConnection.user_id == int(user_id),
+                        ExternalAccountConnection.provider == "google",
+                        ExternalAccountConnection.is_active == True,
+                    )
+                    .order_by(ExternalAccountConnection.updated_at.desc())
+                    .first()
                 )
-                .order_by(ExternalAccountConnection.updated_at.desc())
-                .first()
-            )
+            else:
+                # Web sessions may miss portal_user_id in edge flows.
+                # When there is exactly one active Google connection, use it.
+                active_google = (
+                    db.query(ExternalAccountConnection)
+                    .filter(
+                        ExternalAccountConnection.provider == "google",
+                        ExternalAccountConnection.is_active == True,
+                    )
+                    .order_by(ExternalAccountConnection.updated_at.desc())
+                    .all()
+                )
+                if len(active_google) == 1:
+                    conn = active_google[0]
+                elif len(active_google) > 1:
+                    logger.warning(
+                        "Google linked auth resolve skipped: missing portal_user_id and multiple active Google accounts."
+                    )
+                    if source == "linked_account":
+                        return {
+                            "mode": "none",
+                            "headers": {},
+                            "params": {},
+                            "token_payload": None,
+                            "reason": "Missing portal_user_id with multiple active Google accounts.",
+                        }
             if conn:
                 vault = get_token_vault()
                 tokens = vault.decrypt_json(conn.encrypted_tokens)

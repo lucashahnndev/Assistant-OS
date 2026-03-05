@@ -7,6 +7,7 @@ from drivers.voice.interface import AssistantInterface
 from utils.cli import clear_console
 from services.tts.manager import TTSManager
 from utils.logging_config import get_logger
+from utils.voice_text import sanitize_voice_text, normalize_agent_name_for_tts
 import os
 
 class VoiceDriver(BaseDriver):
@@ -17,6 +18,9 @@ class VoiceDriver(BaseDriver):
         self.assistant = None
         self.interface = None
         self.tts_manager = None
+        self.sanitize_tts_text = True
+        self.agent_name = "Assistant"
+        self.agent_spoken_name = ""
         self.running = False
         self.skip_activation = False
         self.activation_confirm = [
@@ -33,6 +37,15 @@ class VoiceDriver(BaseDriver):
         cm = ConfigManager()
         stt_config = cm.get_stt_config()
         interface_config = cm.get_interfaces_config().get('voice', {})
+        self.sanitize_tts_text = bool(interface_config.get("sanitize_tts_text", True))
+        agent_cfg = cm.get("agent", {}) if hasattr(cm, "get") else {}
+        self.agent_name = str(agent_cfg.get("agent_name", "Assistant")).strip() or "Assistant"
+        self.agent_spoken_name = str(agent_cfg.get("spoken_name", "")).strip()
+        self.logger.info(
+            "VoiceDriver naming loaded | agent_name='%s' | spoken_name='%s'",
+            self.agent_name,
+            self.agent_spoken_name or "(auto)",
+        )
         
         stt_provider = 'google'
         if isinstance(stt_config, list) and stt_config:
@@ -83,9 +96,7 @@ class VoiceDriver(BaseDriver):
         self.assistant.initialize_voice_recognition_engine()
         
         # Initialize UI
-        agent_cfg = cm.get("agent", {}) if hasattr(cm, "get") else {}
-        agent_name = str(agent_cfg.get("agent_name", "Assistant")).strip() or "Assistant"
-        self.interface = AssistantInterface(name=agent_name)
+        self.interface = AssistantInterface(name=self.agent_name)
 
     def start(self):
         self._initialize_components()
@@ -106,13 +117,18 @@ class VoiceDriver(BaseDriver):
         if not self.interface or not self.tts_manager:
             self.logger.warning(f"VoiceDriver components not ready to send response: {text}")
             return
+        raw_text = str(text or "")
+        tts_raw = normalize_agent_name_for_tts(raw_text, self.agent_name, self.agent_spoken_name)
+        speak_text = sanitize_voice_text(tts_raw) if self.sanitize_tts_text else tts_raw.strip()
+        if not speak_text:
+            return
             
         self.interface.assistant_color()
-        self.interface.update_assistant_text(text)
+        self.interface.update_assistant_text(raw_text)
         
         # Use TTS Manager instead of Assistant.speak
         # self.assistant.speak(text) 
-        self.tts_manager.speak(text)
+        self.tts_manager.speak(speak_text)
         
         self.interface.user_color()
 
@@ -132,17 +148,20 @@ class VoiceDriver(BaseDriver):
                 clear_console()
                 self.logger.info(f"Transcription: {transcription}")
                 
-                if transcription:
-                    self.interface.update_user_text(transcription)
+                sanitized_transcription = sanitize_voice_text(transcription) if transcription else transcription
+
+                if sanitized_transcription:
+                    self.interface.update_user_text(sanitized_transcription)
                 
                 if transcription is None:
                     continue
 
-                user_input = transcription
+                user_input = sanitized_transcription or ""
                 
                 # Check for activation word (Wakeword logic)
                 if not self.skip_activation:
                     user_input = self.assistant.its_a_assistant_command(transcription)
+                    user_input = sanitize_voice_text(user_input)
                     if user_input == '':
                         self.skip_activation = True
                         self.send_response(random.choice(self.activation_confirm))

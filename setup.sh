@@ -101,6 +101,9 @@ fi
 if command -v python3 &> /dev/null && ! python3 -m ensurepip --version >/dev/null 2>&1; then
     MISSING_SYSTEM_DEPS+=("python3-venv")
 fi
+if ! command -v openssl &> /dev/null; then
+    MISSING_SYSTEM_DEPS+=("openssl")
+fi
 
 try_install_system_deps
 
@@ -262,6 +265,63 @@ ensure_external_accounts_key "$DATA_DIR/.env"
 if [ -f ".env" ]; then
     ensure_external_accounts_key ".env"
 fi
+
+ensure_local_https_cert() {
+    local cert_dir="$1"
+    local cert_file="$cert_dir/localhost.crt"
+    local key_file="$cert_dir/localhost.key"
+    local openssl_cfg
+
+    if [ -s "$cert_file" ] && [ -s "$key_file" ]; then
+        echo "✅ HTTPS certificate already exists in $cert_dir"
+        return 0
+    fi
+
+    if ! command -v openssl >/dev/null 2>&1; then
+        echo "⚠️  openssl not found. Skipping HTTPS certificate generation."
+        return 0
+    fi
+
+    mkdir -p "$cert_dir"
+    openssl_cfg="$(mktemp)"
+    cat > "$openssl_cfg" <<'EOF'
+[req]
+default_bits = 2048
+prompt = no
+default_md = sha256
+distinguished_name = dn
+x509_extensions = v3_req
+
+[dn]
+CN = localhost
+
+[v3_req]
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+IP.1 = 127.0.0.1
+IP.2 = ::1
+EOF
+
+    if openssl req -x509 -nodes -newkey rsa:2048 \
+        -days 825 \
+        -keyout "$key_file" \
+        -out "$cert_file" \
+        -config "$openssl_cfg" >/dev/null 2>&1; then
+        chmod 600 "$key_file"
+        chmod 644 "$cert_file"
+        echo "🔒 Generated self-signed HTTPS certificate:"
+        echo "   Cert: $cert_file"
+        echo "   Key:  $key_file"
+    else
+        echo "⚠️  Failed to generate HTTPS certificate in $cert_dir"
+    fi
+
+    rm -f "$openssl_cfg"
+}
+
+ensure_local_https_cert "$DATA_DIR/certs"
 
 echo ""
 echo "✨ Setup complete! ✨"

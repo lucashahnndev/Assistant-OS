@@ -70,6 +70,7 @@ function App() {
                 <AuthProvider>
                     <VideoPlayerProvider>
                         <Toaster position="top-right"
+                            containerStyle={{ zIndex: 12000 }}
                             toastOptions={{
                                 style: {
                                     background: 'var(--card-bg)',

@@ -368,9 +368,9 @@ class Kernel:
         if policy in {"allow", "parallel"}:
             return "allow", blocker_ids
         if policy == "queue":
-            # Runtime currently has no persisted queue dispatcher for chat-initiated works.
-            # Treat "queue" as non-blocking parallel admission instead of hard reject.
-            return "allow", blocker_ids
+            # Queueing for chat-initiated works is not implemented yet.
+            # To avoid lock contention and stuck loops, reject new work while another is active.
+            return "reject", blocker_ids
         if policy == "reject":
             return "reject", blocker_ids
         return "allow", blocker_ids
@@ -901,7 +901,7 @@ class Kernel:
                         work = self.scheduler.get_work(work_id)
                         if work and work.result:
                             # Server-side drivers handle their own streaming via callbacks to avoid duplicates
-                            if not hasattr(driver, 'send_reasoning_chunk'):
+                            if not hasattr(driver, 'send_reasoning_chunk') and not bool(getattr(driver, "streams_worker_responses", False)):
                                 driver.send_response(work.result, target=target_session)
                         self._remove_approval_request(target_session, work_id)
                     elif status == "failed":
@@ -978,147 +978,35 @@ class Kernel:
             # Extract user_name from user_data to name the session
             user_name = user_data.get('user_name', "")
 
-            # 1. Get Initial Resolution (Reflex or Chain)
-            plan, _, session = self.orchestrator.get_initial_intent(effective_text, session_id=session_id, user_data=user_data, context=context, attachments=attachments, name=user_name)
-
-            if session and isinstance(context, PrincipalContext):
-                session.context["last_interface"] = str(context.interface or "web")
-                session.context["last_sender_id"] = str(context.sender_id or session_id)
-                if context.sender_name:
-                    session.context["last_sender_name"] = str(context.sender_name)
-                if context.chat_id:
-                    session.context["last_chat_id"] = str(context.chat_id)
-                if context.chat_name:
-                    session.context["last_chat_name"] = str(context.chat_name)
-                session.context["last_is_group"] = bool(context.is_group)
-            
-            # ENSURE PERSISTENCE: Add user message to history before processing the plan
-            # (unless it's an internal/hidden trigger which we don't have yet in this flow)
+            # 1. Ensure Session exists and message is persisted (Main Thread - Quick)
+            session = self.orchestrator.get_session_robust(session_id)
             if session:
+                if isinstance(context, PrincipalContext):
+                    session.context["last_interface"] = str(context.interface or "web")
+                    session.context["last_sender_id"] = str(context.sender_id or session_id)
                 session.add_message("user", text, attachments=attachments)
                 self.orchestrator._save_session(session)
 
-            if not plan:
-                return driver_instance.send_response(
-                    self.orchestrator.i18n.t(
-                        "reply.no_plan_resolved",
-                        locale=self.orchestrator._session_locale(session),
-                    ),
-                    target=session_id,
-                )
-
-            # 2. Quick Path (Reply Action)
-            if plan.action_id == 'reply':
-                # LLM straight reply or reflex
-                coached_response = self.orchestrator.apply_conversation_coaching(session, text, plan.response_text or "")
-                coached_response = self.orchestrator._enforce_response_language(session, coached_response)
-                if plan.thought:
-                    session.add_message("system", plan.thought, msg_type="reasoning")
-                session.add_message("assistant", coached_response)
-                self.orchestrator._save_session(session)
-
-                # Keep thought/protocol hidden from user chat by default.
-                if self._expose_reasoning_to_ui() and hasattr(driver_instance, 'send_reasoning_chunk') and plan.thought:
-                    driver_instance.send_reasoning_chunk(session_id, plan.thought)
-
-                # Send response as chunks to trigger the correct responding UI
-                driver_instance.send_response(coached_response, target=session_id, is_chunk=True, attachments=plan.attachments)
-                
-                # Crucial: Send complete to clear the "Thinking" block in Web UI
-                if hasattr(driver_instance, 'send_complete'):
-                    driver_instance.send_complete(session_id)
-                
-                return session_id
-            # 3. Background Path (Work/Worker)
-            label = None
-            if hasattr(plan, 'metadata') and isinstance(plan.metadata, dict):
-                label = plan.metadata.get('task_label')
-            
-            if not label: label = f"Executing {plan.action_id}"
-
-            admission_decision, blocked_work_ids = self._admission_gate(session_id, plan.action_id)
-            if admission_decision == "confirm_takeover":
-                prompt = self.orchestrator.i18n.t(
-                    "reply.media_busy_takeover_prompt",
-                    locale=self.orchestrator._session_locale(session),
-                )
-                session.pending_action = {
-                    "type": "media_takeover",
-                    "blocked_work_ids": blocked_work_ids,
-                    "original_text": text,
-                    "original_user_data": user_data if isinstance(user_data, dict) else {},
-                    "requested_action": plan.action_id,
-                    "requested_at": datetime.datetime.now().isoformat(),
-                }
-                session.add_message("assistant", prompt)
-                self.orchestrator._save_session(session)
-                if hasattr(driver_instance, "send_status"):
-                    driver_instance.send_status(
-                        session_id,
-                        "thinking",
-                        {
-                            "code": "media_busy",
-                            "message": prompt,
-                            "blocked_work_ids": blocked_work_ids,
-                        },
-                    )
-                driver_instance.send_response(prompt, target=session_id, is_chunk=True)
-                if hasattr(driver_instance, "send_complete"):
-                    driver_instance.send_complete(session_id)
-                return session_id
-
-            if admission_decision == "reject":
-                busy_msg = self.orchestrator.i18n.t(
-                    "reply.session_busy",
-                    locale=self.orchestrator._session_locale(session),
-                )
-                if hasattr(driver_instance, "send_status"):
-                    driver_instance.send_status(
-                        session_id,
-                        "error",
-                        {
-                            "code": "admission_reject",
-                            "message": busy_msg,
-                            "blocked_work_ids": blocked_work_ids,
-                        },
-                    )
-                driver_instance.send_response(busy_msg, target=session_id, is_chunk=True)
-                if hasattr(driver_instance, "send_complete"):
-                    driver_instance.send_complete(session_id)
-                session.add_message("assistant", busy_msg)
-                self.orchestrator._save_session(session)
-                return session_id
-
+            # 2. Create Work (Main Thread - Quick)
             work_scope = str(work_cfg.get("default_scope", "global")).lower()
-            planner_seed = {}
-            if isinstance(plan.metadata, dict):
-                planner_seed = {
-                    "plan": plan.metadata.get("plan"),
-                    "state_summary": plan.metadata.get("state_summary"),
-                }
-
             work = self.scheduler.create_work(
                 session_id,
                 text,
-                label=label,
-                key=plan.action_id,
+                label=f"Analizando: {text[:50]}...",
+                key="intent_resolution",
                 owner_session_id=session_id,
                 favorite_session_id=session_id,
                 owner_sender_id=(context.sender_id if context else None),
                 favorite_sender_id=(context.sender_id if context else None),
                 scope=work_scope,
                 initial_context={
-                    "planner": planner_seed,
                     "data": {
-                        "initial_action": plan.action_id,
-                        "initial_args": plan.args,
-                        "resource_key": f"media:{session_id}" if self._is_media_action(plan.action_id) else f"session:{session_id}",
-                        "admission_blocked_work_ids": blocked_work_ids,
+                        "resource_key": f"session:{session_id}",
                     },
                 },
             )
             
-            # Prepare callbacks
+            # 3. Prepare callbacks
             callbacks = {}
             if hasattr(driver_instance, 'send_file'):
                 callbacks['send_file'] = lambda path, cap=None: driver_instance.send_file(session_id, path, cap)
@@ -1127,23 +1015,95 @@ class Kernel:
             if self._expose_reasoning_to_ui():
                 callbacks['send_reasoning_chunk'] = lambda content: driver_instance.send_reasoning_chunk(session_id, content)
             callbacks['send_complete'] = lambda: driver_instance.send_complete(session_id)
-            callbacks['send_response'] = lambda text, is_chunk=False, attachments=None: driver_instance.send_response(text, target=session_id, is_chunk=is_chunk, attachments=attachments)
+            callbacks['send_response'] = lambda t, is_chunk=False, attachments=None: driver_instance.send_response(t, target=session_id, is_chunk=is_chunk, attachments=attachments)
 
             worker_user_data = dict(user_data or {})
             worker_user_data["__worker_run"] = True
 
-            # Spawn Worker
+            # 4. Spawn Worker for async resolution and processing
             self.worker_manager.spawn_worker(
                 work.work_id,
-                self.orchestrator.process,
+                self._worker_entry_point,
+                work.work_id,
                 text,
                 session_id=session_id,
                 user_data=worker_user_data,
                 callbacks=callbacks,
-                initial_plan=plan, # Resume from this resolved plan
                 context=context,
                 attachments=attachments
             )
+
+            # 5. Immediate user-facing acknowledgment for async work start.
+            session_locale = self.orchestrator._session_locale(session) if session else "en"
+            start_msg = self.orchestrator.i18n.t("status.processing_start", locale=session_locale)
+            driver_instance.send_status(session_id, 'thinking', {"message": start_msg, "work_id": work.work_id})
+            
+            return session_id
+    def _worker_entry_point(self, work_id, text, session_id, user_data, callbacks, context, attachments):
+        """
+        Worker entry point that handles intent resolution and then dispatches 
+        to orchestration process. This runs entirely in the background.
+        """
+        try:
+            # 1. Resolve Intent (formerly in main thread)
+            # We use worker_data to track that we are already in a worker
+            user_name = user_data.get('user_name', "")
+            plan, _, session = self.orchestrator.get_initial_intent(
+                text, 
+                session_id=session_id, 
+                user_data=user_data, 
+                context=context, 
+                attachments=attachments, 
+                name=user_name
+            )
+
+            if not plan:
+                caps = user_data.get("driver_capabilities", {})
+                is_voice = bool(caps.get("voice_only")) or (bool(context) and str(getattr(context, "interface", "")).lower() == "voice")
+                no_plan_key = "reply.voice_rephrase" if is_voice else "reply.no_plan_resolved"
+                response = self.orchestrator.i18n.t(no_plan_key, locale=self.orchestrator._session_locale(session))
+                callbacks['send_response'](response)
+                callbacks['send_complete']()
+                return
+
+            # 2. Quick Path (Reply)
+            if plan.action_id == 'reply':
+                coached_response = self.orchestrator.apply_conversation_coaching(session, text, plan.response_text or "")
+                coached_response = self.orchestrator._enforce_response_language(session, coached_response)
+                if plan.thought:
+                    session.add_message("system", plan.thought, msg_type="reasoning")
+                session.add_message("assistant", coached_response)
+                self.orchestrator._save_session(session)
+                
+                if self._expose_reasoning_to_ui() and 'send_reasoning_chunk' in callbacks and plan.thought:
+                    callbacks['send_reasoning_chunk'](plan.thought)
+                
+                callbacks['send_response'](coached_response, is_chunk=True, attachments=plan.attachments)
+                callbacks['send_complete']()
+                return
+
+            # 3. Work Path (Process Loop)
+            # Note: admission gate was already checked lightly in Kernel.process_input
+            # but we can re-verify here if needed.
+            
+            return self.orchestrator.process(
+                text,
+                session_id=session_id,
+                user_data=user_data,
+                callbacks=callbacks,
+                initial_plan=plan,
+                context=context,
+                attachments=attachments,
+                work_id=work_id
+            )
+
+        except Exception as e:
+            logger.error(f"Error in _worker_entry_point for work {work_id}: {e}", exc_info=True)
+            if callbacks and 'send_response' in callbacks:
+                callbacks['send_response'](f"Erro no processamento: {str(e)}")
+            if callbacks and 'send_complete' in callbacks:
+                callbacks['send_complete']()
+            raise e
 
             # 4. Immediate user-facing acknowledgment for async work start.
             # This keeps the chat responsive while the worker runs in background.

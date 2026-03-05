@@ -3,14 +3,23 @@ import vosk
 import json
 import time
 import pygame as pgame
-import pyaudio
+try:
+    import pyaudio
+except ImportError:
+    pyaudio = None
 import pyttsx3
 import tempfile
 import threading
 import pyttsx3.voice
 from enum import Enum
 from typing import Any
-from fuzzywuzzy import fuzz
+try:
+    from thefuzz import fuzz
+except ImportError:
+    try:
+        from fuzzywuzzy import fuzz
+    except ImportError:
+        fuzz = None
 import speech_recognition as sr
 from google.cloud import texttospeech
 from pydantic import BaseModel, validator
@@ -187,8 +196,11 @@ class Assistant(BaseModel):
             user_test_without_command = " ".join(text_token[2:])
             text_to_analize = " ".join(text_token[:2])
 
-        similarity = fuzz.ratio(text_to_analize.lower(),
-                                text_to_activate.lower())
+        if fuzz:
+            similarity = fuzz.ratio(text_to_analize.lower(),
+                                    text_to_activate.lower())
+        else:
+            similarity = 100 if text_to_activate.lower() in text_to_analize.lower() else 0
         if similarity >= self.command_to_activate_similarity:
             return user_test_without_command.strip()
         return None
@@ -207,6 +219,9 @@ class Assistant(BaseModel):
 
     def initialize_voice_recognition_engine(self):
         if self.voice_recognition_engineering == 'vosk':
+            if not pyaudio:
+                logger.error("pyaudio not found. Hardware microphone support is disabled.")
+                return
             audio = pyaudio.PyAudio()
             model = vosk.Model(self.vosk_engine_.model_path)
             audio_device_index = self.vosk_engine_.microphone  # Pode ser necessário ajustar

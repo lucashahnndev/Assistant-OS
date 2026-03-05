@@ -65,32 +65,30 @@ class TTSManager:
                 except Exception as e:
                     logger.error(f"Failed to instantiate TTS Provider {prov_name}: {e}")
 
-    def speak(self, text):
+    def generate(self, text) -> bytes:
         if not text:
-            return
+            return b""
 
         if not self.tts_pool:
             logger.error("No active TTS providers in the pool.")
-            return
+            return b""
             
-        last_error = ""
         for item in self.tts_pool:
             provider_id = item['id']
             instance = item['instance']
             try:
                 if instance.is_available():
-                    success = instance.speak(text)
-                    if success:
-                        return
+                    content = instance.generate(text)
+                    if content:
+                        return content
                     else:
-                        logger.warning(f"TTS Provider {provider_id} returned false. Falling back...")
+                        logger.warning(f"TTS Provider {provider_id} returned empty bytes. Falling back...")
                 else:
                     logger.warning(f"TTS Provider {provider_id} is unavailable. Falling back...")
             except Exception as e:
-                error_msg = str(e)
-                logger.warning(f"TTS Provider {provider_id} failed: {error_msg}. Falling back to next...")
-                last_error = error_msg
+                logger.warning(f"TTS Provider {provider_id} failed: {e}. Falling back to next...")
                 continue
                 
-        logger.error(f"All TTS providers failed. Last error: {last_error}")
+        logger.error("All TTS providers failed to generate audio.")
+        return b""
 

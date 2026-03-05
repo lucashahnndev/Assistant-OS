@@ -8,6 +8,7 @@ import json
 import os
 import asyncio
 import logging
+import requests
 
 # Logger for this module
 logger = logging.getLogger("SystemRoutes")
@@ -86,6 +87,43 @@ def get_status(request: Request):
         }
     except HTTPException:
         return {"status": "starting", "message": "Kernel initializing"}
+
+@router.get("/deezer/track/{track_id}")
+def get_deezer_track(track_id: str, user: User = Depends(get_current_user)):
+    """
+    Server-side Deezer track proxy to avoid browser CORS issues.
+    Returns normalized fields for the Dashboard mini-player.
+    """
+    safe_track_id = str(track_id or "").strip()
+    if not safe_track_id.isdigit():
+        raise HTTPException(status_code=400, detail="Invalid Deezer track id")
+
+    try:
+        resp = requests.get(f"https://api.deezer.com/track/{safe_track_id}", timeout=10)
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail=f"Deezer API HTTP {resp.status_code}")
+        payload = resp.json() if resp.content else {}
+        if isinstance(payload, dict) and payload.get("error"):
+            msg = payload.get("error", {}).get("message") if isinstance(payload.get("error"), dict) else "Deezer API error"
+            raise HTTPException(status_code=502, detail=msg or "Deezer API error")
+
+        album = payload.get("album") if isinstance(payload.get("album"), dict) else {}
+        artist = payload.get("artist") if isinstance(payload.get("artist"), dict) else {}
+        return {
+            "id": str(payload.get("id") or safe_track_id),
+            "title": str(payload.get("title") or ""),
+            "artist": str(artist.get("name") or ""),
+            "album": str(album.get("title") or ""),
+            "cover": str(album.get("cover_big") or album.get("cover_medium") or album.get("cover") or ""),
+            "preview": str(payload.get("preview") or ""),
+            "link": str(payload.get("link") or f"https://www.deezer.com/track/{safe_track_id}"),
+            "duration": int(payload.get("duration") or 30),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Deezer proxy error for track {safe_track_id}: {e}")
+        raise HTTPException(status_code=502, detail="Failed to fetch Deezer track metadata")
 
 @router.get("/config")
 def get_config(user: User = Depends(get_current_user), request: Request = None):

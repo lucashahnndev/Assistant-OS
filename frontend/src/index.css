@@ -8,6 +8,26 @@ body {
     overflow: hidden;
 }
 
+/* Fullscreen Mode Overrides */
+body.fullscreen-mode aside,
+body.fullscreen-mode header:not(.dashboard-internal-header),
+body.fullscreen-mode .sidebar-overlay,
+body.fullscreen-mode .sidebar-drawer,
+body.fullscreen-mode [title="Expandir cabeçalho"] {
+    display: none !important;
+}
+
+body.fullscreen-mode main {
+    padding: 0 !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+}
+
+body.fullscreen-mode main>div {
+    border: none !important;
+    border-radius: 0 !important;
+}
+
 :root {
     --bg-color: #030406;
     --surface-bg: #0b0d11;
@@ -58,23 +78,31 @@ body {
     --grid-color: rgba(255, 255, 255, 0.03);
     --grid-pattern: url("data:image/svg+xml,%3Csvg width='16' height='16' viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M8 7V9M7 8H9' stroke='white' stroke-opacity='0.03' stroke-width='1'/%3E%3C/svg%3E");
 
+    /* Dashboard Specific */
+    --dashboard-bg: radial-gradient(circle at center, rgba(40, 0, 80, 0.25) 0%, #050505 75%);
+    --dashboard-text: #ffffff;
+
     /* Subtle Noise Texture */
     --noise-texture: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
 }
 
 .light-theme {
-    --bg-color: #cbd5e1;
-    --card-bg: rgba(255, 255, 255, 1);
-    --card-border: rgba(15, 23, 42, 0.15);
-    --accent-color: #334155;
-    --accent-glow: rgba(15, 23, 42, 0.05);
-    --text-primary: #0f172a;
+    --bg-color: #f1f5f9;
+    --card-bg: rgba(255, 255, 255, 0.95);
+    --card-border: rgba(15, 23, 42, 0.12);
+    --accent-color: #475569;
+    --accent-glow: rgba(15, 23, 42, 0.04);
+    --text-primary: #1e293b;
     --text-secondary: #475569;
     --text-muted: #64748b;
-    --surface-blur: blur(8px);
+    --surface-blur: blur(12px);
     --shadow-precise: 0 0 0 1px var(--card-border), 0 2px 8px rgba(0, 0, 0, 0.04);
-    --grid-color: rgba(0, 0, 0, 0.04);
-    --grid-pattern: url("data:image/svg+xml,%3Csvg width='16' height='16' viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M8 7V9M7 8H9' stroke='black' stroke-opacity='0.04' stroke-width='1'/%3E%3C/svg%3E");
+    --grid-color: rgba(0, 0, 0, 0.03);
+    --grid-pattern: url("data:image/svg+xml,%3Csvg width='16' height='16' viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M8 7V9M7 8H9' stroke='black' stroke-opacity='0.03' stroke-width='1'/%3E%3C/svg%3E");
+
+    /* Dashboard Specific - Light Theme */
+    --dashboard-bg: radial-gradient(circle at center, rgba(255, 255, 255, 0.8) 0%, #e2e8f0 100%);
+    --dashboard-text: #1e293b;
 }
 
 * {
@@ -1125,8 +1153,8 @@ select option {
 }
 
 .link-preview-card.is-stage {
-    max-width: none;
-    height: 100%;
+    max-width: 100%;
+    height: auto;
     background: transparent;
     border: none;
     padding: 0;
@@ -1301,7 +1329,7 @@ select option {
 }
 
 .yt-inline-player.is-stage {
-    max-width: none;
+    max-width: 100%;
     border: none;
     background: transparent;
 }

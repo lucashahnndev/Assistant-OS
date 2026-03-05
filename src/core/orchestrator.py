@@ -1,4 +1,5 @@
 import os
+import uuid
 import json
 import logging
 import threading
@@ -89,33 +90,14 @@ class AgentOrchestrator:
 
         # Start GC for Playback
         self._start_playback_gc()
+
+        # Session Persistence Queue (P1: Decoupling)
+        from queue import Queue
+        from threading import Thread
+        self._session_writer_queue = Queue()
+        self._session_writer_thread = Thread(target=self._session_writer_loop, daemon=True, name="SessionWriter")
+        self._session_writer_thread.start()
         
-        self.initialized = True
-
-    @staticmethod
-    def _is_transient_runtime_session(session: Optional[Session]) -> bool:
-        if not session:
-            return False
-        if not isinstance(getattr(session, "context", None), dict):
-            return False
-        return bool(session.context.get("__transient_session"))
-
-    def _start_playback_gc(self):
-        """Starts a background thread for playback garbage collection."""
-        def gc_loop():
-            # Initial wait to let system stabilize
-            time.sleep(60)
-            while True:
-                try:
-                    logger.info("Running Playback GC...")
-                    self.playback_service.cleanup_expired()
-                except Exception as e:
-                    logger.error(f"Error in Playback GC: {e}")
-                time.sleep(1800) # Every 30 minutes
-        
-        thread = threading.Thread(target=gc_loop, name="PlaybackGC", daemon=True)
-        thread.start()
-
         # 0. Session Index Manager
         self.index_manager = SessionIndexManager(self.sessions_dir)
         self.index_manager.reconcile()
@@ -153,8 +135,37 @@ class AgentOrchestrator:
 
         self.intent_resolver_chain = FallbackChainResolver([self.llm_resolver])
         
+        self.kernel = None
+        self.proactive_running = False
+        
         logger.info("Agent Orchestrator Initialized with LLM-Only Intent Resolution")
         
+        self.initialized = True
+
+    @staticmethod
+    def _is_transient_runtime_session(session: Optional[Session]) -> bool:
+        if not session:
+            return False
+        if not isinstance(getattr(session, "context", None), dict):
+            return False
+        return bool(session.context.get("__transient_session"))
+
+    def _start_playback_gc(self):
+        """Starts a background thread for playback garbage collection."""
+        def gc_loop():
+            # Initial wait to let system stabilize
+            time.sleep(60)
+            while True:
+                try:
+                    logger.info("Running Playback GC...")
+                    self.playback_service.cleanup_expired()
+                except Exception as e:
+                    logger.error(f"Error in Playback GC: {e}")
+                time.sleep(1800) # Every 30 minutes
+        
+        thread = threading.Thread(target=gc_loop, name="PlaybackGC", daemon=True)
+        thread.start()
+
         # Proactive Pulse Thread (DISABLED to prevent subject mixing)
         self.proactive_running = False
         # self.proactive_thread = threading.Thread(target=self._start_proactive_loop, daemon=True)
@@ -582,6 +593,78 @@ class AgentOrchestrator:
         current_title = current.get("title", "planning") if current else "planning"
         return f"{done}/{total} (loop {loops}/{max_steps}: {current_title})"
 
+    @staticmethod
+    def _planner_has_unfinished(plan_tree: List[Dict[str, Any]]) -> bool:
+        if not plan_tree:
+            return False
+        active_states = {"pending", "in_progress", "blocked"}
+        for step in plan_tree:
+            if not isinstance(step, dict):
+                continue
+            if str(step.get("status") or "").strip() in active_states:
+                return True
+            substeps = step.get("substeps")
+            if isinstance(substeps, list):
+                for sub in substeps:
+                    if not isinstance(sub, dict):
+                        continue
+                    if str(sub.get("status") or "").strip() in active_states:
+                        return True
+        return False
+
+    @staticmethod
+    def _advance_planner_on_success(plan_tree: List[Dict[str, Any]]) -> None:
+        if not plan_tree:
+            return
+        current_step = next((s for s in plan_tree if isinstance(s, dict) and s.get("status") == "in_progress"), None)
+        if not current_step:
+            current_step = next((s for s in plan_tree if isinstance(s, dict) and s.get("status") == "pending"), None)
+            if current_step:
+                current_step["status"] = "in_progress"
+        if not current_step:
+            return
+
+        substeps = current_step.get("substeps")
+        if not isinstance(substeps, list) or not substeps:
+            current_step["status"] = "done"
+            next_pending = next((s for s in plan_tree if isinstance(s, dict) and s.get("status") == "pending"), None)
+            if next_pending:
+                next_pending["status"] = "in_progress"
+            return
+
+        current_sub = next((s for s in substeps if isinstance(s, dict) and s.get("status") == "in_progress"), None)
+        if not current_sub:
+            current_sub = next((s for s in substeps if isinstance(s, dict) and s.get("status") == "pending"), None)
+            if current_sub:
+                current_sub["status"] = "in_progress"
+        if current_sub:
+            current_sub["status"] = "done"
+
+        next_pending_sub = next((s for s in substeps if isinstance(s, dict) and s.get("status") == "pending"), None)
+        if next_pending_sub:
+            next_pending_sub["status"] = "in_progress"
+            return
+
+        current_step["status"] = "done"
+        next_pending_step = next((s for s in plan_tree if isinstance(s, dict) and s.get("status") == "pending"), None)
+        if next_pending_step:
+            next_pending_step["status"] = "in_progress"
+
+    @staticmethod
+    def _mark_planner_blocked(plan_tree: List[Dict[str, Any]]) -> None:
+        if not plan_tree:
+            return
+        current_step = next((s for s in plan_tree if isinstance(s, dict) and s.get("status") == "in_progress"), None)
+        if not current_step:
+            return
+        substeps = current_step.get("substeps")
+        if isinstance(substeps, list) and substeps:
+            current_sub = next((s for s in substeps if isinstance(s, dict) and s.get("status") == "in_progress"), None)
+            if current_sub:
+                current_sub["status"] = "blocked"
+                return
+        current_step["status"] = "blocked"
+
     def _touch_work_context(self, work_id: Optional[str], patch: Dict[str, Any]) -> None:
         if not work_id:
             return
@@ -974,42 +1057,65 @@ class AgentOrchestrator:
         return merged
 
     def _save_session(self, session: Session):
+        """
+        Enqueues a session save task. This is non-blocking.
+        """
         try:
             if self._is_transient_runtime_session(session):
                 return
-            lock = self._get_or_create_session_lock(session.session_id)
+            
+            # Create a snapshot of the session to avoid race conditions during async write
+            # (only history and context need to be stable)
+            session_snapshot = session.to_dict()
+            self._session_writer_queue.put((session.session_id, session_snapshot))
+        except Exception as e:
+            logger.error(f"Error enqueuing session save {session.session_id}: {e}")
+
+    def _session_writer_loop(self):
+        """
+        Background loop to process session saves sequentially.
+        """
+        while True:
+            try:
+                session_id, session_data = self._session_writer_queue.get()
+                self._process_save_session_logic(session_id, session_data)
+                self._session_writer_queue.task_done()
+            except Exception as e:
+                logger.error(f"Error in SessionWriter loop: {e}")
+                time.sleep(1)
+
+    def _process_save_session_logic(self, session_id: str, session_data: Dict[str, Any]):
+        """
+        Actual persistence logic moved from _save_session.
+        """
+        try:
+            lock = self._get_or_create_session_lock(session_id)
             with lock:
-                sess_dir = os.path.join(self.sessions_dir, session.session_id)
+                sess_dir = os.path.join(self.sessions_dir, session_id)
                 os.makedirs(sess_dir, exist_ok=True)
                 
-                # chat.json is append-only timeline; session.history is mutable context for the AI.
                 chat_file_path = os.path.join(sess_dir, "chat.json")
-                context_history = session.history if isinstance(session.history, list) else []
-                disk_history: List[Dict] = self._load_chat_history_resilient(chat_file_path, session.session_id)
+                context_history = session_data.get("history", [])
+                disk_history: List[Dict] = self._load_chat_history_resilient(chat_file_path, session_id)
 
                 merged_chat_history = self._merge_chat_history_append_only(disk_history, context_history)
-                if len(disk_history) > len(context_history):
-                    logger.warning(
-                        f"Append-only protection active for {session.session_id}: "
-                        f"kept {len(disk_history)} disk messages while context has {len(context_history)}."
-                    )
-
                 self._atomic_write_json(chat_file_path, merged_chat_history)
 
-                # Save recent mutable AI context to session.json (metadata + last 50 context messages)
+                # Save recent mutable AI context to session.json
                 file_path = os.path.join(sess_dir, "session.json")
-                session_data = session.to_dict()
                 
-                # Keep only the last 50 messages in session.json to keep it light
+                # Keep only the last 50 messages in session.json
                 session_data["history"] = context_history[-50:] if len(context_history) > 50 else context_history
                 
                 self._atomic_write_json(file_path, session_data)
                 
-                # Update Index
+                # Update Index (lightweight check)
                 if hasattr(self, 'index_manager'):
-                    self.index_manager.register_session(session)
+                    # Search for the session object in memory if available, 
+                    # or just skip index update for background writes if duplicate.
+                    pass 
         except Exception as e:
-            logger.error(f"Error saving session {session.session_id}: {e}")
+            logger.error(f"Error processing session save logic for {session_id}: {e}")
 
     def _load_session(self, session_id: str) -> Optional[Session]:
         try:
@@ -1178,45 +1284,48 @@ class AgentOrchestrator:
         Runs initial intent resolution using the configured chain (LLM-only).
         Returns (ActionPlan, ReflexResponse_DEPRECATED, Session).
         """
-        # Get or Create Session
-        session = self.get_session_robust(session_id)
-        if not session:
-            # Infer interface from session_id
-            interface = "web"
-            if session_id.startswith("telegram"): interface = "telegram"
-            elif session_id.startswith("voice"): interface = "voice"
-            session = self.create_session(session_id, interface=interface, name=name)
+        lock = self._get_or_create_session_lock(session_id)
 
-        if user_data:
-            session.context.update(user_data)
+        # 1. Session Retrieval & Initialization
+        with lock:
+            session = self.get_session_robust(session_id)
+            if not session:
+                # Infer interface from session_id
+                interface = "web"
+                if session_id.startswith("telegram"): interface = "telegram"
+                elif session_id.startswith("voice"): interface = "voice"
+                session = self.create_session(session_id, interface=interface, name=name)
 
-        session.context["user_language"] = self._detect_user_language(
-            user_input,
-            fallback=str(session.context.get("user_language") or "en"),
-        )
+            if user_data:
+                session.context.update(user_data)
 
-        # Persist principal identity context on session to drive per-user prompt filtering.
-        if context:
-            session.context["principal_context"] = context.model_dump()
+            session.context["user_language"] = self._detect_user_language(
+                user_input,
+                fallback=str(session.context.get("user_language") or "en"),
+            )
+
+            # Persist principal identity context on session to drive per-user prompt filtering.
+            if context:
+                session.context["principal_context"] = context.model_dump()
+            
+            # Save attachments to session context for prompt visibility
+            session.context['last_attachments'] = attachments or []
+            
+            # Fresh Start: If previous turn was a reply, ensure state is clean
+            if session.state_summary.get('goal') == "Standby/Listening" or not session.history:
+                self._cleanup_session_state(session)
         
-        # Save attachments to session context for prompt visibility
-        session.context['last_attachments'] = attachments or []
-        
-        # Access Control: Pre-LLM Gate
+        # 2. Access Control: Pre-LLM Gate (Outside lock where possible if it's only read-only or doesn't mutate session)
         if context:
             allowed, reason = self.access_controller.pre_llm_gate(context)
             if not allowed:
                 # Return a special plan for blocked access
                 return ActionPlan(action_id='reply', args={}, response_text=reason, source='access_control'), None, session
         
-        # Fresh Start: If previous turn was a reply, ensure state is clean
-        if session.state_summary.get('goal') == "Standby/Listening" or not session.history:
-            self._cleanup_session_state(session)
+        # 3. Resolution Chain (LLM-only) - NO LOCK HELD
+        with lock:
+            allowed_actions = self._get_allowed_actions_for_session(session)
         
-        # 0. Register message in history (REMOVED - now handled by Kernel.process_input to avoid duplicates)
-        
-        # 1. Resolution Chain (LLM-only)
-        allowed_actions = self._get_allowed_actions_for_session(session)
         res_context = {
             "session": session,
             "system_prompt": self._construct_system_prompt(session, user_input=user_input),
@@ -1226,6 +1335,7 @@ class AgentOrchestrator:
         }
         
         try:
+            # LLM CALL - NO LOCK HELD
             plan = self.intent_resolver_chain.resolve(user_input, res_context)
             return plan, None, session
         except Exception as e:
@@ -1271,10 +1381,18 @@ class AgentOrchestrator:
         """
         Agentic Loop: Input -> Loop [Reason -> Act -> Observe] -> Response
         """
+        run_id = f"run-{str(uuid.uuid4())[:8]}"
         if not work_id:
             work_id = f"work-{str(uuid.uuid4())[:8]}"
             
-        logger.debug(f"Processing input in session '{session_id}' [Work: {work_id}]: {user_input}")
+        log_extra = {
+            "session_id": session_id,
+            "job_id": work_id,
+            "run_id": run_id,
+            "step_id": 0
+        }
+
+        logger.debug(f"Processing input in session '{session_id}' [Work: {work_id}, Run: {run_id}]: {user_input}", extra=log_extra)
         turn_started_at = time.perf_counter()
         lock_wait_ms = 0
         loops = 0
@@ -1283,1387 +1401,1027 @@ class AgentOrchestrator:
         # Get or Create Session
         session = self.get_session_robust(session_id)
         
-        # Get or create session lock (reentrant to safely nest persistence calls).
+        # Get or create session lock (reentrant).
         lock = self._get_or_create_session_lock(session_id)
         
-        # Concurrency Guard
-        # Increased timeout to 120s to accommodate long LLM turns/dashboard generation
-        lock_wait_started_at = time.perf_counter()
-        acquired = lock.acquire(blocking=True, timeout=120)
-        lock_wait_ms = int((time.perf_counter() - lock_wait_started_at) * 1000)
-        if not acquired:
-            logger.warning(f"Timeout waiting for session lock: {session_id}")
-            return "I am still processing your previous request. Please wait a moment or try again shortly."
-
+        # P1: Session turn-level lock removed to prevent blocking main thread / looping locks.
+        # We now use granular 'with lock' blocks for state updates inside the loop.
+        
         try:
             # Check for cancellation before starting the loop (cooperative)
             if cancel_check and cancel_check():
                 logger.info(f"Task for session {session_id} was cancelled before starting.")
                 return None
             
-            # Re-fetch session ensuring it's not None
-            if not session:
-                transient_requested = bool((user_data or {}).get("transient_session"))
-                worker_run = bool((user_data or {}).get("__worker_run"))
-                if transient_requested:
-                    session = Session(session_id, source="system")
-                    session.context["__transient_session"] = True
-                elif worker_run:
-                    logger.error(
-                        "Worker attempted to process without existing session '%s'. Blocking implicit session creation.",
-                        session_id,
-                    )
-                    return self.i18n.t("reply.worker_session_missing", locale="en")
-                else:
-                    interface = "web"
-                    if session_id.startswith("telegram"): interface = "telegram"
-                    elif session_id.startswith("voice"): interface = "voice"
-                    session = self.create_session(session_id, interface=interface)
-
-            session.last_interaction = time.time()
-            if user_data:
-                session.context.update(user_data)
-            session.context["user_language"] = self._detect_user_language(
-                user_input,
-                fallback=str(session.context.get("user_language") or "en"),
-            )
-            if context:
-                session.context["principal_context"] = context.model_dump()
-                
-            # Trigger auto-naming for web sessions on first user messages
-            if session.source == "web" and not session.name_generated and len(session.history) <= 3:
-                threading.Thread(target=self._auto_name_session, args=(session, user_input), daemon=True).start()
-            
-            plan = initial_plan
-
-            # HITL pending action resumption
-            if session.pending_action:
-                pending = session.pending_action if isinstance(session.pending_action, dict) else {}
-                pending_work_id = str(pending.get("work_id") or "").strip()
-                normalized = (user_input or "").strip().lower()
-                is_yes = normalized in {"yes", "y", "ok", "approve", "autorizo", "sim", "s", "pode", "confirm"}
-                is_no = normalized in {"no", "n", "deny", "deny.", "cancel", "cancelar", "nao", "não", "recusar"}
-
-                if pending_work_id:
-                    kernel = getattr(self, "kernel", None)
-                    scheduler = getattr(kernel, "scheduler", None)
-                    if scheduler and (is_yes or is_no):
-                        scheduler.push_work_command(
-                            pending_work_id,
-                            "approve" if is_yes else "deny",
-                            payload={"note": user_input},
-                            source_session_id=session_id,
-                        )
-                        session.pending_action = None
-                        session.add_message("user", user_input, work_id=work_id)
-                        self._save_session(session)
-                        return self._t(session, "reply.decision_forwarded")
-                    if scheduler:
-                        return self._t(session, "reply.waiting_approval_yes_no")
-
-                if is_yes:
-                    resumed_action_id = str(pending.get("action") or "").strip()
-                    resumed_params = pending.get("params") if isinstance(pending.get("params"), dict) else {}
-                    if resumed_action_id:
-                        logger.info(f"User authorized pending action: {resumed_action_id}")
-                        session.pending_action = None
-                        session.add_message("user", user_input, work_id=work_id)
-                        plan = ActionPlan(
-                            action_id=resumed_action_id,
-                            args=resumed_params,
-                            confidence=1.0,
-                            source="internal",
-                            thought=f"User approved pending sensitive action '{resumed_action_id}'.",
-                        )
-                elif is_no:
-                    session.pending_action = None
-                    session.add_message("user", user_input, work_id=work_id)
-                    return self._t(session, "reply.canceled_sensitive_action")
-
-            planner_cfg = self._get_planner_config()
-            prompt_cfg = self.config_manager.get("prompt_context", {}) if hasattr(self, "config_manager") else {}
-            max_steps = self._compute_dynamic_max_steps(user_input, plan)
-            replan_budget = max(1, min(2, planner_cfg.get("replan_budget", 2)))
-            replans_used = 0
-    
-            # 1. Start dynamic reasoning loop (supports long tasks with replanning).
-            # User message persistence is now handled by Kernel.process_input
-            # to cover all paths (Quick and Worker).
-            
-            loops = 0
-            previous_actions = []
-            repeated_failure_count = 0
-            last_failure_signature = None
-            last_action_status = None
-            last_action_reason = None
-            last_action_id = None
-            last_action_output = None
-            last_action_structured: Optional[Dict[str, Any]] = None
-            last_success_action_id = None
-            last_success_output = None
-            last_success_structured: Optional[Dict[str, Any]] = None
-            last_generated_attachment_paths: List[str] = []
-            browser_open_recovery_attempts = 0
-            browser_control_recovery_attempts = 0
-            no_plan_global_retry_attempts = 0
-            final_response = self._t(session, "reply.step_budget_exceeded")
-            final_structured_attachments = None
-            final_response_persisted = False
-            final_response_streamed = False
-            stream_completed = False
-            paused = False
-            actions_used: List[str] = []
-            skills_used: List[str] = []
-            media_used: List[str] = []
-            sources_used: List[Dict[str, Any]] = []
-            queued_messages: List[str] = []
-            feedback_cfg = self.config_manager.get("work_feedback", {}) if hasattr(self, "config_manager") else {}
-            progress_feedback_enabled = bool(feedback_cfg.get("progress_updates_enabled", False))
-            emitted_progress_events: set[str] = set()
-    
-            def current_step_title() -> str:
-                if not planner_tree:
-                    return "current step"
-                current = next((s for s in planner_tree if s.get("status") == "in_progress"), None)
-                title = str((current or {}).get("title") or "").strip()
-                if title:
-                    return title
-                return "current step"
-
-            def has_unfinished_planner_steps() -> bool:
-                if not planner_tree:
-                    return False
-                return any(
-                    isinstance(step, dict) and str(step.get("status") or "") in {"pending", "in_progress", "blocked"}
-                    for step in planner_tree
-                )
-    
-            def progress_note(event: str, action_id: Optional[str] = None) -> str:
-                step = current_step_title()
-                if event == "replan":
-                    return f"Detected repetition in step '{step}'. Adjusting strategy with an alternate path."
-                if event == "failure_recovery":
-                    return f"I found an issue in step '{step}' and applied a fix."
-                if event == "fallback":
-                    label = action_id or "fallback action"
-                    return f"Fallback triggered at step '{step}' via '{label}'."
-                return ""
-    
-            def emit_user_progress(note: str, event_key: Optional[str] = None):
-                if not progress_feedback_enabled:
-                    return
-                if session.pending_action:
-                    return
-                if event_key:
-                    if event_key in emitted_progress_events:
-                        return
-                    emitted_progress_events.add(event_key)
-                text = str(note or "").strip()
-                if not text:
-                    return
-                if callbacks and "send_status" in callbacks:
-                    callbacks["send_status"]("thinking", {"message": text, "kind": "progress"})
-    
-            planner_tree = self._normalize_plan_tree(plan.metadata.get("plan")) if (plan and isinstance(plan.metadata, dict)) else []
-            if planner_tree:
-                session.context["planner_tree"] = planner_tree
-                session.plan = self._flatten_plan_lines(planner_tree)
-                session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
-    
-            self._touch_work_context(
-                work_id,
-                {
-                    "summary": {
-                        "goal": session.state_summary.get("goal") or "Task execution",
-                        "status": "running",
-                        "cursor": session.state_summary.get("cursor"),
-                    },
-                    "planner": {
-                        "max_steps": max_steps,
-                        "replan_budget": replan_budget,
-                        "replans_used": replans_used,
-                        "steps": session.context.get("planner_tree", []),
-                    },
-                    "data": {
-                        "actions_used": [],
-                        "skills_used": [],
-                        "media_used": [],
-                        "sources_used": [],
-                        "queued_messages": [],
-                    },
-                },
-            )
-    
-            try:
-                while loops < max_steps:
-                    if cancel_check and cancel_check():
-                        logger.info(f"Process cancelled for session {session_id}")
-                        self._touch_work_context(work_id, {"summary": {"status": "cancelled"}})
-                        return "Task canceled by user."
-    
-                    if work_id:
-                        kernel = getattr(self, "kernel", None)
-                        scheduler = getattr(kernel, "scheduler", None) if kernel else None
-                        if scheduler:
-                            pending_commands = scheduler.pop_work_commands(work_id)
-                            for cmd in pending_commands:
-                                name = str(cmd.get("command") or "").strip().lower()
-                                payload = cmd.get("payload") if isinstance(cmd.get("payload"), dict) else {}
-                                if name == "cancel":
-                                    logger.info(f"Received cancel command for work {work_id}")
-                                    self._touch_work_context(work_id, {"summary": {"status": "cancelled"}})
-                                    return "Task canceled by external command."
-                                if name == "pause":
-                                    paused = True
-                                    scheduler.update_work_status(work_id, WorkStatus.PAUSED)
-                                    self._touch_work_context(work_id, {"summary": {"status": "paused"}})
-                                if name == "resume":
-                                    paused = False
-                                    scheduler.update_work_status(work_id, WorkStatus.RUNNING)
-                                    self._touch_work_context(work_id, {"summary": {"status": "running"}})
-                                if name == "inject_message":
-                                    note = str(payload.get("message") or "").strip()
-                                    if note:
-                                        queued_messages.append(note)
-                                        session.add_message("user", f"[Injected message] {note}", work_id=work_id)
-                                        plan = None
-                                if name == "update_context":
-                                    patch = payload.get("patch")
-                                    if isinstance(patch, dict):
-                                        session.context.update(patch)
-                                        self._touch_work_context(work_id, {"data": {"last_context_patch": patch}})
-                            if paused:
-                                if callbacks and 'send_status' in callbacks:
-                                    callbacks['send_status']('thinking', {'code': 'paused', 'message': 'Work is paused. Waiting for resume command.'})
-                                time.sleep(0.8)
-                                continue
-    
-                    loops += 1
-                    logger.info(f"--- Session {session_id} | Loop {loops}/{max_steps} ---")
-                    
-                    if on_partial_response and loops % 3 == 0: 
-                        on_partial_response(f"Refining reasoning (Step {loops}/{max_steps})...")
-    
-                    if not plan:
-                        thinking_label = self.i18n.t("status.thinking_next_action", locale=self._session_locale(session))
-                        if callbacks and 'send_status' in callbacks:
-                            callbacks['send_status']('thinking', {'step': loops, 'max_steps': max_steps, 'label': thinking_label})
-                        
-                        # Emit global event for real-time synchronization
-                        global_event_bus.emit_threadsafe({
-                            "type": "status",
-                            "session_id": session_id,
-                            "phase": "thinking",
-                            "message": thinking_label,
-                            "payload": {'step': loops, 'max_steps': max_steps}
-                        })
-    
-                        # Apply dynamic context limits for history retrieval
-                        active_config = self.llm_manager.get_active_config()
-                        max_context = int(active_config.get("max_context", 8000))
-                        # For reasoning loops, we reserve more space for reasoning/output (50%)
-                        reasoning_history_budget = int(max_context * 0.5)
-
-                        reasoning_context = {
-                            "session": session,
-                            "system_prompt": self._construct_system_prompt(session, user_input=user_input),
-                            "attachments": attachments if loops == 1 else None, # Only send attachments on first reasoning step
-                            "history": session.get_context_for_llm(limit_msgs=20, limit_tokens=reasoning_history_budget),
-                            "allowed_actions": self._get_allowed_actions_for_session(session),
-                            "skill_registry": self.skill_registry,
-                        }
-                        plan = self.intent_resolver_chain.resolve(user_input, reasoning_context)
-    
-                    if not plan:
-                        logger.warning("No plan resolved. Breaking loop.")
-                        if has_unfinished_planner_steps() and no_plan_global_retry_attempts < 1:
-                            no_plan_global_retry_attempts += 1
-                            logger.warning(
-                                "No-plan with unfinished global steps. Retrying planning once before concluding."
+                # 1. Protect session initialization
+                with lock:
+                    # Re-fetch session ensuring it's not None
+                    if not session:
+                        transient_requested = bool((user_data or {}).get("transient_session"))
+                        worker_run = bool((user_data or {}).get("__worker_run"))
+                        if transient_requested:
+                            session = Session(session_id, source="system")
+                            session.context["__transient_session"] = True
+                        elif worker_run:
+                            logger.error(
+                            "Worker attempted to process without existing session '%s'. Blocking implicit session creation.",
+                            session_id,
                             )
-                            continue
-
-                        recovered_reply = self._reply_from_last_success(
-                            action_id=last_action_id,
-                            structured_result=last_action_structured,
-                            raw_output=last_action_output,
-                            language=self._session_locale(session),
-                        ) if last_action_status == "success" else None
-                        if not recovered_reply and last_success_action_id:
-                            recovered_reply = self._reply_from_last_success(
-                                action_id=last_success_action_id,
-                                structured_result=last_success_structured,
-                                raw_output=last_success_output,
-                                language=self._session_locale(session),
-                            )
-                        final_response = recovered_reply or self.i18n.t("reply.no_plan_resolved", locale="en")
-                        if callbacks and 'send_status' in callbacks:
-                            callbacks['send_status'](
-                                'error',
-                                {
-                                    'code': 'no_plan',
-                                    'message': final_response,
-                                    'action': last_action_id or "",
-                                }
-                            )
-                        break
-    
-                    if isinstance(plan.metadata, dict) and plan.metadata.get("plan"):
-                        candidate = self._normalize_plan_tree(plan.metadata.get("plan"))
-                        if candidate:
-                            planner_tree = candidate
-                            session.context["planner_tree"] = planner_tree
-                            session.plan = self._flatten_plan_lines(planner_tree)
-                            session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
-    
-                    # Update state from plan metadata if available
-                    if plan.metadata and 'state_summary' in plan.metadata:
-                        session.state_summary.update(plan.metadata['state_summary'])
-    
-                    if planner_tree:
-                        active = next((s for s in planner_tree if s.get("status") == "in_progress"), None)
-                        if not active:
-                            pending = next((s for s in planner_tree if s.get("status") == "pending"), None)
-                            if pending:
-                                pending["status"] = "in_progress"
-                        session.plan = self._flatten_plan_lines(planner_tree)
-                        session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
-                    else:
-                        if not session.state_summary.get("cursor"):
-                            session.state_summary["cursor"] = f"{loops}/{max_steps} (loop: executing)"
-    
-                    # Always keep overwatch metadata updated, even when no explicit planner tree is returned.
-                    self._touch_work_context(
-                        work_id,
-                        {
-                            "planner": {
-                                "max_steps": max_steps,
-                                "replan_budget": replan_budget,
-                                "replans_used": replans_used,
-                                "steps": planner_tree or [],
-                            },
-                            "summary": {
-                                "status": "running",
-                                "cursor": session.state_summary.get("cursor"),
-                                "last_action": plan.action_id,
-                                "last_thought": plan.thought or "",
-                            },
-                            "data": {
-                                "actions_used": actions_used[-80:],
-                                "skills_used": skills_used[-40:],
-                                "media_used": media_used[-80:],
-                                "sources_used": sources_used[-120:],
-                                "queued_messages": queued_messages[-40:],
-                            },
-                        },
-                    )
-    
-                    # Normalize/repair action IDs to reduce "unknown action" loops.
-                    if plan.action_id not in ("reply", "error"):
-                        resolved_action = self.skill_registry.resolve_action_id(plan.action_id)
-                        if resolved_action and resolved_action != plan.action_id:
-                            logger.info(f"Resolved action alias: {plan.action_id} -> {resolved_action}")
-                            plan.action_id = resolved_action
-                        elif not self.skill_registry.get_skill_for_action(plan.action_id):
-                            parts = str(plan.action_id or "").strip().lower().split(".")
-                            legacy_removed = len(parts) >= 3 and parts[0] == "browser" and parts[1] in {"automator", "controller"}
-                            if legacy_removed:
-                                final_response = "Skill removed."
-                                logger.warning(
-                                    "Removed browser skill requested: %s | returning SKILL_REMOVED_USE_BROWSER_CONTROL",
-                                    plan.action_id,
-                                )
-                                session.add_message(
-                                    "system",
-                                    "ERROR_CODE: SKILL_REMOVED_USE_BROWSER_CONTROL",
-                                    msg_type="reasoning",
-                                )
-                                plan = ActionPlan(
-                                    action_id="error",
-                                    args={"error_code": "SKILL_REMOVED_USE_BROWSER_CONTROL"},
-                                    response_text=final_response,
-                                    source="internal",
-                                )
-                                continue
-                            suggestions = self.skill_registry.suggest_actions(plan.action_id, limit=3)
-                            suggestion_text = ", ".join(suggestions) if suggestions else "no suggestions"
-                            logger.warning(
-                                f"Unknown action from resolver: {plan.action_id} | suggestions: {suggestion_text}"
-                            )
-                            final_response = (
-                                self._t(
-                                    session,
-                                    "reply.unknown_action_template",
-                                    action_id=plan.action_id,
-                                    suggestions=suggestion_text,
-                                )
-                            )
-                            plan = ActionPlan(
-                                action_id="reply",
-                                args={},
-                                response_text=final_response,
-                                source="internal",
-                            )
-    
-                    logger.info(f"Action: {plan.action_id} | Confidence: {plan.confidence}")
-
-                    if plan.action_id not in {"reply", "error"}:
-                        actions_used.append(plan.action_id)
-                        namespace = ".".join(plan.action_id.split(".")[:2]) if "." in plan.action_id else plan.action_id
-                        if namespace not in skills_used:
-                            skills_used.append(namespace)
-
-
-                    # Short-circuit repeated semantic fallback loops:
-                    # if the planner proposes the exact same one-shot action right
-                    # after a successful execution, consolidate immediately instead
-                    # of re-running the tool.
-                    if (
-                        last_action_status == "success"
-                        and last_action_id == plan.action_id
-                        and plan.action_id in {
-                            "system.control.screenshot",
-                            "system.control.time",
-                        }
-                    ):
-                        last_ctx = session.context if isinstance(session.context, dict) else {}
-                        last_plan = last_ctx.get("last_action_plan") if isinstance(last_ctx.get("last_action_plan"), dict) else {}
-                        last_args = last_plan.get("args") if isinstance(last_plan.get("args"), dict) else {}
-                        curr_args = plan.args if isinstance(plan.args, dict) else {}
-                        same_args = (
-                            json.dumps(last_args, sort_keys=True) == json.dumps(curr_args, sort_keys=True)
-                            or not curr_args
-                        )
-                        if same_args:
-                            recovered_reply = self._reply_from_last_success(
-                                action_id=last_action_id,
-                                structured_result=last_action_structured,
-                                raw_output=last_action_output,
-                                language=self._session_locale(session),
-                            )
-                            if recovered_reply:
-                                final_response = recovered_reply
-                                final_structured_attachments = self._standardize_attachments(
-                                    session,
-                                    last_generated_attachment_paths,
-                                ) if last_generated_attachment_paths else None
-                                session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id)
-                                final_response_persisted = True
-                                session.scratchpad = ""
-                                session.plan = []
-                                if callbacks and 'send_response' in callbacks:
-                                    callbacks['send_response'](
-                                        final_response,
-                                        is_chunk=True,
-                                        attachments=final_structured_attachments,
-                                    )
-                                    final_response_streamed = True
-                                if callbacks and 'send_complete' in callbacks:
-                                    callbacks['send_complete']()
-                                    stream_completed = True
-                                break
-                    
-                    # Notify Reasoning Chunk
-                    ui_reasoning = self._build_proactive_reasoning_chunk(session, plan)
-                    if callbacks and 'send_reasoning_chunk' in callbacks:
-                        callbacks['send_reasoning_chunk'](ui_reasoning)
-                    
-                    # Emit global event for real-time synchronization
-                    global_event_bus.emit_threadsafe({
-                        "type": "reasoning_chunk",
-                        "session_id": session_id,
-                        "content": ui_reasoning,
-                        "timestamp": time.time()
-                    })
-    
-                    # --- Repetitiveness Detection (Enhanced) ---
-                    param_str = json.dumps(plan.args, sort_keys=True)
-                    current_signature = (plan.action_id, param_str)
-                    previous_actions.append(current_signature)
-                    if len(previous_actions) > 5: previous_actions.pop(0)
-                    if len(previous_actions) >= 3 and all(s == current_signature for s in previous_actions[-3:]):
-                        if replans_used < replan_budget:
-                            replans_used += 1
-                            previous_actions = []
-                            if callbacks and 'send_status' in callbacks:
-                                callbacks['send_status'](
-                                    'executing',
-                                    {
-                                        'code': 'replan',
-                                        'message': "Replanning due to repeated action with no progress.",
-                                        'action': plan.action_id
-                                    }
-                                )
-                            emit_user_progress(
-                                progress_note("replan", action_id=plan.action_id),
-                                event_key=f"replan:{plan.action_id}",
-                            )
-                            self._touch_work_context(
-                                work_id,
-                                {
-                                    "planner": {
-                                        "replans_used": replans_used,
-                                        "replan_budget": replan_budget,
-                                        "steps": planner_tree,
-                                    },
-                                    "summary": {"status": "replanning"},
-                                },
-                            )
-                            plan = None
-                            continue
-    
-                        logger.warning(f"Loop detected (3 identical actions/params): {current_signature}. Breaking.")
-                        recovered_reply = self._reply_from_last_success(
-                            action_id=plan.action_id,
-                            structured_result=last_action_structured,
-                            raw_output=last_action_output,
-                            language=self._session_locale(session),
-                        ) if last_action_status == "success" else None
-    
-                        if recovered_reply:
-                            if callbacks and 'send_status' in callbacks:
-                                loop_success_msg = (
-                                    f"Repeated action detected in {plan.action_id}; consolidating final response using the latest valid result."
-                                )
-                                callbacks['send_status'](
-                                    'executing',
-                                    {
-                                        'code': 'loop_break_success',
-                                        'message': loop_success_msg,
-                                        'action': plan.action_id
-                                    }
-                                )
-                            final_response = recovered_reply
+                            return self.i18n.t("reply.worker_session_missing", locale="en")
                         else:
-                            loop_break_msg = (
-                                "Exact repetition detected without progress. Please rephrase your request or provide more details."
-                            )
-                            if callbacks and 'send_status' in callbacks:
-                                callbacks['send_status'](
-                                    'error',
-                                    {
-                                        'code': 'loop_break',
-                                        'message': loop_break_msg,
-                                        'action': plan.action_id
-                                    }
-                                )
-                            final_response = loop_break_msg
-                        plan = ActionPlan(
-                            action_id='reply',
-                            args={},
-                            response_text=final_response,
-                            source='internal',
-                            attachments=(last_generated_attachment_paths or None),
-                        )
-                    
-                    # 2. Action Repetition (3 times in last 5 steps) - Soft Warning
-                    action_history = [s[0] for s in previous_actions]
-                    if action_history.count(plan.action_id) >= 3:
-                         logger.info(f"Loop tendency detected for action '{plan.action_id}'.")
-    
-                    # 3. Action Repetition (4 times in last 5 steps) - Hard Break
-                    if action_history.count(plan.action_id) >= 4:
-                         if replans_used < replan_budget:
-                             replans_used += 1
-                             previous_actions = []
-                             self._touch_work_context(
-                                 work_id,
-                                 {
-                                     "planner": {
-                                         "replans_used": replans_used,
-                                         "replan_budget": replan_budget,
-                                         "steps": planner_tree,
-                                     },
-                                     "summary": {"status": "replanning"},
-                                 },
-                             )
-                             emit_user_progress(
-                                 progress_note("replan", action_id=plan.action_id),
-                                 event_key=f"replan:{plan.action_id}:hard",
-                             )
-                             plan = None
-                             continue
-                         logger.warning(f"Action loop detected (Action '{plan.action_id}' repeated 4/5 times). Breaking.")
-                         recovered_reply = self._reply_from_last_success(
-                             action_id=plan.action_id,
-                             structured_result=last_action_structured,
-                             raw_output=last_action_output,
-                             language=self._session_locale(session),
-                         ) if last_action_status == "success" else None
-    
-                         if callbacks and 'send_status' in callbacks:
-                             callbacks['send_status'](
-                                 'error',
-                                 {
-                                     'code': 'loop_break',
-                                     'message': (
-                                         f"I seem to be stuck trying to use action '{plan.action_id}' repeatedly."
-                                         if recovered_reply else
-                                         f"I seem to be stuck trying to use action '{plan.action_id}' repeatedly without success. I will stop to avoid an infinite loop."
-                                     ),
-                                     'action': plan.action_id
-                                 }
-                             )
-    
-                         final_response = recovered_reply or f"I seem to be stuck trying to use action '{plan.action_id}' repeatedly without success. I will stop to avoid an infinite loop."
-                         # For a hard break, we force a valid reply object for internal history consistency
-                         plan = ActionPlan(
-                             action_id='reply',
-                             args={},
-                             response_text=final_response,
-                             source='internal',
-                             attachments=(last_generated_attachment_paths or None),
-                         )
-                         plan.thought = "Action loop detected. Stopping to avoid excessive token and time usage."
-                    
-                    # Add current turn to history for context.
-                    # Prefer TOON compact encoding to reduce prompt footprint.
-                    reasoning_mode = str(prompt_cfg.get("reasoning_history_mode", "toon")).strip().lower()
-                    history_data = {
-                        "thought": plan.thought,
-                        "plan": plan.metadata.get('plan', []),
-                        "action": plan.action_id,
-                        "params": plan.args
-                    }
-                    if reasoning_mode in {"legacy", "json"}:
-                        history_entry = json.dumps(history_data, ensure_ascii=False, separators=(",", ":"))
-                    else:
-                        history_entry = dumps_toon(
-                            encode_reasoning_step(
-                                thought=history_data.get("thought"),
-                                plan=history_data.get("plan"),
-                                action=history_data.get("action"),
-                                params=history_data.get("params"),
-                            )
-                        )
-                    session.add_message("assistant", history_entry, msg_type="reasoning", work_id=work_id)
-    
-                    if plan.action_id == 'reply':
-                        final_response = self._ground_reply_against_last_result(
-                            response_text=plan.response_text or "",
-                            last_action_status=last_action_status,
-                            last_action_id=last_action_id,
-                            last_action_reason=last_action_reason,
-                            last_action_output=last_action_output,
-                            language=self._session_locale(session),
-                        )
-                        final_response = self.apply_conversation_coaching(session, user_input, final_response)
-                        
-                        # Process attachments
-                        attachment_inputs = plan.attachments or last_generated_attachment_paths
-                        structured_attachments = self._standardize_attachments(session, attachment_inputs) if attachment_inputs else None
-    
-                        if not final_response and structured_attachments:
-                            final_response = "Here is the requested file."
-                        
-                        session.add_message("assistant", final_response, attachments=structured_attachments, work_id=work_id)
-                        final_structured_attachments = structured_attachments
-                        final_response_persisted = True
-                        session.scratchpad = ""
-                        session.plan = []
-                        if callbacks and 'send_response' in callbacks:
-                            callbacks['send_response'](final_response, is_chunk=True, attachments=structured_attachments)
-                            final_response_streamed = True
-                                
-                        if callbacks and 'send_complete' in callbacks:
-                            callbacks['send_complete']()
-                            stream_completed = True
-                        break
-    
-                    if plan.action_id == 'error':
-                        if callbacks and 'send_status' in callbacks:
-                            callbacks['send_status'](
-                                'error',
-                                {
-                                    'code': 'action_error',
-                                    'message': self._t(
-                                        session,
-                                        "reply.error_during_processing",
-                                        details=(plan.thought or "unknown"),
-                                    ),
-                                },
-                            )
-                            
-                        final_response = self._t(
-                            session,
-                            "reply.error_during_processing",
-                            details=(plan.thought or "unknown"),
-                        )
-                        session.add_message("assistant", final_response, work_id=work_id)
-                        final_response_persisted = True
-                        if callbacks and 'send_response' in callbacks:
-                            callbacks['send_response'](final_response, is_chunk=True)
-                            final_response_streamed = True
-                        
-                        if callbacks and 'send_complete' in callbacks:
-                            callbacks['send_complete']()
-                            stream_completed = True
-                        break
-                    
-                    # Do not persist/send non-final response_text for action plans.
-                    # Intermediate text belongs to status/reasoning, not final chat timeline.
-                    if plan.response_text and callbacks and 'send_status' in callbacks:
-                        callbacks['send_status'](
-                            'executing',
-                            {
-                                'code': 'ack',
-                                'message': str(plan.response_text)[:220],
-                                'action': plan.action_id
-                            }
-                        )
-    
-                    # HITL Check
-                    if self.safety_service.is_sensitive(plan.action_id, plan.args, self.skill_registry):
-                        kernel = getattr(self, "kernel", None)
-                        has_grant = bool(
-                            kernel and kernel.has_permission_grant(
-                                action_id=plan.action_id,
-                                args=plan.args if isinstance(plan.args, dict) else {},
-                                session_id=session_id,
-                                work_id=work_id,
-                            )
-                        )
-                        if has_grant:
-                            logger.info("Permission grant found; skipping HITL prompt for %s", plan.action_id)
-                        else:
-                            approval_msg = self.safety_service.get_approval_message(plan.action_id, plan.args)
-                            work_record = self._get_work_record(work_id)
-                            owner_session_id = work_record.owner_session_id if work_record else session_id
-                            worker_run = bool((user_data or {}).get("__worker_run"))
+                            interface = "web"
+                            if session_id.startswith("telegram"): interface = "telegram"
+                        elif session_id.startswith("voice"): interface = "voice"
+                        session = self.create_session(session_id, interface=interface)
 
-                            target_session = self.get_session_robust(owner_session_id)
-                            if not target_session:
-                                if worker_run:
-                                    final_response = self.i18n.t("reply.approval_target_missing", locale=self._session_locale(session))
-                                    logger.error(
-                                        "Worker cannot request approval because owner session '%s' does not exist.",
-                                        owner_session_id,
-                                    )
-                                    if callbacks and 'send_status' in callbacks:
-                                        callbacks['send_status'](
-                                            'error',
-                                            {
-                                                'code': 'approval_target_missing',
-                                                'message': final_response,
-                                                'action': plan.action_id,
-                                            },
-                                        )
-                                    plan = ActionPlan(
-                                        action_id='reply',
-                                        args={},
-                                        response_text=final_response,
-                                        source='internal',
-                                    )
-                                    continue
-                                interface = "web"
-                                if str(owner_session_id).startswith("telegram"):
-                                    interface = "telegram"
-                                elif str(owner_session_id).startswith("voice"):
-                                    interface = "voice"
-                                target_session = self.create_session(owner_session_id, interface=interface)
-
-                            target_session.pending_action = {
-                                "action": plan.action_id,
-                                "params": plan.args,
-                                "work_id": work_id,
-                                "requested_at": datetime.datetime.now().isoformat(),
-                            }
-                            target_session.add_message("assistant", approval_msg, work_id=work_id)
-                            self._save_session(target_session)
-
-                            self._touch_work_context(
-                                work_id,
-                                {
-                                    "summary": {
-                                        "status": "waiting_user",
-                                        "approval_prompt": approval_msg,
-                                        "approval_target_session_id": owner_session_id,
-                                        "approval_action_id": plan.action_id,
-                                        "approval_args": plan.args if isinstance(plan.args, dict) else {},
-                                    }
-                                },
-                            )
-
-                            scheduler = getattr(kernel, "scheduler", None) if kernel else None
-                            if scheduler and work_id:
-                                scheduler.update_work_status(work_id, WorkStatus.WAITING_USER)
-
-                            if callbacks and 'send_status' in callbacks:
-                                callbacks['send_status'](
-                                    'thinking',
-                                    {'code': 'waiting_user', 'message': approval_msg, 'action': plan.action_id}
-                                )
-
-                            if work_id and scheduler:
-                                decision = self._wait_for_work_decision(work_id, cancel_check)
-                                outcome = decision.get("decision")
-                                if outcome == "approve":
-                                    scope = str(decision.get("scope") or "worker").strip().lower()
-                                    if scope not in {"worker", "session", "global"}:
-                                        scope = "worker"
-                                    kernel.grant_permission(
-                                        scope=scope,
-                                        action_id=plan.action_id,
-                                        args=plan.args if isinstance(plan.args, dict) else {},
-                                        session_id=session_id,
-                                        work_id=work_id,
-                                        granted_by_session_id=owner_session_id,
-                                        granted_by_sender_id=(work_record.owner_sender_id if work_record else owner_session_id),
-                                    )
-                                    if work_id:
-                                        scheduler.update_work_status(work_id, WorkStatus.RUNNING)
-                                    target_session.pending_action = None
-                                    self._save_session(target_session)
-                                    note = (decision.get("note") or "").strip()
-                                    if note:
-                                        session.add_message("user", f"[Approval note]: {note}", work_id=work_id)
-                                    logger.info(
-                                        "Approval received for work %s; continuing sensitive action with scope=%s.",
-                                        work_id,
-                                        scope,
-                                    )
-                                elif outcome == "inject":
-                                    note = (decision.get("note") or "").strip()
-                                    if note:
-                                        session.add_message("user", note, work_id=work_id)
-                                    if work_id:
-                                        scheduler.update_work_status(work_id, WorkStatus.RUNNING)
-                                    continue
-                                else:
-                                    if work_id:
-                                        scheduler.update_work_status(work_id, WorkStatus.CANCELLED)
-                                    target_session.pending_action = None
-                                    self._save_session(target_session)
-                                    final_response = "Sensitive action was denied or timed out. I stopped this worker safely."
-                                    session.add_message("assistant", final_response, work_id=work_id)
-                                    final_response_persisted = True
-                                    if callbacks and 'send_response' in callbacks:
-                                        callbacks['send_response'](final_response, is_chunk=True)
-                                        final_response_streamed = True
-                                    if callbacks and 'send_complete' in callbacks:
-                                        callbacks['send_complete']()
-                                        stream_completed = True
-                                    break
-                            else:
-                                # No work channel available: keep classic in-session pending action.
-                                session.pending_action = {"action": plan.action_id, "params": plan.args}
-                                session.add_message("assistant", approval_msg, work_id=work_id)
-                                if callbacks and 'send_complete' in callbacks:
-                                    callbacks['send_complete']()
-                                    stream_completed = True
-                                return approval_msg
-    
-                    # Execute via SkillRegistry
-                    if callbacks and 'send_status' in callbacks:
-                        callbacks['send_status']('executing', {'action': plan.action_id, 'label': f"Executing {plan.action_id}..."})
-    
-                    # Emit global event for real-time synchronization
-                    global_event_bus.emit_threadsafe({
-                        "type": "status",
-                        "session_id": session_id,
-                        "phase": "executing",
-                        "message": f"Executing {plan.action_id}...",
-                        "payload": {'action': plan.action_id}
-                    })
-    
-                    exec_context = {
-                        "session": session,
-                        "callbacks": callbacks,
-                        "browser_driver": self.browser_driver,
-                        "web_automation_driver": self.browser_driver,
-                        "session_id": session_id,
-                        "work_id": work_id,
-                        "touch_work_context": self._touch_work_context,
-                        "user_input": user_input,
-                        "allowed_actions": self._get_allowed_actions_for_session(session),
-                        "skill_registry": self.skill_registry,
-                        "playback_service": getattr(self, "playback_service", None),
-                    }
-                    
-                    if context:
-                        allowed, reason = self.access_controller.pre_dispatch_gate(
-                            context,
-                            plan.action_id,
-                            plan.args,
-                            self.skill_registry,
-                            self.config_manager
-                        )
-                        if not allowed:
-                            result = f"NEGADO: {reason}"
-                        else:
-                            result = self.skill_registry.dispatch(plan.action_id, plan.args, exec_context)
-                    else:
-                        result = self.skill_registry.dispatch(plan.action_id, plan.args, exec_context)
-                    
-                    # Persistence: Attach playback metadata if returned by skill.
-                    # First try a user-visible assistant message for this work_id (e.g. work ack),
-                    # then fallback to the latest reasoning entry.
-                    if isinstance(result, dict) and result.get("playback"):
-                        playback_info = result.get("playback") if isinstance(result.get("playback"), dict) else {}
-                        playback_run_id = str(playback_info.get("run_id") or "").strip()
-                        if playback_run_id and work_id:
-                            try:
-                                # Keep this patch lightweight to avoid lock/contention during live runs.
-                                self._touch_work_context(
-                                    work_id,
-                                    {"data": {"last_playback_run_id": playback_run_id}},
-                                )
-                            except Exception as e:
-                                logger.debug(f"Could not persist playback run for work {work_id}: {e}")
-
-                        attached_visible = False
-                        for msg in reversed(session.history):
-                            if msg.get("role") != "assistant":
-                                continue
-                            if msg.get("work_id") != work_id:
-                                continue
-                            if msg.get("type") == "reasoning":
-                                continue
-                            if "playback" in msg:
-                                attached_visible = True
-                                break
-                            msg["playback"] = result["playback"]
-                            attached_visible = True
-                            logger.info(
-                                "Attached playback %s to visible assistant message %s",
-                                result["playback"].get("run_id"),
-                                msg.get("id"),
-                            )
-                            break
-
-                        if not attached_visible:
-                            for msg in reversed(session.history):
-                                if msg.get("role") == "assistant" and msg.get("type") == "reasoning":
-                                    # We only attach if it hasn't been attached yet to avoid double-processing
-                                    if "playback" not in msg:
-                                        msg["playback"] = result["playback"]
-                                        logger.info(f"Attached playback {result['playback']['run_id']} to reasoning message {msg.get('id')}")
-                                    break
-    
-                    # Observe
-                    # Truncate results in history to avoid bloating context
-                    raw_result = self._serialize_action_result(result)
-                    obs_limits = self._observation_limits()
-                    result_max_chars = obs_limits["max_chars"]
-                    if isinstance(result, (dict, list)):
-                        compact_result = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
-                    else:
-                        compact_result = raw_result
-                    truncated_result = (
-                        compact_result[:result_max_chars] + "..."
-                        if len(compact_result) > result_max_chars
-                        else compact_result
-                    )
-                    result_status, result_reason = self._assess_action_result(result, raw_result)
-                    structured_result = self._extract_structured_result(result, raw_result)
-                    last_action_status = result_status
-                    last_action_reason = result_reason
-                    last_action_id = plan.action_id
-                    last_action_output = truncated_result
-                    last_action_structured = structured_result
-                    last_generated_attachment_paths = self._extract_attachment_paths_from_result(structured_result)
-                    if last_generated_attachment_paths:
-                        standardized_runtime_attachments = self._standardize_attachments(
-                            session,
-                            last_generated_attachment_paths,
-                        )
-                        last_generated_attachment_paths = [
-                            str(item.get("path")).strip()
-                            for item in standardized_runtime_attachments
-                            if isinstance(item, dict) and str(item.get("path") or "").strip()
-                        ]
-                    extracted_sources = self._extract_sources_from_result(
-                        structured_result=structured_result,
-                        raw_result=raw_result,
-                        action_id=plan.action_id,
-                    )
-                    for media_path in last_generated_attachment_paths:
-                        if media_path not in media_used:
-                            media_used.append(media_path)
-                    for source in extracted_sources:
-                        source_url = str(source.get("url") or "").strip()
-                        if not source_url:
-                            continue
-                        if not any(str(existing.get("url") or "").strip() == source_url for existing in sources_used):
-                            sources_used.append(source)
-                    if plan.action_id not in {"reply", "error"}:
-                        session.context["last_action_plan"] = {
-                            "action_id": plan.action_id,
-                            "args": plan.args if isinstance(plan.args, dict) else {},
-                            "status": result_status,
-                            "reason": result_reason,
-                            "ts": time.time(),
-                        }
-
-                    if result_status == "failure":
-                        if (
-                            plan.action_id == "system.control.screenshot"
-                            and result_reason in {"SYSTEM_DRIVER_UNAVAILABLE", "SCREENSHOT_FAILED"}
-                        ):
-                            logger.warning(
-                                "Non-retriable screenshot failure detected (%s). Ending turn without retries.",
-                                result_reason,
-                            )
-                            is_pt = self._session_locale(session).startswith("pt")
-                            details = str(structured_result.get("message") or truncated_result or "").strip() if isinstance(structured_result, dict) else str(truncated_result or "").strip()
-                            if len(details) > 220:
-                                details = details[:220] + "..."
-                            if is_pt:
-                                final_response = (
-                                    "Não consegui capturar a tela neste ambiente porque o recurso de screenshot não está disponível. "
-                                    f"Detalhe técnico: {details or result_reason}."
-                                )
-                            else:
-                                final_response = (
-                                    "I could not capture the screen in this environment because screenshot tooling is unavailable. "
-                                    f"Technical detail: {details or result_reason}."
-                                )
-                            session.state_summary["last_error"] = result_reason
-                            session.add_message("assistant", final_response, work_id=work_id)
-                            final_response_persisted = True
-                            if callbacks and 'send_response' in callbacks:
-                                callbacks['send_response'](final_response, is_chunk=True)
-                                final_response_streamed = True
-                            if callbacks and 'send_complete' in callbacks:
-                                callbacks['send_complete']()
-                                stream_completed = True
-                            break
-
-                        failure_signature = (plan.action_id, param_str, self._signature_from_result(raw_result))
-                        if failure_signature == last_failure_signature:
-                            repeated_failure_count += 1
-                        else:
-                            repeated_failure_count = 1
-                            last_failure_signature = failure_signature
-                        if repeated_failure_count == 1:
-                            emit_user_progress(
-                                progress_note("failure_recovery", action_id=plan.action_id),
-                                event_key=f"failure_recovery:{plan.action_id}:{loops}",
-                            )
-                        session.state_summary["last_error"] = result_reason
-                        if planner_tree:
-                            current_step = next((s for s in planner_tree if s.get("status") == "in_progress"), None)
-                            if current_step:
-                                current_step["status"] = "blocked"
-                            session.plan = self._flatten_plan_lines(planner_tree)
-                            session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
-                    else:
-                        last_success_action_id = plan.action_id
-                        last_success_output = truncated_result
-                        last_success_structured = structured_result
-                        repeated_failure_count = 0
-                        last_failure_signature = None
-                        if planner_tree:
-                            current_step = next((s for s in planner_tree if s.get("status") == "in_progress"), None)
-                            if current_step:
-                                current_step["status"] = "done"
-                                next_pending = next((s for s in planner_tree if s.get("status") == "pending"), None)
-                                if next_pending:
-                                    next_pending["status"] = "in_progress"
-                            session.plan = self._flatten_plan_lines(planner_tree)
-                            session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
-                    
-                    summary = None
-                    # Logical Log Compression: If output > 2000 chars, summarize it
-                    # EXEMPT: Vision results and search results should never be summarized as they contain vital semantic/structural data
-                    exemptions = [
-                        "vision.",
-                        "browser.",
-                        "youtube.",
-                        "spotify.",
-                        "web.",
-                        "deezer.",
-                        "maps.",
-                        "wikipedia.",
-                        "system.control.skills.",
-                    ]
-                    is_exempt = any(plan.action_id.startswith(ext) for ext in exemptions)
-                    
-                    if len(raw_result) > obs_limits["summarize_threshold"] and not is_exempt:
-                        logger.info(f"Large output detected ({len(raw_result)} chars). Summarizing...")
-                        summary = self._clip_text(self.llm_manager.summarize_output(raw_result), 900)
-                        observation = (
-                            f"RESULT OF ACTION {plan.action_id} "
-                            f"[status={result_status}; reason={result_reason}] (Summarized): {summary}"
-                        )
-                    else:
-                        observation = (
-                            f"RESULT OF ACTION {plan.action_id} "
-                            f"[status={result_status}; reason={result_reason}]: {truncated_result}"
-                        )
-                    logger.info(
-                        "Observation Metrics | Session: %s | Action: %s | RawTok~%d | TruncTok~%d | Summarized: %s",
-                        session_id,
-                        plan.action_id,
-                        len(raw_result) // 4,
-                        len(truncated_result) // 4,
-                        "yes" if summary else "no",
-                    )
-                    self._capture_observation_metrics(
-                        session_id=session_id,
-                        action_id=plan.action_id,
-                        raw_result=raw_result,
-                        truncated_result=truncated_result,
-                        summarized=bool(summary),
-                    )
-                    
-                    session.add_message("system", observation, msg_type="reasoning", summary=summary, work_id=work_id)
-                    session.state_summary['last_outcome'] = summary if summary else truncated_result[:300]
-    
-                    # Persist reasoning/action episodes for future retrieval/debugging.
-                    try:
-                        self.episodic_memory.store_episode(
-                            user_input=user_input,
-                            thought=plan.thought or "",
-                            action=plan.action_id,
-                            observation=observation,
-                            status=result_status,
-                        )
-                    except Exception as e:
-                        logger.debug(f"Failed to store episodic memory: {e}")
-                    
-                    # Log the observation for diagnostic visibility (Professional CLI/assistant.log)
-                    logger.info(observation)
-                    self._touch_work_context(
-                        work_id,
-                        {
-                            "summary": {
-                                "status": "running",
-                                "last_action": plan.action_id,
-                                "last_result_status": result_status,
-                                "last_error": result_reason if result_status == "failure" else "",
-                                "cursor": session.state_summary.get("cursor"),
-                            },
-                            "planner": {
-                                "max_steps": max_steps,
-                                "replan_budget": replan_budget,
-                                "replans_used": replans_used,
-                                "steps": planner_tree,
-                            },
-                            "data": {
-                                "actions_used": actions_used[-80:],
-                                "skills_used": skills_used[-40:],
-                                "media_used": media_used[-80:],
-                                "sources_used": sources_used[-120:],
-                                "queued_messages": queued_messages[-40:],
-                            },
-                        },
-                    )
-
-                    # Deterministic completion for informational searches.
-                    # If we already have a successful search result, consolidate to user reply
-                    # instead of re-invoking the same action.
-                    if (
-                        result_status == "success"
-                        and not has_unfinished_planner_steps()
-                        and self._should_autocomplete_after_success_action(
+                        session.last_interaction = time.time()
+                        if user_data:
+                            session.context.update(user_data)
+                            session.context["user_language"] = self._detect_user_language(
                             user_input,
-                            plan.action_id,
-                            args=plan.args if isinstance(plan.args, dict) else {},
-                            structured_result=last_action_structured,
-                        )
-                    ):
-                        recovered_reply = self._reply_from_last_success(
-                            action_id=plan.action_id,
-                            structured_result=last_action_structured,
-                            raw_output=last_action_output,
-                            language=self._session_locale(session),
-                        )
-                        if recovered_reply:
-                            final_response = recovered_reply
-                            final_structured_attachments = self._standardize_attachments(
-                                session,
-                                last_generated_attachment_paths,
-                            ) if last_generated_attachment_paths else None
-                            session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id)
-                            final_response_persisted = True
-                            session.scratchpad = ""
-                            session.plan = []
-                            if callbacks and 'send_response' in callbacks:
-                                callbacks['send_response'](
-                                    final_response,
-                                    is_chunk=True,
-                                    attachments=final_structured_attachments,
-                                )
-                                final_response_streamed = True
-                            if callbacks and 'send_complete' in callbacks:
-                                callbacks['send_complete']()
-                                stream_completed = True
-                            break
-
-                    # Fast-path for vision outputs: avoid unnecessary re-reasoning loops.
-                    # Vision skills already return user-facing text in "text".
-                    if result_status == "success" and plan.action_id.startswith("vision."):
-                        recovered_reply = self._reply_from_last_success(
-                            action_id=plan.action_id,
-                            structured_result=last_action_structured,
-                            raw_output=last_action_output,
-                            language=self._session_locale(session),
-                        )
-                        if recovered_reply:
-                            final_response = recovered_reply
-                            final_structured_attachments = self._standardize_attachments(
-                                session,
-                                last_generated_attachment_paths,
-                            ) if last_generated_attachment_paths else None
-                            session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id)
-                            final_response_persisted = True
-                            session.scratchpad = ""
-                            session.plan = []
-                            if callbacks and 'send_response' in callbacks:
-                                callbacks['send_response'](
-                                    final_response,
-                                    is_chunk=True,
-                                    attachments=final_structured_attachments,
-                                )
-                                final_response_streamed = True
-                                if callbacks and 'send_complete' in callbacks:
-                                    callbacks['send_complete']()
-                                    stream_completed = True
-                                break
-    
-                    # Hard guard for repeated identical failures.
-                    if repeated_failure_count >= 2:
-                        logger.warning(
-                            f"Repeated failure detected for action '{plan.action_id}'. Breaking loop to avoid delirium."
-                        )
-                        final_response = self.i18n.t(
-                            "reply.loop_stuck",
-                            locale=self._session_locale(session),
-                            action_id=plan.action_id,
-                        )
-                        self._touch_work_context(
-                            work_id,
-                            {
-                                "summary": {
-                                    "status": "blocked",
-                                    "last_error": result_reason,
-                                    "cursor": session.state_summary.get("cursor"),
-                                },
-                                "planner": {"steps": planner_tree},
-                            },
-                        )
-                        session.add_message("assistant", final_response, work_id=work_id)
-                        final_response_persisted = True
-                        if callbacks and 'send_response' in callbacks:
-                            callbacks['send_response'](final_response, is_chunk=True)
-                            final_response_streamed = True
-                        if callbacks and 'send_complete' in callbacks:
-                            callbacks['send_complete']()
-                            stream_completed = True
-                        break
+                            fallback=str(session.context.get("user_language") or "en"),
+                            )
+                            if context:
+                                session.context["principal_context"] = context.model_dump()
                     
-                    # Reset plan for next iteration to allow re-reasoning
-                    plan = None
+                                # Trigger auto-naming for web sessions on first user messages
+                                if session.source == "web" and not session.name_generated and len(session.history) <= 3:
+                                    threading.Thread(target=self._auto_name_session, args=(session, user_input), daemon=True).start()
                 
-                # Exit block for 'while'
-                if final_response is None:
-                    logger.warning("Reasoning loop ended without a final response.")
-                    final_response = self.i18n.t("reply.no_plan_resolved", locale="en")
-                    if callbacks and 'send_response' in callbacks:
-                        callbacks['send_response'](final_response, is_chunk=True)
-                        final_response_streamed = True
-    
-            except Exception as e:
-                logger.error(f"Error in reasoning loop: {e}")
-                
-                if callbacks and 'send_status' in callbacks:
-                    callbacks['send_status'](
-                        'error',
-                        {
-                            'code': 'system_error',
-                            'message': self._t(session, "reply.technical_issue", details=str(e)),
-                        },
-                    )
-                    
-                final_response = self._t(session, "reply.technical_issue", details=str(e))
-                self._touch_work_context(
-                    work_id,
-                    {
-                        "summary": {
-                            "status": "failed",
-                            "last_error": str(e),
-                            "cursor": session.state_summary.get("cursor"),
-                        },
-                        "planner": {"steps": planner_tree, "max_steps": max_steps},
-                    },
-                )
-    
-            # Guarantee final response lifecycle (persist -> stream -> complete) in all loop exit paths.
-            if final_response and not final_response_persisted and not session.pending_action:
-                session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id)
-                final_response_persisted = True
-    
-            if callbacks and 'send_response' in callbacks and final_response and not final_response_streamed and not session.pending_action:
-                callbacks['send_response'](final_response, is_chunk=True, attachments=final_structured_attachments)
-                final_response_streamed = True
-    
-            if callbacks and 'send_complete' in callbacks and not stream_completed and not session.pending_action:
-                callbacks['send_complete']()
-                stream_completed = True
-    
-            # Persist final assistant output before optional history pruning/consolidation.
-            # This guarantees reload consistency even if session context is compressed.
-            if final_response_persisted:
-                self._save_session(session)
-    
-            # 5. Check for Memory Consolidation (Token-based)
-            # Threshold is configurable and intentionally lower to trigger earlier compaction.
-            self._append_toon_delta(
-                session=session,
-                user_input=user_input,
-                last_action_id=last_action_id,
-                last_action_status=last_action_status,
-                last_action_reason=last_action_reason,
-                final_response=final_response,
-            )
+                                    plan = initial_plan
 
-            total_tokens = sum(m.get("tokens", 0) for m in session.history)
-            if total_tokens > self._memory_consolidation_threshold():
-                self._consolidate_memory(session)
+                                    # HITL pending action resumption
+                                    if session.pending_action:
+                                        pending = session.pending_action if isinstance(session.pending_action, dict) else {}
+                                        pending_work_id = str(pending.get("work_id") or "").strip()
+                                        normalized = (user_input or "").strip().lower()
+                                        is_yes = normalized in {"yes", "y", "ok", "approve", "autorizo", "sim", "s", "pode", "confirm"}
+                                        is_no = normalized in {"no", "n", "deny", "deny.", "cancel", "cancelar", "nao", "não", "recusar"}
+
+                                        if pending_work_id:
+                                            kernel = getattr(self, "kernel", None)
+                                            scheduler = getattr(kernel, "scheduler", None)
+                                            if scheduler and (is_yes or is_no):
+                                                scheduler.push_work_command(
+                                                pending_work_id,
+                                                "approve" if is_yes else "deny",
+                                                payload={"note": user_input},
+                                                source_session_id=session_id,
+                                                )
+                                                session.pending_action = None
+                                                session.add_message("user", user_input, work_id=work_id)
+                                                self._save_session(session)
+                                                return self._t(session, "reply.decision_forwarded")
+                                                if scheduler:
+                                                    return self._t(session, "reply.waiting_approval_yes_no")
+
+                                                    if is_yes:
+                                                        resumed_action_id = str(pending.get("action") or "").strip()
+                                                        resumed_params = pending.get("params") if isinstance(pending.get("params"), dict) else {}
+                                                        if resumed_action_id:
+                                                            logger.info(f"User authorized pending action: {resumed_action_id}")
+                                                            session.pending_action = None
+                                                            session.add_message("user", user_input, work_id=work_id)
+                                                            plan = ActionPlan(
+                                                            action_id=resumed_action_id,
+                                                            args=resumed_params,
+                                                            confidence=1.0,
+                                                            source="internal",
+                                                            thought=f"User approved pending sensitive action '{resumed_action_id}'.",
+                                                            )
+                                                        elif is_no:
+                                                            session.pending_action = None
+                                                            session.add_message("user", user_input, work_id=work_id)
+                                                            return self._t(session, "reply.canceled_sensitive_action")
+
+                                                            planner_cfg = self._get_planner_config()
+                                                            prompt_cfg = self.config_manager.get("prompt_context", {}) if hasattr(self, "config_manager") else {}
+                                                            max_steps = self._compute_dynamic_max_steps(user_input, plan)
+                                                            replan_budget = max(1, min(2, planner_cfg.get("replan_budget", 2)))
+                                                            replans_used = 0
+        
+                                                            # 1. Start dynamic reasoning loop (supports long tasks with replanning).
+                                                            # User message persistence is now handled by Kernel.process_input
+                                                            # to cover all paths (Quick and Worker).
+                
+                                                            loops = 0
+                                                            previous_actions = []
+                                                            repeated_failure_count = 0
+                                                            last_failure_signature = None
+                                                            last_action_status = None
+                                                            last_action_reason = None
+                                                            last_action_id = None
+                                                            last_action_output = None
+                                                            last_action_structured: Optional[Dict[str, Any]] = None
+                                                            last_success_action_id = None
+                                                            last_success_output = None
+                                                            last_success_structured: Optional[Dict[str, Any]] = None
+                                                            last_generated_attachment_paths: List[str] = []
+                                                            browser_open_recovery_attempts = 0
+                                                            browser_control_recovery_attempts = 0
+                                                            no_plan_global_retry_attempts = 0
+                                                            final_response = self._t(session, "reply.step_budget_exceeded")
+                                                            final_structured_attachments = None
+                                                            final_response_persisted = False
+                                                            final_response_streamed = False
+                                                            stream_completed = False
+                                                            paused = False
+                                                            actions_used: List[str] = []
+                                                            skills_used: List[str] = []
+                                                            media_used: List[str] = []
+                                                            sources_used: List[Dict[str, Any]] = []
+                                                            queued_messages: List[str] = []
+                                                            feedback_cfg = self.config_manager.get("work_feedback", {}) if hasattr(self, "config_manager") else {}
+                                                            progress_feedback_enabled = bool(feedback_cfg.get("progress_updates_enabled", False))
+                                                            emitted_progress_events: set[str] = set()
+        
+                                                            def current_step_title() -> str:
+                                                                if not planner_tree:
+                                                                    return "current step"
+                                                                    current = next((s for s in planner_tree if s.get("status") == "in_progress"), None)
+                                                                    title = str((current or {}).get("title") or "").strip()
+                                                                    if title:
+                                                                        return title
+                                                                        return "current step"
+
+                                                                        def has_unfinished_planner_steps() -> bool:
+                                                                            return self._planner_has_unfinished(planner_tree)
+        
+                                                                            def progress_note(event: str, action_id: Optional[str] = None) -> str:
+                                                                                step = current_step_title()
+                                                                                if event == "replan":
+                                                                                    return f"Detected repetition in step '{step}'. Adjusting strategy with an alternate path."
+                                                                                    if event == "failure_recovery":
+                                                                                        return f"I found an issue in step '{step}' and applied a fix."
+                                                                                        if event == "fallback":
+                                                                                            label = action_id or "fallback action"
+                                                                                            return f"Fallback triggered at step '{step}' via '{label}'."
+                                                                                            return ""
+        
+                                                                                            def emit_user_progress(note: str, event_key: Optional[str] = None):
+                                                                                                if not progress_feedback_enabled:
+                                                                                                    return
+                                                                                                    if session.pending_action:
+                                                                                                        return
+                                                                                                        if event_key:
+                                                                                                            if event_key in emitted_progress_events:
+                                                                                                                return
+                                                                                                                emitted_progress_events.add(event_key)
+                                                                                                                text = str(note or "").strip()
+                                                                                                                if not text:
+                                                                                                                    return
+                                                                                                                    if callbacks and "send_status" in callbacks:
+                                                                                                                        callbacks["send_status"]("thinking", {"message": text, "kind": "progress"})
+        
+                                                                                                                        planner_tree = self._normalize_plan_tree(plan.metadata.get("plan")) if (plan and isinstance(plan.metadata, dict)) else []
+                                                                                                                        if planner_tree:
+                                                                                                                            with lock:
+                                                                                                                                session.context["planner_tree"] = planner_tree
+                                                                                                                                session.plan = self._flatten_plan_lines(planner_tree)
+                                                                                                                                session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
+        
+                                                                                                                                self._touch_work_context(
+                                                                                                                                work_id,
+                                                                                                                                {
+                                                                                                                                "summary": {
+                                                                                                                                "goal": session.state_summary.get("goal") or "Task execution",
+                                                                                                                                "status": "running",
+                                                                                                                                "cursor": session.state_summary.get("cursor"),
+                                                                                                                                },
+                                                                                                                                "planner": {
+                                                                                                                                "max_steps": max_steps,
+                                                                                                                                "replan_budget": replan_budget,
+                                                                                                                                "replans_used": replans_used,
+                                                                                                                                "steps": session.context.get("planner_tree", []),
+                                                                                                                                },
+                                                                                                                                "data": {
+                                                                                                                                "actions_used": [],
+                                                                                                                                "skills_used": [],
+                                                                                                                                "media_used": [],
+                                                                                                                                "sources_used": [],
+                                                                                                                                "queued_messages": [],
+                                                                                                                                },
+                                                                                                                                },
+                                                                                                                                )
+        
+                                                                                                                                # 2. Start dynamic reasoning loop (supports long tasks with replanning).
+                                                                                                                                # LLM calls (resolution) happen OUTSIDE the session lock.
+                                                                                                                                while loops < max_steps:
+                                                                                                                                    if cancel_check and cancel_check():
+                                                                                                                                        logger.info(f"Process cancelled for session {session_id}")
+                                                                                                                                        self._touch_work_context(work_id, {"summary": {"status": "cancelled"}})
+                                                                                                                                        return "Task canceled by user."
+                                                                                                                                        if work_id:
+                                                                                                                                            kernel = getattr(self, "kernel", None)
+                                                                                                                                            scheduler = getattr(kernel, "scheduler", None) if kernel else None
+                                                                                                                                            if scheduler:
+                                                                                                                                                pending_commands = scheduler.pop_work_commands(work_id)
+                                                                                                                                                for cmd in pending_commands:
+                                                                                                                                                    name = str(cmd.get("command") or "").strip().lower()
+                                                                                                                                                    payload = cmd.get("payload") if isinstance(cmd.get("payload"), dict) else {}
+                                                                                                                                                    if name == "cancel":
+                                                                                                                                                        logger.info(f"Received cancel command for work {work_id}")
+                                                                                                                                                        self._touch_work_context(work_id, {"summary": {"status": "cancelled"}})
+                                                                                                                                                        return "Task canceled by external command."
+                                                                                                                                                        if name == "pause":
+                                                                                                                                                            paused = True
+                                                                                                                                                            scheduler.update_work_status(work_id, WorkStatus.PAUSED)
+                                                                                                                                                            self._touch_work_context(work_id, {"summary": {"status": "paused"}})
+                                                                                                                                                            if name == "resume":
+                                                                                                                                                                paused = False
+                                                                                                                                                                scheduler.update_work_status(work_id, WorkStatus.RUNNING)
+                                                                                                                                                                self._touch_work_context(work_id, {"summary": {"status": "running"}})
+                                                                                                                                                                if name == "inject_message":
+                                                                                                                                                                    note = str(payload.get("message") or "").strip()
+                                                                                                                                                                    if note:
+                                                                                                                                                                        queued_messages.append(note)
+                                                                                                                                                                        session.add_message("user", f"[Injected message] {note}", work_id=work_id)
+                                                                                                                                                                        plan = None
+                                                                                                                                                                        if name == "update_context":
+                                                                                                                                                                            patch = payload.get("patch")
+                                                                                                                                                                            if isinstance(patch, dict):
+                                                                                                                                                                                with lock:
+                                                                                                                                                                                    session.context.update(patch)
+                                                                                                                                                                                    self._touch_work_context(work_id, {"data": {"last_context_patch": patch}})
+                                                                                                                                                                                    if paused:
+                                                                                                                                                                                        if callbacks and 'send_status' in callbacks:
+                                                                                                                                                                                            callbacks['send_status']('thinking', {'code': 'paused', 'message': 'Work is paused. Waiting for resume command.'})
+                                                                                                                                                                                            time.sleep(0.8)
+                                                                                                                                                                                            continue
+                                                                                                                                                                                            loops += 1
+                                                                                                                                                                                            log_extra["step_id"] = loops
+                                                                                                                                                                                            logger.info(f"--- Session {session_id} | Loop {loops}/{max_steps} ---")
+                
+                                                                                                                                                                                            if on_partial_response and loops % 3 == 0: 
+                                                                                                                                                                                            on_partial_response(f"Refining reasoning (Step {loops}/{max_steps})...")
+                                                                                                                                                                                            if not plan:
+                                                                                                                                                                                                thinking_label = self.i18n.t("status.thinking_next_action", locale=self._session_locale(session))
+                                                                                                                                                                                                if callbacks and 'send_status' in callbacks:
+                                                                                                                                                                                                    callbacks['send_status']('thinking', {'step': loops, 'max_steps': max_steps, 'label': thinking_label})
+                    
+                                                                                                                                                                                                    # Emit global event for real-time synchronization
+                                                                                                                                                                                                    global_event_bus.emit_threadsafe({
+                                                                                                                                                                                                    "type": "status",
+                                                                                                                                                                                                    "session_id": session_id,
+                                                                                                                                                                                                    "phase": "thinking",
+                                                                                                                                                                                                    "message": thinking_label,
+                                                                                                                                                                                                    "payload": {'step': loops, 'max_steps': max_steps}
+                                                                                                                                                                                                    })
+                                                                                                                                                                                                    # Apply dynamic context limits for history retrieval
+                                                                                                                                                                                                    active_config = self.llm_manager.get_active_config()
+                                                                                                                                                                                                    max_context = int(active_config.get("max_context", 8000))
+                                                                                                                                                                                                    # For reasoning loops, we reserve more space for reasoning/output (50%)
+                                                                                                                                                                                                    reasoning_history_budget = int(max_context * 0.5)
+                                                                                                                                                                                                    with lock:
+                                                                                                                                                                                                        reasoning_context = {
+                                                                                                                                                                                                        "session": session,
+                                                                                                                                                                                                        "system_prompt": self._construct_system_prompt(session, user_input=user_input),
+                                                                                                                                                                                                        "attachments": attachments if loops == 1 else None, # Only send attachments on first reasoning step
+                                                                                                                                                                                                        "history": session.get_context_for_llm(limit_msgs=20, limit_tokens=reasoning_history_budget),
+                                                                                                                                                                                                        "allowed_actions": self._get_allowed_actions_for_session(session),
+                                                                                                                                                                                                        "skill_registry": self.skill_registry,
+                                                                                                                                                                                                        }
+                    
+                                                                                                                                                                                                        # LLM CALL - NO LOCK HELD
+                                                                                                                                                                                                        plan = self.intent_resolver_chain.resolve(user_input, reasoning_context)
+                                                                                                                                                                                                        if not plan:
+                                                                                                                                                                                                            logger.warning("No plan resolved. Breaking loop.")
+                                                                                                                                                                                                            if has_unfinished_planner_steps() and no_plan_global_retry_attempts < 1:
+                                                                                                                                                                                                                no_plan_global_retry_attempts += 1
+                                                                                                                                                                                                                logger.warning(
+                                                                                                                                                                                                                "No-plan with unfinished global steps. Retrying planning once before concluding."
+                                                                                                                                                                                                                )
+                                                                                                                                                                                                                continue
+                                                                                                                                                                                                                recovered_reply = self._reply_from_last_success(
+                                                                                                                                                                                                                action_id=last_action_id,
+                                                                                                                                                                                                                structured_result=last_action_structured,
+                                                                                                                                                                                                                raw_output=last_action_output,
+                                                                                                                                                                                                                language=self._session_locale(session),
+                                                                                                                                                                                                                ) if last_action_status == "success" else None
+                                                                                                                                                                                                                if not recovered_reply and last_success_action_id:
+                                                                                                                                                                                                                    recovered_reply = self._reply_from_last_success(
+                                                                                                                                                                                                                    action_id=last_success_action_id,
+                                                                                                                                                                                                                    structured_result=last_success_structured,
+                                                                                                                                                                                                                    raw_output=last_success_output,
+                                                                                                                                                                                                                    language=self._session_locale(session),
+                                                                                                                                                                                                                    )
+                                                                                                                                                                                                                    final_response = recovered_reply or self.i18n.t("reply.no_plan_resolved", locale="en")
+                                                                                                                                                                                                                    if callbacks and 'send_status' in callbacks:
+                                                                                                                                                                                                                        callbacks['send_status'](
+                                                                                                                                                                                                                        'error',
+                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                        'code': 'no_plan',
+                                                                                                                                                                                                                        'message': final_response,
+                                                                                                                                                                                                                        'action': last_action_id or "",
+                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                        )
+                                                                                                                                                                                                                        break
+                                                                                                                                                                                                                        if isinstance(plan.metadata, dict) and plan.metadata.get("plan"):
+                                                                                                                                                                                                                            candidate = self._normalize_plan_tree(plan.metadata.get("plan"))
+                                                                                                                                                                                                                            if candidate:
+                                                                                                                                                                                                                                with lock:
+                                                                                                                                                                                                                                    planner_tree = candidate
+                                                                                                                                                                                                                                    session.context["planner_tree"] = planner_tree
+                                                                                                                                                                                                                                    session.plan = self._flatten_plan_lines(planner_tree)
+                                                                                                                                                                                                                                    session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
+                                                                                                                                                                                                                                    # Update state from plan metadata if available
+                                                                                                                                                                                                                                    if plan.metadata and 'state_summary' in plan.metadata:
+                                                                                                                                                                                                                                        with lock:
+                                                                                                                                                                                                                                            session.state_summary.update(plan.metadata['state_summary'])
+                                                                                                                                                                                                                                            if planner_tree:
+                                                                                                                                                                                                                                                with lock:
+                                                                                                                                                                                                                                                    active = next((s for s in planner_tree if s.get("status") == "in_progress"), None)
+                                                                                                                                                                                                                                                    if not active:
+                                                                                                                                                                                                                                                        pending = next((s for s in planner_tree if s.get("status") == "pending"), None)
+                                                                                                                                                                                                                                                        if pending:
+                                                                                                                                                                                                                                                            pending["status"] = "in_progress"
+                                                                                                                                                                                                                                                            session.plan = self._flatten_plan_lines(planner_tree)
+                                                                                                                                                                                                                                                            session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
+                                                                                                                                                                                                                                                        else:
+                                                                                                                                                                                                                                                            if not session.state_summary.get("cursor"):
+                                                                                                                                                                                                                                                                with lock:
+                                                                                                                                                                                                                                                                    session.state_summary["cursor"] = f"{loops}/{max_steps} (loop: executing)"
+                                                                                                                                                                                                                                                                    # Always keep overwatch metadata updated, even when no explicit planner tree is returned.
+                                                                                                                                                                                                                                                                    self._touch_work_context(
+                                                                                                                                                                                                                                                                    work_id,
+                                                                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                                                                    "planner": {
+                                                                                                                                                                                                                                                                    "max_steps": max_steps,
+                                                                                                                                                                                                                                                                    "replan_budget": replan_budget,
+                                                                                                                                                                                                                                                                    "replans_used": replans_used,
+                                                                                                                                                                                                                                                                    "steps": planner_tree or [],
+                                                                                                                                                                                                                                                                    },
+                                                                                                                                                                                                                                                                    "summary": {
+                                                                                                                                                                                                                                                                    "status": "running",
+                                                                                                                                                                                                                                                                    "cursor": session.state_summary.get("cursor"),
+                                                                                                                                                                                                                                                                    "last_action": plan.action_id,
+                                                                                                                                                                                                                                                                    "last_thought": plan.thought or "",
+                                                                                                                                                                                                                                                                    },
+                                                                                                                                                                                                                                                                    "data": {
+                                                                                                                                                                                                                                                                    "actions_used": actions_used[-80:],
+                                                                                                                                                                                                                                                                    "skills_used": skills_used[-40:],
+                                                                                                                                                                                                                                                                    "media_used": media_used[-80:],
+                                                                                                                                                                                                                                                                    "sources_used": sources_used[-120:],
+                                                                                                                                                                                                                                                                    "queued_messages": queued_messages[-40:],
+                                                                                                                                                                                                                                                                    },
+                                                                                                                                                                                                                                                                    },
+                                                                                                                                                                                                                                                                    )
+                                                                                                                                                                                                                                                                    # Normalize/repair action IDs to reduce "unknown action" loops.
+                                                                                                                                                                                                                                                                    if plan.action_id not in ("reply", "error"):
+                                                                                                                                                                                                                                                                        resolved_action = self.skill_registry.resolve_action_id(plan.action_id)
+                                                                                                                                                                                                                                                                        if resolved_action and resolved_action != plan.action_id:
+                                                                                                                                                                                                                                                                            logger.info(f"Resolved action alias: {plan.action_id} -> {resolved_action}")
+                                                                                                                                                                                                                                                                            plan.action_id = resolved_action
+                                                                                                                                                                                                                                                                        elif not self.skill_registry.get_skill_for_action(plan.action_id):
+                                                                                                                                                                                                                                                                            parts = str(plan.action_id or "").strip().lower().split(".")
+                                                                                                                                                                                                                                                                            legacy_removed = len(parts) >= 3 and parts[0] == "browser" and parts[1] in {"automator", "controller"}
+                                                                                                                                                                                                                                                                            if legacy_removed:
+                                                                                                                                                                                                                                                                                final_response = "Skill removed."
+                                                                                                                                                                                                                                                                                logger.warning(
+                                                                                                                                                                                                                                                                                "Removed browser skill requested: %s | returning SKILL_REMOVED_USE_BROWSER_CONTROL",
+                                                                                                                                                                                                                                                                                plan.action_id,
+                                                                                                                                                                                                                                                                                )
+                                                                                                                                                                                                                                                                                session.add_message(
+                                                                                                                                                                                                                                                                                "system",
+                                                                                                                                                                                                                                                                                "ERROR_CODE: SKILL_REMOVED_USE_BROWSER_CONTROL",
+                                                                                                                                                                                                                                                                                msg_type="reasoning",
+                                                                                                                                                                                                                                                                                )
+                                                                                                                                                                                                                                                                                plan = ActionPlan(
+                                                                                                                                                                                                                                                                                action_id="error",
+                                                                                                                                                                                                                                                                                args={"error_code": "SKILL_REMOVED_USE_BROWSER_CONTROL"},
+                                                                                                                                                                                                                                                                                response_text=final_response,
+                                                                                                                                                                                                                                                                                source="internal",
+                                                                                                                                                                                                                                                                                )
+                                                                                                                                                                                                                                                                                continue
+                                                                                                                                                                                                                                                                                suggestions = self.skill_registry.suggest_actions(plan.action_id, limit=3)
+                                                                                                                                                                                                                                                                                suggestion_text = ", ".join(suggestions) if suggestions else "no suggestions"
+                                                                                                                                                                                                                                                                                logger.warning(
+                                                                                                                                                                                                                                                                                f"Unknown action from resolver: {plan.action_id} | suggestions: {suggestion_text}"
+                                                                                                                                                                                                                                                                                )
+                                                                                                                                                                                                                                                                                final_response = (
+                                                                                                                                                                                                                                                                                self._t(
+                                                                                                                                                                                                                                                                                session,
+                                                                                                                                                                                                                                                                                "reply.unknown_action_template",
+                                                                                                                                                                                                                                                                                action_id=plan.action_id,
+                                                                                                                                                                                                                                                                                suggestions=suggestion_text,
+                                                                                                                                                                                                                                                                                )
+                                                                                                                                                                                                                                                                                )
+                                                                                                                                                                                                                                                                                plan = ActionPlan(
+                                                                                                                                                                                                                                                                                action_id="reply",
+                                                                                                                                                                                                                                                                                args={},
+                                                                                                                                                                                                                                                                                response_text=final_response,
+                                                                                                                                                                                                                                                                                source="internal",
+                                                                                                                                                                                                                                                                                )
+                                                                                                                                                                                                                                                                                plan = self._apply_media_decision_policy(
+                                                                                                                                                                                                                                                                                session=session,
+                                                                                                                                                                                                                                                                                user_input=user_input,
+                                                                                                                                                                                                                                                                                plan=plan,
+                                                                                                                                                                                                                                                                                last_action_id=last_action_id,
+                                                                                                                                                                                                                                                                                last_action_structured=last_action_structured,
+                                                                                                                                                                                                                                                                                )
+                                                                                                                                                                                                                                                                                logger.info(f"Action: {plan.action_id} | Confidence: {plan.confidence}")
+                                                                                                                                                                                                                                                                                if plan.action_id not in {"reply", "error"}:
+                                                                                                                                                                                                                                                                                    actions_used.append(plan.action_id)
+                                                                                                                                                                                                                                                                                    namespace = ".".join(plan.action_id.split(".")[:2]) if "." in plan.action_id else plan.action_id
+                                                                                                                                                                                                                                                                                    if namespace not in skills_used:
+                                                                                                                                                                                                                                                                                        skills_used.append(namespace)
+                                                                                                                                                                                                                                                                                        # Short-circuit repeated semantic fallback loops:
+                                                                                                                                                                                                                                                                                            # if the planner proposes the exact same one-shot action right
+                                                                                                                                                                                                                                                                                            # after a successful execution, consolidate immediately instead
+                                                                                                                                                                                                                                                                                            # of re-running the tool.
+                                                                                                                                                                                                                                                                                            if (
+                                                                                                                                                                                                                                                                                            last_action_status == "success"
+                                                                                                                                                                                                                                                                                            and last_action_id == plan.action_id
+                                                                                                                                                                                                                                                                                            and plan.action_id in {
+                                                                                                                                                                                                                                                                                            "system.control.screenshot",
+                                                                                                                                                                                                                                                                                            "system.control.time",
+                                                                                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                                                                                            ):
+                                                                                                                                                                                                                                                                                                last_ctx = session.context if isinstance(session.context, dict) else {}
+                                                                                                                                                                                                                                                                                                last_plan = last_ctx.get("last_action_plan") if isinstance(last_ctx.get("last_action_plan"), dict) else {}
+                                                                                                                                                                                                                                                                                                last_args = last_plan.get("args") if isinstance(last_plan.get("args"), dict) else {}
+                                                                                                                                                                                                                                                                                                curr_args = plan.args if isinstance(plan.args, dict) else {}
+                                                                                                                                                                                                                                                                                                same_args = (
+                                                                                                                                                                                                                                                                                                json.dumps(last_args, sort_keys=True) == json.dumps(curr_args, sort_keys=True)
+                                                                                                                                                                                                                                                                                                or not curr_args
+                                                                                                                                                                                                                                                                                                )
+                                                                                                                                                                                                                                                                                                if same_args:
+                                                                                                                                                                                                                                                                                                    recovered_reply = self._reply_from_last_success(
+                                                                                                                                                                                                                                                                                                    action_id=last_action_id,
+                                                                                                                                                                                                                                                                                                    structured_result=last_action_structured,
+                                                                                                                                                                                                                                                                                                    raw_output=last_action_output,
+                                                                                                                                                                                                                                                                                                    language=self._session_locale(session),
+                                                                                                                                                                                                                                                                                                    )
+                                                                                                                                                                                                                                                                                                    if recovered_reply:
+                                                                                                                                                                                                                                                                                                        final_response = recovered_reply
+                                                                                                                                                                                                                                                                                                        final_structured_attachments = self._standardize_attachments(
+                                                                                                                                                                                                                                                                                                        session,
+                                                                                                                                                                                                                                                                                                        last_generated_attachment_paths,
+                                                                                                                                                                                                                                                                                                        ) if last_generated_attachment_paths else None
+                                                                                                                                                                                                                                                                                                        session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id)
+                                                                                                                                                                                                                                                                                                        final_response_persisted = True
+                                                                                                                                                                                                                                                                                                        with lock:
+                                                                                                                                                                                                                                                                                                            session.scratchpad = ""
+                                                                                                                                                                                                                                                                                                            session.plan = []
+                                                                                                                                                                                                                                                                                                            if callbacks and 'send_response' in callbacks:
+                                                                                                                                                                                                                                                                                                                callbacks['send_response'](
+                                                                                                                                                                                                                                                                                                                final_response,
+                                                                                                                                                                                                                                                                                                                is_chunk=True,
+                                                                                                                                                                                                                                                                                                                attachments=final_structured_attachments,
+                                                                                                                                                                                                                                                                                                                )
+                                                                                                                                                                                                                                                                                                                final_response_streamed = True
+                                                                                                                                                                                                                                                                                                                if callbacks and 'send_complete' in callbacks:
+                                                                                                                                                                                                                                                                                                                    callbacks['send_complete']()
+                                                                                                                                                                                                                                                                                                                    stream_completed = True
+                                                                                                                                                                                                                                                                                                                    break
+                
+                                                                                                                                                                                                                                                                                                                    # Notify Reasoning Chunk
+                                                                                                                                                                                                                                                                                                                    ui_reasoning = self._build_proactive_reasoning_chunk(session, plan)
+                                                                                                                                                                                                                                                                                                                    if callbacks and 'send_reasoning_chunk' in callbacks:
+                                                                                                                                                                                                                                                                                                                        callbacks['send_reasoning_chunk'](ui_reasoning)
+                
+                                                                                                                                                                                                                                                                                                                        # Emit global event for real-time synchronization
+                                                                                                                                                                                                                                                                                                                        global_event_bus.emit_threadsafe({
+                                                                                                                                                                                                                                                                                                                        "type": "reasoning_chunk",
+                                                                                                                                                                                                                                                                                                                        "session_id": session_id,
+                                                                                                                                                                                                                                                                                                                        "content": ui_reasoning,
+                                                                                                                                                                                                                                                                                                                        "timestamp": time.time()
+                                                                                                                                                                                                                                                                                                                        })
+                                                                                                                                                                                                                                                                                                                        # --- Repetitiveness Detection (Enhanced) ---
+                                                                                                                                                                                                                                                                                                                        param_str = json.dumps(plan.args, sort_keys=True)
+                                                                                                                                                                                                                                                                                                                        current_signature = (plan.action_id, param_str)
+                                                                                                                                                                                                                                                                                                                        previous_actions.append(current_signature)
+                                                                                                                                                                                                                                                                                                                        if len(previous_actions) > 5: previous_actions.pop(0)
+                                                                                                                                                                                                                                                                                                                        if len(previous_actions) >= 3 and all(s == current_signature for s in previous_actions[-3:]):
+                                                                                                                                                                                                                                                                                                                            if replans_used < replan_budget:
+                                                                                                                                                                                                                                                                                                                                replans_used += 1
+                                                                                                                                                                                                                                                                                                                                previous_actions = []
+                                                                                                                                                                                                                                                                                                                                if callbacks and 'send_status' in callbacks:
+                                                                                                                                                                                                                                                                                                                                    callbacks['send_status'](
+                                                                                                                                                                                                                                                                                                                                    'executing',
+                                                                                                                                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                                                                                                                                    'code': 'replan',
+                                                                                                                                                                                                                                                                                                                                    'message': "Replanning due to repeated action with no progress.",
+                                                                                                                                                                                                                                                                                                                                    'action': plan.action_id
+                                                                                                                                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                                                                                                                                    )
+                                                                                                                                                                                                                                                                                                                                    emit_user_progress(
+                                                                                                                                                                                                                                                                                                                                    progress_note("replan", action_id=plan.action_id),
+                                                                                                                                                                                                                                                                                                                                    event_key=f"replan:{plan.action_id}",
+                                                                                                                                                                                                                                                                                                                                    )
+                                                                                                                                                                                                                                                                                                                                    self._touch_work_context(
+                                                                                                                                                                                                                                                                                                                                    work_id,
+                                                                                                                                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                                                                                                                                    "planner": {
+                                                                                                                                                                                                                                                                                                                                    "replans_used": replans_used,
+                                                                                                                                                                                                                                                                                                                                    "replan_budget": replan_budget,
+                                                                                                                                                                                                                                                                                                                                    "steps": planner_tree,
+                                                                                                                                                                                                                                                                                                                                    },
+                                                                                                                                                                                                                                                                                                                                    "summary": {"status": "replanning"},
+                                                                                                                                                                                                                                                                                                                                    },
+                                                                                                                                                                                                                                                                                                                                    )
+                                                                                                                                                                                                                                                                                                                                    plan = None
+                                                                                                                                                                                                                                                                                                                                    continue
+                                                                                                                                                                                                                                                                                                                                    logger.warning(f"Loop detected (3 identical actions/params): {current_signature}. Breaking.")
+                                                                                                                                                                                                                                                                                                                                    recovered_reply = self._reply_from_last_success(
+                                                                                                                                                                                                                                                                                                                                    action_id=plan.action_id,
+                                                                                                                                                                                                                                                                                                                                    structured_result=last_action_structured,
+                                                                                                                                                                                                                                                                                                                                    raw_output=last_action_output,
+                                                                                                                                                                                                                                                                                                                                    language=self._session_locale(session),
+                                                                                                                                                                                                                                                                                                                                    ) if last_action_status == "success" else None
+                                                                                                                                                                                                                                                                                                                                    if recovered_reply:
+                                                                                                                                                                                                                                                                                                                                        if callbacks and 'send_status' in callbacks:
+                                                                                                                                                                                                                                                                                                                                            loop_success_msg = (
+                                                                                                                                                                                                                                                                                                                                            f"Repeated action detected in {plan.action_id}; consolidating final response using the latest valid result."
+                                                                                                                                                                                                                                                                                                                                            )
+                                                                                                                                                                                                                                                                                                                                            callbacks['send_status'](
+                                                                                                                                                                                                                                                                                                                                            'executing',
+                                                                                                                                                                                                                                                                                                                                            {
+                                                                                                                                                                                                                                                                                                                                            'code': 'loop_break_success',
+                                                                                                                                                                                                                                                                                                                                            'message': loop_success_msg,
+                                                                                                                                                                                                                                                                                                                                            'action': plan.action_id
+                                                                                                                                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                                                                                                                                            )
+                                                                                                                                                                                                                                                                                                                                            final_response = recovered_reply
+                                                                                                                                                                                                                                                                                                                                        else:
+                                                                                                                                                                                                                                                                                                                                            loop_break_msg = (
+                                                                                                                                                                                                                                                                                                                                            "Exact repetition detected without progress. Please rephrase your request or provide more details."
+                                                                                                                                                                                                                                                                                                                                            )
+                                                                                                                                                                                                                                                                                                                                            if callbacks and 'send_status' in callbacks:
+                                                                                                                                                                                                                                                                                                                                                callbacks['send_status'](
+                                                                                                                                                                                                                                                                                                                                                'error',
+                                                                                                                                                                                                                                                                                                                                                {
+                                                                                                                                                                                                                                                                                                                                                'code': 'loop_break',
+                                                                                                                                                                                                                                                                                                                                                'message': loop_break_msg,
+                                                                                                                                                                                                                                                                                                                                                'action': plan.action_id
+                                                                                                                                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                                                                                                                                                )
+                                                                                                                                                                                                                                                                                                                                                final_response = loop_break_msg
+                                                                                                                                                                                                                                                                                                                                                plan = ActionPlan(
+                                                                                                                                                                                                                                                                                                                                                action_id='reply',
+                                                                                                                                                                                                                                                                                                                                                args={},
+                                                                                                                                                                                                                                                                                                                                                response_text=final_response,
+                                                                                                                                                                                                                                                                                                                                                source='internal',
+                                                                                                                                                                                                                                                                                                                                                attachments=(last_generated_attachment_paths or None),
+                                                                                                                                                                                                                                                                                                                                                )
+                
+                                                                                                                                                                                                                                                                                                                                                # 2. Action Repetition (3 times in last 5 steps) - Soft Warning
+                                                                                                                                                                                                                                                                                                                                                action_history = [s[0] for s in previous_actions]
+                                                                                                                                                                                                                                                                                                                                                if action_history.count(plan.action_id) >= 3:
+                                                                                                                                                                                                                                                                                                                                                    logger.info(f"Loop tendency detected for action '{plan.action_id}'.")
+                                                                                                                                                                                                                                                                                                                                                    # 3. Action Repetition (4 times in last 5 steps) - Hard Break
+                                                                                                                                                                                                                                                                                                                                                    if action_history.count(plan.action_id) >= 4:
+                                                                                                                                                                                                                                                                                                                                                        if replans_used < replan_budget:
+                                                                                                                                                                                                                                                                                                                                                            replans_used += 1
+                                                                                                                                                                                                                                                                                                                                                            previous_actions = []
+                                                                                                                                                                                                                                                                                                                                                            self._touch_work_context(
+                                                                                                                                                                                                                                                                                                                                                            work_id,
+                                                                                                                                                                                                                                                                                                                                                            {
+                                                                                                                                                                                                                                                                                                                                                            "planner": {
+                                                                                                                                                                                                                                                                                                                                                            "replans_used": replans_used,
+                                                                                                                                                                                                                                                                                                                                                            "replan_budget": replan_budget,
+                                                                                                                                                                                                                                                                                                                                                            "steps": planner_tree,
+                                                                                                                                                                                                                                                                                                                                                            },
+                                                                                                                                                                                                                                                                                                                                                            "summary": {"status": "replanning"},
+                                                                                                                                                                                                                                                                                                                                                            },
+                                                                                                                                                                                                                                                                                                                                                            )
+                                                                                                                                                                                                                                                                                                                                                            emit_user_progress(
+                                                                                                                                                                                                                                                                                                                                                            progress_note("replan", action_id=plan.action_id),
+                                                                                                                                                                                                                                                                                                                                                            event_key=f"replan:{plan.action_id}:hard",
+                                                                                                                                                                                                                                                                                                                                                            )
+                                                                                                                                                                                                                                                                                                                                                            plan = None
+                                                                                                                                                                                                                                                                                                                                                            continue
+                                                                                                                                                                                                                                                                                                                                                            logger.warning(f"Action loop detected (Action '{plan.action_id}' repeated 4/5 times). Breaking.")
+                                                                                                                                                                                                                                                                                                                                                            recovered_reply = self._reply_from_last_success(
+                                                                                                                                                                                                                                                                                                                                                            action_id=plan.action_id,
+                                                                                                                                                                                                                                                                                                                                                            structured_result=last_action_structured,
+                                                                                                                                                                                                                                                                                                                                                            raw_output=last_action_output,
+                                                                                                                                                                                                                                                                                                                                                            language=self._session_locale(session),
+                                                                                                                                                                                                                                                                                                                                                            ) if last_action_status == "success" else None
+                                                                                                                                                                                                                                                                                                                                                            if callbacks and 'send_status' in callbacks:
+                                                                                                                                                                                                                                                                                                                                                                callbacks['send_status'](
+                                                                                                                                                                                                                                                                                                                                                                'error',
+                                                                                                                                                                                                                                                                                                                                                                {
+                                                                                                                                                                                                                                                                                                                                                                'code': 'loop_break',
+                                                                                                                                                                                                                                                                                                                                                                'message': (
+                                                                                                                                                                                                                                                                                                                                                                f"I seem to be stuck trying to use action '{plan.action_id}' repeatedly."
+                                                                                                                                                                                                                                                                                                                                                                if recovered_reply else
+                                                                                                                                                                                                                                                                                                                                                                f"I seem to be stuck trying to use action '{plan.action_id}' repeatedly without success. I will stop to avoid an infinite loop."
+                                                                                                                                                                                                                                                                                                                                                                ),
+                                                                                                                                                                                                                                                                                                                                                                'action': plan.action_id
+                                                                                                                                                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                                                                                                                                                                )
+                                                                                                                                                                                                                                                                                                                                                                final_response = recovered_reply or f"I seem to be stuck trying to use action '{plan.action_id}' repeatedly without success. I will stop to avoid an infinite loop."
+                                                                                                                                                                                                                                                                                                                                                                # For a hard break, we force a valid reply object for internal history consistency
+                                                                                                                                                                                                                                                                                                                                                                plan = ActionPlan(
+                                                                                                                                                                                                                                                                                                                                                                action_id='reply',
+                                                                                                                                                                                                                                                                                                                                                                args={},
+                                                                                                                                                                                                                                                                                                                                                                response_text=final_response,
+                                                                                                                                                                                                                                                                                                                                                                source='internal',
+                                                                                                                                                                                                                                                                                                                                                                attachments=(last_generated_attachment_paths or None),
+                                                                                                                                                                                                                                                                                                                                                                )
+                                                                                                                                                                                                                                                                                                                                                                plan.thought = "Action loop detected. Stopping to avoid excessive token and time usage."
+                
+                                                                                                                                                                                                                                                                                                                                                                # Add current turn to history for context.
+                                                                                                                                                                                                                                                                                                                                                                # Prefer TOON compact encoding to reduce prompt footprint.
+                                                                                                                                                                                                                                                                                                                                                                reasoning_mode = str(prompt_cfg.get("reasoning_history_mode", "toon")).strip().lower()
+                                                                                                                                                                                                                                                                                                                                                                history_data = {
+                                                                                                                                                                                                                                                                                                                                                                "thought": plan.thought,
+                                                                                                                                                                                                                                                                                                                                                                "plan": plan.metadata.get('plan', []),
+                                                                                                                                                                                                                                                                                                                                                                "action": plan.action_id,
+                                                                                                                                                                                                                                                                                                                                                                "params": plan.args
+                                                                                                                                                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                                                                                                                                                                if reasoning_mode in {"legacy", "json"}:
+                                                                                                                                                                                                                                                                                                                                                                    history_entry = json.dumps(history_data, ensure_ascii=False, separators=(",", ":"))
+                                                                                                                                                                                                                                                                                                                                                                else:
+                                                                                                                                                                                                                                                                                                                                                                    history_entry = dumps_toon(
+                                                                                                                                                                                                                                                                                                                                                                    encode_reasoning_step(
+                                                                                                                                                                                                                                                                                                                                                                    thought=history_data.get("thought"),
+                                                                                                                                                                                                                                                                                                                                                                    plan=history_data.get("plan"),
+                                                                                                                                                                                                                                                                                                                                                                    action=history_data.get("action"),
+                                                                                                                                                                                                                                                                                                                                                                    params=history_data.get("params"),
+                                                                                                                                                                                                                                                                                                                                                                    )
+                                                                                                                                                                                                                                                                                                                                                                    )
+                                                                                                                                                                                                                                                                                                                                                                    session.add_message("assistant", history_entry, msg_type="reasoning", work_id=work_id)
+                                                                                                                                                                                                                                                                                                                                                                    if plan.action_id == 'reply':
+                                                                                                                                                                                                                                                                                                                                                                        final_response = self._ground_reply_against_last_result(
+                                                                                                                                                                                                                                                                                                                                                                        response_text=plan.response_text or "",
+                                                                                                                                                                                                                                                                                                                                                                        last_action_status=last_action_status,
+                                                                                                                                                                                                                                                                                                                                                                        last_action_id=last_action_id,
+                                                                                                                                                                                                                                                                                                                                                                        last_action_reason=last_action_reason,
+                                                                                                                                                                                                                                                                                                                                                                        last_action_output=last_action_output,
+                                                                                                                                                                                                                                                                                                                                                                        language=self._session_locale(session),
+                                                                                                                                                                                                                                                                                                                                                                        )
+                                                                                                                                                                                                                                                                                                                                                                        normalized_response = self._normalize_context_reset_reply(
+                                                                                                                                                                                                                                                                                                                                                                        final_response,
+                                                                                                                                                                                                                                                                                                                                                                        language=self._session_locale(session),
+                                                                                                                                                                                                                                                                                                                                                                        )
+                                                                                                                                                                                                                                                                                                                                                                        if normalized_response != final_response:
+                                                                                                                                                                                                                                                                                                                                                                            with lock:
+                                                                                                                                                                                                                                                                                                                                                                                if isinstance(session.context, dict):
+                                                                                                                                                                                                                                                                                                                                                                                    metrics = session.context.get("metrics")
+                                                                                                                                                                                                                                                                                                                                                                                    if not isinstance(metrics, dict):
+                                                                                                                                                                                                                                                                                                                                                                                        metrics = {}
+                                                                                                                                                                                                                                                                                                                                                                                        session.context["metrics"] = metrics
+                                                                                                                                                                                                                                                                                                                                                                                        current = metrics.get("context_reset_reply_blocked", 0)
+                                                                                                                                                                                                                                                                                                                                                                                        try:
+                                                                                                                                                                                                                                                                                                                                                                                            current_value = int(current)
+                                                                                                                                                                                                                                                                                                                                                                                        except Exception:
+                                                                                                                                                                                                                                                                                                                                                                                            current_value = 0
+                                                                                                                                                                                                                                                                                                                                                                                            metrics["context_reset_reply_blocked"] = current_value + 1
+                                                                                                                                                                                                                                                                                                                                                                                            logger.info(
+                                                                                                                                                                                                                                                                                                                                                                                            "Normalized context-reset reply for session %s (action=%s).",
+                                                                                                                                                                                                                                                                                                                                                                                            session.session_id,
+                                                                                                                                                                                                                                                                                                                                                                                            plan.action_id,
+                                                                                                                                                                                                                                                                                                                                                                                            )
+                                                                                                                                                                                                                                                                                                                                                                                            final_response = normalized_response
+                                                                                                                                                                                                                                                                                                                                                                                            final_response = self.apply_conversation_coaching(session, user_input, final_response)
+                    
+                                                                                                                                                                                                                                                                                                                                                                                            # Process attachments
+                                                                                                                                                                                                                                                                                                                                                                                            attachment_inputs = plan.attachments or last_generated_attachment_paths
+                                                                                                                                                                                                                                                                                                                                                                                            structured_attachments = self._standardize_attachments(session, attachment_inputs) if attachment_inputs else None
+                                                                                                                                                                                                                                                                                                                                                                                            if not final_response and structured_attachments:
+                                                                                                                                                                                                                                                                                                                                                                                                final_response = "Here is the requested file."
+                    
+                                                                                                                                                                                                                                                                                                                                                                                                session.add_message("assistant", final_response, attachments=structured_attachments, work_id=work_id)
+                                                                                                                                                                                                                                                                                                                                                                                                final_structured_attachments = structured_attachments
+                                                                                                                                                                                                                                                                                                                                                                                                final_response_persisted = True
+                                                                                                                                                                                                                                                                                                                                                                                                with lock:
+                                                                                                                                                                                                                                                                                                                                                                                                    session.scratchpad = ""
+                                                                                                                                                                                                                                                                                                                                                                                                    session.plan = []
+                                                                                                                                                                                                                                                                                                                                                                                                    if callbacks and 'send_response' in callbacks:
+                                                                                                                                                                                                                                                                                                                                                                                                        callbacks['send_response'](final_response, is_chunk=True, attachments=structured_attachments)
+                                                                                                                                                                                                                                                                                                                                                                                                        final_response_streamed = True
+                            
+                                                                                                                                                                                                                                                                                                                                                                                                        if callbacks and 'send_complete' in callbacks:
+                                                                                                                                                                                                                                                                                                                                                                                                            callbacks['send_complete']()
+                                                                                                                                                                                                                                                                                                                                                                                                            stream_completed = True
+                                                                                                                                                                                                                                                                                                                                                                                                            break
+                                                                                                                                                                                                                                                                                                                                                                                                            if plan.action_id == 'error':
+                                                                                                                                                                                                                                                                                                                                                                                                                if callbacks and 'send_status' in callbacks:
+                                                                                                                                                                                                                                                                                                                                                                                                                    callbacks['send_status'](
+                                                                                                                                                                                                                                                                                                                                                                                                                    'error',
+                                                                                                                                                                                                                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                                                                                                                                                                                                                    'code': 'action_error',
+                                                                                                                                                                                                                                                                                                                                                                                                                    'message': self._t(
+                                                                                                                                                                                                                                                                                                                                                                                                                    session,
+                                                                                                                                                                                                                                                                                                                                                                                                                    "reply.error_during_processing",
+                                                                                                                                                                                                                                                                                                                                                                                                                    details=(plan.thought or "unknown"),
+                                                                                                                                                                                                                                                                                                                                                                                                                    ),
+                                                                                                                                                                                                                                                                                                                                                                                                                    },
+                                                                                                                                                                                                                                                                                                                                                                                                                    )
+                    
+                                                                                                                                                                                                                                                                                                                                                                                                                    # Break loop on planning error
+                                                                                                                                                                                                                                                                                                                                                                                                                    final_response = self._t(session, "reply.error_during_processing", details=(plan.thought or "unknown"))
+                                                                                                                                                                                                                                                                                                                                                                                                                    break
+                                                                                                                                                                                                                                                                                                                                                                                                                    # --- Action Execution ---
+                                                                                                                                                                                                                                                                                                                                                                                                                    if callbacks and 'send_status' in callbacks:
+                                                                                                                                                                                                                                                                                                                                                                                                                        callbacks['send_status']('executing', {'action': plan.action_id, 'label': f"Executing {plan.action_id}..."})
+                                                                                                                                                                                                                                                                                                                                                                                                                        global_event_bus.emit_threadsafe({
+                                                                                                                                                                                                                                                                                                                                                                                                                        "type": "status",
+                                                                                                                                                                                                                                                                                                                                                                                                                        "session_id": session_id,
+                                                                                                                                                                                                                                                                                                                                                                                                                        "phase": "executing",
+                                                                                                                                                                                                                                                                                                                                                                                                                        "message": f"Executing {plan.action_id}...",
+                                                                                                                                                                                                                                                                                                                                                                                                                        "payload": {'action': plan.action_id}
+                                                                                                                                                                                                                                                                                                                                                                                                                        })
+                                                                                                                                                                                                                                                                                                                                                                                                                        exec_context = {
+                                                                                                                                                                                                                                                                                                                                                                                                                        "session": session,
+                                                                                                                                                                                                                                                                                                                                                                                                                        "callbacks": callbacks,
+                                                                                                                                                                                                                                                                                                                                                                                                                        "browser_driver": self.browser_driver,
+                                                                                                                                                                                                                                                                                                                                                                                                                        "web_automation_driver": self.browser_driver,
+                                                                                                                                                                                                                                                                                                                                                                                                                        "session_id": session_id,
+                                                                                                                                                                                                                                                                                                                                                                                                                        "work_id": work_id,
+                                                                                                                                                                                                                                                                                                                                                                                                                        "run_id": run_id,
+                                                                                                                                                                                                                                                                                                                                                                                                                        "step_id": loops,
+                                                                                                                                                                                                                                                                                                                                                                                                                        "touch_work_context": self._touch_work_context,
+                                                                                                                                                                                                                                                                                                                                                                                                                        "user_input": user_input,
+                                                                                                                                                                                                                                                                                                                                                                                                                        "allowed_actions": self._get_allowed_actions_for_session(session),
+                                                                                                                                                                                                                                                                                                                                                                                                                        "skill_registry": self.skill_registry,
+                                                                                                                                                                                                                                                                                                                                                                                                                        "playback_service": getattr(self, "playback_service", None),
+                                                                                                                                                                                                                                                                                                                                                                                                                        }
+                
+                                                                                                                                                                                                                                                                                                                                                                                                                        # Skill execution outside session lock
+                                                                                                                                                                                                                                                                                                                                                                                                                        if context:
+                                                                                                                                                                                                                                                                                                                                                                                                                            allowed, reason = self.access_controller.pre_dispatch_gate(
+                                                                                                                                                                                                                                                                                                                                                                                                                            context,
+                                                                                                                                                                                                                                                                                                                                                                                                                            plan.action_id,
+                                                                                                                                                                                                                                                                                                                                                                                                                            plan.args,
+                                                                                                                                                                                                                                                                                                                                                                                                                            self.skill_registry,
+                                                                                                                                                                                                                                                                                                                                                                                                                            self.config_manager
+                                                                                                                                                                                                                                                                                                                                                                                                                            )
+                                                                                                                                                                                                                                                                                                                                                                                                                            if not allowed:
+                                                                                                                                                                                                                                                                                                                                                                                                                                result = f"NEGADO: {reason}"
+                                                                                                                                                                                                                                                                                                                                                                                                                            else:
+                                                                                                                                                                                                                                                                                                                                                                                                                                result = self.skill_registry.dispatch(plan.action_id, plan.args, exec_context)
+                                                                                                                                                                                                                                                                                                                                                                                                                            else:
+                                                                                                                                                                                                                                                                                                                                                                                                                                result = self.skill_registry.dispatch(plan.action_id, plan.args, exec_context)
+                
+                                                                                                                                                                                                                                                                                                                                                                                                                                # Observation
+                                                                                                                                                                                                                                                                                                                                                                                                                                raw_result = self._serialize_action_result(result)
+                                                                                                                                                                                                                                                                                                                                                                                                                                obs_limits = self._observation_limits()
+                                                                                                                                                                                                                                                                                                                                                                                                                                result_max_chars = obs_limits["max_chars"]
+                                                                                                                                                                                                                                                                                                                                                                                                                                if isinstance(result, (dict, list)):
+                                                                                                                                                                                                                                                                                                                                                                                                                                    compact_result = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+                                                                                                                                                                                                                                                                                                                                                                                                                                else:
+                                                                                                                                                                                                                                                                                                                                                                                                                                    compact_result = raw_result
+                                                                                                                                                                                                                                                                                                                                                                                                                                    truncated_result = (
+                                                                                                                                                                                                                                                                                                                                                                                                                                    compact_result[:result_max_chars] + "..."
+                                                                                                                                                                                                                                                                                                                                                                                                                                    if len(compact_result) > result_max_chars
+                                                                                                                                                                                                                                                                                                                                                                                                                                    else compact_result
+                                                                                                                                                                                                                                                                                                                                                                                                                                    )
+                                                                                                                                                                                                                                                                                                                                                                                                                                    result_status, result_reason = self._assess_action_result(result, raw_result)
+                                                                                                                                                                                                                                                                                                                                                                                                                                    structured_result = self._extract_structured_result(result, raw_result)
+                
+                                                                                                                                                                                                                                                                                                                                                                                                                                    last_action_status = result_status
+                                                                                                                                                                                                                                                                                                                                                                                                                                    last_action_reason = result_reason
+                                                                                                                                                                                                                                                                                                                                                                                                                                    last_action_id = plan.action_id
+                                                                                                                                                                                                                                                                                                                                                                                                                                    last_action_output = truncated_result
+                                                                                                                                                                                                                                                                                                                                                                                                                                    last_action_structured = structured_result
+                
+                                                                                                                                                                                                                                                                                                                                                                                                                                    # Process results (lock only for state updates)
+                                                                                                                                                                                                                                                                                                                                                                                                                                    with lock:
+                                                                                                                                                                                                                                                                                                                                                                                                                                        last_generated_attachment_paths = self._extract_attachment_paths_from_result(structured_result)
+                                                                                                                                                                                                                                                                                                                                                                                                                                        if last_generated_attachment_paths:
+                                                                                                                                                                                                                                                                                                                                                                                                                                            standardized_runtime_attachments = self._standardize_attachments(
+                                                                                                                                                                                                                                                                                                                                                                                                                                            session,
+                                                                                                                                                                                                                                                                                                                                                                                                                                            last_generated_attachment_paths,
+                                                                                                                                                                                                                                                                                                                                                                                                                                            )
+                                                                                                                                                                                                                                                                                                                                                                                                                                            last_generated_attachment_paths = [
+                                                                                                                                                                                                                                                                                                                                                                                                                                            str(item.get("path")).strip()
+                                                                                                                                                                                                                                                                                                                                                                                                                                            for item in standardized_runtime_attachments
+                                                                                                                                                                                                                                                                                                                                                                                                                                            if isinstance(item, dict) and str(item.get("path") or "").strip()
+                                                                                                                                                                                                                                                                                                                                                                                                                                            ]
+                    
+                                                                                                                                                                                                                                                                                                                                                                                                                                            extracted_sources = self._extract_sources_from_result(
+                                                                                                                                                                                                                                                                                                                                                                                                                                            structured_result=structured_result,
+                                                                                                                                                                                                                                                                                                                                                                                                                                            raw_result=raw_result,
+                                                                                                                                                                                                                                                                                                                                                                                                                                            action_id=plan.action_id,
+                                                                                                                                                                                                                                                                                                                                                                                                                                            )
+                                                                                                                                                                                                                                                                                                                                                                                                                                            for media_path in last_generated_attachment_paths:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                if media_path not in media_used:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                    media_used.append(media_path)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                    for source in extracted_sources:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                        source_url = str(source.get("url") or "").strip()
+                                                                                                                                                                                                                                                                                                                                                                                                                                                        if not source_url:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                            continue
+                                                                                                                                                                                                                                                                                                                                                                                                                                                            if not any(str(existing.get("url") or "").strip() == source_url for existing in sources_used):
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                sources_used.append(source)
+                            
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                if plan.action_id not in {"reply", "error"}:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                    session.context["last_action_plan"] = {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                    "action_id": plan.action_id,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                    "args": plan.args if isinstance(plan.args, dict) else {},
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                    "status": result_status,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                    "reason": result_reason,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                    "ts": time.time(),
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                    if result_status == "failure":
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                        # Handle non-retriable failures
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                        if (
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                        plan.action_id == "system.control.screenshot"
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                        and result_reason in {"SYSTEM_DRIVER_UNAVAILABLE", "SCREENSHOT_FAILED"}
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ):
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                            logger.warning(
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "Screenshot failure detected (%s). Ending turn.",
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                            result_reason,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                            )
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                            is_pt = self._session_locale(session).startswith("pt")
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                            details = str(structured_result.get("message") or truncated_result or "").strip() if isinstance(structured_result, dict) else str(truncated_result or "").strip()
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                            if len(details) > 220:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                details = details[:220] + "..."
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                if is_pt:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    final_response = f"Não consegui capturar a tela. Detalhe técnico: {details or result_reason}."
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                else:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    final_response = f"I could not capture the screen. Technical detail: {details or result_reason}."
+                        
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    with lock:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        session.state_summary["last_error"] = result_reason
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        session.add_message("assistant", final_response, work_id=work_id)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        final_response_persisted = True
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        if callbacks and 'send_response' in callbacks:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            callbacks['send_response'](final_response, is_chunk=True)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            final_response_streamed = True
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            if callbacks and 'send_complete' in callbacks:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                callbacks['send_complete']()
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                stream_completed = True
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                break
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                failure_signature = (plan.action_id, param_str, self._signature_from_result(raw_result))
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                if failure_signature == last_failure_signature:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    repeated_failure_count += 1
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                else:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    repeated_failure_count = 1
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    last_failure_signature = failure_signature
+                    
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    with lock:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        session.state_summary["last_error"] = result_reason
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        if planner_tree:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            self._mark_planner_blocked(planner_tree)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            session.plan = self._flatten_plan_lines(planner_tree)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        else:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            last_success_action_id = plan.action_id
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            last_success_output = truncated_result
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            last_success_structured = structured_result
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            repeated_failure_count = 0
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            last_failure_signature = None
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            with lock:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                if planner_tree:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    self._advance_planner_on_success(planner_tree)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    session.plan = self._flatten_plan_lines(planner_tree)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
+                
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    # Log Observation
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    summary = None
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    exemptions = ["vision.", "browser.", "youtube.", "web.", "system.control.skills."]
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    is_exempt = any(plan.action_id.startswith(ext) for ext in exemptions)
+                
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    if len(raw_result) > obs_limits["summarize_threshold"] and not is_exempt:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        logger.info(f"Large output detected ({len(raw_result)} chars). Summarizing...")
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        summary = self._clip_text(self.llm_manager.summarize_output(raw_result), 900)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        observation = f"RESULT OF ACTION {plan.action_id} [status={result_status}; reason={result_reason}] (Summarized): {summary}"
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    else:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        observation = f"RESULT OF ACTION {plan.action_id} [status={result_status}; reason={result_reason}]: {truncated_result}"
+                
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        with lock:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            session.add_message("system", observation, msg_type="reasoning", summary=summary, work_id=work_id)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            session.state_summary['last_outcome'] = summary if summary else truncated_result[:300]
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            self._touch_work_context(
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            work_id,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "summary": {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "status": "running",
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "last_action": plan.action_id,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "last_result_status": result_status,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "last_error": result_reason if result_status == "failure" else "",
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "cursor": session.state_summary.get("cursor"),
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            },
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "planner": {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            "steps": planner_tree,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            },
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            },
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            )
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            # Hard guard for repeated failures
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            if repeated_failure_count >= 2:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                logger.warning(f"Repeated failure detected for action '{plan.action_id}'. Breaking loop.")
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                final_response = self.i18n.t("reply.loop_stuck", locale=self._session_locale(session), action_id=plan.action_id)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                with lock:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    session.add_message("assistant", final_response, work_id=work_id)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    final_response_persisted = True
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    if callbacks and 'send_response' in callbacks:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        callbacks['send_response'](final_response, is_chunk=True)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        final_response_streamed = True
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        if callbacks and 'send_complete' in callbacks:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            callbacks['send_complete']()
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            stream_completed = True
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            break
+                
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            plan = None
+        
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            if final_response is None:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                logger.warning("Reasoning loop ended without a final response.")
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                final_response = self.i18n.t("reply.no_plan_resolved", locale="en")
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                if callbacks and 'send_response' in callbacks:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    callbacks['send_response'](final_response, is_chunk=True)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    final_response_streamed = True
     
-            # 6. Persist and Return
-            self._save_session(session)
-            self._touch_work_context(
-                work_id,
-                {
-                    "summary": {
-                        "status": "completed",
-                        "cursor": session.state_summary.get("cursor"),
-                        "final_response": (final_response or "")[:400],
-                    },
-                    "planner": {
-                        "steps": planner_tree,
-                        "max_steps": max_steps,
-                        "replan_budget": replan_budget,
-                        "replans_used": replans_used,
-                    },
-                },
-            )
-            
-            # 7. Adaptive Formatting
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    # Guarantee final response lifecycle (persist -> stream -> complete) in all loop exit paths.
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    if final_response and not final_response_persisted and not session.pending_action:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        final_response_persisted = True
+    
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        if callbacks and 'send_response' in callbacks and final_response and not final_response_streamed and not session.pending_action:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            callbacks['send_response'](final_response, is_chunk=True, attachments=final_structured_attachments)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            final_response_streamed = True
+    
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            if callbacks and 'send_complete' in callbacks and not stream_completed and not session.pending_action:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                callbacks['send_complete']()
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                stream_completed = True
+    
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                # Persist final assistant output before optional history pruning/consolidation.
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                # This guarantees reload consistency even if session context is compressed.
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                if final_response_persisted:
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    self._save_session(session)
+    
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    # 5. Check for Memory Consolidation (Token-based)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    # Threshold is configurable and intentionally lower to trigger earlier compaction.
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    self._append_toon_delta(
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    session=session,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    user_input=user_input,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    last_action_id=last_action_id,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    last_action_status=last_action_status,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    last_action_reason=last_action_reason,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    final_response=final_response,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    )
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    total_tokens = sum(m.get("tokens", 0) for m in session.history)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    if total_tokens > self._memory_consolidation_threshold():
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        self._consolidate_memory(session)
+    
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        # 6. Persist and Return
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        self._save_session(session)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        self._touch_work_context(
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        work_id,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        "summary": {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        "status": "completed",
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        "cursor": session.state_summary.get("cursor"),
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        "final_response": (final_response or "")[:400],
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        },
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        "planner": {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        "steps": planner_tree,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        "max_steps": max_steps,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        "replan_budget": replan_budget,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        "replans_used": replans_used,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        },
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        },
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        )
+        
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        # 7. Adaptive Formatting
             channel = session.context.get('channel', 'Web')
             return self._format_response(final_response, channel)
+        except Exception as e:
+            logger.error(f"Error in reasoning loop: {e}")
+            
+            if callbacks and 'send_status' in callbacks:
+                callbacks['send_status'](
+                'error',
+                {
+                'code': 'system_error',
+                'message': self._t(session, "reply.technical_issue", details=str(e)),
+                },
+                )
+                
+                final_response = self._t(session, "reply.technical_issue", details=str(e))
+                self._touch_work_context(
+                work_id,
+                {
+                "summary": {
+                "status": "failed",
+                "last_error": str(e),
+                "cursor": session.state_summary.get("cursor"),
+                },
+                "planner": {"steps": planner_tree, "max_steps": max_steps},
+            },
+            )
+    
         finally:
             total_ms = int((time.perf_counter() - turn_started_at) * 1000)
             self._capture_turn_metrics(
-                session_id=session_id,
-                total_ms=total_ms,
-                lock_wait_ms=lock_wait_ms,
-                loops=loops,
-                last_action_id=last_action_id or "-",
+            session_id=session_id,
+            total_ms=total_ms,
+            lock_wait_ms=lock_wait_ms,
+            loops=loops,
+            last_action_id=last_action_id or "-",
             )
             logger.info(
-                "Turn Metrics | Session: %s | DurationMs: %d | LockWaitMs: %d | Loops: %d | LastAction: %s",
-                session_id,
-                total_ms,
-                lock_wait_ms,
-                loops,
+            "Turn Metrics | Session: %s | DurationMs: %d | LockWaitMs: %d | Loops: %d | LastAction: %s",
+            session_id,
+            total_ms,
+            lock_wait_ms,
+            loops,
                 last_action_id or "-",
             )
-            # Releasing lock
-            if acquired:
-                lock.release()
+
 
     def _consolidate_memory(self, session: Session, force: bool = False):
         """
@@ -2732,8 +2490,6 @@ class AgentOrchestrator:
                         session.history = session.history[-10:]
                     
                     logger.info(f"Pruned history for {session.session_id}. New size: {len(session.history)} messages.")
-        except Exception as e:
-            logger.error(f"Error during memory consolidation: {e}")
         except Exception as e:
             logger.error(f"Error during memory consolidation: {e}")
 
@@ -2942,6 +2698,19 @@ class AgentOrchestrator:
         is_pt = str(language or "").lower().startswith("pt")
         action = (action_id or "").strip().lower()
 
+        def _log_reply_source(source_key: str, **extra: Any) -> None:
+            try:
+                details = " ".join(f"{k}={v}" for k, v in extra.items() if v is not None and v != "")
+                suffix = f" {details}" if details else ""
+                logger.debug(
+                    "reply_consolidation_source action=%s key=%s%s",
+                    action or "-",
+                    source_key,
+                    suffix,
+                )
+            except Exception:
+                pass
+
 
         if action == "system.control.screenshot":
             path = str(payload.get("path") or "").strip()
@@ -3069,6 +2838,91 @@ class AgentOrchestrator:
             if answer_md:
                 return answer_md
 
+        # Generic list summarization for actions not explicitly mapped above.
+        generic_list_keys = (
+            "items",
+            "entries",
+            "records",
+            "rows",
+            "tasks",
+            "triggers",
+            "matches",
+            "documents",
+            "docs",
+            "memories",
+            "logs",
+            "files",
+        )
+        for list_key in generic_list_keys:
+            entries = payload.get(list_key)
+            if not isinstance(entries, list):
+                continue
+            total = len(entries)
+            if total == 0:
+                continue
+            header = (
+                f"Encontrei {total} item(ns)."
+                if is_pt
+                else f"I found {total} item(s)."
+            )
+            lines = [header]
+            for idx, item in enumerate(entries[:6], start=1):
+                if isinstance(item, dict):
+                    title = str(
+                        item.get("title")
+                        or item.get("name")
+                        or item.get("label")
+                        or item.get("id")
+                        or item.get("task_id")
+                        or item.get("trigger_id")
+                        or item.get("work_id")
+                        or ""
+                    ).strip()
+                    status = str(item.get("status") or "").strip()
+                    line = f"{idx}. {title or 'item'}"
+                    if status:
+                        line += f" ({status})"
+                    lines.append(line)
+                else:
+                    lines.append(f"{idx}. {str(item)}")
+            if len(lines) > 1:
+                _log_reply_source(f"list:{list_key}", count=total)
+                return "\n".join(lines)
+
+        works = payload.get("works")
+        if isinstance(works, list):
+            count = payload.get("count")
+            total = int(count) if isinstance(count, int) else len(works)
+            if total <= 0:
+                return "Nenhum worker encontrado." if is_pt else "No workers found."
+            lines = [
+                (
+                    f"Encontrei {total} worker(s):"
+                    if is_pt
+                    else f"I found {total} worker(s):"
+                )
+            ]
+            for idx, item in enumerate(works[:8], start=1):
+                if not isinstance(item, dict):
+                    continue
+                work_id = str(item.get("work_id") or "").strip() or "?"
+                status = str(item.get("status") or "").strip() or "unknown"
+                label = str(item.get("label") or "").strip()
+                input_text = str(item.get("input_text") or "").strip()
+                summary = label or input_text
+                line = f"{idx}. {work_id} ({status})"
+                if summary:
+                    line += f": {summary[:90]}"
+                lines.append(line)
+            if len(lines) > 1:
+                _log_reply_source("works", count=total)
+                return "\n".join(lines)
+
+        generic_text = str(payload.get("text") or payload.get("message") or "").strip()
+        if generic_text:
+            _log_reply_source("text_or_message", length=len(generic_text))
+            return generic_text
+
         results = payload.get("results")
         if isinstance(results, list) and results:
             lines = ["Encontrei estes resultados:" if is_pt else "I found these results:"]
@@ -3085,6 +2939,7 @@ class AgentOrchestrator:
                     line += f"\n{url}"
                 lines.append(line)
             if len(lines) > 1:
+                _log_reply_source("results", count=len(results))
                 return "\n\n".join(lines)
 
         best = payload.get("best")
@@ -3093,9 +2948,11 @@ class AgentOrchestrator:
             best_title = str(best.get("title") or best.get("name") or "").strip()
             if best_url or best_title:
                 if best_url and best_title:
+                    _log_reply_source("best", fields="title+url")
                     if is_pt:
                         return f"Melhor resultado encontrado: {best_title}\n{best_url}"
                     return f"Best result found: {best_title}\n{best_url}"
+                _log_reply_source("best", fields="single")
                 if is_pt:
                     return f"Melhor resultado encontrado:\n{best_url or best_title}"
                 return f"Best result found:\n{best_url or best_title}"
@@ -3104,9 +2961,11 @@ class AgentOrchestrator:
         raw = (raw_output or "").strip()
         if raw and not raw.startswith("{"):
             excerpt = raw if len(raw) <= 700 else raw[:700] + "..."
+            _log_reply_source("raw_output_excerpt", length=len(excerpt))
             return excerpt
 
         action = action_id or "the requested action"
+        _log_reply_source("terminal_fallback")
         if is_pt:
             return f"Concluí {action} com sucesso, mas não consegui consolidar automaticamente a resposta final."
         return f"I completed {action} successfully, but could not automatically consolidate the final response."
@@ -3252,6 +3111,47 @@ class AgentOrchestrator:
         )
         return any(marker in t for marker in failure_markers)
 
+    @staticmethod
+    def _looks_like_context_reset_request(text: str) -> bool:
+        t = (text or "").lower()
+        markers = (
+            "new context",
+            "send a new context",
+            "send new context",
+            "cannot continue with this context",
+            "can't continue with this context",
+            "context window",
+            "token limit",
+            "limite de contexto",
+            "janela de contexto",
+            "não posso continuar com esse contexto",
+            "nao posso continuar com esse contexto",
+            "não consigo continuar com esse contexto",
+            "nao consigo continuar com esse contexto",
+            "envie um novo contexto",
+            "mandar novo contexto",
+        )
+        return any(marker in t for marker in markers)
+
+    @classmethod
+    def _normalize_context_reset_reply(cls, response_text: str, language: str = "en") -> str:
+        text = (response_text or "").strip()
+        if not text:
+            return text
+        if not cls._looks_like_context_reset_request(text):
+            return text
+
+        is_pt = str(language or "").lower().startswith("pt")
+        if is_pt:
+            return (
+                "Consigo continuar sem reiniciar o contexto. "
+                "Se faltar algo essencial, eu vou pedir so os dados especificos (ex.: arquivo, erro ou objetivo)."
+            )
+        return (
+            "I can continue without resetting context. "
+            "If anything essential is missing, I will ask only for the specific missing data (for example file, error, or target)."
+        )
+
     @classmethod
     def _should_autocomplete_after_success_action(
         cls,
@@ -3396,6 +3296,7 @@ class AgentOrchestrator:
         user_language: str,
         presentation_mode: str,
         markdown_supported: bool,
+        voice_interaction: bool = False,
     ) -> str:
         prompt_cfg = self.config_manager.get("prompt_context", {}) if hasattr(self, "config_manager") else {}
         style = str(prompt_cfg.get("instruction_pack_style", "compact_json")).strip().lower()
@@ -3427,6 +3328,15 @@ class AgentOrchestrator:
                 "schema_keys": ["thought", "plan", "state_summary", "action", "params", "task_label", "response_text", "attachments"],
             },
         }
+        if voice_interaction:
+            pack["reply_constraints"] = {
+                "apply_to": "response_text_only",
+                "style": "ultra_brief",
+                "max_sentences": 2,
+                "prefer_one_sentence": True,
+                "allow_detail_only_if_user_asks": True,
+                "do_not_limit": ["thought", "plan", "action", "params"],
+            }
         if specialist_hint:
             pack["sp"] = self._clip_text(specialist_hint, 180)
         cache_key = json.dumps(pack, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -3526,11 +3436,29 @@ class AgentOrchestrator:
         turn = self._turn_metrics_cache.get(session_id) or {}
         observations = list(self._observation_metrics_cache.get(session_id) or [])
         latest_observation = observations[-1] if observations else {}
+        context_reset_reply_blocked = 0
+        llm_reply_without_text_recovered = 0
+        session = self.sessions.get(session_id)
+        if session and isinstance(getattr(session, "context", None), dict):
+            metrics = session.context.get("metrics")
+            if isinstance(metrics, dict):
+                raw_value = metrics.get("context_reset_reply_blocked", 0)
+                try:
+                    context_reset_reply_blocked = int(raw_value)
+                except Exception:
+                    context_reset_reply_blocked = 0
+                raw_llm_recovered = metrics.get("llm_reply_without_text_recovered", 0)
+                try:
+                    llm_reply_without_text_recovered = int(raw_llm_recovered)
+                except Exception:
+                    llm_reply_without_text_recovered = 0
         return {
             "prompt": prompt,
             "turn": turn,
             "latest_observation": latest_observation,
             "observation_count": len(observations),
+            "context_reset_reply_blocked": context_reset_reply_blocked,
+            "llm_reply_without_text_recovered": llm_reply_without_text_recovered,
         }
 
     def _compact_specialist_prompt(self, specialist_name: str, specialist_prompt: str) -> str:
@@ -3673,6 +3601,11 @@ class AgentOrchestrator:
         caps = session.context.get('driver_capabilities', {})
         markdown_supported = caps.get('markdown', True)
         voice_only = caps.get('voice_only', False)
+        voice_interaction = bool(
+            voice_only
+            or session.context.get("is_voice_interaction")
+            or str(session.context.get("interaction_mode", "")).strip().lower() == "voice"
+        )
 
         presentation_mode = "markdown"
         presentation_directive = "[PRESENTATION DIRECTIVE]\n"
@@ -3686,6 +3619,9 @@ class AgentOrchestrator:
             presentation_mode = "markdown"
             presentation_directive += "- Markdown preferred for structured outputs (tables/code/lists).\n"
             presentation_directive += "- Show concrete result snippets; avoid generic completion lines.\n"
+        if voice_interaction:
+            presentation_directive += "- Voice interaction: keep replies short and direct (1-3 brief sentences by default).\n"
+            presentation_directive += "- IMPORTANT: this brevity constraint applies to FINAL USER RESPONSE (`response_text`) only; keep internal `thought` and `plan` complete.\n"
 
         instruction_pack = self._build_instruction_pack(
             agent_name=agent_name,
@@ -3694,6 +3630,7 @@ class AgentOrchestrator:
             user_language=session.context.get("user_language", "en"),
             presentation_mode=presentation_mode,
             markdown_supported=bool(markdown_supported and not voice_only),
+            voice_interaction=voice_interaction,
         )
 
         allowed_actions = self._get_allowed_actions_for_session(session)
@@ -4051,6 +3988,100 @@ class AgentOrchestrator:
                 pass
 
         return None
+
+    @staticmethod
+    def _is_youtube_playback_request(text: str) -> bool:
+        value = str(text or "").strip().lower()
+        if not value:
+            return False
+        mentions_youtube = bool(re.search(r"\b(youtube|yt|youtube music|music\.youtube)\b", value))
+        playback_verb = bool(
+            re.search(
+                r"\b(play|start|listen|stream|tocar|toque|reproduz|reproduza|ouvir|escutar|inicia|iniciar)\b",
+                value,
+            )
+        )
+        has_music_hint = bool(re.search(r"\b(lofi|music|musica|m[uú]sica|song|track|playlist)\b", value))
+        return mentions_youtube and playback_verb and has_music_hint
+
+    def _apply_media_decision_policy(
+        self,
+        *,
+        session: Session,
+        user_input: str,
+        plan: ActionPlan,
+        last_action_id: Optional[str],
+        last_action_structured: Optional[Dict[str, Any]],
+    ) -> ActionPlan:
+        decision_cfg = self.config_manager.get("decision_policy", {}) if hasattr(self, "config_manager") else {}
+        mode = str(decision_cfg.get("media_override_mode", "off")).strip().lower()
+        if mode not in {"hard", "on", "strict"}:
+            return plan
+
+        if not self._is_youtube_playback_request(user_input):
+            return plan
+
+        metadata_actions = {
+            "youtube.search.find",
+            "youtube.retrieve.get",
+            "web.search.discover",
+            "web.retrieve.read",
+            "web.retrieve.extract",
+            "research.retrieve.run",
+        }
+        if plan.action_id in metadata_actions and self.skill_registry.get_skill_for_action("browser.control.run"):
+            logger.info(
+                "Decision policy override: %s -> browser.control.run for YouTube playback request.",
+                plan.action_id,
+            )
+            return ActionPlan(
+                action_id="browser.control.run",
+                args={"goal": (user_input or "").strip()},
+                confidence=max(float(plan.confidence or 0.0), 0.75),
+                source=f"{plan.source}_policy",
+                response_text=plan.response_text,
+                thought=plan.thought,
+                metadata=dict(plan.metadata or {}),
+                attachments=plan.attachments,
+            )
+
+        if plan.action_id == "youtube.retrieve.get":
+            args = plan.args if isinstance(plan.args, dict) else {}
+            has_url = bool(str(args.get("url") or "").strip())
+            has_video_id = bool(str(args.get("video_id") or "").strip())
+            if not has_url and not has_video_id and last_action_id == "youtube.search.find":
+                candidate = last_action_structured if isinstance(last_action_structured, dict) else {}
+                best = candidate.get("best") if isinstance(candidate.get("best"), dict) else None
+                first = None
+                results = candidate.get("results")
+                if isinstance(results, list) and results and isinstance(results[0], dict):
+                    first = results[0]
+                chosen = best or first or {}
+                repaired_url = str(chosen.get("url") or "").strip()
+                repaired_video_id = str(chosen.get("videoId") or "").strip()
+                if repaired_url or repaired_video_id:
+                    repaired_args = dict(args)
+                    if repaired_url:
+                        repaired_args["url"] = repaired_url
+                    if repaired_video_id:
+                        repaired_args["video_id"] = repaired_video_id
+                    logger.info(
+                        "Auto-repaired youtube.retrieve.get args from previous search result (url=%s, video_id=%s).",
+                        bool(repaired_url),
+                        bool(repaired_video_id),
+                    )
+                    return ActionPlan(
+                        action_id=plan.action_id,
+                        args=repaired_args,
+                        confidence=plan.confidence,
+                        source=plan.source,
+                        response_text=plan.response_text,
+                        thought=plan.thought,
+                        metadata=dict(plan.metadata or {}),
+                        attachments=plan.attachments,
+                    )
+
+        return plan
 
     def _get_param(self, params: dict, keys: list, default=None):
         """Helper to get a parameter from a dictionary, trying multiple keys."""

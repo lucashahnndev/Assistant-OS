@@ -200,6 +200,7 @@ class PromptComposer:
             "- Browser actions only for real UI interaction.\n"
             "- On failure: report honestly and choose an alternative.\n"
             "- Use memory.recall only when older context is needed.\n"
+            "- Never ask user to restart/send a new context; ask only for specific missing data.\n"
             "- Suggest next step only when grounded in current result."
         )
 

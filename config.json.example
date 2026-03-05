@@ -23,7 +23,19 @@
     "interfaces": {
         "voice": {
             "enabled": false,
-            "wake_word": "atlas"
+            "wake_word": "atlas",
+            "sanitize_tts_text": true,
+            "vad_threshold": 300,
+            "endpoint_silence_chunks": 2,
+            "endpoint_silence_ms": 900,
+            "vad_assistant_multiplier": 2.0,
+            "debug_vad": false,
+            "debug_vad_every_chunks": 20,
+            "partial_stt_enabled": true,
+            "partial_stt_interval_ms": 900,
+            "partial_stt_min_buffer_ms": 500,
+            "partial_stt_window_ms": 3500,
+            "partial_stt_min_chars": 4
         },
         "telegram": {
             "enabled": true,
@@ -34,9 +46,16 @@
             "enabled": true,
             "host": "0.0.0.0",
             "port": 8000,
+            "tls": {
+                "enabled": true,
+                "certfile": "data/certs/localhost.crt",
+                "keyfile": "data/certs/localhost.key"
+            },
             "cors_origins": [
                 "http://localhost:5173",
                 "http://127.0.0.1:5173",
+                "https://localhost:5173",
+                "https://127.0.0.1:5173",
                 "http://192.168.0.9:5173",
                 ""
             ]
@@ -187,6 +206,7 @@
                 "provider": "edge_tts",
                 "providers": {
                     "system": {
+                        "preferred_gender": "MALE",
                         "rate": 150,
                         "volume": 1
                     },
@@ -202,6 +222,7 @@
     },
     "agent": {
         "agent_name": "Atlas",
+        "spoken_name": "",
         "personality": "You are a proactive, technical assistant focused on solving problems with precision. Your communication is clear, friendly, and professional."
     },
     "location": {

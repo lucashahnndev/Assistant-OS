@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from .core.database import init_db
 from .routes import auth, system, skills, memory, sessions, tasks, messaging_access, link_preview, models, external_accounts
@@ -14,7 +14,9 @@ logger = logging.getLogger("PortalServer")
 def _resolve_cors_config(kernel):
     default_origins = [
         "http://localhost:5173",
-        "http://127.0.0.1:5173"
+        "http://127.0.0.1:5173",
+        "https://localhost:5173",
+        "https://127.0.0.1:5173",
     ]
 
     configured = []
@@ -85,5 +87,10 @@ def create_app(kernel=None) -> FastAPI:
     @app.get("/")
     def read_root():
         return {"app": "AOSD Portal", "status": "running"}
+
+    @app.get("/api/status", include_in_schema=False)
+    def legacy_status(request: Request):
+        # Backward-compatible alias for older clients still polling /api/status.
+        return system.get_status(request)
 
     return app

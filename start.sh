@@ -91,6 +91,11 @@ FRONTEND_PORT=$("$PYTHON_BIN" -c "import json,os; conf=json.load(open('data/conf
 BACKEND_HOST=$("$PYTHON_BIN" -c "import json,os; conf=json.load(open('data/config.json')); print(conf.get('interfaces', {}).get('server', {}).get('host', '0.0.0.0'))")
 FRONTEND_PUBLIC=$("$PYTHON_BIN" -c "import json,os; conf=json.load(open('data/config.json')); print(str(conf.get('frontend', {}).get('public_mode', False)).lower())")
 FRONTEND_HOST=$("$PYTHON_BIN" -c "import json,os; conf=json.load(open('data/config.json')); print(conf.get('frontend', {}).get('host', 'localhost'))")
+BACKEND_TLS_ENABLED=$("$PYTHON_BIN" -c "import json,os; conf=json.load(open('data/config.json')); print(str(conf.get('interfaces', {}).get('server', {}).get('tls', {}).get('enabled', True)).lower())")
+BACKEND_TLS_CERT=$("$PYTHON_BIN" -c "import json,os; conf=json.load(open('data/config.json')); print(conf.get('interfaces', {}).get('server', {}).get('tls', {}).get('certfile', 'data/certs/localhost.crt'))")
+BACKEND_TLS_KEY=$("$PYTHON_BIN" -c "import json,os; conf=json.load(open('data/config.json')); print(conf.get('interfaces', {}).get('server', {}).get('tls', {}).get('keyfile', 'data/certs/localhost.key'))")
+BACKEND_TLS_CERT_ABS=$("$PYTHON_BIN" -c "import os; print(os.path.abspath('$BACKEND_TLS_CERT'))")
+BACKEND_TLS_KEY_ABS=$("$PYTHON_BIN" -c "import os; print(os.path.abspath('$BACKEND_TLS_KEY'))")
 
 # If public mode is ON, we bind to 0.0.0.0 to allow external access
 if [ "$FRONTEND_PUBLIC" = "true" ]; then
@@ -98,8 +103,14 @@ if [ "$FRONTEND_PUBLIC" = "true" ]; then
     FRONTEND_HOST="0.0.0.0"
 fi
 
-echo -e "${GREEN}[System]${NC} Configured Backend: http://$BACKEND_HOST:$BACKEND_PORT"
-echo -e "${GREEN}[System]${NC} Configured Frontend: http://$FRONTEND_HOST:$FRONTEND_PORT"
+BACKEND_SCHEME="http"
+if [ "$BACKEND_TLS_ENABLED" = "true" ] && [ -f "$BACKEND_TLS_CERT_ABS" ] && [ -f "$BACKEND_TLS_KEY_ABS" ]; then
+    BACKEND_SCHEME="https"
+fi
+FRONTEND_SCHEME="$BACKEND_SCHEME"
+
+echo -e "${GREEN}[System]${NC} Configured Backend: $BACKEND_SCHEME://$BACKEND_HOST:$BACKEND_PORT"
+echo -e "${GREEN}[System]${NC} Configured Frontend: $FRONTEND_SCHEME://$FRONTEND_HOST:$FRONTEND_PORT"
 
 # 2. Start Backend (Agent Kernel + API)
 echo -e "${GREEN}[Backend]${NC} Starting Agent Kernel and Portal API..."
@@ -148,7 +159,10 @@ if node_version_ok; then
     # Exporting vars for Vite
     export VITE_PORT=$FRONTEND_PORT
     export VITE_HOST=$FRONTEND_HOST
-    export VITE_API_URL="http://127.0.0.1:$BACKEND_PORT"
+    export VITE_HTTPS=true
+    export VITE_SSL_CERT_FILE="$BACKEND_TLS_CERT_ABS"
+    export VITE_SSL_KEY_FILE="$BACKEND_TLS_KEY_ABS"
+    export VITE_API_URL="$BACKEND_SCHEME://127.0.0.1:$BACKEND_PORT"
     npm run dev -- --host $VITE_HOST &
     FRONTEND_PID=$!
 else
@@ -173,9 +187,9 @@ cleanup() {
 trap cleanup SIGINT
 
 echo -e "${BLUE}>>> System is running!${NC}"
-echo -e "${BLUE}>>> Backend API: http://localhost:$BACKEND_PORT"
+echo -e "${BLUE}>>> Backend API: $BACKEND_SCHEME://localhost:$BACKEND_PORT"
 if [ -n "$FRONTEND_PID" ]; then
-    echo -e "${BLUE}>>> Frontend Console: http://localhost:$FRONTEND_PORT"
+    echo -e "${BLUE}>>> Frontend Console: $FRONTEND_SCHEME://localhost:$FRONTEND_PORT"
 else
     echo -e "${BLUE}>>> Frontend Console: skipped (Node upgrade required)"
 fi

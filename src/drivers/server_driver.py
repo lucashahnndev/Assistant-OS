@@ -1,6 +1,7 @@
 import threading
 import uvicorn
 import asyncio
+import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from typing import Dict
 import json
@@ -56,11 +57,22 @@ class ServerDriver(BaseDriver):
         server_config = self.kernel.config_manager.get_interfaces_config().get('server', {})
         self.host = server_config.get('host', "0.0.0.0")
         self.port = server_config.get('port', 8000)
+        tls_config = server_config.get("tls", {}) if isinstance(server_config.get("tls"), dict) else {}
+        base_data_dir = getattr(self.kernel.config_manager, "base_data_dir", os.path.join(os.getcwd(), "data"))
+        cert_default = os.path.join(base_data_dir, "certs", "localhost.crt")
+        key_default = os.path.join(base_data_dir, "certs", "localhost.key")
+        self.tls_enabled = bool(tls_config.get("enabled", True))
+        self.ssl_certfile = tls_config.get("certfile") or cert_default
+        self.ssl_keyfile = tls_config.get("keyfile") or key_default
         self.running = False
         self.loop = None
         self.loop_ready = threading.Event()
         
         self._setup_extra_routes()
+        
+        # Initialize VoiceManager for the new protocol
+        from server.voice_manager import VoiceManager
+        self.voice_manager = VoiceManager(self)
 
     def _setup_extra_routes(self):
         @self.app.on_event("startup")
@@ -130,6 +142,35 @@ class ServerDriver(BaseDriver):
 
                     if msg_type == "ping":
                         await websocket.send_text(json.dumps({"type": "pong"}))
+                        continue
+
+                    # VOICE PROTOCOL HANDLERS
+                    if msg_type == "session.start":
+                        logger.info(f"Voice session start requested: {session_id}")
+                        await websocket.send_text(json.dumps({
+                            "type": "server.ready", 
+                            "sessionId": session_id,
+                            "features": {"vad": True, "asrPartial": True, "ttsStream": True}
+                        }))
+                        continue
+                    
+                    if msg_type == "input.audio.chunk":
+                        # Log every 20 chunks to avoid spam
+                        if not hasattr(self, '_chunk_count'): self._chunk_count = 0
+                        self._chunk_count += 1
+                        if self._chunk_count % 20 == 0:
+                            logger.debug(f"Received audio chunk {self._chunk_count} for {session_id}")
+                        
+                        self.voice_manager.handle_chunk(session_id, message_data.get("b64", ""))
+                        continue
+                    
+                    if msg_type == "input.audio.end":
+                        self.voice_manager.handle_end(session_id)
+                        continue
+                    
+                    if msg_type == "control.cancel":
+                        # Interruption logic
+                        # Not fully implemented in P0, but signal received
                         continue
 
                     # Process in background thread to avoid blocking WebSocket loop
@@ -239,8 +280,24 @@ class ServerDriver(BaseDriver):
         # Since we are inside a class, we pass the app instance directly
         # But uvicorn.run blocks.
         try:
-            logger.info(f"Attempting to start Uvicorn on {self.host}:{self.port}")
-            uvicorn.run(self.app, host=self.host, port=self.port)
+            run_kwargs = {"host": self.host, "port": self.port}
+            if self.tls_enabled:
+                cert_ok = os.path.isfile(self.ssl_certfile)
+                key_ok = os.path.isfile(self.ssl_keyfile)
+                if cert_ok and key_ok:
+                    run_kwargs["ssl_certfile"] = self.ssl_certfile
+                    run_kwargs["ssl_keyfile"] = self.ssl_keyfile
+                    logger.info(f"Attempting to start Uvicorn on https://{self.host}:{self.port}")
+                else:
+                    logger.warning(
+                        "TLS enabled but cert/key not found (%s, %s). Falling back to HTTP.",
+                        self.ssl_certfile,
+                        self.ssl_keyfile,
+                    )
+                    logger.info(f"Attempting to start Uvicorn on http://{self.host}:{self.port}")
+            else:
+                logger.info(f"Attempting to start Uvicorn on http://{self.host}:{self.port}")
+            uvicorn.run(self.app, **run_kwargs)
             logger.info("Uvicorn stopped.")
         except Exception as e:
             logger.error(f"Server start error: {e}", exc_info=True)
@@ -383,3 +440,13 @@ class ServerDriver(BaseDriver):
             )
         else:
             logger.error("ServerDriver: Loop not captured or target missing. Cannot send file.")
+
+    def send_voice_event(self, session_id, payload):
+        """Standardized method to send Voice Protocol events to the client."""
+        if not self.loop or not session_id: return
+        
+        json_payload = json.dumps(payload)
+        asyncio.run_coroutine_threadsafe(
+            self.connection_manager.send_personal_message(json_payload, session_id), 
+            self.loop
+        )

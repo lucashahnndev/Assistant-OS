@@ -24,15 +24,11 @@ class EdgeTTSProvider(ITTSProvider):
         # Basic check: is library installed? (Internet check is harder to do reliably without blocking)
         return edge_tts is not None
 
-    def speak(self, text):
+    def generate(self, text) -> bytes:
         if not self.is_available():
-            logger.warning("EdgeTTS library not installed.")
-            return False
-
-        try:
-            # edge-tts is async, so we need to run it in an event loop
-            # We use a temporary file to store the audio
+            return b""
             
+        try:
             temp_file = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False)
             temp_path = temp_file.name
             temp_file.close()
@@ -41,7 +37,6 @@ class EdgeTTSProvider(ITTSProvider):
                 communicate = edge_tts.Communicate(text, self.voice, rate=self.rate, volume=self.volume)
                 await communicate.save(temp_path)
 
-            # Run async function
             try:
                 loop = asyncio.get_event_loop()
             except RuntimeError:
@@ -50,17 +45,34 @@ class EdgeTTSProvider(ITTSProvider):
                 
             loop.run_until_complete(_generate())
             
-            # Play Audio using Pygame (Standard in this project)
-            self._play_audio(temp_path)
-            
-            # Cleanup
+            with open(temp_path, 'rb') as f:
+                content = f.read()
+                
             if os.path.exists(temp_path):
                 os.remove(temp_path)
                 
-            return True
-
+            return content
         except Exception as e:
-            logger.error(f"EdgeTTS Error: {e}")
+            logger.error(f"Edge generate error: {e}")
+            return b""
+
+    def speak(self, text):
+        content = self.generate(text)
+        if not content: return False
+        
+        try:
+            temp_file = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False)
+            temp_path = temp_file.name
+            temp_file.write(content)
+            temp_file.close()
+            
+            self._play_audio(temp_path)
+            
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            return True
+        except Exception as e:
+            logger.error(f"Edge speak error: {e}")
             return False
 
     def _play_audio(self, file_path):

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 import logging
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -16,6 +17,10 @@ import time
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 logger = logging.getLogger("SessionsRoutes")
 _NET_RATE_SAMPLES = {}
+_WEATHER_CITY_PATTERNS = [
+    re.compile(r"\b(?:clima|tempo|weather|forecast|previs[aã]o)[^.\n]{0,90}?\b(?:em|para|in|for)\s+([a-zA-ZÀ-ÿ][a-zA-ZÀ-ÿ0-9\s,\-]{1,48})", re.IGNORECASE),
+    re.compile(r"\b(?:em|in)\s+([a-zA-ZÀ-ÿ][a-zA-ZÀ-ÿ0-9\s,\-]{1,48})\s*(?:\?|$)", re.IGNORECASE),
+]
 
 
 def _read_meminfo_bytes() -> dict:
@@ -57,6 +62,56 @@ def _read_cpu_percent() -> float:
         return max(0.0, min(100.0, (load1 / cpus) * 100.0))
     except Exception:
         return 0.0
+
+
+def _normalize_city_candidate(value: str) -> str:
+    city = str(value or "").strip(" ,.-")
+    if not city:
+        return ""
+    # Prefer the first segment before region/country qualifiers.
+    city = city.split(",")[0].strip(" ,.-")
+    # Guard against generic words.
+    if city.lower() in {"clima", "tempo", "weather", "forecast", "previsao", "previsão", "regiao", "região"}:
+        return ""
+    return city
+
+
+def _infer_weather_city_from_text(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    for pattern in _WEATHER_CITY_PATTERNS:
+        m = pattern.search(raw)
+        if not m:
+            continue
+        candidate = _normalize_city_candidate(m.group(1) or "")
+        if candidate:
+            return candidate
+    return ""
+
+
+def _infer_weather_city_from_history(session_obj) -> str:
+    """
+    Infer location/city from recent chat text so weather cards can hydrate even when
+    session location context is missing.
+    """
+    history = getattr(session_obj, "history", None)
+    if not isinstance(history, list):
+        return ""
+
+    for msg in reversed(history[-20:]):
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "").lower()
+        if role not in {"user", "assistant", "atlas"}:
+            continue
+        text = str(msg.get("content") or "").strip()
+        if not text:
+            continue
+        city = _infer_weather_city_from_text(text)
+        if city:
+            return city
+    return ""
 
 
 def _read_top_processes(limit: int = 5) -> list:
@@ -617,6 +672,7 @@ def get_weather_card(
     session_id: str,
     request: Request,
     days: int = 3,
+    hint: str | None = None,
     user: User = Depends(get_current_user),
 ):
     """
@@ -634,8 +690,10 @@ def get_weather_card(
     weather_skill = WeatherSkill(kernel=kernel, config=weather_cfg)
     safe_days = max(1, min(int(days or 3), 5))
     ctx = {"session": session}
+    inferred_city = _infer_weather_city_from_text(hint or "") or _infer_weather_city_from_history(session)
+    weather_params = {"city": inferred_city} if inferred_city else {}
 
-    current_payload = weather_skill.execute("weather.control.get", {}, ctx)
+    current_payload = weather_skill.execute("weather.control.get", weather_params, ctx)
     if not isinstance(current_payload, dict) or not current_payload.get("ok"):
         return {
             "ok": False,
@@ -644,7 +702,8 @@ def get_weather_card(
             "message": (current_payload or {}).get("message", "Weather data unavailable."),
         }
 
-    forecast_payload = weather_skill.execute("weather.control.forecast", {"days": safe_days}, ctx)
+    forecast_params = {"days": safe_days, **weather_params}
+    forecast_payload = weather_skill.execute("weather.control.forecast", forecast_params, ctx)
     if not isinstance(forecast_payload, dict) or not forecast_payload.get("ok"):
         forecast_payload = {"ok": False, "forecast": [], "days": 0}
 

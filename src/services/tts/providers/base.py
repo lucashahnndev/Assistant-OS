@@ -11,11 +11,16 @@ class ITTSProvider(ABC):
     @abstractmethod
     def speak(self, text):
         """
-        Synthesize speech from text.
-        :param text: Text to speak.
-        :return: True if successful, False otherwise.
+        Synthesize and play speech from text locally.
         """
-        pass
+        return None
+
+    @abstractmethod
+    def generate(self, text) -> bytes:
+        """
+        Synthesize speech from text and return audio bytes.
+        """
+        return b""
 
     @abstractmethod
     def is_available(self):

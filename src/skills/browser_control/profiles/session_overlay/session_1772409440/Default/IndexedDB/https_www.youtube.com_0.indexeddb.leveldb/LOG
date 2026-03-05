@@ -1,0 +1,6 @@
+2026/03/01-21:00:36.212 20e45 Reusing MANIFEST /home/lucas/Documentos/GitHub/Assistant-OS/src/skills/browser_control/profiles/session_overlay/session_1772409440/Default/IndexedDB/https_www.youtube.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/03/01-21:00:36.212 20e45 Recovering log #3
+2026/03/01-21:00:36.216 20e45 Reusing old log /home/lucas/Documentos/GitHub/Assistant-OS/src/skills/browser_control/profiles/session_overlay/session_1772409440/Default/IndexedDB/https_www.youtube.com_0.indexeddb.leveldb/000003.log 
+2026/03/01-21:03:16.120 20e45 Level-0 table #5: started
+2026/03/01-21:03:16.139 20e45 Level-0 table #5: 1152491 bytes OK
+2026/03/01-21:03:16.141 20e45 Delete type=0 #3

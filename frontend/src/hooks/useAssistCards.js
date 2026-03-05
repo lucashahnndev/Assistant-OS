@@ -453,7 +453,8 @@ export function useAssistCards({
 
         let cancelled = false;
         const pending = WEATHER_CARD_PENDING.get(cacheKey);
-        const fetchPromise = pending || api.get('/sessions/' + sessionId + '/cards/weather?days=5');
+        const weatherHint = encodeURIComponent(content.slice(0, 320));
+        const fetchPromise = pending || api.get('/sessions/' + sessionId + `/cards/weather?days=5&hint=${weatherHint}`);
         if (!pending) WEATHER_CARD_PENDING.set(cacheKey, fetchPromise);
         setWeatherCardLoading(true);
 
@@ -474,7 +475,7 @@ export function useAssistCards({
         return () => {
             cancelled = true;
         };
-    }, [shouldTryWeatherCard, sessionId]);
+    }, [shouldTryWeatherCard, sessionId, content]);
 
     useEffect(() => {
         if (!shouldTrySystemHealthCard) return undefined;

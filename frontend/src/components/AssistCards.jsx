@@ -300,7 +300,7 @@ export const tryParseMarkdownTable = (text) => {
 };
 
 export const WeatherAssistCard = memo(({ data, isStage = false }) => {
-    const [showDetails, setShowDetails] = useState(true);
+    const [showDetails, setShowDetails] = useState(!isStage);
     const [metricTab, setMetricTab] = useState('temp');
     const [selectedDayIndex, setSelectedDayIndex] = useState(0);
     const [hoveredPoint, setHoveredPoint] = useState(null);

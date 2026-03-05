@@ -131,7 +131,11 @@ class YouTubeSearchSkill(SkillBase):
             q = f"site:{target} {query}"
             results: List[Dict[str, Any]] = []
             with DDGS() as ddgs:
-                for item in ddgs.text(q, max_results=max(5, limit * 4), timeout=3):
+                try:
+                    generator = ddgs.text(q, max_results=max(5, limit * 4), timeout=3)
+                except TypeError:
+                    generator = ddgs.text(q, max_results=max(5, limit * 4))
+                for item in generator:
                     if not isinstance(item, dict):
                         continue
                     url = (item.get("href") or "").strip()
