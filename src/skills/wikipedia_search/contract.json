@@ -1,6 +1,8 @@
 {
     "name": "wikipedia",
     "description": "Consulta a Wikipedia e retorna conteúdo estruturado para RAG.",
+    "icon_key": "wikipedia",
+    "icon_url": "https://wikipedia.org",
     "version": "1.0.0",
     "actions": {
         "search": {

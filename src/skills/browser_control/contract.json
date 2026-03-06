@@ -1,6 +1,8 @@
 {
     "name": "browser.control",
     "description": "Abre e controla um navegador real (Chrome) via CDP. USE ESTA SKILL quando o usuário pedir para ABRIR o navegador, NAVEGAR em sites, CLICAR em elementos, PREENCHER formulários, ou realizar qualquer INTERAÇÃO VISUAL com páginas web. NÃO use web.search ou web.retrieve para esses casos.",
+    "icon_key": "browser",
+    "icon_url": "https://www.chromium.org",
     "version": "1.0.0",
     "actions": {
         "run": {

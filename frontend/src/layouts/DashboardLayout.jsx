@@ -29,6 +29,12 @@ const DashboardLayout = () => {
     const { t } = useI18n();
     const location = useLocation();
     const isChat = location.pathname === '/chat' || location.pathname === '/chat/';
+    const isFullBleedPage =
+        isChat ||
+        location.pathname === '/skills' ||
+        location.pathname === '/memory' ||
+        location.pathname === '/security' ||
+        location.pathname === '/messaging-access';
     const [isCollapsed, setIsCollapsed] = useState(() => {
         return localStorage.getItem('sidebar-collapsed') === 'true';
     });
@@ -74,7 +80,7 @@ const DashboardLayout = () => {
         { to: '/tasks', icon: ClipboardCheck, label: t('nav.tasks') },
         { to: '/skills', icon: Cpu, label: t('nav.skills') },
         { to: '/memory', icon: Database, label: t('nav.memory') },
-        { to: '/messaging-access', icon: Shield, label: t('nav.security') },
+        { to: '/security', icon: Shield, label: t('nav.security') },
         { to: '/settings', icon: Settings, label: t('nav.settings') },
     ];
 
@@ -290,17 +296,17 @@ const DashboardLayout = () => {
                     flexDirection: 'column',
                     overflow: 'hidden'
                 }}>
-                    <div className={(isChat || location.pathname === '/skills' || location.pathname === '/memory') ? "" : "custom-scrollbar"} style={{
+                    <div className={`${isFullBleedPage ? "" : "custom-scrollbar"} page-outlet-shell`} style={{
                         flex: 1,
                         position: 'relative',
                         minHeight: 0,
-                        overflowY: (isChat || location.pathname === '/skills' || location.pathname === '/memory') ? 'hidden' : 'auto',
+                        overflowY: isFullBleedPage ? 'hidden' : 'auto',
                         borderRadius: 'var(--radius-md)',
-                        padding: (isChat || isBelowDesktop) ? '0' : '0 var(--space-2)',
+                        padding: (isFullBleedPage || isBelowDesktop) ? '0' : '0 var(--space-2)',
                         display: 'flex',
                         flexDirection: 'column',
-                        background: 'rgba(255, 255, 255, 0.01)',
-                        border: '1px solid var(--card-border)'
+                        background: isChat ? 'transparent' : 'var(--card-bg)',
+                        border: isChat ? 'none' : '1px solid var(--card-border)'
                     }}>
                         <Outlet />
                     </div>

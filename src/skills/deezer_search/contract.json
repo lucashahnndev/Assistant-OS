@@ -1,6 +1,8 @@
 {
     "name": "deezer.search",
     "description": "Encontra músicas, artistas, álbuns e playlists no Deezer, com retorno estruturado para recomendação e reprodução.",
+    "icon_key": "deezer",
+    "icon_url": "https://www.deezer.com",
     "version": "1.0.0",
     "actions": {
         "search": {

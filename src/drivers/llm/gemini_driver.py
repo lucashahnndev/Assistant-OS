@@ -26,6 +26,27 @@ class GeminiProvider(ILLMProvider):
         self.max_tokens = int(config.get("max_tokens", 4096)) if config else 4096
         self.client = genai.Client(api_key=self.api_key)
 
+    @staticmethod
+    def _normalize_response_text(value: Any, fallback: str = "") -> str:
+        if isinstance(value, str):
+            return value
+        if value is None:
+            return fallback
+        if isinstance(value, dict):
+            candidate = value.get("text") or value.get("response") or value.get("message")
+            if candidate is not None:
+                return str(candidate)
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        if isinstance(value, list):
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        return str(value)
+
     def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] | None = None, **kwargs) -> AgentIntent:
         contents = []
         for msg in history:
@@ -120,13 +141,17 @@ class GeminiProvider(ILLMProvider):
             attachments = data.get("attachments")
             if not attachments and isinstance(data.get("params"), dict):
                 attachments = data.get("params", {}).get("attachments")
+            response_text = self._normalize_response_text(
+                data.get("response_text", data.get("reply", "")),
+                fallback="",
+            )
 
             return AgentIntent(
                 thought=data.get("thought", ""),
                 plan=data.get("plan", []),
                 action=data.get("action", "reply"), # Default to reply
                 params=data.get("params", {}),
-                response_text=data.get("response_text", data.get("reply", "")),
+                response_text=response_text,
                 attachments=attachments
             )
 

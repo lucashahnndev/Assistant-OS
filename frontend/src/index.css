@@ -155,6 +155,17 @@ body::after {
     overflow: hidden;
 }
 
+/* Keep page shells stretched to full available height, even with short content */
+.page-outlet-shell>.animate-in,
+.page-outlet-shell>.animate-fade-in {
+    min-height: 100%;
+}
+
+/* Security-like pages using scroll-container + section should fill bottom area */
+.page-outlet-shell .scroll-container>div>section {
+    min-height: 100%;
+}
+
 .glass {
     background: var(--card-bg);
     backdrop-filter: var(--surface-blur);
@@ -757,6 +768,42 @@ select.input-field {
 .input-field:focus {
     border-color: var(--accent-color);
     box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* Security page compact controls */
+.security-refine .security-card {
+    border-radius: 8px !important;
+}
+
+.security-refine .input-field,
+.security-refine select.input-field,
+.security-refine textarea.input-field {
+    border-radius: 6px !important;
+    min-height: 32px !important;
+    padding: 5px 9px !important;
+    font-size: 12px !important;
+    line-height: 1.25 !important;
+    background: color-mix(in srgb, var(--card-bg) 84%, var(--text-main) 4%) !important;
+    border-color: color-mix(in srgb, var(--card-border) 80%, var(--text-main) 20%) !important;
+}
+
+.security-refine select.input-field {
+    padding-right: 34px !important;
+    background-position: right 10px center !important;
+}
+
+.security-refine .input-field:focus,
+.security-refine select.input-field:focus,
+.security-refine textarea.input-field:focus {
+    border-color: var(--accent-color) !important;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color) 18%, transparent) !important;
+}
+
+.light-theme .security-refine .input-field,
+.light-theme .security-refine select.input-field,
+.light-theme .security-refine textarea.input-field {
+    background: color-mix(in srgb, #ffffff 88%, #cbd5e1 12%) !important;
+    border-color: color-mix(in srgb, #94a3b8 72%, #475569 28%) !important;
 }
 
 /* Specific Select Overrides for reliability */

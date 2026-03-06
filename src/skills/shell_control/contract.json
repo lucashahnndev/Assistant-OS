@@ -1,6 +1,7 @@
 {
     "name": "Shell Control",
     "description": "Executa comandos no shell do sistema com timeout e retorno estruturado de stdout/stderr.",
+    "icon_key": "shell",
     "actions": [
         {
             "id": "shell.control.execute",

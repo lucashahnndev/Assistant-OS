@@ -24,11 +24,7 @@ class Worker(threading.Thread):
         self.name = f"Worker-{work_id}"
 
     def run(self):
-        log_extra = {
-            "job_id": self.work_id,
-            "session_id": self.kwargs.get("session_id", "-"),
-        }
-        logger.info(f"Worker {self.work_id} (Exec: {self.execution_id}) started execution.", extra=log_extra)
+        logger.info(f"Worker {self.work_id} (Exec: {self.execution_id}) started execution.")
         
         self.scheduler.update_work_status(self.work_id, WorkStatus.RUNNING)
         if self.execution_id:
@@ -63,21 +59,19 @@ class Worker(threading.Thread):
                  else:
                      self.scheduler.update_work_status(self.work_id, WorkStatus.SUCCEEDED, result=result)
                  self.scheduler.update_execution_status(self.execution_id, "succeeded", result=result)
-                 logger.info(f"Worker {self.work_id} Finished (Success).", extra=log_extra)
+                 logger.info(f"Worker {self.work_id} Finished (Success).")
             else:
                 work = self.scheduler.get_work(self.work_id)
                 if work and work.cancel_requested:
                     self.scheduler.update_work_status(self.work_id, WorkStatus.CANCELLED)
-                    logger.info(f"Worker {self.work_id} Finished (Cancelled).", extra=log_extra)
+                    logger.info(f"Worker {self.work_id} Finished (Cancelled).")
                 else:
                     self.scheduler.update_work_status(self.work_id, WorkStatus.SUCCEEDED, result=result)
-                    logger.info(f"Worker {self.work_id} Finished (Success).", extra=log_extra)
+                    logger.info(f"Worker {self.work_id} Finished (Success).")
                 
         except Exception as e:
             error_msg = str(e)
-            error_code = getattr(e, "code", "WORKER_FAILED")
-            log_extra["error_code"] = error_code
-            logger.error(f"Worker {self.work_id} Failed [{error_code}]: {error_msg}", extra=log_extra, exc_info=True)
+            logger.error(f"Worker {self.work_id} Failed: {error_msg}", exc_info=True)
             
             # Injection: Update session state with the error so the agent knows in the next turn
             session_id = self.kwargs.get('session_id')

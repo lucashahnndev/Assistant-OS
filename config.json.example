@@ -100,9 +100,26 @@
         }
     },
     "planner": {
-        "base_max_steps": 15,
-        "hard_max_steps": 60,
-        "replan_budget": 4
+        "policy": {
+            "max_retries_per_step": 2,
+            "retry_on": [
+                "TIMEOUT",
+                "BROWSER_CLOSED"
+            ],
+            "abort_on": [
+                "NAVIGATION_ERROR",
+                "MISSING_TARGET"
+            ],
+            "retry_http_status": {
+                "500": 1,
+                "503": 2
+            },
+            "abort_http_status": {
+                "404": true,
+                "401": true
+            },
+            "max_total_steps": 20
+        }
     },
     "decision_policy": {
         "media_override_mode": "hard"
@@ -235,28 +252,6 @@
             "lon": "-51.190630"
         }
     },
-    "planner": {
-        "policy": {
-            "max_retries_per_step": 2,
-            "retry_on": [
-                "TIMEOUT",
-                "BROWSER_CLOSED"
-            ],
-            "abort_on": [
-                "NAVIGATION_ERROR",
-                "MISSING_TARGET"
-            ],
-            "retry_http_status": {
-                "500": 1,
-                "503": 2
-            },
-            "abort_http_status": {
-                "404": true,
-                "401": true
-            },
-            "max_total_steps": 20
-        }
-    },
     "prompt_context": {
         "actions_mode": "on_demand",
         "actions_pack_style": "compact_json",
@@ -275,6 +270,12 @@
         },
         "vision": {
             "enabled": true
+        },
+        "assistive_overlay": {
+            "enabled": true,
+            "backend": "qt",
+            "default_ttl_ms": 4500,
+            "allow_wayland": false
         },
         "browser_control": {
             "enabled": true

@@ -1,11 +1,9 @@
 from typing import Dict, Any, List, Optional, Tuple
+from .base import SkillBase
 import logging
 import difflib
 import hashlib
 import re
-import time
-from .base import SkillBase
-from core.exceptions import AgentError, ErrorCode
 
 logger = logging.getLogger("SkillRegistry")
 
@@ -64,22 +62,7 @@ class SkillRegistry:
         return self.action_map.get(action_id)
 
     def dispatch(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
-        start_time = time.perf_counter()
-        session_id = context.get("session_id", "unknown")
-        work_id = context.get("work_id", "unknown")
-        run_id = context.get("run_id", "unknown")
-        step_id = context.get("step_id", "0")
-
-        log_extra = {
-            "session_id": session_id,
-            "job_id": work_id,
-            "run_id": run_id,
-            "step_id": step_id,
-            "tool": action_id
-        }
-
         if self._is_legacy_blocked_action(action_id):
-            logger.warning(f"Attempted to dispatch legacy/blocked action: {action_id}", extra=log_extra)
             return {
                 "ok": False,
                 "status": "error",
@@ -87,31 +70,14 @@ class SkillRegistry:
                 "error_code": "SKILL_REMOVED_USE_BROWSER_CONTROL",
                 "text": "Skill removed. Use browser.control.run or browser.control.step.",
             }
-
         skill = self.get_skill_for_action(action_id)
         if skill:
             try:
-                result = skill.execute(action_id, params, context)
-                latency = int((time.perf_counter() - start_time) * 1000)
-                log_extra["latency_ms"] = latency
-                logger.info(f"Dispatched action '{action_id}' in {latency}ms", extra=log_extra)
-                return result
+                return skill.execute(action_id, params, context)
             except Exception as e:
-                latency = int((time.perf_counter() - start_time) * 1000)
-                error_code = ErrorCode.INTERNAL_ERROR
-                if isinstance(e, AgentError):
-                    error_code = e.code
-                
-                log_extra.update({
-                    "latency_ms": latency,
-                    "error_code": error_code.value,
-                    "error": str(e)
-                })
-                logger.error(f"Error executing action '{action_id}': {e}", extra=log_extra)
+                logger.error(f"Error executing action '{action_id}' in skill '{skill.name}': {e}")
                 return f"Error executing {action_id}: {str(e)}"
         
-        log_extra["error_code"] = ErrorCode.SKILL_NOT_FOUND.value
-        logger.error(f"Unknown action: {action_id}", extra=log_extra)
         return f"Unknown action: {action_id}"
 
     def list_actions(self) -> List[str]:

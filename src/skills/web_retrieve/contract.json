@@ -1,6 +1,7 @@
 {
   "name": "web.retrieve",
   "description": "Retrieval web determinístico para RAG: leitura robusta e extração estruturada sem LLM.",
+  "icon_key": "web",
   "version": "1.0.0",
   "actions": {
     "read": {

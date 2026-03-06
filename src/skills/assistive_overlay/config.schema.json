@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "default_ttl_ms": {
+      "type": "integer",
+      "minimum": 100,
+      "default": 2200
+    },
+    "backend": {
+      "type": "string",
+      "enum": ["qt", "noop"],
+      "default": "qt"
+    },
+    "allow_wayland": {
+      "type": "boolean",
+      "default": false
+    },
+    "overlay": {
+      "type": "object",
+      "properties": {
+        "backend": {
+          "type": "string",
+          "enum": ["qt", "noop"],
+          "default": "qt"
+        },
+        "default_ttl_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "default": 2200
+        },
+        "allow_wayland": {
+          "type": "boolean",
+          "default": false
+        },
+        "debug": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "save_on_draw": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -10,24 +10,30 @@ export const AuthProvider = ({ children }) => {
 
     const checkStatus = async () => {
         try {
+            // Fetch agent name from public status endpoint (works before login)
+            try {
+                let statusData = null;
+                const statusRes = await fetch('/api/system/status');
+                if (statusRes.ok) {
+                    statusData = await statusRes.json();
+                } else {
+                    const legacyStatusRes = await fetch('/api/status');
+                    if (legacyStatusRes.ok) {
+                        statusData = await legacyStatusRes.json();
+                    }
+                }
+                if (statusData?.agent_name) {
+                    setAgentName(statusData.agent_name);
+                }
+            } catch (err) {
+                console.error("Failed to fetch public system status", err);
+            }
+
             // First check if initialized
             const bootRes = await fetch('/api/auth/initialized');
             if (bootRes.ok) {
                 const bootData = await bootRes.json();
                 setInitialized(bootData.initialized);
-            }
-
-            // Fetch agent name from config
-            try {
-                const configRes = await fetch('/api/system/config');
-                if (configRes.ok) {
-                    const configData = await configRes.json();
-                    if (configData.agent?.agent_name) {
-                        setAgentName(configData.agent.agent_name);
-                    }
-                }
-            } catch (err) {
-                console.error("Failed to fetch agent config", err);
             }
 
             const res = await fetch('/api/auth/me');

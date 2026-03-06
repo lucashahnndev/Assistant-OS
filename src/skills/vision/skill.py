@@ -1,5 +1,7 @@
 import logging
 import os
+import json
+import re
 from typing import Any, Dict, List
 
 from ..base import SkillBase
@@ -19,7 +21,7 @@ class VisionSkill(SkillBase):
 
     @property
     def actions(self) -> List[str]:
-        return ["analyze", "search_screen"]
+        return ["analyze", "search_screen", "locate_screen"]
 
     @staticmethod
     def _result(ok: bool, status: str, text: str, **extra: Any) -> Dict[str, Any]:
@@ -58,6 +60,79 @@ class VisionSkill(SkillBase):
             "result": result,
             **({"error": "VISION_ANALYSIS_FAILED"} if has_error_text else {}),
         }
+
+    @staticmethod
+    def _extract_json_object(raw: Any) -> Dict[str, Any] | None:
+        if isinstance(raw, dict):
+            return dict(raw)
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+        if text.startswith("```"):
+            fence = re.search(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+            if fence:
+                candidate = fence.group(1).strip()
+                try:
+                    parsed = json.loads(candidate)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    pass
+        decoder = json.JSONDecoder()
+        for i, ch in enumerate(text):
+            if ch != "{":
+                continue
+            try:
+                obj, _ = decoder.raw_decode(text[i:])
+                if isinstance(obj, dict):
+                    return obj
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _normalize_bbox(payload: Dict[str, Any], fallback_label: str) -> Dict[str, Any]:
+        return {
+            "label": str(payload.get("label") or fallback_label or "target"),
+            "confidence": float(payload.get("confidence") or 0.0),
+            "x": float(payload.get("x") or 0),
+            "y": float(payload.get("y") or 0),
+            "width": float(payload.get("width") or 0),
+            "height": float(payload.get("height") or 0),
+            "screen_id": int(payload.get("screen_id") or 0),
+        }
+
+    @staticmethod
+    def _looks_like_screen_request(params: Dict[str, Any], context: Dict[str, Any]) -> bool:
+        text_parts = [
+            str(params.get("query") or ""),
+            str(params.get("prompt") or ""),
+            str(context.get("user_input") or ""),
+        ]
+        haystack = " ".join(text_parts).strip().lower()
+        if not haystack:
+            return False
+        hints = (
+            "tela",
+            "ecra",
+            "ecrã",
+            "screen",
+            "desktop",
+            "janela",
+            "window",
+            "monitor",
+            "display",
+            "o que está na tela",
+            "oque está na tela",
+            "descreva a tela",
+        )
+        return any(token in haystack for token in hints)
 
     @staticmethod
     def _extract_image_path(params: Dict[str, Any]) -> str | None:
@@ -168,6 +243,11 @@ class VisionSkill(SkillBase):
             prompt = params.get("prompt", "Descreva esta imagem em detalhes.")
 
             if not path:
+                if self._looks_like_screen_request(params, context):
+                    # Defensive fallback: if planner chose analyze without image_path
+                    # for a screen request, route to search_screen instead of failing.
+                    screen_query = str(params.get("query") or prompt or "").strip() or "Descreva resumidamente a tela atual."
+                    return self.execute("vision.search_screen", {"query": screen_query}, context)
                 return self._result(
                     ok=False,
                     status="error",
@@ -223,6 +303,90 @@ class VisionSkill(SkillBase):
             normalized["path"] = screenshot_path
             normalized["query"] = query
             return normalized
+
+        elif action == "locate_screen":
+            label = str(
+                params.get("label")
+                or params.get("query")
+                or params.get("target")
+                or params.get("target_description")
+                or params.get("target_desc")
+                or params.get("description")
+                or params.get("object")
+                or params.get("element")
+                or ""
+            ).strip()
+            hint = str(params.get("hint") or params.get("target_description") or "").strip()
+            if not label:
+                return self._result(
+                    ok=False,
+                    status="error",
+                    text="Missing required parameter 'label' (or alias 'query').",
+                    error="MISSING_LABEL",
+                )
+
+            sd = context.get("system_driver") or getattr(self.kernel, "system_driver", None)
+            if not sd:
+                return self._result(
+                    ok=False,
+                    status="error",
+                    text="SystemDriver not available.",
+                    error="SYSTEM_DRIVER_UNAVAILABLE",
+                )
+
+            sid = context.get("session_id")
+            screenshot_path = sd.take_screenshot(filename="vision_locator.png", session_id=sid)
+            if isinstance(screenshot_path, str) and screenshot_path.startswith("Error"):
+                return self._result(
+                    ok=False,
+                    status="error",
+                    text=f"Screenshot capture failed: {screenshot_path}",
+                    error="SCREENSHOT_FAILED",
+                    message=screenshot_path,
+                )
+
+            prompt = (
+                "Locate exactly one UI element in this screenshot and return ONLY valid JSON with this schema: "
+                "{\"found\":true|false,\"label\":string,\"confidence\":number,\"x\":number,\"y\":number,"
+                "\"width\":number,\"height\":number,\"screen_id\":number}. "
+                f"Target description: {label}. "
+                "Coordinates must be absolute pixels in the screenshot reference frame. "
+                "If not found, return found=false and keep numbers as 0."
+            )
+            if hint:
+                prompt += f" Extra hint: {hint}."
+
+            llm_result = llm_manager.analyze_image(screenshot_path, prompt)
+            parsed = self._extract_json_object(llm_result)
+            if not isinstance(parsed, dict):
+                return self._result(
+                    ok=False,
+                    status="error",
+                    text="Vision model did not return valid JSON bbox.",
+                    error="LOCATOR_PARSE_FAILED",
+                    raw=str(llm_result)[:4000],
+                    path=screenshot_path,
+                )
+
+            found = bool(parsed.get("found", True))
+            bbox = self._normalize_bbox(parsed, fallback_label=label)
+            if not found or bbox["width"] <= 0 or bbox["height"] <= 0:
+                return self._result(
+                    ok=False,
+                    status="error",
+                    text=f"Element not found: {label}",
+                    error="ELEMENT_NOT_FOUND",
+                    bbox=bbox,
+                    path=screenshot_path,
+                )
+            return self._result(
+                ok=True,
+                status="success",
+                text=f"Element located: {bbox['label']}",
+                bbox=bbox,
+                path=screenshot_path,
+                query=label,
+            )
 
         return self._result(
             ok=False,

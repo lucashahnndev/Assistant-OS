@@ -16,6 +16,7 @@ import Memory from './pages/Memory';
 import Settings from './pages/Settings';
 import Tasks from './pages/Tasks';
 import MessagingAccess from './pages/MessagingAccess';
+import Security from './pages/Security';
 import NotFound from './pages/NotFound';
 
 import { Toaster } from 'react-hot-toast';
@@ -55,6 +56,7 @@ const AppRoutes = () => {
                 <Route path="memory" element={<Memory />} />
                 <Route path="tasks" element={<Tasks />} />
                 <Route path="settings" element={<Settings />} />
+                <Route path="security" element={<Security />} />
                 <Route path="messaging-access" element={<MessagingAccess />} />
             </Route>
 

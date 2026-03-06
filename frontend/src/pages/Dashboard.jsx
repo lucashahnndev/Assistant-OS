@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useReducer, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useReducer, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useVoice } from '../hooks/useVoice';
 import { useTheme } from '../context/ThemeContext';
@@ -251,9 +251,28 @@ const resolveDeezerMeta = (payload) => {
     };
 };
 
-function useMediaStackManager() {
+const mediaSignatureFromItem = (item) => {
+    const type = String(item?.type || '').toUpperCase();
+    const payload = (item?.payload && typeof item.payload === 'object') ? item.payload : {};
+    const safe = (v) => String(v || '').trim();
+    if (!type) return '';
+    if (type === 'YOUTUBE') return `YOUTUBE:${safe(payload.videoId || extractYouTubeId(safe(payload.url)) || payload.url)}`;
+    if (type === 'DEEZER') return `DEEZER:${safe(payload.trackId || extractDeezerTrackId(safe(payload.url)) || payload.url)}`;
+    if (type === 'PLAYBACK') return `PLAYBACK:${safe(payload.runId || payload.run_id)}`;
+    if (type === 'TERMINAL') return `TERMINAL:${safe(payload.work_id || payload.id || payload.terminal_id || payload.command)}`;
+    if (type === 'APPROVAL') return `APPROVAL:${safe(payload.work_id || payload.approval_key || payload.prompt)}`;
+    if (type === 'IMAGE') return `IMAGE:${safe(payload.url || payload.path || payload.file_path || payload.filename)}`;
+    if (type === 'LINK') return `LINK:${safe(payload.url || payload.fullContent)}`;
+    if (['WEATHER', 'SYSTEM_HEALTH', 'WIKI', 'MAP', 'CHART', 'CODE'].includes(type)) {
+        return `${type}:${safe(payload.work_id || payload.query || payload.title || payload.content).slice(0, 160)}`;
+    }
+    return `${type}:${safe(payload.work_id || payload.url || payload.title || payload.content).slice(0, 160)}`;
+};
+
+function useMediaStackManager(preferredStageSignatures = []) {
     const [mediaList, setMediaList] = useState([]);
     const [focusedMediaId, setFocusedMediaId] = useState(null);
+    const [stageDismissedIds, setStageDismissedIds] = useState(() => new Set());
     const timersRef = useRef(new Map());
 
     const clearMediaTimer = (id) => {
@@ -309,6 +328,11 @@ function useMediaStackManager() {
         });
 
         setFocusedMediaId(id);
+        setStageDismissedIds(prev => {
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+        });
         clearMediaTimer(`${id}_focus`);
         if (!isPersistent) {
             const t = setTimeout(() => dockMedia(id), HERO_CONSTANTS.MEDIA_FOCUS_DURATION_MS);
@@ -320,6 +344,11 @@ function useMediaStackManager() {
     const dockMedia = (id) => {
         clearMediaTimer(`${id}_focus`);
         setFocusedMediaId(prev => (prev === id ? null : prev));
+        setStageDismissedIds(prev => {
+            const next = new Set(prev);
+            next.add(id);
+            return next;
+        });
         setMediaList(prev => prev.map(m => {
             if (m.id === id) {
                 if (m.isPinned) {
@@ -384,6 +413,11 @@ function useMediaStackManager() {
     const focusMedia = (id) => {
         clearMediaTimer(`${id}_expire`);
         setFocusedMediaId(id);
+        setStageDismissedIds(prev => {
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+        });
         setMediaList(prev => prev.map(m => ({
             ...m,
             status: m.id === id ? 'focused' : (m.status === 'focused' ? 'docked' : m.status)
@@ -393,6 +427,11 @@ function useMediaStackManager() {
     const removeMedia = (id) => {
         clearMediaTimer(`${id}_focus`); clearMediaTimer(`${id}_expire`);
         setFocusedMediaId(prev => (prev === id ? null : prev));
+        setStageDismissedIds(prev => {
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+        });
         setMediaList(prev => prev.filter(m => m.id !== id));
     };
 
@@ -409,13 +448,99 @@ function useMediaStackManager() {
         timersRef.current.clear();
     }, []);
 
+    const stageItems = useMemo(() => {
+        const active = (Array.isArray(mediaList) ? mediaList : []).filter((m) => m && m.status !== 'expired' && !stageDismissedIds.has(m.id));
+        if (active.length === 0) return [];
+        const preferredIndex = new Map(
+            (Array.isArray(preferredStageSignatures) ? preferredStageSignatures : [])
+                .map((sig, idx) => [String(sig || ''), idx])
+                .filter(([sig]) => !!sig)
+        );
+
+        const isCriticalRunning = (m) => {
+            const type = String(m?.type || '');
+            const statusNorm = String(m?.payload?.status || m?.payload?.terminal_status || '').toLowerCase();
+            if (type === 'TERMINAL') return ['running', 'active', 'executing'].includes(statusNorm);
+            if (type === 'PLAYBACK') return ['running', 'active', 'playback', 'playback.frame'].includes(statusNorm);
+            return false;
+        };
+
+        const focused = active.find((m) => m.id === focusedMediaId) || null;
+        const withPriorityMeta = active
+            .map((m) => {
+                const type = String(m?.type || '');
+                const statusNorm = String(m?.payload?.status || m?.payload?.terminal_status || '').toLowerCase();
+                const terminalRunning = type === 'TERMINAL' && ['running', 'active', 'executing'].includes(statusNorm);
+                const playbackRunning = type === 'PLAYBACK' && ['running', 'active', 'playback', 'playback.frame'].includes(statusNorm);
+                let score = 0;
+                if (focused && m.id === focused.id) score += 1000;
+                if (m?.isPinned) score += 40;
+                if (type === 'APPROVAL') score += 60;
+                if (terminalRunning) score += 55;
+                if (playbackRunning) score += 52;
+                if (type === 'TERMINAL') score += 25;
+                if (type === 'PLAYBACK') score += 22;
+                const sig = mediaSignatureFromItem(m);
+                if (preferredIndex.has(sig)) {
+                    const idx = preferredIndex.get(sig);
+                    score += Math.max(1, 20 - Number(idx || 0));
+                }
+                score += Math.floor(Number(m?.createdAt || 0) / 1000); // recency tie-break
+                return { m, score, criticalRunning: terminalRunning || playbackRunning };
+            })
+            .sort((a, b) => b.score - a.score);
+        const withPriority = withPriorityMeta.map((x) => x.m);
+        const scoreById = new Map(withPriorityMeta.map((x) => [x.m.id, x.score]));
+        const criticalItems = withPriority.filter(isCriticalRunning);
+
+        const uniqueTypes = new Set(withPriority.map((m) => String(m?.type || '')));
+        let selected = uniqueTypes.size <= 1 ? withPriority.slice(0, 4) : (() => {
+            const onePerType = [];
+            const seen = new Set();
+            for (const m of withPriority) {
+                const t = String(m?.type || '');
+                if (seen.has(t)) continue;
+                seen.add(t);
+                onePerType.push(m);
+                if (onePerType.length >= 4) break;
+            }
+            return onePerType;
+        })();
+
+        // Hard rule: running TERMINAL/PLAYBACK must be present in stage (up to max 4).
+        for (const critical of criticalItems) {
+            if (selected.some((s) => s.id === critical.id)) continue;
+            if (selected.length < 4) {
+                selected.push(critical);
+                continue;
+            }
+            let replaceIdx = -1;
+            let lowestScore = Number.POSITIVE_INFINITY;
+            for (let i = 0; i < selected.length; i += 1) {
+                const candidate = selected[i];
+                if (isCriticalRunning(candidate)) continue;
+                const sc = Number(scoreById.get(candidate.id) || 0);
+                if (sc < lowestScore) {
+                    lowestScore = sc;
+                    replaceIdx = i;
+                }
+            }
+            if (replaceIdx >= 0) selected[replaceIdx] = critical;
+        }
+        selected = [...selected].sort((a, b) => Number(scoreById.get(b.id) || 0) - Number(scoreById.get(a.id) || 0)).slice(0, 4);
+        return selected;
+    }, [mediaList, focusedMediaId, preferredStageSignatures, stageDismissedIds]);
+
+    const stageItemIds = new Set(stageItems.map((m) => m.id));
+
     return {
         mediaList,
         focusedMediaId,
         mediaState: {
             focusedMediaId,
             focusedItem: mediaList.find(m => m.id === focusedMediaId),
-            popups: mediaList.filter(m => m.status === 'docked')
+            stageItems,
+            popups: mediaList.filter(m => m.status === 'docked' && !stageItemIds.has(m.id))
         },
         addMedia, focusMedia, dockMedia, removeMedia, patchMediaPayload,
         pauseMediaExpiry, resumeMediaExpiry, togglePinMedia, setMediaPinned
@@ -1048,7 +1173,16 @@ const TerminalStreamCard = ({ payload, onOpenFullscreen }) => {
     const statusColor = isLive ? '#10b981' : (status === 'success' ? '#22c55e' : status === 'timeout' ? '#f59e0b' : '#ef4444');
 
     return (
-        <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: 'rgba(2, 6, 18, 0.96)' }}>
+        <div style={{
+            width: '100%',
+            height: '100%',
+            maxHeight: '100%',
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            background: 'rgba(2, 6, 18, 0.96)',
+            overflow: 'hidden'
+        }}>
             <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--card-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
                 <div style={{ minWidth: 0 }}>
                     <div style={{ fontFamily: '"JetBrains Mono","Fira Code",monospace', fontSize: '11px', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -1071,7 +1205,7 @@ const TerminalStreamCard = ({ payload, onOpenFullscreen }) => {
                     <span style={{ fontSize: '9px', fontWeight: 800, color: statusColor, textTransform: 'uppercase' }}>{status || 'running'}</span>
                 </div>
             </div>
-            <div ref={scrollRef} className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
+            <div ref={scrollRef} className="custom-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px' }}>
                 <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '12px', lineHeight: 1.5, color: '#d9e1ff', fontFamily: '"JetBrains Mono","Fira Code",monospace' }}>
                     {transcript}
                 </pre>
@@ -1385,9 +1519,10 @@ const DeezerMiniPlayerCard = ({ payload, showHeader = true }) => {
 };
 
 const StageMediaLayer = ({ mediaState, onDockMedia, onResolveApproval, onOpenTerminalFullscreen, sessionId, isMobile = false }) => {
-    if (mediaState.focusedMediaId == null) return null;
-
-    const item = mediaState.focusedItem;
+    const stageItems = Array.isArray(mediaState?.stageItems) ? mediaState.stageItems : [];
+    const item = mediaState.focusedItem || stageItems[0] || null;
+    if (!item) return null;
+    const isSingleStage = stageItems.length <= 1;
     const isAssistCard = ['WEATHER', 'SYSTEM_HEALTH', 'WIKI', 'MAP', 'CHART'].includes(item?.type);
     const isWeather = item?.type === 'WEATHER';
     const isLink = item?.type === 'LINK';
@@ -1398,6 +1533,7 @@ const StageMediaLayer = ({ mediaState, onDockMedia, onResolveApproval, onOpenTer
     const isImage = item?.type === 'IMAGE';
     const isApproval = item?.type === 'APPROVAL';
     const isPlayback = item?.type === 'PLAYBACK';
+    const [isSystemFullscreen, setIsSystemFullscreen] = useState(() => !!document.fullscreenElement);
     const resolvedYouTubeId = isYouTube
         ? (extractYouTubeId(String(item?.payload?.videoId || '')) || extractYouTubeId(String(item?.payload?.url || '')) || '')
         : '';
@@ -1439,23 +1575,48 @@ const StageMediaLayer = ({ mediaState, onDockMedia, onResolveApproval, onOpenTer
     // Extra compact for dashboard focus media.
     const frameMaxWidth = isMobile
         ? (isWeather ? 'min(96vw, 540px)' : isAssistCard ? 'min(98vw, 560px)' : isYouTube ? 'min(88vw, 520px)' : isDeezer ? 'min(82vw, 320px)' : isLink ? 'min(90vw, 420px)' : 'min(90vw, 420px)')
-        : (isWeather ? 'min(56vw, 800px, calc((100vh - 220px) * 1.42))' : isAssistCard ? 'min(60vw, 880px, calc((100vh - 220px) * 1.56))' : isApproval ? 'min(58vw, 820px, calc((100vh - 220px) * 1.45))' : isYouTube ? 'min(42vw, 560px)' : isDeezer ? 'min(30vw, 320px)' : isLink ? 'min(44vw, 560px)' : 'min(44vw, 560px)');
+        : (isWeather
+            ? (isSingleStage ? 'min(64vw, 920px, calc((100vh - 220px) * 1.55))' : 'min(56vw, 800px, calc((100vh - 220px) * 1.42))')
+            : isAssistCard
+                ? (isSingleStage ? 'min(68vw, 980px, calc((100vh - 220px) * 1.70))' : 'min(60vw, 880px, calc((100vh - 220px) * 1.56))')
+                : isApproval
+                    ? (isSingleStage ? 'min(64vw, 900px, calc((100vh - 220px) * 1.52))' : 'min(58vw, 820px, calc((100vh - 220px) * 1.45))')
+                    : isYouTube
+                        ? (isSingleStage ? 'min(50vw, 700px)' : 'min(42vw, 560px)')
+                        : isDeezer
+                            ? (isSingleStage ? 'min(34vw, 360px)' : 'min(30vw, 320px)')
+                            : isLink
+                                ? (isSingleStage ? 'min(50vw, 640px)' : 'min(44vw, 560px)')
+                                : (isSingleStage ? 'min(50vw, 640px)' : 'min(44vw, 560px)'));
     const frameMaxHeight = isMobile
-        ? (isWeather ? 'min(66vh, 560px)' : isAssistCard ? 'min(72vh, 700px)' : isYouTube ? 'min(58vh, 460px)' : isDeezer ? 'min(66vh, 540px)' : isTerminal ? 'min(48vh, 420px)' : isCode ? 'min(52vh, 500px)' : isImage ? 'min(42vh, 340px)' : 'min(30vh, 240px)')
-        : (isWeather ? 'min(58vh, 560px)' : isAssistCard ? 'min(46vh, 520px)' : isApproval ? 'min(42vh, 460px)' : isYouTube ? 'min(56vh, 520px)' : isDeezer ? 'min(64vh, 560px)' : isTerminal ? 'min(42vh, 440px)' : isCode ? 'min(54vh, 620px)' : isImage ? 'min(48vh, 460px)' : 'min(30vh, 260px)');
-    const topSafe = isMobile ? 58 : 76;
-    const bottomSafe = isMobile ? 120 : 150;
+        ? (isWeather ? 'min(66vh, 560px)' : isAssistCard ? 'min(72vh, 700px)' : isYouTube ? 'min(58vh, 460px)' : isDeezer ? 'min(66vh, 540px)' : isTerminal ? 'min(52vh, calc(100vh - 260px))' : isCode ? 'min(52vh, 500px)' : isImage ? 'min(42vh, 340px)' : 'min(30vh, 240px)')
+        : (isWeather ? 'min(58vh, 560px)' : isAssistCard ? 'min(46vh, 520px)' : isApproval ? 'min(42vh, 460px)' : isYouTube ? 'min(56vh, 520px)' : isDeezer ? 'min(64vh, 560px)' : isTerminal ? 'min(58vh, calc(100vh - 320px))' : isCode ? 'min(54vh, 620px)' : isImage ? 'min(48vh, 460px)' : 'min(30vh, 260px)');
+    const topSafe = isMobile ? 56 : (isPlayback ? 34 : isTerminal ? (isSystemFullscreen ? 12 : 36) : 72);
+    const bottomSafe = isMobile ? 170 : (isTerminal ? 320 : 230);
     const viewportSafeMaxHeight = `calc(100vh - ${topSafe + bottomSafe}px)`;
     const effectiveFrameMaxHeight = `min(${frameMaxHeight}, ${viewportSafeMaxHeight})`;
+    const terminalHardMaxHeightPx = (() => {
+        if (typeof window === 'undefined') return 360;
+        const vh = window.innerHeight || 900;
+        return Math.max(isMobile ? 280 : 320, vh - (isMobile ? 260 : 360));
+    })();
     const baseShiftY = isYouTube
         ? (isMobile ? -18 : -56)
         : isPlayback
             ? (isMobile ? -22 : -64)
+        : isTerminal
+            ? (isMobile ? -24 : (isSystemFullscreen ? -116 : -72))
         : isWeather
             ? (isMobile ? -12 : -42)
             : (isMobile ? -8 : -28);
     const stageFrameRef = useRef(null);
     const [dynamicShiftY, setDynamicShiftY] = useState(baseShiftY);
+
+    useEffect(() => {
+        const onFs = () => setIsSystemFullscreen(!!document.fullscreenElement);
+        document.addEventListener('fullscreenchange', onFs);
+        return () => document.removeEventListener('fullscreenchange', onFs);
+    }, []);
 
     useEffect(() => {
         const el = stageFrameRef.current;
@@ -1490,6 +1651,142 @@ const StageMediaLayer = ({ mediaState, onDockMedia, onResolveApproval, onOpenTer
         };
     }, [baseShiftY, isMobile, mediaState.focusedMediaId, item?.type]);
 
+    if (stageItems.length > 1) {
+        const multiItems = stageItems.slice(0, 4);
+        const cols = multiItems.length >= 3 ? 2 : multiItems.length;
+        const rows = Math.ceil(multiItems.length / Math.max(1, cols));
+        const stageTopPad = isMobile ? 70 : 86;
+        const stageBottomPad = isMobile ? 170 : 220;
+        const gridGapPx = 10;
+        const viewportH = typeof window !== 'undefined' ? window.innerHeight : 900;
+        const safeStageHeight = Math.max(
+            isMobile ? 340 : 390,
+            viewportH - stageTopPad - stageBottomPad
+        );
+        const rowHeight = Math.max(
+            isMobile ? 156 : 186,
+            Math.floor((safeStageHeight - ((rows - 1) * gridGapPx)) / Math.max(1, rows))
+        );
+        return (
+            <div style={{
+                width: '100vw', height: '100vh',
+                position: 'fixed', inset: 0,
+                pointerEvents: 'none',
+                zIndex: DASHBOARD_Z.STAGE_CARD,
+                display: 'flex',
+                alignItems: 'flex-start',
+                justifyContent: 'center',
+                paddingTop: isMobile ? '72px' : '88px',
+                paddingBottom: isMobile ? '132px' : '156px'
+            }}>
+                <div className="custom-scrollbar" style={{
+                    width: isMobile ? '95vw' : 'min(78vw, 1080px)',
+                    height: `${safeStageHeight}px`,
+                    overflow: 'hidden',
+                    pointerEvents: 'auto',
+                    display: 'grid',
+                    gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+                    gridTemplateRows: `repeat(${rows}, minmax(0, ${rowHeight}px))`,
+                    gap: `${gridGapPx}px`
+                }}>
+                    {multiItems.map((gridItem) => {
+                        const gType = String(gridItem?.type || '');
+                        const gIsAssist = ['WEATHER', 'SYSTEM_HEALTH', 'WIKI', 'MAP', 'CHART'].includes(gType);
+                        const gIsWeather = gType === 'WEATHER';
+                        const gIsYouTube = gType === 'YOUTUBE';
+                        const gIsDeezer = gType === 'DEEZER';
+                        const gIsTerminal = gType === 'TERMINAL';
+                        const gIsCode = gType === 'CODE';
+                        const gIsImage = gType === 'IMAGE';
+                        const gIsApproval = gType === 'APPROVAL';
+                        const gIsPlayback = gType === 'PLAYBACK';
+                        const gFrameH = Math.max(112, Math.min(isMobile ? 184 : 220, rowHeight - (isMobile ? 112 : 124)));
+                        const gYtId = gIsYouTube
+                            ? (extractYouTubeId(String(gridItem?.payload?.videoId || '')) || extractYouTubeId(String(gridItem?.payload?.url || '')) || '')
+                            : '';
+                        const gExternal = gIsYouTube
+                            ? String(gYtId ? `https://www.youtube.com/watch?v=${gYtId}` : (gridItem?.payload?.url || '')).trim()
+                            : gIsDeezer
+                                ? String(gridItem?.payload?.url || (gridItem?.payload?.trackId ? `https://www.deezer.com/track/${gridItem.payload.trackId}` : '')).trim()
+                                : String(gridItem?.payload?.url || '').trim();
+                        const gTitle = (gIsYouTube ? 'YOUTUBE' : gIsDeezer ? 'DEEZER' : gType || 'ASSET');
+                        const gFavicon = gIsYouTube
+                            ? '/api/favicon?url=https%3A%2F%2Fyoutube.com'
+                            : gIsDeezer
+                                ? '/api/favicon?url=https%3A%2F%2Fdeezer.com'
+                                : '';
+
+                        return (
+                            <div key={gridItem.id} style={{
+                                borderRadius: HERO_CONSTANTS.RADIUS.CARD,
+                                border: '1px solid rgba(var(--accent-rgb), 0.18)',
+                                background: 'var(--card-bg)',
+                                boxShadow: 'none',
+                                backdropFilter: 'blur(4px)',
+                                WebkitBackdropFilter: 'blur(4px)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                padding: '6px',
+                                gap: '4px',
+                                minHeight: 0,
+                                height: '100%'
+                            }}>
+                                <div style={{
+                                    width: '100%',
+                                    minHeight: '22px',
+                                    padding: '0 6px',
+                                    borderRadius: '6px',
+                                    border: '1px solid var(--card-border)',
+                                    background: 'transparent',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    gap: '8px',
+                                }}>
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                                        {gFavicon ? <img src={gFavicon} alt="" style={{ width: '12px', height: '12px', borderRadius: '3px', flexShrink: 0 }} onError={(e) => { e.currentTarget.style.display = 'none'; }} /> : <Layers size={12} color="#9ca3af" />}
+                                        <span style={{ fontSize: '10px', fontWeight: 800, color: 'var(--text-primary)', textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{gTitle}</span>
+                                    </div>
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                        {gExternal && (
+                                            <a href={gExternal} target="_blank" rel="noreferrer" className="btn-ghost" title="Open link" style={{ padding: '4px', lineHeight: 0, color: 'var(--text-muted)', borderRadius: '6px' }}>
+                                                <ExternalLink size={12} strokeWidth={2.4} />
+                                            </a>
+                                        )}
+                                        <button onClick={() => onDockMedia(gridItem.id)} className="flex-center" style={{ width: '24px', height: '24px', borderRadius: '6px', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--card-border)', cursor: 'pointer' }} title="Fechar mídia focada">
+                                            <X size={15} strokeWidth={2.8} />
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="custom-scrollbar" style={{ flex: 1, minHeight: 0, borderRadius: '8px', overflow: 'auto', border: '1px solid var(--card-border)', padding: '4px', background: 'transparent' }}>
+                                    {gIsApproval ? (
+                                        <DashboardApprovalCard item={gridItem} sessionId={sessionId} onResolved={onResolveApproval} />
+                                    ) : gIsImage ? (
+                                        <img src={getFileUrl(gridItem.payload, sessionId)} alt="" style={{ width: '100%', maxHeight: `${Math.max(120, rowHeight - 92)}px`, objectFit: 'contain' }} />
+                                    ) : gIsYouTube ? (
+                                        gYtId ? <iframe width="100%" height={String(gFrameH)} src={`https://www.youtube-nocookie.com/embed/${gYtId}?autoplay=0&rel=0&modestbranding=1`} title="YouTube player" frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen /> : <LinkPreviewCard messageContent={gridItem?.payload?.url || gridItem?.payload?.fullContent || ''} isStage={true} />
+                                    ) : gIsAssist ? (
+                                        <StageAssistCard type={gridItem.type} payload={gridItem.payload} sessionId={sessionId} isMobile={isMobile} />
+                                    ) : gIsCode ? (
+                                        <pre style={{ margin: 0, color: '#0f0', fontFamily: "'Fira Code', monospace", fontSize: '12px', whiteSpace: 'pre-wrap' }}>{gridItem?.payload?.code || ''}</pre>
+                                    ) : gIsTerminal ? (
+                                        <TerminalStreamCard payload={gridItem.payload || {}} onOpenFullscreen={() => onOpenTerminalFullscreen?.(gridItem?.id)} />
+                                    ) : gIsDeezer ? (
+                                        <DeezerMiniPlayerCard payload={gridItem.payload || {}} showHeader={false} />
+                                    ) : gIsPlayback ? (
+                                        <PlaybackCard runId={gridItem.payload.runId} sessionId={sessionId} embedMode={true} />
+                                    ) : (
+                                        <LinkPreviewCard messageContent={gridItem?.payload?.fullContent || gridItem?.payload?.url || ''} isStage={true} />
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div style={{
             width: '100vw', height: '100vh',
@@ -1519,7 +1816,7 @@ const StageMediaLayer = ({ mediaState, onDockMedia, onResolveApproval, onOpenTer
                     width: '100%',
                     maxWidth: frameMaxWidth,
                     height: '100%',
-                    maxHeight: effectiveFrameMaxHeight,
+                    maxHeight: isTerminal ? `${terminalHardMaxHeightPx}px` : effectiveFrameMaxHeight,
                     aspectRatio: isYouTube ? '4 / 3' : 'auto',
                     overflow: 'visible'
                 }} ref={stageFrameRef}>
@@ -1619,7 +1916,7 @@ const StageMediaLayer = ({ mediaState, onDockMedia, onResolveApproval, onOpenTer
                                         </a>
                                     )}
                                     <button
-                                        onClick={() => onDockMedia(mediaState.focusedMediaId)}
+                                        onClick={() => onDockMedia(item.id)}
                                         className="flex-center"
                                         style={{
                                             width: '28px', height: '28px', borderRadius: '8px',
@@ -1697,12 +1994,14 @@ const StageMediaLayer = ({ mediaState, onDockMedia, onResolveApproval, onOpenTer
                                 <pre style={{ margin: 0 }}>{item.payload.code}</pre>
                             </div>
                         ) : item?.type === 'TERMINAL' ? (
-                            <TerminalStreamCard payload={item.payload || {}} onOpenFullscreen={() => onOpenTerminalFullscreen?.(item?.id)} />
+                            <div style={{ width: '100%', height: '100%', maxHeight: '100%', minHeight: 0, overflow: 'hidden' }}>
+                                <TerminalStreamCard payload={item.payload || {}} onOpenFullscreen={() => onOpenTerminalFullscreen?.(item?.id)} />
+                            </div>
                         ) : item?.type === 'DEEZER' ? (
                             <DeezerMiniPlayerCard payload={item.payload || {}} showHeader={false} />
                         ) : item?.type === 'PLAYBACK' ? (
-                            <div style={{ width: '100%', height: '100%', padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'auto' }}>
-                                <PlaybackCard runId={item.payload.runId} sessionId={sessionId} />
+                            <div style={{ width: '100%', height: '100%', padding: '10px 16px', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflow: 'auto' }}>
+                                <PlaybackCard runId={item.payload.runId} sessionId={sessionId} embedMode={true} />
                             </div>
                         ) : item?.type === 'LINK' ? (
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', maxWidth: '100%', maxHeight: '100%', overflow: 'hidden' }}>
@@ -1728,7 +2027,8 @@ const StageMediaLayer = ({ mediaState, onDockMedia, onResolveApproval, onOpenTer
 const Dashboard = () => {
     const { theme } = useTheme();
     const [state, dispatch] = useReducer(dashboardReducer, initialState);
-    const msm = useMediaStackManager();
+    const [preferredStageSignatures, setPreferredStageSignatures] = useState([]);
+    const msm = useMediaStackManager(preferredStageSignatures);
     const msmRef = useRef(msm);
     useEffect(() => { msmRef.current = msm; }, [msm]);
     const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 640);
@@ -1752,6 +2052,49 @@ const Dashboard = () => {
     const terminalDismissedRef = useRef(new Map());
     const playbackCardByRunRef = useRef(new Map());
     const deezerHydrationAttemptedRef = useRef(new Set());
+
+    useEffect(() => {
+        const sid = String(state.textState.sessionId || '').trim();
+        if (!sid) {
+            setPreferredStageSignatures([]);
+            return;
+        }
+        const key = `dashboard_stage_layout_${sid}`;
+        try {
+            const raw = localStorage.getItem(key);
+            if (!raw) {
+                setPreferredStageSignatures([]);
+                return;
+            }
+            const parsed = JSON.parse(raw);
+            const arr = Array.isArray(parsed?.signatures) ? parsed.signatures.map((v) => String(v || '').trim()).filter(Boolean) : [];
+            setPreferredStageSignatures(arr.slice(0, 16));
+        } catch (_) {
+            setPreferredStageSignatures([]);
+        }
+    }, [state.textState.sessionId]);
+
+    useEffect(() => {
+        const sid = String(state.textState.sessionId || '').trim();
+        if (!sid) return;
+        const stageNow = Array.isArray(msm.mediaState?.stageItems) ? msm.mediaState.stageItems : [];
+        if (stageNow.length === 0) return;
+        const signatures = stageNow.map((m) => mediaSignatureFromItem(m)).filter(Boolean).slice(0, 16);
+        if (signatures.length === 0) return;
+        setPreferredStageSignatures((prev) => {
+            const same = Array.isArray(prev) && prev.length === signatures.length && prev.every((v, i) => v === signatures[i]);
+            if (same) return prev;
+            return signatures;
+        });
+        try {
+            localStorage.setItem(`dashboard_stage_layout_${sid}`, JSON.stringify({
+                signatures,
+                updatedAt: Date.now(),
+            }));
+        } catch (_) {
+            // ignore storage errors
+        }
+    }, [msm.mediaState?.stageItems, state.textState.sessionId]);
 
     const claimAssistCardSlot = useCallback((workId, type) => {
         if (!workId) return true;

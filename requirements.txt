@@ -18,6 +18,7 @@ trafilatura
 readability-lxml
 wikipedia
 pyautogui
+PySide6
 pytz
 openai
 geopy

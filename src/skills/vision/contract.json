@@ -37,6 +37,52 @@
                     "description": "O que procurar ou o que descrever na tela."
                 }
             }
+        },
+        "locate_screen": {
+            "description": "Captura a tela e localiza um elemento retornando bounding box estruturado.",
+            "params": {
+                "label": {
+                    "type": "string",
+                    "description": "Descricao do elemento alvo a ser localizado na tela."
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Alias de label para compatibilidade."
+                },
+                "target": {
+                    "type": "string",
+                    "description": "Alias adicional de label para planners legados."
+                },
+                "target_description": {
+                    "type": "string",
+                    "description": "Descricao longa do alvo (alias de label)."
+                },
+                "hint": {
+                    "type": "string",
+                    "description": "Dica opcional para ajudar na localizacao."
+                }
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "ok": { "type": "boolean" },
+                    "status": { "type": "string" },
+                    "text": { "type": "string" },
+                    "bbox": {
+                        "type": "object",
+                        "properties": {
+                            "label": { "type": "string" },
+                            "confidence": { "type": "number" },
+                            "x": { "type": "number" },
+                            "y": { "type": "number" },
+                            "width": { "type": "number" },
+                            "height": { "type": "number" },
+                            "screen_id": { "type": "integer" }
+                        }
+                    },
+                    "path": { "type": "string" }
+                }
+            }
         }
     }
 }

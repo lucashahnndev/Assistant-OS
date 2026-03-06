@@ -1,6 +1,7 @@
 {
     "name": "weather.control",
     "description": "Consulta clima atual e previsão por cidade/coordenadas, com fallback automático.",
+    "icon_key": "weather",
     "version": "1.0.0",
     "actions": {
         "get": {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Play, Pause, SkipBack, SkipForward, Monitor, ExternalLink, Download, Maximize2, Minimize2 } from 'lucide-react';
 
-const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = null }) => {
+const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = null, embedMode = false }) => {
     const [manifest, setManifest] = useState(initialManifest);
     const [currentStepIndex, setCurrentStepIndex] = useState(0);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -142,7 +142,7 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
 
     if (!manifest || !manifest.steps || manifest.steps.length === 0) {
         return (
-            <div className="playback-card glass loading" style={{ margin: '10px auto', borderRadius: '14px', border: '1px solid var(--card-border)', background: 'rgba(0,0,0,0.4)', maxWidth: '420px', width: '100%' }}>
+            <div className="playback-card glass loading" style={{ margin: embedMode ? '0 auto' : '10px auto', borderRadius: '14px', border: '1px solid var(--card-border)', background: 'rgba(0,0,0,0.4)', maxWidth: '420px', width: '100%' }}>
                 <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '170px', flexDirection: 'column', gap: '12px' }}>
                     <div className="loader-spin" style={{ width: '24px', height: '24px', border: '2px solid rgba(255,255,255,0.1)', borderTopColor: 'var(--accent-color)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
                     <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Aguardando interação visual...</span>
@@ -217,7 +217,7 @@ const PlaybackCard = ({ runId, sessionId, initialManifest = null, liveEvent = nu
             overflow: 'hidden',
             border: '1px solid var(--card-border)',
             background: 'rgba(15, 23, 42, 0.6)',
-            margin: '10px auto',
+            margin: embedMode ? '0 auto' : '10px auto',
             maxWidth: isSystemFullscreen ? '100vw' : '420px',
             width: isSystemFullscreen ? '100vw' : '100%',
             boxShadow: 'var(--shadow-lg)',

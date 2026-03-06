@@ -169,6 +169,8 @@ def list_skills(request: Request, user: User = Depends(get_current_user)):
                         "id": skill_id,
                         "name": contract.get("name", item),
                         "description": contract.get("description", ""),
+                        "icon_key": contract.get("icon_key", ""),
+                        "icon_url": contract.get("icon_url", ""),
                         "actions": actions_list,
                         "config_schema": schema,
                         "enabled": False,
@@ -350,7 +352,9 @@ def get_skill_registry(
             "skill_name": skill.name,
             "namespace": getattr(skill, "_namespace", "") or ".".join(action_id.split(".")[:-1]),
             "description": desc,
-            "risk_level": risk_level
+            "risk_level": risk_level,
+            "icon_key": metadata.get("icon_key") or getattr(skill, "_contract", {}).get("icon_key", ""),
+            "icon_url": metadata.get("icon_url") or getattr(skill, "_contract", {}).get("icon_url", ""),
         })
             
     return actions

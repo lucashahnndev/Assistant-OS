@@ -35,6 +35,32 @@ class PromptComposer:
         "dependenc",
     )
 
+    _ASSISTIVE_KEYWORDS = (
+        "na minha tela",
+        "na tela",
+        "mostrar na tela",
+        "mostra na tela",
+        "me mostra",
+        "aponta",
+        "aponte",
+        "destaca",
+        "destaque",
+        "demarca",
+        "demarque",
+        "circula",
+        "circule",
+        "desenha",
+        "desenhe",
+        "indicador",
+        "ícone",
+        "icone",
+        "where is",
+        "show on screen",
+        "point to",
+        "highlight",
+        "mark on screen",
+    )
+
     _INTENT_SCHEMA = {
         "thought": "Internal reasoning in English",
         "plan": ["[ ] pending step", "[/] in progress", "[x] done"],
@@ -60,6 +86,7 @@ class PromptComposer:
         "scratchpad": 1400,
         "attachments": 1400,
         "skills_summary": 3200,
+        "relevant_memory": 2500,
     }
 
     def __init__(self, block_budgets: Dict[str, int] = None):
@@ -97,6 +124,7 @@ class PromptComposer:
         attachments: List[Any],
         skills_summary: str,
         skill_scope: str,
+        relevant_memory: List[Dict[str, Any]] = None,
     ) -> str:
         prompt_parts: List[str] = []
 
@@ -184,6 +212,14 @@ class PromptComposer:
                 f"{self._clip_block('attachments', attachment_text)}"
             )
 
+        if relevant_memory:
+            memory_text = json.dumps(relevant_memory, ensure_ascii=False, separators=(",", ":"))
+            dynamic_sections.append(
+                "[RELEVANT MEMORY]\n"
+                "(Selected historical context for the current turn.)\n"
+                f"{self._clip_block('relevant_memory', memory_text)}"
+            )
+
         if dynamic_sections:
             prompt_parts.append("[DYNAMIC CONTEXT]\n" + "\n\n".join(dynamic_sections))
 
@@ -192,6 +228,16 @@ class PromptComposer:
             f"Scope: {skill_scope}\n"
             f"{self._clip_block('skills_summary', skills_summary or '- No actions available for this principal.')}"
         )
+
+        if self._is_assistive_request(user_input):
+            prompt_parts.append(
+                "[ASSISTIVE MODE DIRECTIVE]\n"
+                "- User asked for visual guidance on their screen.\n"
+                "- Prefer `overlay.assist.highlight_target` as the primary action.\n"
+                "- Use `vision.locate_screen` only as a locator step to obtain bbox for overlay.\n"
+                "- Do NOT use `vision.search_screen` as final result for these requests.\n"
+                "- Final outcome should be an overlay mark on target (or a structured failure with reason if target not found)."
+            )
 
         prompt_parts.append(
             "[EXECUTION POLICY]\n"
@@ -227,6 +273,11 @@ class PromptComposer:
         if not user_input:
             return False
         return self._has_any_keyword(user_input, self._DEV_KEYWORDS)
+
+    def _is_assistive_request(self, user_input: str) -> bool:
+        if not user_input:
+            return False
+        return self._has_any_keyword(user_input, self._ASSISTIVE_KEYWORDS)
 
     @staticmethod
     def _has_any_keyword(text: str, keywords: tuple[str, ...]) -> bool:

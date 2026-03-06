@@ -1,0 +1,192 @@
+{
+  "name": "overlay.assist",
+  "namespace": "overlay.assist",
+  "description": "Overlay assistivo global para destacar elementos na tela sem bloquear mouse/teclado.",
+  "actions": {
+    "highlight_target": {
+      "description": "Localiza um elemento na tela via visão e desenha marcação temporária.",
+      "risk_level": "low",
+      "params": {
+        "label": { "type": "string", "description": "Descrição do alvo na tela." },
+        "target": { "type": "string", "description": "Alias de label." },
+        "query": { "type": "string", "description": "Alias de label." },
+        "hint": { "type": "string", "description": "Dica extra para o locator." },
+        "mark_type": {
+          "type": "string",
+          "enum": [
+            "focus_corners",
+            "circle",
+            "rect",
+            "arrow",
+            "line",
+            "text",
+            "path",
+            "draw_focus_corners",
+            "draw_circle",
+            "draw_rect",
+            "draw_arrow",
+            "draw_line",
+            "draw_text",
+            "draw_path"
+          ],
+          "default": "focus_corners"
+        },
+        "color": { "type": "string", "default": "#00E5FF" },
+        "stroke_width": { "type": "integer", "default": 3 },
+        "opacity": { "type": "number", "default": 0.95 },
+        "ttl_ms": { "type": "integer", "default": 2200 },
+        "pulse": { "type": "boolean", "default": true },
+        "screen_id": { "type": "integer", "default": 0 }
+      }
+    },
+    "draw_circle": {
+      "description": "Desenha um circulo sobre coordenadas.",
+      "risk_level": "low",
+      "params": {
+        "id": { "type": "string" },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "radius": { "type": "number" },
+        "width": { "type": "number" },
+        "height": { "type": "number" },
+        "color": { "type": "string" },
+        "stroke_width": { "type": "number" },
+        "opacity": { "type": "number" },
+        "ttl_ms": { "type": "integer" },
+        "pulse": { "type": "boolean" },
+        "screen_id": { "type": "integer" }
+      }
+    },
+    "draw_rect": {
+      "description": "Desenha um retangulo sobre coordenadas.",
+      "risk_level": "low",
+      "params": {
+        "id": { "type": "string" },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "width": { "type": "number" },
+        "height": { "type": "number" },
+        "color": { "type": "string" },
+        "stroke_width": { "type": "number" },
+        "opacity": { "type": "number" },
+        "ttl_ms": { "type": "integer" },
+        "pulse": { "type": "boolean" },
+        "screen_id": { "type": "integer" }
+      }
+    },
+    "draw_focus_corners": {
+      "description": "Desenha foco por 4 cantos com pulse opcional.",
+      "risk_level": "low",
+      "params": {
+        "id": { "type": "string" },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "width": { "type": "number" },
+        "height": { "type": "number" },
+        "color": { "type": "string" },
+        "stroke_width": { "type": "number" },
+        "opacity": { "type": "number" },
+        "ttl_ms": { "type": "integer" },
+        "pulse": { "type": "boolean", "default": true },
+        "screen_id": { "type": "integer" }
+      }
+    },
+    "draw_arrow": {
+      "description": "Desenha seta entre dois pontos.",
+      "risk_level": "low",
+      "params": {
+        "id": { "type": "string" },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "x2": { "type": "number" },
+        "y2": { "type": "number" },
+        "color": { "type": "string" },
+        "stroke_width": { "type": "number" },
+        "opacity": { "type": "number" },
+        "ttl_ms": { "type": "integer" },
+        "pulse": { "type": "boolean" },
+        "screen_id": { "type": "integer" }
+      }
+    },
+    "draw_line": {
+      "description": "Desenha linha entre dois pontos.",
+      "risk_level": "low",
+      "params": {
+        "id": { "type": "string" },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "x2": { "type": "number" },
+        "y2": { "type": "number" },
+        "color": { "type": "string" },
+        "stroke_width": { "type": "number" },
+        "opacity": { "type": "number" },
+        "ttl_ms": { "type": "integer" },
+        "pulse": { "type": "boolean" },
+        "screen_id": { "type": "integer" }
+      }
+    },
+    "draw_text": {
+      "description": "Desenha texto em coordenadas.",
+      "risk_level": "low",
+      "params": {
+        "id": { "type": "string" },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "text": { "type": "string" },
+        "font_size": { "type": "integer", "default": 20 },
+        "color": { "type": "string" },
+        "stroke_width": { "type": "number" },
+        "opacity": { "type": "number" },
+        "ttl_ms": { "type": "integer" },
+        "screen_id": { "type": "integer" }
+      }
+    },
+    "draw_path": {
+      "description": "Desenha path livre baseado em pontos.",
+      "risk_level": "low",
+      "params": {
+        "id": { "type": "string" },
+        "points": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "x": { "type": "number" },
+              "y": { "type": "number" }
+            }
+          }
+        },
+        "color": { "type": "string" },
+        "stroke_width": { "type": "number" },
+        "opacity": { "type": "number" },
+        "ttl_ms": { "type": "integer" },
+        "screen_id": { "type": "integer" }
+      }
+    },
+    "clear_by_id": {
+      "description": "Remove um desenho pelo id.",
+      "risk_level": "low",
+      "params": {
+        "id": { "type": "string" },
+        "command_id": { "type": "string" }
+      }
+    },
+    "clear_all": {
+      "description": "Remove todos os desenhos ativos do overlay.",
+      "risk_level": "low",
+      "params": {}
+    }
+  },
+  "locator_output": {
+    "type": "object",
+    "properties": {
+      "label": { "type": "string" },
+      "confidence": { "type": "number" },
+      "x": { "type": "number" },
+      "y": { "type": "number" },
+      "width": { "type": "number" },
+      "height": { "type": "number" },
+      "screen_id": { "type": "integer" }
+    }
+  }
+}

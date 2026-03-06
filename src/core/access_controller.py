@@ -77,6 +77,7 @@ class IdentityService:
                     "deezer.*",
                     "spotify.*",
                     "vision.*",
+                    "overlay.assist.*",
                     "system_logs.*",
                     "system.apps.*",
                     "system.control.info",
@@ -128,6 +129,7 @@ class IdentityService:
                     "system.control.screenshot",
                     "vision.analyze",
                     "vision.search_screen",
+                    "overlay.assist.*",
                     "reflex.*",
                 ],
                 deny_actions=["shell.*", "system.control.*"],
@@ -271,14 +273,51 @@ class IdentityService:
         groups = self.policy.get("permission_groups", {})
         return [dict(value) for _, value in sorted(groups.items(), key=lambda x: x[0])]
 
+    def resolve_permission_group_id(self, token: Optional[str]) -> str:
+        """
+        Resolve a group token to a canonical group id.
+        Accepts exact id, case-insensitive id, display name, or slug-like variants.
+        Returns empty string when unresolved.
+        """
+        raw = str(token or "").strip()
+        if not raw:
+            return ""
+
+        groups = self.policy.get("permission_groups", {})
+        if not isinstance(groups, dict) or not groups:
+            return ""
+
+        exact = raw.lower()
+        if exact in groups:
+            return exact
+
+        compact = exact.replace(" ", "_")
+        if compact in groups:
+            return compact
+
+        for gid, data in groups.items():
+            if str(gid or "").strip().lower() == exact:
+                return str(gid).strip().lower()
+            name = ""
+            if isinstance(data, dict):
+                name = str(data.get("name") or "").strip().lower()
+            if name and name in {exact, compact}:
+                return str(gid).strip().lower()
+            if name and name.replace(" ", "_") == compact:
+                return str(gid).strip().lower()
+        return ""
+
     def get_permission_group(self, group_id: str) -> Optional[PermissionGroup]:
-        group_data = self.policy.get("permission_groups", {}).get(group_id)
+        canonical_group_id = self.resolve_permission_group_id(group_id)
+        if not canonical_group_id:
+            return None
+        group_data = self.policy.get("permission_groups", {}).get(canonical_group_id)
         if not group_data:
             return None
         try:
             return PermissionGroup(**group_data)
         except Exception as e:
-            logger.warning(f"Invalid permission group '{group_id}': {e}")
+            logger.warning(f"Invalid permission group '{canonical_group_id}': {e}")
             return None
 
     def save_permission_group(self, group: PermissionGroup):
@@ -337,8 +376,9 @@ class IdentityService:
 
     def _ensure_valid_group(self, group_id: Optional[str], fallback: str) -> str:
         groups = self.policy.get("permission_groups", {})
-        if group_id and group_id in groups:
-            return group_id
+        resolved = self.resolve_permission_group_id(group_id)
+        if resolved and resolved in groups:
+            return resolved
         return fallback if fallback in groups else "master"
 
     def ensure_user_group(self, user: UserEntity, interface: str, mode: Optional[str] = None) -> UserEntity:

@@ -104,8 +104,11 @@ async def update_interface(interface: str, update: InterfaceUpdate, request: Req
                         continue
                     if token in {"*", "all"}:
                         token = "*"
-                    elif not service.get_permission_group(token):
-                        raise HTTPException(status_code=400, detail=f"Permission group '{token}' not found")
+                    else:
+                        resolved_group = service.resolve_permission_group_id(token)
+                        if not resolved_group:
+                            raise HTTPException(status_code=400, detail=f"Permission group '{token}' not found")
+                        token = resolved_group
                     if token not in normalized:
                         normalized.append(token)
                 merged_approval[list_key] = normalized
@@ -113,8 +116,11 @@ async def update_interface(interface: str, update: InterfaceUpdate, request: Req
             current["approval_decisions"] = merged_approval
             continue
         if field in group_fields and value:
-            if not service.get_permission_group(value):
+            resolved_group = service.resolve_permission_group_id(value)
+            if not resolved_group:
                 raise HTTPException(status_code=400, detail=f"Permission group '{value}' not found")
+            current[field] = resolved_group
+            continue
         current[field] = value
         
     service.save_policy()
@@ -133,10 +139,11 @@ async def update_user_group(interface: str, user_id: str, update: GroupAssignUpd
     entity = service.get_user(interface, user_id)
     if not entity:
         raise HTTPException(status_code=404, detail="User not found")
-    if not service.get_permission_group(update.group_id):
+    resolved_group = service.resolve_permission_group_id(update.group_id)
+    if not resolved_group:
         raise HTTPException(status_code=400, detail="Permission group not found")
 
-    entity.group_id = update.group_id
+    entity.group_id = resolved_group
     service.save_user(entity)
     return entity
 
@@ -177,10 +184,11 @@ async def update_chat_group(interface: str, chat_id: str, update: GroupAssignUpd
     entity = service.get_chat(interface, chat_id)
     if not entity:
         raise HTTPException(status_code=404, detail="Chat not found")
-    if not service.get_permission_group(update.group_id):
+    resolved_group = service.resolve_permission_group_id(update.group_id)
+    if not resolved_group:
         raise HTTPException(status_code=400, detail="Permission group not found")
 
-    entity.group_id = update.group_id
+    entity.group_id = resolved_group
     service.save_chat(entity)
     return entity
 
@@ -307,7 +315,8 @@ async def create_group(payload: GroupCreateRequest, request: Request, user_ctx: 
 async def patch_group(group_id: str, payload: GroupPatchRequest, request: Request, user_ctx: User = Depends(require_admin_user)):
     kernel = request.app.state.kernel
     service = kernel.orchestrator.access_controller.identity_service
-    existing = service.get_permission_group(group_id)
+    resolved_group_id = service.resolve_permission_group_id(group_id)
+    existing = service.get_permission_group(resolved_group_id or group_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Group not found")
 
@@ -328,10 +337,11 @@ async def patch_group(group_id: str, payload: GroupPatchRequest, request: Reques
 async def delete_group(group_id: str, request: Request, user_ctx: User = Depends(require_admin_user)):
     kernel = request.app.state.kernel
     service = kernel.orchestrator.access_controller.identity_service
+    resolved_group_id = service.resolve_permission_group_id(group_id) or group_id
     try:
-        deleted = service.delete_permission_group(group_id)
+        deleted = service.delete_permission_group(resolved_group_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not deleted:
         raise HTTPException(status_code=404, detail="Group not found")
-    return {"status": "deleted", "group_id": group_id}
+    return {"status": "deleted", "group_id": resolved_group_id}

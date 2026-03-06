@@ -1,6 +1,8 @@
 {
     "name": "spotify.search",
     "description": "Busca conteúdo no Spotify (música, artista, álbum, playlist), com fallback quando credenciais não estiverem disponíveis.",
+    "icon_key": "spotify",
+    "icon_url": "https://open.spotify.com",
     "version": "1.0.0",
     "actions": {
         "search": {

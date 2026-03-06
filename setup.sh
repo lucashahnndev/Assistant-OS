@@ -105,6 +105,12 @@ if ! command -v openssl &> /dev/null; then
     MISSING_SYSTEM_DEPS+=("openssl")
 fi
 
+# 3.1 Qt runtime dependency for assistive overlay backend (PySide6 on X11)
+# Required to load the Qt xcb platform plugin correctly.
+if can_use_apt; then
+    MISSING_SYSTEM_DEPS+=("libxcb-cursor0")
+fi
+
 try_install_system_deps
 
 if ! command -v python3 &> /dev/null; then

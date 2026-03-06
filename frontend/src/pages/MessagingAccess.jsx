@@ -29,8 +29,8 @@ import {
 } from 'lucide-react';
 import { api } from '../hooks/api';
 import { toast } from 'react-hot-toast';
-import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
+import SkillIcon from '../components/SkillIcon';
 
 const API_BASE = '/messaging_access';
 const INTERFACE_META = {
@@ -440,6 +440,13 @@ const MessagingAccess = () => {
                             >
                                 <div style={{ minWidth: 0, flex: 1 }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                                        <SkillIcon
+                                            variant="inline"
+                                            actionId={action.id}
+                                            skillName={action.skill_name}
+                                            iconKey={action.icon_key}
+                                            iconUrl={action.icon_url}
+                                        />
                                         <span style={{ fontSize: '13px', fontWeight: '800' }}>{action.id}</span>
                                         <span style={{
                                             fontSize: '9px',
@@ -596,87 +603,100 @@ const MessagingAccess = () => {
 
     return (
         <div className="animate-in scroll-container" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? 'var(--space-4)' : 'var(--space-6)', paddingBottom: '100px' }}>
-                <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '24px' }}>
-                    <PageHeader
-                        title="Security Hub"
-                        subtitle="Interface-wide access control and permission orchestration."
+            <div style={{ flex: 1, overflowY: 'auto', padding: 0, paddingBottom: '24px' }}>
+                <section style={{ padding: isMobile ? '10px' : '14px', borderRadius: 0, border: 'none', background: 'var(--card-bg)', backdropFilter: 'var(--surface-blur)', WebkitBackdropFilter: 'var(--surface-blur)', boxShadow: 'none' }}>
+                    <div
+                        style={{
+                            position: 'sticky',
+                            top: 0,
+                            zIndex: 5,
+                            background: 'var(--card-bg)',
+                            backdropFilter: 'var(--surface-blur)',
+                            WebkitBackdropFilter: 'var(--surface-blur)',
+                            margin: isMobile ? '-10px -10px 10px -10px' : '-14px -14px 10px -14px',
+                            padding: isMobile ? '10px 10px 0 10px' : '10px 14px 0 14px',
+                            borderBottom: '1px solid var(--card-border)',
+                        }}
                     >
-                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-                            {visibleInterfaces.map(itf => (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: isMobile ? 'wrap' : 'nowrap', paddingBottom: '10px' }}>
+                            <div style={{ minWidth: 0 }}>
+                                <h2 style={{ fontSize: isMobile ? '1.05rem' : '1.25rem', fontWeight: '800', margin: 0 }}>Security Hub</h2>
+                                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>Interface-wide access control and permission orchestration.</p>
+                            </div>
+                            <div style={{ display: 'flex', gap: '4px', padding: '3px', borderRadius: '9px', border: '1px solid var(--card-border)', background: 'rgba(255,255,255,0.02)', flexShrink: 0 }}>
+                                {visibleInterfaces.map(itf => (
+                                    <button
+                                        key={itf}
+                                        onClick={() => setActiveInterface(itf)}
+                                        className="btn-ghost"
+                                        style={{
+                                            padding: '6px 8px',
+                                            borderRadius: '7px',
+                                            fontSize: '11px',
+                                            fontWeight: '700',
+                                            background: activeInterface === itf ? 'var(--accent-glow)' : 'transparent',
+                                            color: activeInterface === itf ? 'var(--accent-color)' : 'var(--text-muted)',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '6px',
+                                            textTransform: 'uppercase',
+                                        }}
+                                    >
+                                        {itf === 'telegram' && <Send size={12} />}
+                                        {itf === 'web' && <Globe size={12} />}
+                                        {itf === 'cli' && <Terminal size={12} />}
+                                        {INTERFACE_META[itf]?.label || itf}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Tabs */}
+                        <nav style={{ display: 'flex', gap: '14px', borderTop: '1px solid var(--card-border)', borderBottom: '1px solid var(--card-border)' }}>
+                            {['config', 'groups', 'users', 'chats'].map(tab => (
                                 <button
-                                    key={itf}
-                                    onClick={() => setActiveInterface(itf)}
+                                    key={tab}
+                                    onClick={() => setActiveTab(tab)}
                                     style={{
-                                        padding: '6px 12px',
-                                        background: activeInterface === itf ? 'var(--accent-glow)' : 'transparent',
-                                        border: '1px solid',
-                                        borderColor: activeInterface === itf ? 'var(--accent-color)' : 'var(--card-border)',
-                                        borderRadius: '8px',
-                                        fontSize: '0.6875rem',
-                                        fontWeight: '800',
-                                        color: activeInterface === itf ? 'var(--accent-color)' : 'var(--text-muted)',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '6px',
-                                        transition: 'var(--transition-fast)',
-                                        cursor: 'pointer'
+                                        padding: '8px 2px',
+                                        background: 'none',
+                                        border: 'none',
+                                        color: activeTab === tab ? 'var(--accent-color)' : 'var(--text-muted)',
+                                        fontWeight: activeTab === tab ? '800' : '600',
+                                        borderBottom: activeTab === tab ? '2px solid var(--accent-color)' : '2px solid transparent',
+                                        cursor: 'pointer',
+                                        textTransform: 'uppercase',
+                                        letterSpacing: '0.05em',
+                                        fontSize: '0.625rem',
+                                        transition: 'var(--transition-fast)'
                                     }}
                                 >
-                                    {itf === 'telegram' && <Send size={12} />}
-                                    {itf === 'web' && <Globe size={12} />}
-                                    {itf === 'cli' && <Terminal size={12} />}
-                                    {(INTERFACE_META[itf]?.label || itf).toUpperCase()}
+                                    {tab}
                                 </button>
                             ))}
-                        </div>
-                    </PageHeader>
-
-                    {/* Tabs */}
-                    <nav style={{ display: 'flex', gap: '24px', borderBottom: '1px solid var(--card-border)', marginBottom: '24px' }}>
-                        {['config', 'groups', 'users', 'chats'].map(tab => (
-                            <button
-                                key={tab}
-                                onClick={() => setActiveTab(tab)}
-                                style={{
-                                    padding: '10px 2px',
-                                    background: 'none',
-                                    border: 'none',
-                                    color: activeTab === tab ? 'var(--accent-color)' : 'var(--text-muted)',
-                                    fontWeight: activeTab === tab ? '800' : '600',
-                                    borderBottom: activeTab === tab ? '2px solid var(--accent-color)' : '2px solid transparent',
-                                    cursor: 'pointer',
-                                    textTransform: 'uppercase',
-                                    letterSpacing: '0.05em',
-                                    fontSize: '0.6875rem',
-                                    transition: 'var(--transition-fast)'
-                                }}
-                            >
-                                {tab}
-                            </button>
-                        ))}
-                    </nav>
+                        </nav>
+                    </div>
 
                     {/* Content */}
                     {activeTab === 'config' && (
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '24px' }}>
-                            <div style={{ padding: '20px', borderRadius: '20px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--card-border)' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-                                    <div className="flex-center" style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'var(--accent-glow)', color: 'var(--accent-color)' }}>
-                                        <Shield size={18} />
+                        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '14px', alignItems: 'stretch' }}>
+                            <div style={{ padding: '14px', borderRadius: '12px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--card-border)', minHeight: '100%' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+                                    <div className="flex-center" style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'var(--accent-glow)', color: 'var(--accent-color)' }}>
+                                        <Shield size={15} />
                                     </div>
                                     <h3 style={{ fontSize: '0.875rem', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Access Strategy</h3>
                                 </div>
 
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px' }}>
                                         <div>
-                                            <label style={{ display: 'block', fontSize: '11px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '8px', textTransform: 'uppercase' }}>Private Messages</label>
+                                            <label style={{ display: 'block', fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase' }}>Private Messages</label>
                                             <select
                                                 value={currentConf.dm_mode}
                                                 onChange={(e) => handleInterfaceUpdate({ dm_mode: e.target.value })}
                                                 className="input-field"
-                                                style={{ width: '100%', borderRadius: '12px', background: 'rgba(0,0,0,0.2)' }}
+                                                style={{ width: '100%', borderRadius: '9px', background: 'rgba(0,0,0,0.2)', minHeight: '38px' }}
                                             >
                                                 <option value="approved_only">Approved Only</option>
                                                 <option value="auto_approve">Auto Approve</option>
@@ -684,12 +704,12 @@ const MessagingAccess = () => {
                                             </select>
                                         </div>
                                         <div>
-                                            <label style={{ display: 'block', fontSize: '11px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '8px', textTransform: 'uppercase' }}>Groups / Channels</label>
+                                            <label style={{ display: 'block', fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase' }}>Groups / Channels</label>
                                             <select
                                                 value={currentConf.group_mode}
                                                 onChange={(e) => handleInterfaceUpdate({ group_mode: e.target.value })}
                                                 className="input-field"
-                                                style={{ width: '100%', borderRadius: '12px', background: 'rgba(0,0,0,0.2)' }}
+                                                style={{ width: '100%', borderRadius: '9px', background: 'rgba(0,0,0,0.2)', minHeight: '38px' }}
                                             >
                                                 <option value="approved_only">Approved Only</option>
                                                 <option value="auto_approve">Auto Approve</option>
@@ -698,7 +718,7 @@ const MessagingAccess = () => {
                                         </div>
                                     </div>
 
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px' }}>
                                         {[
                                             { label: 'Default User Group', key: 'default_user_group', prefix: 'dug' },
                                             { label: 'Auto-Approve User Group', key: 'auto_approve_user_group', prefix: 'aug' },
@@ -711,7 +731,7 @@ const MessagingAccess = () => {
                                                     value={currentConf[field.key] || ''}
                                                     onChange={(e) => handleInterfaceUpdate({ [field.key]: e.target.value })}
                                                     className="input-field"
-                                                    style={{ width: '100%', fontSize: '12px', padding: '10px', borderRadius: '10px', background: 'rgba(0,0,0,0.2)' }}
+                                                    style={{ width: '100%', fontSize: '12px', padding: '8px 10px', borderRadius: '9px', background: 'rgba(0,0,0,0.2)' }}
                                                 >
                                                     {groupOptions.map(g => (
                                                         <option key={`${field.prefix}-${g.value}`} value={g.value}>{g.label}</option>
@@ -723,19 +743,19 @@ const MessagingAccess = () => {
                                 </div>
                             </div>
 
-                            <div style={{ padding: '20px', borderRadius: '20px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--card-border)' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-                                    <div className="flex-center" style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b' }}>
-                                        <Activity size={18} />
+                            <div style={{ padding: '14px', borderRadius: '12px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--card-border)', minHeight: '100%' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+                                    <div className="flex-center" style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b' }}>
+                                        <Activity size={15} />
                                     </div>
                                     <h3 style={{ fontSize: '0.875rem', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Traffic Control</h3>
                                 </div>
 
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px', borderRadius: '16px', background: 'rgba(0,0,0,0.2)' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px', borderRadius: '10px', background: 'rgba(0,0,0,0.2)' }}>
                                         <div>
-                                            <div style={{ fontSize: '13px', fontWeight: '800' }}>Global Rate Limit</div>
-                                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Prevent API exhaustion</div>
+                                            <div style={{ fontSize: '12px', fontWeight: '800' }}>Global Rate Limit</div>
+                                            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Prevent API exhaustion</div>
                                         </div>
                                         <div
                                             onClick={() => handleInterfaceUpdate({ rate_limit_enabled: !currentConf.rate_limit_enabled })}
@@ -779,7 +799,7 @@ const MessagingAccess = () => {
                                         />
                                     </div>
 
-                                    <div style={{ marginTop: 'auto', padding: '16px', borderRadius: '16px', background: 'rgba(239, 68, 68, 0.05)', border: '1px solid rgba(239, 68, 68, 0.1)' }}>
+                                    <div style={{ marginTop: 'auto', padding: '12px', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.05)', border: '1px solid rgba(239, 68, 68, 0.1)' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#ef4444', marginBottom: '4px' }}>
                                             <Zap size={14} />
                                             <span style={{ fontSize: '11px', fontWeight: '900', textTransform: 'uppercase' }}>Emergency Stop</span>
@@ -792,11 +812,11 @@ const MessagingAccess = () => {
                                 </div>
                             </div>
 
-                            <div style={{ padding: '20px', borderRadius: '20px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--card-border)', gridColumn: '1 / -1' }}>
+                            <div style={{ padding: '14px', borderRadius: '12px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--card-border)', gridColumn: '1 / -1' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                        <div className="flex-center" style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'rgba(56,189,248,0.1)', color: '#38bdf8' }}>
-                                            <ShieldAlert size={18} />
+                                        <div className="flex-center" style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'rgba(56,189,248,0.1)', color: '#38bdf8' }}>
+                                            <ShieldAlert size={15} />
                                         </div>
                                         <div>
                                             <h3 style={{ fontSize: '0.875rem', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Permission Decisions ({(INTERFACE_META[activeInterface]?.label || activeInterface).toUpperCase()})</h3>

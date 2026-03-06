@@ -18,27 +18,11 @@ class AnsiColorFormatter(logging.Formatter):
     }
 
     def format(self, record):
-        # Ensure structured fields exist to avoid formatting errors
-        for field in ['run_id', 'job_id', 'step_id', 'latency_ms', 'error_code']:
-            if not hasattr(record, field):
-                setattr(record, field, "-")
-        
         base = super().format(record)
         color = self.COLORS.get(record.levelno, "")
         if not color:
             return base
         return f"{color}{base}{self.RESET}"
-
-class StructuredFormatter(logging.Formatter):
-    """
-    Handles structured logging fields like run_id, job_id, etc.
-    Defaults them to '-' if not present to avoid KeyError in format string.
-    """
-    def format(self, record):
-        for field in ['run_id', 'job_id', 'step_id', 'latency_ms', 'error_code']:
-            if not hasattr(record, field):
-                setattr(record, field, "-")
-        return super().format(record)
 
 
 def setup_logging():
@@ -68,10 +52,8 @@ def setup_logging():
     service_levels = config.get("services", {})
 
     # Define Formatting
-    log_format = '%(asctime)s - %(name)s - %(levelname)s [%(run_id)s|%(job_id)s|step:%(step_id)s] - %(message)s'
-    
-    formatter = StructuredFormatter(
-        log_format,
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
@@ -80,7 +62,7 @@ def setup_logging():
     supports_tty_color = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
     use_color_formatter = enable_console_colors and supports_tty_color and not no_color_env
     console_formatter = AnsiColorFormatter(
-        log_format,
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     ) if use_color_formatter else formatter
 

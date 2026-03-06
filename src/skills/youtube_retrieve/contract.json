@@ -1,6 +1,8 @@
 {
   "name": "youtube",
   "description": "Recupera metadados de vídeo do YouTube e transcript opcional sem LLM.",
+  "icon_key": "youtube",
+  "icon_url": "https://www.youtube.com",
   "version": "1.0.0",
   "actions": {
     "get": {

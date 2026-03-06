@@ -1,6 +1,8 @@
 {
     "name": "maps.search",
     "description": "Busca locais no Google Maps com suporte a cidade, categorias e modo diversificado de resultados.",
+    "icon_key": "maps",
+    "icon_url": "https://maps.google.com",
     "version": "1.0.0",
     "actions": {
         "search": {

@@ -14,6 +14,7 @@ import { api } from '../hooks/api';
 import PlaybackCard from '../components/PlaybackCard';
 import LinkPreviewCard from '../components/LinkPreviewCard';
 import ConfirmDialog from '../components/ConfirmDialog';
+import SkillIcon from '../components/SkillIcon';
 import toast from 'react-hot-toast';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -61,7 +62,11 @@ import {
     CloudSun,
     HeartPulse,
     BarChart3,
-    BookOpen
+    BookOpen,
+    Brain,
+    Wrench,
+    Link2,
+    Zap
 } from 'lucide-react';
 
 const SessionIcon = ({ source, size = 16 }) => {
@@ -617,12 +622,12 @@ const TypewriterMarkdown = ({ text, isStreaming, isComplete, isUser }) => {
 
 // ─── Work Unit Inspector ──────────────────────────────────────────────────────
 const INSPECTOR_TABS = [
-    { id: 'plan', label: 'Plan', emoji: '📋' },
-    { id: 'thought', label: 'Thought', emoji: '🧠' },
-    { id: 'terminal', label: 'Terminal', emoji: '🖥️' },
-    { id: 'skills', label: 'Skills', emoji: '🛠️' },
-    { id: 'media', label: 'Media', emoji: '📦' },
-    { id: 'sources', label: 'Sources', emoji: '🔗' },
+    { id: 'plan', label: 'Plan', icon: FileText },
+    { id: 'thought', label: 'Thought', icon: Brain },
+    { id: 'terminal', label: 'Terminal', icon: Terminal },
+    { id: 'skills', label: 'Skills', icon: Wrench },
+    { id: 'media', label: 'Media', icon: Archive },
+    { id: 'sources', label: 'Sources', icon: Link2 },
 ];
 
 const stepStatusIcon = (status) => {
@@ -928,16 +933,16 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
             {steps.length > 0 ? steps.map((s, i) => {
                 const { icon, color } = stepStatusIcon(s.status);
                 return (
-                    <div key={s.id || i} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
-                        <span style={{ color, fontWeight: '900', fontSize: '12px', flexShrink: 0, minWidth: '12px', marginTop: '1px' }}>{icon}</span>
-                        <span style={{ fontSize: '12px', color: s.status === 'done' ? 'var(--text-muted)' : 'var(--text-primary)', textDecoration: s.status === 'done' ? 'line-through' : 'none', opacity: s.status === 'done' ? 0.6 : 1 }}>
+                    <div key={s.id || i} style={{ display: 'flex', gap: '9px', alignItems: 'flex-start', padding: '6px 8px', border: '1px solid var(--card-border)', borderRadius: '7px', background: 'rgba(2,6,23,0.02)' }}>
+                        <span style={{ color, fontWeight: '900', fontSize: '11px', flexShrink: 0, minWidth: '11px', marginTop: '1px' }}>{icon}</span>
+                        <span style={{ fontSize: '12px', color: s.status === 'done' ? 'var(--text-muted)' : 'var(--text-primary)', textDecoration: s.status === 'done' ? 'line-through' : 'none', opacity: s.status === 'done' ? 0.72 : 1 }}>
                             {s.title}
                         </span>
                     </div>
                 );
             }) : plan.length > 0 ? plan.map((line, i) => (
-                <div key={i} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
-                    <span style={{ color: 'var(--text-muted)', fontSize: '12px', flexShrink: 0 }}>{'›'}</span>
+                <div key={i} style={{ display: 'flex', gap: '9px', alignItems: 'flex-start', padding: '6px 8px', border: '1px solid var(--card-border)', borderRadius: '7px', background: 'rgba(2,6,23,0.02)' }}>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '11px', flexShrink: 0 }}>{'›'}</span>
                     <span style={{ fontSize: '12px', color: 'var(--text-primary)' }}>{String(line).replace(/^\[.\]\s*/, '')}</span>
                 </div>
             )) : <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No plan recorded.</span>}
@@ -948,10 +953,11 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {skills.length > 0 && (
                 <div>
-                    <p style={{ fontSize: '9px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-muted)', marginBottom: '6px' }}>Skills</p>
+                    <p style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '6px' }}>Skills</p>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                         {skills.map((s, i) => (
-                            <span key={i} style={{ padding: '3px 10px', background: 'var(--accent-glow)', border: '1px solid var(--accent-color)', borderRadius: '20px', fontSize: '11px', color: 'var(--accent-color)', fontWeight: '700' }}>
+                            <span key={i} style={{ padding: '3px 8px', background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.35)', borderRadius: '8px', fontSize: '11px', color: 'var(--text-primary)', fontWeight: '700', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                <SkillIcon variant="inline" skillId={s} skillName={s} />
                                 {s}
                             </span>
                         ))}
@@ -960,7 +966,7 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
             )}
             {actions.length > 0 && (
                 <div>
-                    <p style={{ fontSize: '9px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-muted)', marginBottom: '6px' }}>Actions performed</p>
+                    <p style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '6px' }}>Actions performed</p>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                         {[...new Set(actions)].map((a, i) => (
                             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -980,11 +986,11 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
     const renderThought = () => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {thoughtTimeline.length > 0 ? thoughtTimeline.map((entry, i) => (
-                <div key={i} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '8px', border: '1px solid var(--card-border)', borderRadius: '8px', background: 'rgba(0,0,0,0.04)' }}>
-                    <span style={{ fontSize: '14px', lineHeight: 1 }}>🧠</span>
+                <div key={i} style={{ display: 'flex', gap: '9px', alignItems: 'flex-start', padding: '8px 9px', border: '1px solid var(--card-border)', borderRadius: '7px', background: 'rgba(2,6,23,0.02)' }}>
+                    <Brain size={14} color="var(--text-muted)" style={{ flexShrink: 0, marginTop: '1px' }} />
                     <div style={{ minWidth: 0 }}>
-                        <p style={{ fontSize: '12px', color: 'var(--text-primary)' }}>{entry.text}</p>
-                        {entry.ts && <p style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '3px' }}>{formatTime(entry.ts)}</p>}
+                        <p style={{ fontSize: '12px', color: 'var(--text-primary)', lineHeight: 1.5 }}>{entry.text}</p>
+                        {entry.ts && <p style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px', fontFamily: 'monospace' }}>{formatTime(entry.ts)}</p>}
                     </div>
                 </div>
             )) : <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No thought timeline recorded.</span>}
@@ -1004,7 +1010,7 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
                     : (status === 'success' ? 'completed' : (status || 'error'));
                 const statusColor = status === 'running' ? '#10b981' : status === 'success' ? '#22c55e' : status === 'timeout' ? '#f59e0b' : '#ef4444';
                 return (
-                    <div key={termId} style={{ border: '1px solid var(--card-border)', borderRadius: '8px', background: 'rgba(0,0,0,0.05)' }}>
+                    <div key={termId} style={{ border: '1px solid var(--card-border)', borderRadius: '7px', background: 'rgba(2,6,23,0.02)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '7px 9px' }}>
                             <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace', minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={description}>
                                 {description}
@@ -1036,10 +1042,10 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {relatedPlaybackRuns.length > 0 && (
                 <div style={{ marginBottom: '6px' }}>
-                    <p style={{ fontSize: '9px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-muted)', marginBottom: '6px' }}>Playback</p>
+                    <p style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '6px' }}>Playback</p>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         {relatedPlaybackRuns.map((run) => (
-                            <div key={run.run_id} style={{ border: '1px solid var(--card-border)', borderRadius: '8px', background: 'rgba(0,0,0,0.04)' }}>
+                            <div key={run.run_id} style={{ border: '1px solid var(--card-border)', borderRadius: '7px', background: 'rgba(2,6,23,0.02)' }}>
                                 {expandedPlaybackRunId === run.run_id ? (
                                     <div style={{ padding: '8px' }}>
                                         <button
@@ -1115,12 +1121,15 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
                 const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext);
                 const url = getFileUrl({ path: m, name, type: isImg ? 'image' : 'file' }, sessionId);
                 return (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px', background: 'rgba(0,0,0,0.05)', borderRadius: '8px', border: '1px solid var(--card-border)' }}>
-                        <div style={{ width: '42px', height: '42px', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--card-border)', background: 'rgba(0,0,0,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px', background: 'rgba(2,6,23,0.02)', borderRadius: '7px', border: '1px solid var(--card-border)' }}>
+                        <div style={{ width: '42px', height: '42px', borderRadius: '5px', overflow: 'hidden', border: '1px solid var(--card-border)', background: 'rgba(2,6,23,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                             {isImg ? (
                                 <img src={url} alt={name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                             ) : (
-                                <span style={{ fontSize: '18px', flexShrink: 0 }}>{ext === 'mp4' ? '🎬' : ext === 'mp3' ? '🎵' : ext === 'pdf' ? '📄' : '📎'}</span>
+                                ext === 'mp4' ? <Video size={18} color="#f87171" /> :
+                                    ext === 'mp3' ? <Music size={18} color="#a78bfa" /> :
+                                        ext === 'pdf' ? <FileText size={18} color="#cbd5e1" /> :
+                                            <Paperclip size={18} color="var(--text-muted)" />
                             )}
                         </div>
                         <div style={{ minWidth: 0, flex: 1 }}>
@@ -1167,11 +1176,11 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
                         alignItems: 'center',
                         gap: '8px',
                         padding: '8px',
-                        borderRadius: '8px',
+                        borderRadius: '7px',
                         border: '1px solid var(--card-border)',
-                        background: 'rgba(0,0,0,0.04)',
+                        background: 'rgba(2,6,23,0.02)',
                         fontSize: '11px',
-                        color: 'var(--accent-color)',
+                        color: 'var(--text-primary)',
                         textDecoration: 'underline',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
@@ -1193,7 +1202,7 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
                             background: 'rgba(255,255,255,0.08)',
                         }}
                     >
-                        <span style={{ fontSize: '9px', lineHeight: 1, opacity: 0.75 }}>🌐</span>
+                        <Globe size={9} color="var(--text-muted)" style={{ opacity: 0.75 }} />
                         <img
                             src={`/api/favicon?url=${encodeURIComponent(url)}`}
                             alt=""
@@ -1213,6 +1222,7 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
                     <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {url}
                     </span>
+                    <ArrowUpRight size={11} color="var(--text-muted)" style={{ flexShrink: 0 }} />
                 </a>
             )) : <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No sources recorded.</span>}
         </div>
@@ -1237,7 +1247,7 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
                         transition: 'all 0.2s ease',
                     }}
                 >
-                    <span style={{ fontSize: '12px' }}>⚡</span>
+                    <Zap size={12} color={isOpen ? 'var(--accent-color)' : 'var(--text-muted)'} />
                     <span style={{ fontSize: '9px', fontWeight: '800', color: isOpen ? 'var(--accent-color)' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                         {isOpen ? 'Hide Details' : 'Work Details'}
                     </span>
@@ -1254,31 +1264,34 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
                     zIndex: inline ? 40 : 'auto',
                     minWidth: inline ? '320px' : 'auto',
                     border: '1px solid var(--card-border)',
-                    borderRadius: '10px',
+                    borderRadius: '8px',
                     overflow: 'hidden',
-                    background: 'rgba(0,0,0,0.03)',
+                    background: 'rgba(2,6,23,0.02)',
                     animation: 'fadeIn 0.2s ease'
                 }}>
                     {/* Tab Bar */}
-                    <div style={{ display: 'flex', borderBottom: '1px solid var(--card-border)', background: 'rgba(0,0,0,0.04)' }}>
-                        {INSPECTOR_TABS.map(tab => (
+                    <div style={{ display: 'flex', borderBottom: '1px solid var(--card-border)', background: 'rgba(2,6,23,0.03)' }}>
+                        {INSPECTOR_TABS.map(tab => {
+                            const TabIcon = tab.icon;
+                            return (
                             <button
                                 key={tab.id}
                                 onClick={() => setActiveTab(tab.id)}
                                 style={{
-                                    flex: 1, padding: '8px 4px',
+                                    flex: 1, padding: '7px 4px',
                                     background: 'transparent', border: 'none', cursor: 'pointer',
-                                    borderBottom: activeTab === tab.id ? '2px solid var(--accent-color)' : '2px solid transparent',
+                                    borderBottom: activeTab === tab.id ? '2px solid rgba(99,102,241,0.85)' : '2px solid transparent',
                                     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px',
                                     transition: 'background 0.15s',
                                 }}
                             >
-                                <span style={{ fontSize: '14px' }}>{tab.emoji}</span>
-                                <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.06em', color: activeTab === tab.id ? 'var(--accent-color)' : 'var(--text-muted)' }}>
+                                <TabIcon size={13} color={activeTab === tab.id ? 'var(--accent-color)' : 'var(--text-muted)'} />
+                                <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.05em', color: activeTab === tab.id ? 'var(--accent-color)' : 'var(--text-muted)' }}>
                                     {tab.label}
                                 </span>
                             </button>
-                        ))}
+                            );
+                        })}
                     </div>
 
                     {/* Tab Content */}
@@ -1296,31 +1309,33 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
                     position: 'fixed',
                     inset: 0,
                     zIndex: 1200,
-                    background: 'rgba(0,0,0,0.78)',
-                    backdropFilter: 'blur(3px)',
+                    background: 'rgba(15,23,42,0.08)',
+                    backdropFilter: 'blur(5px)',
+                    WebkitBackdropFilter: 'blur(5px)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    padding: '20px',
+                    padding: '10px',
                 }}
                 onClick={() => setFullscreenTerminalId(null)}
             >
                 <div
                     style={{
-                        width: 'min(1200px, 100%)',
-                        height: 'min(86vh, 860px)',
+                        width: 'min(1100px, 96vw)',
+                        maxHeight: '78vh',
                         border: '1px solid var(--card-border)',
-                        borderRadius: '12px',
+                        borderRadius: '8px',
                         overflow: 'hidden',
-                        background: 'rgba(2,6,18,0.98)',
+                        background: 'var(--card-bg)',
+                        boxShadow: '0 10px 26px rgba(2,6,23,0.14)',
                         display: 'flex',
                         flexDirection: 'column',
                     }}
                     onClick={(e) => e.stopPropagation()}
                 >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '10px 12px', borderBottom: '1px solid var(--card-border)', background: 'rgba(255,255,255,0.03)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '7px 10px', borderBottom: '1px solid var(--card-border)', background: 'rgba(255,255,255,0.03)' }}>
                         <div style={{ minWidth: 0 }}>
-                            <p style={{ fontSize: '12px', color: 'var(--text-primary)', fontFamily: 'monospace', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            <p style={{ fontSize: '11px', color: 'var(--text-primary)', fontFamily: 'monospace', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 {String(fullscreenTerminal?.command || fullscreenTerminal?.id || 'terminal')}
                             </p>
                             <p style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1329,15 +1344,49 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
                             <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{Number(fullscreenTerminal?.line_count || 0)} lines</span>
-                            <button className="btn-ghost" style={{ padding: '6px', borderRadius: '8px' }} onClick={() => setFullscreenTerminalId(null)} title="Close">
-                                <X size={14} />
+                            <button className="btn-ghost" style={{ padding: '4px', borderRadius: '6px', color: 'var(--text-primary)' }} onClick={() => setFullscreenTerminalId(null)} title="Close">
+                                <X size={13} />
                             </button>
                         </div>
                     </div>
-                    <div ref={fullscreenTerminalBodyRef} className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px', background: 'rgba(4,7,20,0.8)' }}>
-                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '12px', lineHeight: 1.5, color: '#d9e1ff', fontFamily: '"JetBrains Mono","Fira Code",monospace' }}>
+                    <div
+                        ref={fullscreenTerminalBodyRef}
+                        className="custom-scrollbar"
+                        style={{
+                            flex: 1,
+                            minHeight: '220px',
+                            overflowY: 'auto',
+                            padding: '10px',
+                            background: 'var(--bg-color)',
+                        }}
+                    >
+                        <div
+                            style={{
+                                border: '1px solid var(--card-border)',
+                                borderRadius: '6px',
+                                background: 'var(--card-bg)',
+                                padding: '10px',
+                            }}
+                        >
+                        <pre
+                            style={{
+                                margin: 0,
+                                padding: 0,
+                                background: 'transparent',
+                                border: 'none',
+                                boxShadow: 'none',
+                                borderRadius: 0,
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                                fontSize: '11px',
+                                lineHeight: 1.42,
+                                color: 'var(--text-primary)',
+                                fontFamily: '"JetBrains Mono","Fira Code",monospace',
+                            }}
+                        >
                             {String(fullscreenTerminal?.transcript || fullscreenTerminal?.output_full || fullscreenTerminal?.output_tail || `$ ${String(fullscreenTerminal?.command || 'shell command')}\n(waiting for output...)`)}
                         </pre>
+                        </div>
                     </div>
                 </div>
             </div>

@@ -1,0 +1,62 @@
+/home/lucas/Documentos/GitHub/Assistant-OS/env/lib/python3.12/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (6.0.0.post1)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.0.2, pluggy-1.6.0
+rootdir: /home/lucas/Documentos/GitHub/Assistant-OS
+configfile: pytest.ini
+plugins: anyio-4.12.1, langsmith-0.7.6
+collected 4 items
+
+tests/minimal/test_phase_5_coordination.py 
+UPDATES: [{'event_id': 'fa6f7fcc-e88b-4db9-95d5-4fccc698cc41', 'timestamp': '2026-03-06T03:30:50.526696+00:00', 'task_id': 'task_fa25e864', 'run_id': 'run_4998a5c4', 'task_role': 'WorkerA', 'intent_group_id': None, 'turn_id': 1, 'base_turn_id': 0, 'event_type': <WorkerEventType.COMPLETED: 'COMPLETED'>, 'phase': 'completed', 'progress': 1.0, 'summary': 'Task completed successfully: WorkerA', 'error_code': None, 'failure_summary': None, 'needs_user_input': False, 'suggested_user_prompt': None, 'attention_level': <AttentionLevel.LOW: 'low'>, 'artifacts': []}, {'event_id': '0765767e-a8e8-4fef-8341-e6e704db30e2', 'timestamp': '2026-03-06T03:30:50.527045+00:00', 'task_id': 'task_571843da', 'run_id': 'run_3b81a506', 'task_role': 'WorkerB', 'intent_group_id': None, 'turn_id': 1, 'base_turn_id': 0, 'event_type': <WorkerEventType.COMPLETED: 'COMPLETED'>, 'phase': 'completed', 'progress': 1.0, 'summary': 'Task completed successfully: WorkerB', 'error_code': None, 'failure_summary': None, 'needs_user_input': False, 'suggested_user_prompt': None, 'attention_level': <AttentionLevel.LOW: 'low'>, 'artifacts': []}]
+DECISIONS: [{'outcome': 'SILENT', 'message': '', 'role': 'WorkerA', 'score': 50, 'event': {'event_id': 'fa6f7fcc-e88b-4db9-95d5-4fccc698cc41', 'timestamp': '2026-03-06T03:30:50.526696+00:00', 'task_id': 'task_fa25e864', 'run_id': 'run_4998a5c4', 'task_role': 'WorkerA', 'intent_group_id': None, 'turn_id': 1, 'base_turn_id': 0, 'event_type': <WorkerEventType.COMPLETED: 'COMPLETED'>, 'phase': 'completed', 'progress': 1.0, 'summary': 'Task completed successfully: WorkerA', 'error_code': None, 'failure_summary': None, 'needs_user_input': False, 'suggested_user_prompt': None, 'attention_level': <AttentionLevel.LOW: 'low'>, 'artifacts': []}}, {'outcome': 'SILENT', 'message': '', 'role': 'WorkerB', 'score': 50, 'event': {'event_id': '0765767e-a8e8-4fef-8341-e6e704db30e2', 'timestamp': '2026-03-06T03:30:50.527045+00:00', 'task_id': 'task_571843da', 'run_id': 'run_3b81a506', 'task_role': 'WorkerB', 'intent_group_id': None, 'turn_id': 1, 'base_turn_id': 0, 'event_type': <WorkerEventType.COMPLETED: 'COMPLETED'>, 'phase': 'completed', 'progress': 1.0, 'summary': 'Task completed successfully: WorkerB', 'error_code': None, 'failure_summary': None, 'needs_user_input': False, 'suggested_user_prompt': None, 'attention_level': <AttentionLevel.LOW: 'low'>, 'artifacts': []}}]
+F...
+
+=================================== FAILURES ===================================
+_____________________ test_concurrent_tasks_prioritization _____________________
+
+orchestrator = <core.orchestrator.AgentOrchestrator object at 0x75b38b6e19d0>
+
+    def test_concurrent_tasks_prioritization(orchestrator):
+        """Verify that multiple concurrent events are prioritized and limited."""
+        session_id = "conc_1"
+        session = Session(session_id=session_id)
+        orchestrator.sessions[session_id] = session
+    
+        # Spawn two workers
+        def task_a(worker):
+            worker.report_status(WorkerEventType.COMPLETED, "done", 1.0, "Task A finished")
+    
+        def task_b(worker):
+            worker.report_status(WorkerEventType.FAILED, "error", 0.0, "Task B failed")
+    
+        worker_a = orchestrator.spawn_worker(session_id, "WorkerA", 1, 0, task_a)
+        worker_b = orchestrator.spawn_worker(session_id, "WorkerB", 1, 0, task_b)
+    
+        # Wait for completion (poll)
+        timeout = 5
+        while timeout > 0:
+            if any(t.get("status") in {"COMPLETED", "FAILED"} for t in session.task_registry.values() if t["task_id"] in {worker_a.task_id, worker_b.task_id}):
+                # Wait a bit more for second worker if only one finished
+                if all(t.get("status") in {"COMPLETED", "FAILED"} for t in session.task_registry.values() if t["task_id"] in {worker_a.task_id, worker_b.task_id}):
+                    break
+            time.sleep(0.5)
+            timeout -= 0.5
+    
+        # Process events
+        updates, _ = orchestrator._process_worker_events(session)
+        decisions = orchestrator._decide_on_worker_events(session, updates)
+    
+        print(f"\nUPDATES: {updates}")
+        print(f"DECISIONS: {decisions}")
+    
+        # We expect both to be considered
+        outcomes = [d["outcome"] for d in decisions]
+>       assert any(o in {"CHAT", "PANEL"} for o in outcomes)
+E       assert False
+E        +  where False = any(<generator object test_concurrent_tasks_prioritization.<locals>.<genexpr> at 0x75b375df0450>)
+
+tests/minimal/test_phase_5_coordination.py:49: AssertionError
+=========================== short test summary info ============================
+FAILED tests/minimal/test_phase_5_coordination.py::test_concurrent_tasks_prioritization
+========================= 1 failed, 3 passed in 11.01s =========================

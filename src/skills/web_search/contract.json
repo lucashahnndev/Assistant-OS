@@ -1,6 +1,7 @@
 {
     "name": "web.search",
     "description": "Busca informações na web com modo de links ou extração de conhecimento estruturado para contexto da IA.",
+    "icon_key": "web",
     "version": "1.0.0",
     "actions": {
         "discover": {

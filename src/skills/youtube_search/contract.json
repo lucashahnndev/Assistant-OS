@@ -1,6 +1,8 @@
 {
     "name": "youtube",
     "description": "Busca vídeos, playlists e canais no YouTube (API oficial com fallback web).",
+    "icon_key": "youtube",
+    "icon_url": "https://www.youtube.com",
     "version": "1.0.0",
     "actions": {
         "find": {

@@ -1,6 +1,7 @@
 {
     "name": "System Control",
     "description": "Operações de controle do sistema: status, processos, rede, serviços, arquivos, screenshot, teclado e energia.",
+    "icon_key": "system",
     "actions": [
         {
             "id": "system.control.info",

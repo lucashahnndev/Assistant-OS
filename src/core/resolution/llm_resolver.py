@@ -2,6 +2,7 @@ from typing import Optional, Dict, Any, List
 from .base import IntentResolver
 from .action_plan import ActionPlan
 from services.llm.manager import LLMManager
+from core.errors import AgentError, ErrorCode
 import logging
 
 logger = logging.getLogger("LLMResolver")
@@ -103,7 +104,14 @@ class LLMResolver(IntentResolver):
             )
         except Exception as e:
             logger.error(f"LLM resolution failed: {e}")
-            return None
+            error_code = ErrorCode.PLANNER_SCHEMA_MISMATCH if "json" in str(e).lower() else ErrorCode.UNKNOWN_ERROR
+            return ActionPlan(
+                action_id="error",
+                args={},
+                source="llm_error",
+                thought=f"Planning failed: {str(e)}",
+                metadata={"error_code": error_code.value}
+            )
 
     def _estimate_confidence(self, intent: Any, context: Dict[str, Any]) -> tuple[float, List[str]]:
         """
