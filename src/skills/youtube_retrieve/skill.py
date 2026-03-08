@@ -221,7 +221,7 @@ class YouTubeRetrieveSkill(SkillBase):
 
         cmd = ["yt-dlp", "--dump-single-json", "--no-warnings", input_url]
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            proc = subprocess.run(cmd, capture_output=True, message=True, check=True)
         except subprocess.CalledProcessError as e:
             api_fallback = self._fetch_video_via_api(video_id, auth)
             if api_fallback:

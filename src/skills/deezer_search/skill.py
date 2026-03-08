@@ -82,13 +82,13 @@ class DeezerSearchSkill(SkillBase):
                 "ok": False,
                 "status": "error",
                 "error": "MISSING_QUERY",
-                "message": "Missing query for Deezer search.",
+                "error_details": "Missing query for Deezer search.",
                 "provider": "deezer",
                 "query": "",
                 "count": 0,
                 "results": [],
                 "best": None,
-                "text": "Error: parameter 'query' is required para deezer.search.search.",
+                "error_details": "Error: parameter 'query' is required para deezer.search.search.",
             }
 
         if search_type not in {"track", "artist", "album", "playlist"}:
@@ -96,13 +96,13 @@ class DeezerSearchSkill(SkillBase):
                 "ok": False,
                 "status": "error",
                 "error": "INVALID_TYPE",
-                "message": f"Unsupported Deezer type: {search_type}",
+                "error_details": f"Unsupported Deezer type: {search_type}",
                 "provider": "deezer",
                 "query": query,
                 "count": 0,
                 "results": [],
                 "best": None,
-                "text": f"Error: type '{search_type}' is not supported em deezer.search.search.",
+                "error_details": f"Error: type '{search_type}' is not supported em deezer.search.search.",
             }
 
         try:
@@ -119,13 +119,13 @@ class DeezerSearchSkill(SkillBase):
                     "ok": False,
                     "status": "error",
                     "error": "HTTP_ERROR",
-                    "message": f"Deezer API HTTP {response.status_code}",
+                    "error_details": f"Deezer API HTTP {response.status_code}",
                     "provider": "deezer",
                     "query": query,
                     "count": 0,
                     "results": [],
                     "best": None,
-                    "text": f"Erro na API do Deezer: HTTP {response.status_code}",
+                    "error_details": f"Erro na API do Deezer: HTTP {response.status_code}",
                 }
             data = response.json()
             if isinstance(data, dict) and data.get("error"):
@@ -135,13 +135,13 @@ class DeezerSearchSkill(SkillBase):
                     "ok": False,
                     "status": "error",
                     "error": "API_ERROR",
-                    "message": msg or "Unknown Deezer API error",
+                    "error_details": msg or "Unknown Deezer API error",
                     "provider": "deezer",
                     "query": query,
                     "count": 0,
                     "results": [],
                     "best": None,
-                    "text": f"Erro na API do Deezer: {msg or 'erro desconhecido'}",
+                    "error_details": f"Erro na API do Deezer: {msg or 'erro desconhecido'}",
                 }
             
             items = data.get("data", [])
@@ -179,7 +179,7 @@ class DeezerSearchSkill(SkillBase):
                 "query": query,
                 "count": len(results),
                 "type": search_type,
-                "text": text,
+                "error_details": text,
             }
         except Exception as e:
             logger.error(f"Deezer Search Execution Error: {e}")
@@ -187,11 +187,11 @@ class DeezerSearchSkill(SkillBase):
                 "ok": False,
                 "status": "error",
                 "error": "EXCEPTION",
-                "message": str(e),
+                "error_details": str(e),
                 "provider": "deezer",
                 "query": query,
                 "count": 0,
                 "results": [],
                 "best": None,
-                "text": f"Erro na busca do Deezer: {str(e)}",
+                "error_details": f"Erro na busca do Deezer: {str(e)}",
             }

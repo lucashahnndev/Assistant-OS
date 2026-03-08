@@ -69,8 +69,12 @@ class SystemSkill(SkillBase):
         ]
 
     @staticmethod
-    def _result(ok: bool, status: str, text: str, **extra: Any) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"ok": ok, "status": status, "text": text}
+    def _result(ok: bool, status: str, message: str = "", error_code: str = "", **extra: Any) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"ok": ok, "status": status}
+        if message:
+            payload["message"] = message
+        if error_code:
+            payload["error_code"] = error_code
         payload.update(extra)
         return payload
 
@@ -164,7 +168,7 @@ class SystemSkill(SkillBase):
             return self._result(
                 ok=True,
                 status="success",
-                text=f"System info: {payload['os']} {payload['dist']} ({payload['date']} {payload['time']}).",
+                message=f"System info: {payload['os']} {payload['dist']} ({payload['date']} {payload['time']}).",
                 info=payload,
             )
 
@@ -177,11 +181,11 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=True,
                     status="success",
-                    text=f"Current date is {today} and time is {now}.",
+                    message=f"Current date is {today} and time is {now}.",
                     date=today,
                     time=now,
                 )
-            return self._result(ok=True, status="success", text=f"Current time is {now}.", date=today, time=now)
+            return self._result(ok=True, status="success", message=f"Current time is {now}.", date=today, time=now)
 
         if local in {"skills.list", "skills.list.ai", "skills.list.ui"}:
             orch = getattr(self.kernel, "orchestrator", None) if self.kernel else None
@@ -190,8 +194,8 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Skill registry not available.",
-                    error="SKILL_REGISTRY_UNAVAILABLE",
+                    message="Skill registry not available.",
+                    error_code="SKILL_REGISTRY_UNAVAILABLE",
                 )
 
             allowed_actions = context.get("allowed_actions")
@@ -227,7 +231,7 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=True,
                     status="success" if rows else "empty",
-                    text=f"Skill catalog returned {len(rows)} action(s).",
+                    message=f"Skill catalog returned {len(rows)} action(s).",
                     count=len(rows),
                     items=rows,
                     catalog_mode="on_demand",
@@ -239,7 +243,7 @@ class SystemSkill(SkillBase):
             return self._result(
                 ok=True,
                 status="success" if rows else "empty",
-                text=f"Skill catalog returned {len(rows)} action(s) in TOON format.",
+                message=f"Skill catalog returned {len(rows)} action(s) in TOON format.",
                 count=len(rows),
                 toon=toon,
                 catalog_mode="on_demand",
@@ -255,8 +259,8 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Skill registry not available.",
-                    error="SKILL_REGISTRY_UNAVAILABLE",
+                    message="Skill registry not available.",
+                    error_code="SKILL_REGISTRY_UNAVAILABLE",
                 )
 
             requested: List[str] = []
@@ -274,8 +278,8 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Missing required parameter 'action_id' or 'action_ids'.",
-                    error="MISSING_ACTION_ID",
+                    message="Missing required parameter 'action_id' or 'action_ids'.",
+                    error_code="MISSING_ACTION_ID",
                 )
 
             allowed_actions = context.get("allowed_actions")
@@ -295,7 +299,7 @@ class SystemSkill(SkillBase):
                         {
                             "id": action_id,
                             "ok": False,
-                            "error": "ACTION_NOT_ALLOWED",
+                            "error_code": "ACTION_NOT_ALLOWED",
                         }
                     )
                     continue
@@ -312,7 +316,7 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=True,
                     status="success",
-                    text=f"Returned details for {len(details)} action(s).",
+                    message=f"Returned details for {len(details)} action(s).",
                     count=len(details),
                     items=details,
                     format="legacy",
@@ -323,7 +327,7 @@ class SystemSkill(SkillBase):
             return self._result(
                 ok=True,
                 status="success",
-                text=f"Returned details for {len(details)} action(s) in TOON format.",
+                message=f"Returned details for {len(details)} action(s) in TOON format.",
                 count=len(details),
                 toon=toon,
                 format="toon",
@@ -335,8 +339,8 @@ class SystemSkill(SkillBase):
             return self._result(
                 ok=False,
                 status="error",
-                text="SystemDriver not available.",
-                error="SYSTEM_DRIVER_UNAVAILABLE",
+                message="SystemDriver not available.",
+                error_code="SYSTEM_DRIVER_UNAVAILABLE",
                 message="System driver is required for this action.",
             )
 
@@ -348,15 +352,15 @@ class SystemSkill(SkillBase):
                     return self._result(
                         ok=False,
                         status="error",
-                        text="System status unavailable (local execution).",
-                        error="STATUS_UNAVAILABLE",
+                        message="System status unavailable (local execution).",
+                        error_code="STATUS_UNAVAILABLE",
                     )
                 work = scheduler.get_work(work_id)
                 if not work:
                     return self._result(
                         ok=True,
                         status="empty",
-                        text=f"Work '{work_id}' not found.",
+                        message=f"Work '{work_id}' not found.",
                         work_id=work_id,
                         work=None,
                     )
@@ -364,7 +368,7 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=True,
                     status="success",
-                    text=f"Status loaded for work '{work_id}'.",
+                    message=f"Status loaded for work '{work_id}'.",
                     work_id=work_id,
                     work=data,
                 )
@@ -373,15 +377,15 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text="System status unavailable (local execution).",
-                    error="STATUS_UNAVAILABLE",
+                    message="System status unavailable (local execution).",
+                    error_code="STATUS_UNAVAILABLE",
                 )
 
             active = scheduler.list_active_works() if scheduler else []
             return self._result(
                 ok=True,
                 status="success" if active else "empty",
-                text=f"Active works: {len(active)}.",
+                message=f"Active works: {len(active)}.",
                 count=len(active),
                 works=active,
             )
@@ -393,21 +397,21 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Missing required parameter 'work_id'.",
-                    error="MISSING_WORK_ID",
+                    message="Missing required parameter 'work_id'.",
+                    error_code="MISSING_WORK_ID",
                 )
             if not scheduler:
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Kernel scheduler not available.",
-                    error="SCHEDULER_UNAVAILABLE",
+                    message="Kernel scheduler not available.",
+                    error_code="SCHEDULER_UNAVAILABLE",
                 )
             scheduler.request_cancel(work_id)
             return self._result(
                 ok=True,
                 status="success",
-                text=f"Cancellation requested for work '{work_id}'.",
+                message=f"Cancellation requested for work '{work_id}'.",
                 work_id=work_id,
             )
 
@@ -419,14 +423,14 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text=f"Screenshot failed: {screenshot_path}",
-                    error="SCREENSHOT_FAILED",
+                    message=f"Screenshot failed: {screenshot_path}",
+                    error_code="SCREENSHOT_FAILED",
                     message=str(screenshot_path),
                 )
             return self._result(
                 ok=True,
                 status="success",
-                text=f"Screenshot saved to {screenshot_path}.",
+                message=f"Screenshot saved to {screenshot_path}.",
                 path=screenshot_path,
                 session_id=sid,
             )
@@ -438,7 +442,7 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=not self._is_error_text(out),
                     status="success" if not self._is_error_text(out) else "error",
-                    text=str(out),
+                    message=str(out),
                     action="reboot",
                     output=out,
                 )
@@ -447,15 +451,15 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=not self._is_error_text(out),
                     status="success" if not self._is_error_text(out) else "error",
-                    text=str(out),
+                    message=str(out),
                     action="shutdown",
                     output=out,
                 )
             return self._result(
                 ok=False,
                 status="error",
-                text=f"Unknown power command: '{command}'. Use 'reboot' or 'shutdown'.",
-                error="UNKNOWN_POWER_COMMAND",
+                message=f"Unknown power command: '{command}'. Use 'reboot' or 'shutdown'.",
+                error_code="UNKNOWN_POWER_COMMAND",
                 message="Use reboot/restart or shutdown/off",
             )
 
@@ -468,14 +472,14 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text=f"Unable to list processes: {items}",
-                    error="PROCESS_LIST_FAILED",
+                    message=f"Unable to list processes: {items}",
+                    error_code="PROCESS_LIST_FAILED",
                     message=str(items),
                 )
             return self._result(
                 ok=True,
                 status="success" if items else "empty",
-                text=f"Processes listed: {len(items)}.",
+                message=f"Processes listed: {len(items)}.",
                 count=len(items),
                 results=items,
             )
@@ -486,8 +490,8 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Missing required parameter 'pid'.",
-                    error="MISSING_PID",
+                    message="Missing required parameter 'pid'.",
+                    error_code="MISSING_PID",
                 )
             signal = str(params.get("signal") or "TERM")
             out = sd.kill_process(int(pid), signal)
@@ -495,7 +499,7 @@ class SystemSkill(SkillBase):
             return self._result(
                 ok=ok,
                 status="success" if ok else "error",
-                text=str(out),
+                message=str(out),
                 pid=int(pid),
                 signal=signal,
                 output=out,
@@ -507,14 +511,14 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text=f"Network status failed: {out}",
-                    error="NETWORK_STATUS_FAILED",
+                    message=f"Network status failed: {out}",
+                    error_code="NETWORK_STATUS_FAILED",
                     message=out,
                 )
             return self._result(
                 ok=True,
                 status="success",
-                text="Network status retrieved.",
+                message="Network status retrieved.",
                 result=out,
             )
 
@@ -524,8 +528,8 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Missing required parameter 'host'.",
-                    error="MISSING_HOST",
+                    message="Missing required parameter 'host'.",
+                    error_code="MISSING_HOST",
                 )
             count = self._to_int(params.get("count"), default=4, min_value=1, max_value=10)
             out = sd.net_ping(host, count)
@@ -533,7 +537,7 @@ class SystemSkill(SkillBase):
             return self._result(
                 ok=ok,
                 status="success" if ok else "error",
-                text=f"Ping executed for {host} ({count} packets)." if ok else str(out),
+                message=f"Ping executed for {host} ({count} packets)." if ok else str(out),
                 host=host,
                 count=count,
                 output=out,
@@ -546,15 +550,15 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Missing required parameters 'unit' and/or 'action'.",
-                    error="MISSING_SERVICE_PARAMS",
+                    message="Missing required parameters 'unit' and/or 'action'.",
+                    error_code="MISSING_SERVICE_PARAMS",
                 )
             out = sd.service_action(unit, action)
             ok = not self._is_error_text(out)
             return self._result(
                 ok=ok,
                 status="success" if ok else "error",
-                text=str(out) if out else f"Service action '{action}' executed for '{unit}'.",
+                message=str(out) if out else f"Service action '{action}' executed for '{unit}'.",
                 unit=unit,
                 action=action,
                 output=out,
@@ -566,8 +570,8 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Missing required parameter 'unit'.",
-                    error="MISSING_UNIT",
+                    message="Missing required parameter 'unit'.",
+                    error_code="MISSING_UNIT",
                 )
             lines = self._to_int(params.get("lines"), default=50, min_value=1, max_value=500)
             out = sd.service_logs(unit, lines)
@@ -575,7 +579,7 @@ class SystemSkill(SkillBase):
             return self._result(
                 ok=ok,
                 status="success" if ok else "error",
-                text=f"Service logs retrieved for '{unit}' ({lines} lines)." if ok else str(out),
+                message=f"Service logs retrieved for '{unit}' ({lines} lines)." if ok else str(out),
                 unit=unit,
                 lines=lines,
                 logs=out if ok else None,
@@ -589,15 +593,15 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text=str(out),
-                    error="FS_LIST_FAILED",
+                    message=str(out),
+                    error_code="FS_LIST_FAILED",
                     path=path,
                 )
             if isinstance(out, list):
                 return self._result(
                     ok=True,
                     status="success" if out else "empty",
-                    text=f"Listed {len(out)} items in '{path}'.",
+                    message=f"Listed {len(out)} items in '{path}'.",
                     path=path,
                     count=len(out),
                     results=out,
@@ -605,8 +609,8 @@ class SystemSkill(SkillBase):
             return self._result(
                 ok=False,
                 status="error",
-                text=f"Unexpected fs.list output for '{path}'.",
-                error="FS_LIST_INVALID_OUTPUT",
+                message=f"Unexpected fs.list output for '{path}'.",
+                error_code="FS_LIST_INVALID_OUTPUT",
                 path=path,
                 output=out,
             )
@@ -617,8 +621,8 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Missing required parameter 'path'.",
-                    error="MISSING_PATH",
+                    message="Missing required parameter 'path'.",
+                    error_code="MISSING_PATH",
                 )
             start = self._to_int(params.get("start"), default=1, min_value=1)
             end = params.get("end")
@@ -628,7 +632,7 @@ class SystemSkill(SkillBase):
             return self._result(
                 ok=ok,
                 status="success" if ok else "error",
-                text=f"Read file '{path}'." if ok else str(out),
+                message=f"Read file '{path}'." if ok else str(out),
                 path=path,
                 start=start,
                 end=end_value,
@@ -642,8 +646,8 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Missing required parameter 'path'.",
-                    error="MISSING_PATH",
+                    message="Missing required parameter 'path'.",
+                    error_code="MISSING_PATH",
                 )
             content = str(params.get("content") or "")
             out = sd.fs_write(path, content)
@@ -651,7 +655,7 @@ class SystemSkill(SkillBase):
             return self._result(
                 ok=ok,
                 status="success" if ok else "error",
-                text=str(out),
+                message=str(out),
                 path=path,
                 bytes_written=len(content.encode("utf-8")),
                 output=out,
@@ -663,15 +667,15 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Missing required parameter 'path'.",
-                    error="MISSING_PATH",
+                    message="Missing required parameter 'path'.",
+                    error_code="MISSING_PATH",
                 )
             out = sd.fs_delete(path)
             ok = not self._is_error_text(out)
             return self._result(
                 ok=ok,
                 status="success" if ok else "error",
-                text=str(out),
+                message=str(out),
                 path=path,
                 output=out,
             )
@@ -681,45 +685,45 @@ class SystemSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Keyboard control (pyautogui) not available.",
-                    error="PYAUTOGUI_UNAVAILABLE",
+                    message="Keyboard control (pyautogui) not available.",
+                    error_code="PYAUTOGUI_UNAVAILABLE",
                 )
 
             kb_action = self._keyboard_action(params)
             if kb_action == "next":
                 pyautogui.hotkey("fn", "right")
-                return self._result(ok=True, status="success", text="Skipping to next.", action="next")
+                return self._result(ok=True, status="success", message="Skipping to next.", action="next")
             if kb_action == "prev":
                 pyautogui.hotkey("fn", "left")
-                return self._result(ok=True, status="success", text="Going to previous.", action="prev")
+                return self._result(ok=True, status="success", message="Going to previous.", action="prev")
             if kb_action == "pause":
                 pyautogui.press("space")
-                return self._result(ok=True, status="success", text="Playback paused/resumed.", action="pause")
+                return self._result(ok=True, status="success", message="Playback paused/resumed.", action="pause")
             if kb_action == "volume_up":
                 for _ in range(5):
                     pyautogui.press("volumeup")
-                return self._result(ok=True, status="success", text="Volume increased.", action="volume_up")
+                return self._result(ok=True, status="success", message="Volume increased.", action="volume_up")
             if kb_action == "volume_down":
                 for _ in range(5):
                     pyautogui.press("volumedown")
-                return self._result(ok=True, status="success", text="Volume decreased.", action="volume_down")
+                return self._result(ok=True, status="success", message="Volume decreased.", action="volume_down")
             if kb_action == "mute":
                 pyautogui.press("volumemute")
-                return self._result(ok=True, status="success", text="Mute toggled.", action="mute")
+                return self._result(ok=True, status="success", message="Mute toggled.", action="mute")
             if kb_action == "close":
                 pyautogui.hotkey("alt", "f4")
-                return self._result(ok=True, status="success", text="Window closed.", action="close")
+                return self._result(ok=True, status="success", message="Window closed.", action="close")
             return self._result(
                 ok=False,
                 status="error",
-                text="Unknown keyboard command. Use action: next|prev|pause|volume_up|volume_down|mute|close.",
-                error="UNKNOWN_KEYBOARD_COMMAND",
+                message="Unknown keyboard command. Use action: next|prev|pause|volume_up|volume_down|mute|close.",
+                error_code="UNKNOWN_KEYBOARD_COMMAND",
             )
 
         return self._result(
             ok=False,
             status="error",
-            text=f"Unknown system action: {action_id}",
-            error="UNKNOWN_ACTION",
+            message=f"Unknown system action: {action_id}",
+            error_code="UNKNOWN_ACTION",
             message=f"Unknown action: {action_id}",
         )

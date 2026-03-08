@@ -36,7 +36,7 @@
         "opacity": { "type": "number", "default": 0.95 },
         "ttl_ms": { "type": "integer", "default": 2200 },
         "pulse": { "type": "boolean", "default": true },
-        "screen_id": { "type": "integer", "default": 0 }
+        "screen_id": { "type": "integer" }
       }
     },
     "draw_circle": {
@@ -186,7 +186,8 @@
       "y": { "type": "number" },
       "width": { "type": "number" },
       "height": { "type": "number" },
-      "screen_id": { "type": "integer" }
+      "screen_id": { "type": "integer" },
+      "coordinate_space": { "type": "string" }
     }
   }
 }

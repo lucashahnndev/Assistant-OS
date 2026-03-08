@@ -59,8 +59,8 @@ class SystemAppsSkill(SkillBase):
         return ["open", "close", "find"]
 
     @staticmethod
-    def _result(ok: bool, status: str, text: str, **extra: Any) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"ok": ok, "status": status, "text": text}
+    def _result(ok: bool, status: str, error_details: str = "", **extra: Any) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"ok": ok, "status": status, "error_details": text}
         payload.update(extra)
         return payload
 
@@ -114,7 +114,7 @@ class SystemAppsSkill(SkillBase):
             res = subprocess.run(
                 ["cmd", "/c", "start", "", program],
                 capture_output=True,
-                text=True,
+                error_details=True,
                 timeout=10,
                 check=False,
             )
@@ -165,7 +165,7 @@ class SystemAppsSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Missing required parameter 'program_name' (or alias 'query').",
+                    error_details="Missing required parameter 'program_name' (or alias 'query').",
                     error="MISSING_PROGRAM_NAME",
                     message="program_name is required for system.apps.open",
                 )
@@ -177,7 +177,7 @@ class SystemAppsSkill(SkillBase):
                 return self._result(
                     ok=bool(opened),
                     status="success" if opened else "error",
-                    text=f"Opening '{target}' in browser.",
+                    error_details=f"Opening '{target}' in browser.",
                     action="open",
                     target=target,
                     resolved_target=mapped_target,
@@ -198,7 +198,7 @@ class SystemAppsSkill(SkillBase):
             return self._result(
                 ok=ok,
                 status="success" if ok else "error",
-                text=f"Program '{target}' started." if ok else f"Failed to open '{target}'.",
+                error_details=f"Program '{target}' started." if ok else f"Failed to open '{target}'.",
                 action="open",
                 target=target,
                 resolved_target=mapped_target,
@@ -211,7 +211,7 @@ class SystemAppsSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Missing required parameter 'program_name' (or alias 'query').",
+                    error_details="Missing required parameter 'program_name' (or alias 'query').",
                     error="MISSING_PROGRAM_NAME",
                     message="program_name is required for system.apps.close",
                 )
@@ -227,7 +227,7 @@ class SystemAppsSkill(SkillBase):
             return self._result(
                 ok=ok,
                 status="success" if ok else "error",
-                text=(
+                error_details=(
                     f"Program '{target}' closed."
                     if ok
                     else f"Close signal sent for '{target}', but process may still be running."
@@ -244,7 +244,7 @@ class SystemAppsSkill(SkillBase):
                 return self._result(
                     ok=False,
                     status="error",
-                    text="Missing required parameter 'program_name' (or alias 'query').",
+                    error_details="Missing required parameter 'program_name' (or alias 'query').",
                     error="MISSING_PROGRAM_NAME",
                     message="program_name is required for system.apps.find",
                 )
@@ -254,7 +254,7 @@ class SystemAppsSkill(SkillBase):
                 return self._result(
                     ok=True,
                     status="success",
-                    text=f"Alias '{target}' is available as URL target.",
+                    error_details=f"Alias '{target}' is available as URL target.",
                     action="find",
                     target=target,
                     resolved_target=mapped_target,
@@ -269,7 +269,7 @@ class SystemAppsSkill(SkillBase):
             return self._result(
                 ok=True,
                 status="success" if found else "empty",
-                text=(
+                error_details=(
                     f"Found '{target}' in system path."
                     if found
                     else f"Could not find '{target}' in system path."
@@ -285,7 +285,7 @@ class SystemAppsSkill(SkillBase):
         return self._result(
             ok=False,
             status="error",
-            text=f"Unknown action: {action_id}",
+            error_details=f"Unknown action: {action_id}",
             error="UNKNOWN_ACTION",
             message=f"Unknown action: {action_id}",
         )

@@ -163,6 +163,17 @@ class LLMManager:
             return result
         return f"Error analyzing image: {err}"
 
+    def generate_text(self, prompt: str, system_prompt: str = None, **kwargs) -> Optional[str]:
+        """
+        Generic text generation routing to the primary chat provider.
+        Used for summarization, recovery, and other conversational needs.
+        """
+        result, err = self._execute_with_router(
+            self.chat_pool, 'generate_text', 
+            prompt=prompt, system_prompt=system_prompt, **kwargs
+        )
+        return result
+
     def summarize_output(self, text: str) -> str:
         """
         Generates a concise semantic summary of a large text (e.g., a tool log).

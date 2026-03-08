@@ -140,25 +140,6 @@ class SpotifySearchSkill(SkillBase):
             logger.error(f"Spotify fallback search error: {e}")
             return []
 
-    @staticmethod
-    def _render_text(query: str, provider: str, results: List[Dict[str, Any]]) -> str:
-        if not results:
-            return f"Nenhum resultado encontrado para '{query}' no Spotify."
-        lines = [f"Resultados Spotify para '{query}' ({len(results)} itens):"]
-        for i, item in enumerate(results, start=1):
-            title = item.get("title") or "Untitled"
-            artist = item.get("artist")
-            score = item.get("confidenceScore")
-            line = f"{i}. {title}"
-            if artist:
-                line += f" - {artist}"
-            if score is not None:
-                line += f" (score {score:.2f})"
-            lines.append(line)
-            if item.get("url"):
-                lines.append(f"   URL: {item['url']}")
-        lines.append(f"Provider: {provider}")
-        return "\n".join(lines)
 
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         action = action_id.split(".")[-1]
@@ -174,28 +155,26 @@ class SpotifySearchSkill(SkillBase):
             return {
                 "ok": False,
                 "status": "error",
-                "error": "MISSING_QUERY",
-                "message": "Missing query for Spotify search.",
+                "error_code": "MISSING_QUERY",
+                "error_details": "Missing query for Spotify search.",
                 "provider": "spotify",
                 "query": "",
                 "count": 0,
                 "results": [],
                 "best": None,
-                "text": "Error: parameter 'query' is required para spotify.search.search.",
             }
 
         if search_type not in {"track", "artist", "album", "playlist"}:
             return {
                 "ok": False,
                 "status": "error",
-                "error": "INVALID_TYPE",
-                "message": f"Unsupported Spotify type: {search_type}",
+                "error_code": "INVALID_TYPE",
+                "error_details": f"Unsupported Spotify type: {search_type}",
                 "provider": "spotify",
                 "query": query,
                 "count": 0,
                 "results": [],
                 "best": None,
-                "text": f"Error: type '{search_type}' is not supported em spotify.search.search.",
             }
 
         # 1. Check Config
@@ -211,8 +190,8 @@ class SpotifySearchSkill(SkillBase):
             return {
                 "ok": True if fallback_results else False,
                 "status": "success" if fallback_results else "error",
-                "error": None if fallback_results else "MISSING_CONFIG",
-                "message": (
+                "error_code": None if fallback_results else "MISSING_CONFIG",
+                "error_details": (
                     f"Configuração do Spotify incompleta. Faltando: {', '.join(missing)}"
                     if missing else "Configuração do Spotify incompleta."
                 ),
@@ -223,7 +202,6 @@ class SpotifySearchSkill(SkillBase):
                 "results": fallback_results,
                 "best": fallback_results[0] if fallback_results else None,
                 "fallback": True,
-                "text": text if fallback_results else f"Erro de configuração Spotify: {', '.join(missing)}",
             }
 
         # 2. Get Token
@@ -234,15 +212,14 @@ class SpotifySearchSkill(SkillBase):
             return {
                 "ok": True if fallback_results else False,
                 "status": "success" if fallback_results else "error",
-                "error": None if fallback_results else "AUTH_FAILED",
-                "message": "Erro ao obter token de acesso do Spotify. Verifique suas credenciais.",
+                "error_code": None if fallback_results else "AUTH_FAILED",
+                "error_details": "Erro ao obter token de acesso do Spotify. Verifique suas credenciais.",
                 "provider": "spotify_fallback_web" if fallback_results else "spotify",
                 "query": query,
                 "count": len(fallback_results),
                 "results": fallback_results,
                 "best": fallback_results[0] if fallback_results else None,
                 "fallback": True,
-                "text": text if fallback_results else "Erro ao autenticar no Spotify.",
             }
 
         # 3. Perform Search
@@ -257,14 +234,13 @@ class SpotifySearchSkill(SkillBase):
                 return {
                     "ok": False,
                     "status": "error",
-                    "error": "HTTP_ERROR",
-                    "message": f"Spotify API HTTP {response.status_code}",
+                    "error_code": "HTTP_ERROR",
+                    "error_details": f"Spotify API HTTP {response.status_code}",
                     "provider": "spotify",
                     "query": query,
                     "count": 0,
                     "results": [],
                     "best": None,
-                    "text": f"Erro na API do Spotify: HTTP {response.status_code}",
                 }
             data = response.json()
             if isinstance(data, dict) and data.get("error"):
@@ -273,14 +249,13 @@ class SpotifySearchSkill(SkillBase):
                 return {
                     "ok": False,
                     "status": "error",
-                    "error": "API_ERROR",
-                    "message": msg or "Unknown Spotify API error",
+                    "error_code": "API_ERROR",
+                    "error_details": msg or "Unknown Spotify API error",
                     "provider": "spotify",
                     "query": query,
                     "count": 0,
                     "results": [],
                     "best": None,
-                    "text": f"Erro na API do Spotify: {msg or 'erro desconhecido'}",
                 }
             
             type_key = f"{search_type}s"
@@ -306,7 +281,6 @@ class SpotifySearchSkill(SkillBase):
             # Sort by confidence
             results.sort(key=lambda x: x["confidenceScore"], reverse=True)
             best = results[0] if results else None
-            text = self._render_text(query, "spotify_api", results)
 
             return {
                 "ok": True,
@@ -319,7 +293,6 @@ class SpotifySearchSkill(SkillBase):
                 "count": len(results),
                 "type": search_type,
                 "market": market,
-                "text": text,
             }
         except Exception as e:
             logger.error(f"Spotify Search Execution Error: {e}")
@@ -328,13 +301,12 @@ class SpotifySearchSkill(SkillBase):
             return {
                 "ok": True if fallback_results else False,
                 "status": "success" if fallback_results else "error",
-                "error": None if fallback_results else "EXCEPTION",
-                "message": str(e),
+                "error_code": None if fallback_results else "EXCEPTION",
+                "error_details": str(e),
                 "provider": "spotify_fallback_web" if fallback_results else "spotify",
                 "query": query,
                 "count": len(fallback_results),
                 "results": fallback_results,
                 "best": fallback_results[0] if fallback_results else None,
                 "fallback": True,
-                "text": text if fallback_results else f"Erro na busca do Spotify: {str(e)}",
             }

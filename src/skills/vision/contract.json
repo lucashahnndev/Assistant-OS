@@ -77,9 +77,23 @@
                             "y": { "type": "number" },
                             "width": { "type": "number" },
                             "height": { "type": "number" },
+                            "screen_id": { "type": "integer" },
+                            "coordinate_space": { "type": "string", "enum": ["normalized_1000"] }
+                        }
+                    },
+                    "bbox_px": {
+                        "type": "object",
+                        "properties": {
+                            "label": { "type": "string" },
+                            "confidence": { "type": "number" },
+                            "x": { "type": "number" },
+                            "y": { "type": "number" },
+                            "width": { "type": "number" },
+                            "height": { "type": "number" },
                             "screen_id": { "type": "integer" }
                         }
                     },
+                    "output_coordinate_space": { "type": "string" },
                     "path": { "type": "string" }
                 }
             }

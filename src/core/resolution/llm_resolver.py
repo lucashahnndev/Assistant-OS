@@ -41,46 +41,9 @@ class LLMResolver(IntentResolver):
             confidence, notes = self._estimate_confidence(intent, local_context)
             
             if confidence < self.threshold:
-                # Voice/chat fallback: if the model selected reply but omitted text,
-                # produce a compact clarification reply instead of dropping to None.
-                if (
-                    str(intent.action or "").strip().lower() == "reply"
-                    and "reply_without_text" in notes
-                ):
-                    fallback_text = self._build_reply_without_text_fallback(local_context)
-                    if fallback_text:
-                        metrics = None
-                        if session and isinstance(getattr(session, "context", None), dict):
-                            metrics = session.context.get("metrics")
-                            if not isinstance(metrics, dict):
-                                metrics = {}
-                                session.context["metrics"] = metrics
-                            current = metrics.get("llm_reply_without_text_recovered", 0)
-                            try:
-                                current_value = int(current)
-                            except Exception:
-                                current_value = 0
-                            metrics["llm_reply_without_text_recovered"] = current_value + 1
-                        logger.warning(
-                            "LLM low-confidence reply_without_text recovered with fallback text | confidence=%.2f threshold=%.2f",
-                            confidence,
-                            self.threshold,
-                        )
-                        return ActionPlan(
-                            action_id="reply",
-                            args={},
-                            confidence=max(confidence, 0.40),
-                            source="llm_fallback",
-                            response_text=fallback_text,
-                            thought=(intent.thought or ""),
-                            attachments=(intent.attachments if isinstance(getattr(intent, "attachments", None), list) else None),
-                            metadata={
-                                "plan": intent.plan,
-                                "state_summary": intent.state_summary,
-                                "task_label": intent.task_label,
-                                "confidence_notes": notes + ["fallback_reply_text"],
-                            },
-                        )
+                # Conversational recovery is now handled by the Orchestrator's bounded recovery loop.
+                # If the model selected reply but omitted text, or if confidence is low, we return None
+                # to trigger the supervisor-led recovery path.
                 logger.warning(
                     f"LLM confidence {confidence:.2f} below threshold {self.threshold:.2f} "
                     f"for action '{intent.action}' | notes={notes}"
@@ -193,24 +156,3 @@ class LLMResolver(IntentResolver):
         score = max(0.0, min(1.0, score))
         return score, notes
 
-    @staticmethod
-    def _build_reply_without_text_fallback(context: Dict[str, Any]) -> Optional[str]:
-        session = context.get("session")
-        locale = "en"
-        if session and isinstance(getattr(session, "context", None), dict):
-            locale = str(session.context.get("user_language") or "en").strip().lower()
-
-        user_input = str(context.get("user_input") or "").strip()
-        short_or_ambiguous = len(user_input) < 24
-        if short_or_ambiguous:
-            if locale.startswith("pt"):
-                return "Não entendi totalmente. Pode repetir em uma frase curta?"
-            if locale.startswith("es"):
-                return "No entendí todo. ¿Puedes repetirlo en una frase corta?"
-            return "I did not fully catch that. Could you repeat it in one short sentence?"
-
-        if locale.startswith("pt"):
-            return "Entendi parte do pedido, mas faltou um detalhe-chave. Pode dizer exatamente o resultado que você quer?"
-        if locale.startswith("es"):
-            return "Entendí parte del pedido, pero faltó un detalle clave. ¿Puedes decir exactamente qué resultado quieres?"
-        return "I understood part of your request, but one key detail is missing. Could you state exactly what result you want?"

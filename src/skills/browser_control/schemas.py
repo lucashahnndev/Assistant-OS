@@ -27,7 +27,7 @@ class ToonResponse(BaseModel):
     command_id: str
     ts: datetime = Field(default_factory=datetime.utcnow)
     component: Literal["runtime", "planner", "dom_analyzer", "image_analyzer"]
-    action: Literal["navigate", "click", "type", "scroll", "wait", "screenshot", "dom_snapshot", "safe_confirm"]
+    action: Literal["navigate", "click", "type", "scroll", "wait", "screenshot", "dom_snapshot", "safe_confirm", "vision"]
     trace_id: str # global session correlation
     step_id: str # planner step identifier
     retry_count: int = 0

@@ -24,6 +24,30 @@ class OpenAlexProvider(SearchProvider):
         self.retries = max(0, min(int(retries or 1), 3))
         self.enabled = bool(enabled)
 
+    @staticmethod
+    def _is_academic_query(query: str) -> bool:
+        text = str(query or "").strip().lower()
+        if not text:
+            return False
+        markers = (
+            "paper",
+            "research",
+            "study",
+            "journal",
+            "systematic review",
+            "meta-analysis",
+            "meta analysis",
+            "clinical trial",
+            "doi",
+            "arxiv",
+            "pubmed",
+            "scholar",
+            "citation",
+            "academic",
+            "evidence",
+        )
+        return any(marker in text for marker in markers)
+
     def _build_params(self, request: SearchRequest) -> Dict[str, Any]:
         params: Dict[str, Any] = {
             "search": request.query,
@@ -38,6 +62,8 @@ class OpenAlexProvider(SearchProvider):
     def search(self, request: SearchRequest) -> SearchResponse:
         if not self.enabled:
             return SearchResponse(results=[], warnings=["PROVIDER_DISABLED:openalex"])
+        if not self._is_academic_query(request.query):
+            return SearchResponse(results=[], warnings=["PROVIDER_SKIPPED:openalex:non_academic_query"])
 
         timeout = httpx.Timeout(self.timeout_ms / 1000.0)
         params = self._build_params(request)

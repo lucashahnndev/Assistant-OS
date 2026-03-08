@@ -39,11 +39,35 @@ from core.scheduler import WorkStatus
 from skills.registry import SkillRegistry
 from skills.loader import SkillLoader
 from core.sessions_index import SessionIndexManager
-from core.errors import AgentError, ErrorCode
+from core.errors import AgentError, ErrorCode, ErrorCategory
 from core.worker_runtime import WorkerRuntime
+from core.events import TaskOrigin, TaskSpawnReason
+from core.policy import SupervisorPolicy, SupervisorOutcome, ExecutionRecommendation
+from core.plan_validator import PlanValidator
 
 # Configure logging
 logger = get_logger("AgentOrchestrator")
+
+
+class _SkillSessionView:
+    """
+    Restricted session view for skill execution.
+    Skills can read lightweight session metadata/context, but cannot write
+    directly to chat/event streams (must return results to the worker).
+    """
+
+    __slots__ = ("session_id", "context")
+
+    def __init__(self, session: Optional[Session]):
+        self.session_id = getattr(session, "session_id", None)
+        self.context = getattr(session, "context", {}) if session else {}
+
+    def add_message(self, *args, **kwargs):
+        raise RuntimeError("Direct session messaging is not allowed from skills.")
+
+    def publish_event(self, *args, **kwargs):
+        raise RuntimeError("Direct event publishing is not allowed from skills.")
+
 
 class AgentOrchestrator:
     _instance = None
@@ -87,10 +111,12 @@ class AgentOrchestrator:
         self.intent_resolver_chain: Optional[FallbackChainResolver] = None
         self.browser_driver = None
         self.system_driver = None
+        self.proactive_running = False
         self._instruction_pack_cache: Dict[str, str] = {}
         self._prompt_metrics_cache: Dict[str, Dict[str, Any]] = {}
         self._turn_metrics_cache: Dict[str, Dict[str, Any]] = {}
         self._observation_metrics_cache: Dict[str, deque] = {}
+        self._task_func_registry: Dict[str, Callable] = {}
         # Persistence Path
         self.base_data_dir = self.config_manager.base_data_dir
         self.sessions_dir = os.path.join(self.base_data_dir, 'sessions')
@@ -133,6 +159,20 @@ class AgentOrchestrator:
         
         self.initialized = True
 
+    def _release_if_owned(self, lock: threading.RLock) -> bool:
+        """Safely release the lock if the current thread owns it."""
+        try:
+            # RLock._is_owned() is internal but useful here to avoid exceptions.
+            # Alternatively, try/except RuntimeError.
+            lock.release()
+            return True
+        except RuntimeError:
+            return False
+
+    def _reacquire_lock(self, lock: threading.RLock, timeout: int = 60) -> bool:
+        """Safely re-acquire the lock."""
+        return lock.acquire(blocking=True, timeout=timeout)
+
     @staticmethod
     def _is_transient_runtime_session(session: Optional[Session]) -> bool:
         if not session:
@@ -174,21 +214,25 @@ class AgentOrchestrator:
         
         while self.proactive_running:
             try:
-                # Heartbeat Guard: Only trigger if no other session was active recently
-                # This prevents interrupting the user during active tasks
                 now_ts = time.time()
-                active_sessions = [s for s in self.sessions.values() if s.session_id != 'proactive' and (now_ts - s.last_interaction) < 60]
                 
-                if not active_sessions:
-                    # IMPROVEMENT: Scan for triggers instead of fixed pulse
-                    triggers = self._scan_system_triggers()
-                    if triggers:
-                        logger.info(f"Triggering proactive session for: {triggers}")
-                        self.process(f"[SYSTEM_TRIGGER: {triggers}]", session_id="proactive")
-                    else:
-                        logger.debug("Pulse: No triggers found, system status normal.")
+                # Calculate metrics for the policy
+                interaction_ages = [(now_ts - s.last_interaction) for s in self.sessions.values() if s.session_id != 'proactive']
+                min_age = min(interaction_ages) if interaction_ages else 3600.0
+                active_count = len([age for age in interaction_ages if age < 60])
+                
+                triggers = self._scan_system_triggers()
+                
+                # Decision via Centralized Policy
+                if SupervisorPolicy.should_trigger_proactive_check(
+                    last_interaction_age=min_age,
+                    active_sessions_count=active_count,
+                    has_system_triggers=bool(triggers)
+                ):
+                    logger.info(f"Triggering proactive session for: {triggers}")
+                    self.process(f"[SYSTEM_TRIGGER: {triggers}]", session_id="proactive")
                 else:
-                    logger.debug("Skipping Heartbeat: Active user session detected.")
+                    logger.debug("Pulse: Policy deferred proactive check.")
             except Exception as e:
                 logger.error(f"Error in proactive loop: {e}")
             
@@ -1236,15 +1280,110 @@ class AgentOrchestrator:
         )
         return any(marker in value for marker in markers)
 
+    @staticmethod
+    def _infer_assistive_target_label(user_input: str, fallback: str = "elemento solicitado na tela") -> str:
+        raw = str(user_input or "").strip()
+        if not raw:
+            return fallback
+        cleaned = re.sub(r"\s+", " ", raw).strip(" .,:;!?")
+        lower = cleaned.lower()
+
+        patterns = [
+            r"(?:onde\s+fica|onde\s+est[áa]|mostra|mostrar|mostre|aponta|aponte|destaca|destaque|demarca|demarque|circula|circule|desenha|desenhe|indica|indique)\s+(?:na\s+minha\s+tela\s+|na\s+tela\s+)?(?:o|a|os|as|um|uma)?\s*(.+)$",
+            r"(?:na\s+minha\s+tela|na\s+tela)\s+(?:o|a|os|as|um|uma)?\s*(.+)$",
+            r"(?:onde\s+(?:tem|existe|fica|est[áa])|where\s+is)\s+(?:o|a|os|as|um|uma|the)?\s*(.+)$",
+        ]
+        for pat in patterns:
+            match = re.search(pat, lower, flags=re.IGNORECASE)
+            if match and match.group(1):
+                candidate = match.group(1).strip(" .,:;!?")
+                if candidate:
+                    # Remove style instructions from target extraction.
+                    candidate = re.sub(
+                        r"\b(?:com|usando)\s+(?:uma\s+)?(?:seta|flecha|arrow|ret[âa]ngulo|retangulo|rectangle|rect|círculo|circulo|circle|foco|focus|cantos?)\b.*$",
+                        "",
+                        candidate,
+                        flags=re.IGNORECASE,
+                    ).strip(" .,:;!?")
+                    if candidate in {"tenta novamente", "novamente", "de novo", "again", "retry"}:
+                        break
+                    if candidate:
+                        return candidate[:180]
+        fallback_candidate = lower[:180] if lower else fallback
+        fallback_candidate = re.sub(
+            r"\b(?:com|usando)\s+(?:uma\s+)?(?:seta|flecha|arrow|ret[âa]ngulo|retangulo|rectangle|rect|círculo|circulo|circle|foco|focus|cantos?)\b.*$",
+            "",
+            fallback_candidate,
+            flags=re.IGNORECASE,
+        ).strip(" .,:;!?")
+        if fallback_candidate in {"tenta novamente", "novamente", "de novo", "again", "retry"}:
+            return fallback
+        return fallback_candidate
+
+    @staticmethod
+    def _extract_assistive_render_preferences(user_input: str) -> Dict[str, Any]:
+        text = str(user_input or "").strip().lower()
+        if not text:
+            return {}
+        prefs: Dict[str, Any] = {}
+
+        if re.search(r"\b(seta|flecha|arrow)\b", text):
+            prefs["mark_type"] = "arrow"
+        elif re.search(r"\b(c[íi]rculo|circle)\b", text):
+            prefs["mark_type"] = "circle"
+        elif re.search(r"\b(ret[âa]ngulo|retangulo|rectangle|rect|caixa|box)\b", text):
+            prefs["mark_type"] = "rect"
+        elif re.search(r"\b(focus|foco|cantos?)\b", text):
+            prefs["mark_type"] = "focus_corners"
+
+        hex_match = re.search(r"#([0-9a-f]{3}|[0-9a-f]{6})\b", text, flags=re.IGNORECASE)
+        if hex_match:
+            prefs["color"] = f"#{hex_match.group(1).upper()}"
+        else:
+            color_map = {
+                "vermelha": "#FF3B30",
+                "vermelho": "#FF3B30",
+                "red": "#FF3B30",
+                "azul": "#4DA3FF",
+                "blue": "#4DA3FF",
+                "verde": "#34C759",
+                "green": "#34C759",
+                "amarela": "#FFD60A",
+                "amarelo": "#FFD60A",
+                "yellow": "#FFD60A",
+                "ciano": "#00E5FF",
+                "cyan": "#00E5FF",
+            }
+            for token, color in color_map.items():
+                if re.search(rf"\b{re.escape(token)}\b", text):
+                    prefs["color"] = color
+                    break
+
+        if re.search(r"\b(sem pulso|sem anima[cç][aã]o|without pulse|no pulse)\b", text):
+            prefs["pulse"] = False
+        elif re.search(r"\b(com pulso|pulse|pulsando|pulsar)\b", text):
+            prefs["pulse"] = True
+
+        return prefs
+
     def _build_contextual_start_ack(self, session: Optional[Session], action_id: str, action_args: Optional[Dict[str, Any]] = None) -> str:
         args = action_args if isinstance(action_args, dict) else {}
         action = str(action_id or "").strip().lower()
 
-
-        if action in {"system.control.screenshot", "vision.analyze"}:
-            return "Understood, capturing the screen now."
-
         return self._t(session, "ack.work_started")
+
+    @staticmethod
+    def _build_skill_callbacks_view(callbacks: Optional[Dict[str, Callable]]) -> Dict[str, Callable]:
+        """
+        Skills receive only non-terminal callback channels.
+        Final user replies/completion are orchestrator responsibilities.
+        """
+        if not isinstance(callbacks, dict):
+            return {}
+        allowed = {}
+        if callable(callbacks.get("send_status")):
+            allowed["send_status"] = callbacks["send_status"]
+        return allowed
 
     def build_work_start_ack(
         self,
@@ -1260,6 +1399,49 @@ class AgentOrchestrator:
             session,
             self._build_contextual_start_ack(session, action_id, action_args=action_args),
         )
+
+    def _emit_execution_commitment(
+        self,
+        session: Optional[Session],
+        plan: ActionPlan,
+        work_id: str,
+        callbacks: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Emits the conversational commitment message after the first plan validation.
+        This represents the 'Execution Commitment' layer.
+        """
+        if not callbacks or "send_response" not in callbacks:
+            return
+
+        # 1. Build the commitment message
+        commit_msg = self.build_work_start_ack(
+            session,
+            plan.action_id,
+            explicit_text=(plan.response_text or ""),
+            action_args=(plan.args if isinstance(plan.args, dict) else {}),
+        )
+
+        # 2. Prevent duplication if it's already a reply (unlikely here but safe)
+        if plan.action_id == "reply":
+            return
+
+        # 3. Send and persist
+        callbacks["send_response"](commit_msg, is_chunk=True)
+        if session:
+            session.add_message("assistant", commit_msg, work_id=work_id)
+            self._save_session(session)
+
+        # 4. Technical Status Update
+        if "send_status" in callbacks:
+            callbacks["send_status"](
+                "executing",
+                {
+                    "message": self._t(session, "status.execution_committed"),
+                    "work_id": work_id,
+                    "code": "commitment",
+                },
+            )
 
     def _build_proactive_reasoning_chunk(self, session: Optional[Session], plan: ActionPlan) -> str:
         action = str(getattr(plan, "action_id", "") or "").strip()
@@ -1278,7 +1460,7 @@ class AgentOrchestrator:
             return f"Executando: {action}"
         return f"Executing: {action}"
 
-    def get_initial_intent(self, user_input: str, session_id: str = "default", user_data: dict = None, context: PrincipalContext = None, attachments: List[str] = None, name: str = "") -> tuple[Optional[ActionPlan], Optional[str], Any]:
+    def get_initial_intent(self, user_input: str, session_id: str = "default", user_data: dict = None, context: PrincipalContext = None, attachments: List[str] = None, name: str = "", lock: Optional[threading.RLock] = None, cancel_check: Optional[Callable[[], bool]] = None) -> tuple[Optional[ActionPlan], Optional[str], Any]:
         """
         Runs initial intent resolution using the configured chain (LLM-only).
         Returns (ActionPlan, ReflexResponse_DEPRECATED, Session).
@@ -1330,9 +1512,17 @@ class AgentOrchestrator:
             "skill_registry": self.skill_registry,
         }
         
+        start_res_ts = time.time()
         try:
-            start_res_ts = time.time()
-            plan = self.intent_resolver_chain.resolve(user_input, res_context)
+            # Yield lock during initial planning LLM call
+            if lock: self._release_if_owned(lock)
+            try:
+                plan = self.intent_resolver_chain.resolve(user_input, context=res_context)
+            finally:
+                if lock: self._reacquire_lock(lock)
+                if cancel_check and cancel_check():
+                    logger.info(f"Cancellation during initial planning for session {session_id}")
+                    return None, None, session
             res_latency_ms = int((time.time() - start_res_ts) * 1000)
             
             status = "success" if plan and plan.action_id != "error" else "failure"
@@ -1348,21 +1538,14 @@ class AgentOrchestrator:
                     "error_code": plan.metadata.get("error_code") if plan and plan.action_id == "error" else None
                 }
             )
-            res_latency_ms = int((time.time() - start_res_ts) * 1000)
-            
-            status = "success" if plan and plan.action_id != "error" else "failure"
-            logger.info(
-                "Intent resolution completed | action=%s session_id=%s latency_ms=%d status=%s",
-                plan.action_id if plan else "none", session_id, res_latency_ms, status,
-                extra={
-                    "phase": "intent_resolution",
-                    "action": plan.action_id if plan else "none",
-                    "session_id": session_id,
-                    "latency_ms": res_latency_ms,
-                    "status": status,
-                    "error_code": plan.metadata.get("error_code") if plan and plan.action_id == "error" else None
-                }
-            )
+            if plan:
+                plan = self._apply_media_decision_policy(
+                    session=session,
+                    user_input=user_input,
+                    plan=plan,
+                    last_action_id=None,
+                    last_action_structured=None,
+                )
             return plan, None, session
         except Exception as e:
             logger.error(f"Error in initial resolution: {e}")
@@ -1432,7 +1615,7 @@ class AgentOrchestrator:
             is_worker_run = bool((user_data or {}).get("__worker_run")) if isinstance(user_data, dict) else False
             if is_worker_run:
                 raise TimeoutError(f"SESSION_LOCK_TIMEOUT:{session_id}")
-            return "I am still processing your previous request. Please wait a moment or try again shortly."
+            return "SESSION_BUSY: Processing prior request."
 
         try:
             # Check for cancellation before starting the loop (cooperative)
@@ -1636,6 +1819,13 @@ class AgentOrchestrator:
             initial_decisions = self._decide_on_worker_events(session, worker_updates)
             # Filter for active alerts (non-silent) to inject into prompt
             active_alerts = [d for d in initial_decisions if d["outcome"] != "SILENT"]
+
+            # Initiative Policy: Deterministic suppression for system turns
+            is_system_turn = bool(user_input and user_input.startswith("[SYSTEM_TRIGGER:"))
+            if SupervisorPolicy.should_suppress_output(initial_decisions, is_system_turn=is_system_turn):
+                logger.info(f"Initiative Policy: Suppressing output for system turn in session {session_id}")
+                self._save_session(session)
+                return "" # Remain silent
             
             # Debounce settings
             replan_debounce_s = float(self.config_manager.get("worker_replan_debounce_s", 10.0))
@@ -1734,24 +1924,20 @@ class AgentOrchestrator:
                             "history": session.get_context_for_llm(limit_msgs=20, limit_tokens=reasoning_history_budget),
                             "allowed_actions": self._get_allowed_actions_for_session(session),
                             "skill_registry": self.skill_registry,
+                            "last_action_status": last_action_status,
+                            "last_action_id": last_action_id,
+                            "last_action_reason": last_action_reason,
                         }
                         start_res_ts = time.time()
-                        plan = self.intent_resolver_chain.resolve(user_input, reasoning_context)
-                        res_latency_ms = int((time.time() - start_res_ts) * 1000)
-                        
-                        status = "success" if plan and plan.action_id != "error" else "failure"
-                        logger.info(
-                            "Reasoning resolution completed | action=%s session_id=%s latency_ms=%d status=%s",
-                            plan.action_id if plan else "none", session_id, res_latency_ms, status,
-                            extra={
-                                "phase": "reasoning_loop",
-                                "action": plan.action_id if plan else "none",
-                                "session_id": session_id,
-                                "latency_ms": res_latency_ms,
-                                "status": status,
-                                "error_code": plan.metadata.get("error_code") if plan and plan.action_id == "error" else None
-                            }
-                        )
+                        # Yield lock during re-planning LLM call
+                        self._release_if_owned(lock)
+                        try:
+                            plan = self.intent_resolver_chain.resolve(user_input, reasoning_context)
+                        finally:
+                            self._reacquire_lock(lock)
+                            if cancel_check and cancel_check():
+                                logger.info(f"Cancellation during re-planning for session {session_id}")
+                                break
                         res_latency_ms = int((time.time() - start_res_ts) * 1000)
                         
                         status = "success" if plan and plan.action_id != "error" else "failure"
@@ -1777,20 +1963,35 @@ class AgentOrchestrator:
                             )
                             continue
 
-                        recovered_reply = self._reply_from_last_success(
+                        tool_data = self._summarize_last_success_data(
                             action_id=last_action_id,
                             structured_result=last_action_structured,
                             raw_output=last_action_output,
-                            language=self._session_locale(session),
                         ) if last_action_status == "success" else None
-                        if not recovered_reply and last_success_action_id:
-                            recovered_reply = self._reply_from_last_success(
+                        
+                        if not tool_data and last_success_action_id:
+                             tool_data = self._summarize_last_success_data(
                                 action_id=last_success_action_id,
                                 structured_result=last_success_structured,
                                 raw_output=last_success_output,
-                                language=self._session_locale(session),
                             )
-                        final_response = recovered_reply or self.i18n.t("reply.no_plan_resolved", locale="en")
+
+                        # Yield lock during conversational recovery (long LLM call)
+                        self._release_if_owned(lock)
+                        try:
+                            final_response = self._generate_recovery_reply(
+                                session=session,
+                                user_input=user_input,
+                                reason="no_plan_resolved",
+                                last_tool_data=tool_data,
+                                last_action_id=last_action_id or last_success_action_id
+                            )
+                        finally:
+                            self._reacquire_lock(lock)
+                            # Re-check cancellation after lock re-acquisition
+                            if cancel_check and cancel_check():
+                                logger.info(f"Cancellation detected after recovery yield for session {session_id}")
+                                break
                         if callbacks and 'send_status' in callbacks:
                             callbacks['send_status'](
                                 'error',
@@ -1892,12 +2093,50 @@ class AgentOrchestrator:
                                     suggestions=suggestion_text,
                                 )
                             )
+                            # Ensure final_response doesn't contain raw signals
+                            if "SYSTEM_SIGNAL:" in str(final_response):
+                                final_response = self._t(session, "reply.technical_issue")
+
                             plan = ActionPlan(
                                 action_id="reply",
                                 args={},
                                 response_text=final_response,
                                 source="internal",
                             )
+                            continue
+
+                    # --- Phase 9: Plan Validation ---
+                    validation_context = {
+                        "is_system_turn": is_system_turn,
+                        "authorized_destructive_actions": False, # TODO: integrate with session context or policy
+                        "principal_context": context
+                    }
+                    v_res = PlanValidator.validate(
+                        plan=plan,
+                        skill_registry=self.skill_registry,
+                        session=session,
+                        context=validation_context
+                    )
+                    
+                    if not v_res.is_valid:
+                        logger.warning(
+                            "Plan validation failed | action=%s error=%s msg=%s diag=%s",
+                            plan.action_id, v_res.error_code, v_res.message, v_res.diagnostics
+                        )
+                        # Inject error into reasoning history to force re-planning
+                        validation_error_msg = f"PLAN_VALIDATION_FAILED: {v_res.message}\nDIAGNOSTICS: {json.dumps(v_res.diagnostics)}"
+                        session.add_message("system", validation_error_msg, msg_type="reasoning", work_id=work_id)
+                        
+                        # Yield lock before re-entering planning loop
+                        self._release_if_owned(lock)
+                        try:
+                            time.sleep(0.01) # Small yield to allow main loop to process interrupts
+                        finally:
+                            self._reacquire_lock(lock)
+                            if cancel_check and cancel_check(): break
+
+                        plan = None
+                        continue
 
                     plan = self._apply_media_decision_policy(
                         session=session,
@@ -1937,14 +2176,19 @@ class AgentOrchestrator:
                             or not curr_args
                         )
                         if same_args:
-                            recovered_reply = self._reply_from_last_success(
+                            tool_data = self._summarize_last_success_data(
                                 action_id=last_action_id,
                                 structured_result=last_action_structured,
                                 raw_output=last_action_output,
-                                language=self._session_locale(session),
                             )
-                            if recovered_reply:
-                                final_response = recovered_reply
+                            final_response = self._generate_recovery_reply(
+                                session=session,
+                                user_input=user_input,
+                                reason="repetition_detected",
+                                last_tool_data=tool_data,
+                                last_action_id=last_action_id
+                            )
+                            if final_response:
                                 final_structured_attachments = self._standardize_attachments(
                                     session,
                                     last_generated_attachment_paths,
@@ -2015,14 +2259,20 @@ class AgentOrchestrator:
                             continue
     
                         logger.warning(f"Loop detected (3 identical actions/params): {current_signature}. Breaking.")
-                        recovered_reply = self._reply_from_last_success(
-                            action_id=plan.action_id,
+                        tool_data = self._summarize_last_success_data(
+                            action_id=last_action_id,
                             structured_result=last_action_structured,
                             raw_output=last_action_output,
-                            language=self._session_locale(session),
                         ) if last_action_status == "success" else None
-    
-                        if recovered_reply:
+                        
+                        final_response = self._generate_recovery_reply(
+                            session=session,
+                            user_input=user_input,
+                            reason="loop_detected",
+                            last_tool_data=tool_data,
+                            last_action_id=last_action_id
+                        )
+                        if final_response:
                             if callbacks and 'send_status' in callbacks:
                                 loop_success_msg = (
                                     f"Repeated action detected in {plan.action_id}; consolidating final response using the latest valid result."
@@ -2035,10 +2285,14 @@ class AgentOrchestrator:
                                         'action': plan.action_id
                                     }
                                 )
-                            final_response = recovered_reply
+                            final_response = final_response
                         else:
-                            loop_break_msg = (
-                                "Exact repetition detected without progress. Please rephrase your request or provide more details."
+                            loop_break_msg = self._generate_recovery_reply(
+                                session=session,
+                                user_input=user_input,
+                                reason="loop_detected_no_progress",
+                                last_tool_data=None,
+                                last_action_id=plan.action_id
                             )
                             if callbacks and 'send_status' in callbacks:
                                 callbacks['send_status'](
@@ -2064,59 +2318,58 @@ class AgentOrchestrator:
                          logger.info(f"Loop tendency detected for action '{plan.action_id}'.")
     
                     # 3. Action Repetition (4 times in last 5 steps) - Hard Break
-                    if action_history.count(plan.action_id) >= 4:
-                         if replans_used < replan_budget:
-                             replans_used += 1
-                             previous_actions = []
-                             self._touch_work_context(
-                                 work_id,
-                                 {
-                                     "planner": {
-                                         "replans_used": replans_used,
-                                         "replan_budget": replan_budget,
-                                         "steps": planner_tree,
-                                     },
-                                     "summary": {"status": "replanning"},
-                                 },
-                             )
-                             emit_user_progress(
-                                 progress_note("replan", action_id=plan.action_id),
-                                 event_key=f"replan:{plan.action_id}:hard",
-                             )
-                             plan = None
-                             continue
-                         logger.warning(f"Action loop detected (Action '{plan.action_id}' repeated 4/5 times). Breaking.")
-                         recovered_reply = self._reply_from_last_success(
-                             action_id=plan.action_id,
-                             structured_result=last_action_structured,
-                             raw_output=last_action_output,
-                             language=self._session_locale(session),
-                         ) if last_action_status == "success" else None
-    
-                         if callbacks and 'send_status' in callbacks:
-                             callbacks['send_status'](
-                                 'error',
-                                 {
-                                     'code': 'loop_break',
-                                     'message': (
-                                         f"I seem to be stuck trying to use action '{plan.action_id}' repeatedly."
-                                         if recovered_reply else
-                                         f"I seem to be stuck trying to use action '{plan.action_id}' repeatedly without success. I will stop to avoid an infinite loop."
-                                     ),
-                                     'action': plan.action_id
-                                 }
-                             )
-    
-                         final_response = recovered_reply or f"I seem to be stuck trying to use action '{plan.action_id}' repeatedly without success. I will stop to avoid an infinite loop."
-                         # For a hard break, we force a valid reply object for internal history consistency
-                         plan = ActionPlan(
-                             action_id='reply',
-                             args={},
-                             response_text=final_response,
-                             source='internal',
-                             attachments=(last_generated_attachment_paths or None),
-                         )
-                         plan.thought = "Action loop detected. Stopping to avoid excessive token and time usage."
+                    # Cognitive Guardrails via Policy
+                    repeat_count = action_history.count(plan.action_id)
+                    guardrail_code = SupervisorPolicy.evaluate_guardrails(
+                        repeat_count=repeat_count,
+                        failure_count=0, # This block is for action repeats, not necessarily failures
+                        loop_threshold=4
+                    )
+                    
+                    if guardrail_code == "loop_guardrail":
+                        if replans_used < replan_budget:
+                            replans_used += 1
+                            previous_actions = []
+                            self._touch_work_context(
+                                work_id,
+                                {
+                                    "planner": {
+                                        "replans_used": replans_used,
+                                        "replan_budget": replan_budget,
+                                        "steps": planner_tree,
+                                    },
+                                    "summary": {"status": "replanning"},
+                                },
+                            )
+                            emit_user_progress(
+                                progress_note("replan", action_id=plan.action_id),
+                                event_key=f"replan:{plan.action_id}:hard",
+                            )
+                            plan = None
+                            continue
+                            
+                        logger.warning(
+                            "Action loop detected (Action '%s' repeated %d times). Applying policy guardrail.",
+                            plan.action_id, repeat_count
+                        )
+                        if callbacks and 'send_status' in callbacks:
+                            callbacks['send_status'](
+                                'thinking',
+                                {
+                                    'code': guardrail_code,
+                                    'message': f"Action '{plan.action_id}' is repeating without progress; replanning.",
+                                    'action': plan.action_id
+                                }
+                            )
+                        guardrail_observation = (
+                            f"GUARDRAIL: action '{plan.action_id}' repeated {repeat_count} times without progress. "
+                            "Do NOT repeat the same action/args. Choose an alternative strategy/tool, "
+                            "or ask a clarifying question if missing information is required."
+                        )
+                        session.add_message("system", guardrail_observation, msg_type="reasoning", work_id=work_id)
+                        previous_actions = []
+                        plan = None
+                        continue
                     
                     # Add current turn to history for context.
                     # Prefer TOON compact encoding to reduce prompt footprint.
@@ -2172,6 +2425,10 @@ class AgentOrchestrator:
                             )
                         final_response = normalized_response
                         final_response = self.apply_conversation_coaching(session, user_input, final_response)
+                        final_response = self._sanitize_user_facing_response(
+                            final_response,
+                            language=self._session_locale(session),
+                        )
                         
                         # Process attachments
                         attachment_inputs = plan.attachments or last_generated_attachment_paths
@@ -2395,7 +2652,13 @@ class AgentOrchestrator:
                                     callbacks['send_complete']()
                                     stream_completed = True
                                 return approval_msg
-    
+
+                    # --- PhaseCommit: Execution Commitment ---
+                    # Only emit conversational commitment if this is the first successful step
+                    # of a fresh worker run and the plan has been validated.
+                    if loops == 0 and plan.action_id != "reply" and plan.action_id != "error":
+                        self._emit_execution_commitment(session, plan, work_id, callbacks)
+
                     # Execute via SkillRegistry
                     if callbacks and 'send_status' in callbacks:
                         callbacks['send_status']('executing', {'action': plan.action_id, 'label': f"Executing {plan.action_id}..."})
@@ -2410,8 +2673,8 @@ class AgentOrchestrator:
                     })
     
                     exec_context = {
-                        "session": session,
-                        "callbacks": callbacks,
+                        "session": _SkillSessionView(session),
+                        "callbacks": self._build_skill_callbacks_view(callbacks),
                         "browser_driver": self.browser_driver,
                         "web_automation_driver": self.browser_driver,
                         "session_id": session_id,
@@ -2735,22 +2998,44 @@ class AgentOrchestrator:
                     # Deterministic completion for informational searches.
                     # If we already have a successful search result, consolidate to user reply
                     # instead of re-invoking the same action.
+                    autocomplete_after_success = self._should_autocomplete_after_success_action(
+                        user_input,
+                        plan.action_id,
+                        args=plan.args if isinstance(plan.args, dict) else {},
+                        structured_result=last_action_structured,
+                    )
+                    is_overlay_action = str(plan.action_id or "").strip().lower().startswith("overlay.assist.")
                     if (
                         result_status == "success"
-                        and not has_unfinished_planner_steps()
-                        and self._should_autocomplete_after_success_action(
-                            user_input,
-                            plan.action_id,
-                            args=plan.args if isinstance(plan.args, dict) else {},
-                            structured_result=last_action_structured,
-                        )
+                        and autocomplete_after_success
+                        and (not has_unfinished_planner_steps() or is_overlay_action)
                     ):
-                        recovered_reply = self._reply_from_last_success(
-                            action_id=plan.action_id,
-                            structured_result=last_action_structured,
-                            raw_output=last_action_output,
-                            language=self._session_locale(session),
-                        )
+                        if not result and last_action_status == "success":
+                            tool_data = self._summarize_last_success_data(
+                                action_id=last_action_id,
+                                structured_result=last_action_structured,
+                                raw_output=last_action_output,
+                            )
+                            final_response = self._generate_recovery_reply(
+                                session=session,
+                                user_input=user_input,
+                                reason="empty_result_success",
+                                last_tool_data=tool_data,
+                                last_action_id=last_action_id
+                            )
+                            recovered_reply = final_response
+                        else:
+                            recovered_reply = self._generate_recovery_reply(
+                                session=session,
+                                user_input=user_input,
+                                reason="autocomplete_after_success",
+                                last_tool_data=self._summarize_last_success_data(
+                                    action_id=plan.action_id,
+                                    structured_result=last_action_structured,
+                                    raw_output=last_action_output,
+                                ),
+                                last_action_id=plan.action_id,
+                            )
                         if recovered_reply:
                             final_response = recovered_reply
                             final_structured_attachments = self._standardize_attachments(
@@ -2782,14 +3067,18 @@ class AgentOrchestrator:
                         and plan.action_id in {"vision.search_screen", "vision.analyze"}
                         and not is_assistive_request
                     ):
-                        recovered_reply = self._reply_from_last_success(
-                            action_id=plan.action_id,
-                            structured_result=last_action_structured,
-                            raw_output=last_action_output,
-                            language=self._session_locale(session),
+                        final_response = self._generate_recovery_reply(
+                            session=session,
+                            user_input=user_input,
+                            reason="vision_fast_path_summary",
+                            last_tool_data=self._summarize_last_success_data(
+                                action_id=plan.action_id,
+                                structured_result=last_action_structured,
+                                raw_output=last_action_output,
+                            ),
+                            last_action_id=plan.action_id,
                         )
-                        if recovered_reply:
-                            final_response = recovered_reply
+                        if final_response:
                             final_structured_attachments = self._standardize_attachments(
                                 session,
                                 last_generated_attachment_paths,
@@ -2811,35 +3100,59 @@ class AgentOrchestrator:
                                 break
     
                     # Hard guard for repeated identical failures.
-                    if repeated_failure_count >= 2:
+                    assistive_guardrail_reasons = {
+                        "ELEMENT_GROUNDING_FAILED",
+                        "ELEMENT_CONTEXT_MISMATCH",
+                        "ELEMENT_CONSENSUS_FAILED",
+                    }
+                    fail_threshold = 2
+                    if is_assistive_request:
+                        # Keep assistive flows exploratory: do not abort after the first miss.
+                        # Use tighter guardrails for semantic mismatch errors only.
+                        normalized_reason = str(result_reason or "").strip().upper()
+                        fail_threshold = 3 if normalized_reason == "ELEMENT_NOT_FOUND" else 2
+                        if normalized_reason in assistive_guardrail_reasons:
+                            fail_threshold = 2
+                    # Cognitive Guardrails via Policy
+                    guardrail_code = SupervisorPolicy.evaluate_guardrails(
+                        repeat_count=0, # This block is for failure counts, not necessarily repeats
+                        failure_count=repeated_failure_count,
+                        failure_threshold=fail_threshold
+                    )
+                    
+                    if guardrail_code == "failure_guardrail":
                         logger.warning(
-                            f"Repeated failure detected for action '{plan.action_id}'. Breaking loop to avoid delirium."
+                            "Repeated failure detected for action '%s'. Applying policy guardrail.",
+                            plan.action_id,
                         )
-                        final_response = self.i18n.t(
-                            "reply.loop_stuck",
-                            locale=self._session_locale(session),
-                            action_id=plan.action_id,
+                        if callbacks and 'send_status' in callbacks:
+                            callbacks['send_status'](
+                                'thinking',
+                                {
+                                    'code': guardrail_code,
+                                    'message': f"Action '{plan.action_id}' failed repeatedly; replanning.",
+                                    'action': plan.action_id,
+                                }
+                            )
+                        guardrail_observation = (
+                            f"GUARDRAIL: action '{plan.action_id}' failed repeatedly "
+                            f"(reason={result_reason or 'unknown'}). Do NOT repeat the same action/args now. "
+                            "Choose an alternative strategy/tool, or ask the user one concise clarifying question if needed."
                         )
+                        session.add_message("system", guardrail_observation, msg_type="reasoning", work_id=work_id)
                         self._touch_work_context(
                             work_id,
                             {
                                 "summary": {
-                                    "status": "blocked",
+                                    "status": "running",
                                     "last_error": result_reason,
                                     "cursor": session.state_summary.get("cursor"),
                                 },
                                 "planner": {"steps": planner_tree},
                             },
                         )
-                        session.add_message("assistant", final_response, work_id=work_id)
-                        final_response_persisted = True
-                        if callbacks and 'send_response' in callbacks:
-                            callbacks['send_response'](final_response, is_chunk=True)
-                            final_response_streamed = True
-                        if callbacks and 'send_complete' in callbacks:
-                            callbacks['send_complete']()
-                            stream_completed = True
-                        break
+                        plan = None
+                        continue
                     
                     # Reset plan for next iteration to allow re-reasoning
                     plan = None
@@ -2963,7 +3276,10 @@ class AgentOrchestrator:
             return [], False
             
         current_turn = getattr(session, "turn_id", 0)
-        replan_types = {"WAITING_INPUT", "FAILED", "COMPLETED", "SLOW"}
+        replan_types = {
+            "WAITING_INPUT", "FAILED", "COMPLETED", "SLOW", 
+            "STALLED", "RECOVERY_NEEDED", "ATTENTION_REQUIRED"
+        }
         
         final_updates = []
         latest_per_task = {} # task_id -> latest_event
@@ -2980,11 +3296,27 @@ class AgentOrchestrator:
             # Check for re-plan trigger
             if e_type in replan_types or attention in {"medium", "high"}:
                 should_replan = True
-                # Focus heuristic: the first/latest high-attention task captures focus
-                if task_id and (e_type == "WAITING_INPUT" or attention in {"medium", "high"}):
+                
+                # Delegate focus shift decision to Policy
+                if task_id and SupervisorPolicy.evaluate_focus_shift(
+                    e_type, attention, session.active_focus_task_id, task_id
+                ):
+                    previous_focus = session.active_focus_task_id
                     session.active_focus_task_id = task_id
                     session.active_focus_group = event.get("intent_group_id")
                     logger.info(f"Focus shifted to task {task_id} (Group: {session.active_focus_group}) due to {e_type}/{attention}")
+                    
+                    # Phase 7: Log focus shift to timeline
+                    if not hasattr(session, "event_timeline"):
+                        session.event_timeline = []
+                    session.event_timeline.append({
+                        "scope": "SESSION",
+                        "type": "FOCUS_SHIFT",
+                        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        "from": previous_focus,
+                        "to": task_id,
+                        "reason": f"policy_logic_{e_type}_{attention}"
+                    })
                 
             if task_id:
                 # Coalescing: only the last event for each task in this drain cycle
@@ -3017,6 +3349,9 @@ class AgentOrchestrator:
                 (task.get("intent_group_id") is not None and task.get("intent_group_id") == session.active_focus_group)
             )
 
+        # Phase 11: Reconcile scheduling before processing updates
+        self._reconcile_scheduling(session.session_id)
+
         # Process each update with scoring
         for event in updates:
             task_id = event.get("task_id")
@@ -3038,73 +3373,82 @@ class AgentOrchestrator:
                 # Silent if superseded
                 continue
 
-            # Scoring Policy
-            score = 0
-            if task:
-                if task.get("is_relevant_to_current_focus"): score += 50
-                if task.get("status") == "WAITING_INPUT": score += 30
-                if task.get("status") == "COMPLETED": score += 25
-                if task.get("status") == "FAILED": score += 20
-                score -= (task.get("turn_distance", 0) * 5)
+            # Scoring and Outcome Policy via Centralized Policy Layer
+            policy_result = SupervisorPolicy.evaluate_event(event, task, current_turn)
             
-            # Base logic for outcomes
-            outcome = "SILENT"
-            message = ""
+            outcome = policy_result["outcome"]
+            score = policy_result["score"]
+            attention = policy_result["attention"]
+            is_stale = policy_result["is_stale"]
+            turn_dist = policy_result["turn_distance"]
+            e_type = policy_result["event_type"]
             
-            # Priority mapping for tie-breaks
-            priority_map = {
-                "WAITING_INPUT": 5,
-                "FAILED": 4,
-                "COMPLETED": 3,
-                "SLOW": 2,
-                "PROGRESS": 1,
-                "UNKNOWN": 0
-            }
-            event_priority = priority_map.get(e_type, 0)
+            # Recovery Arbitration for structured failure signals
+            assessment = None
+            if e_type in {"RECOVERY_NEEDED", "STALLED", "FAILED"}:
+                assessment = self._arbitrate_recovery(session, event, task)
+                if assessment and assessment.recommendation == "RETRY":
+                    # If retry is recommended, maybe downgrade outcome to PANEL unless critical
+                    if outcome == SupervisorOutcome.CHAT:
+                        outcome = SupervisorOutcome.PANEL
+            
+            message = policy_result["message_template"].format(role=role, summary=event.get("summary") or event.get("failure_summary") or "")
 
-            if e_type == "WAITING_INPUT":
-                summary = event.get("summary") or "needs input"
-                message = f"The {role} is waiting for your input: {summary}"
-                if task: task["waiting_user_response"] = True
-                
-                # WAITING_INPUT becomes INPUT only if focused.
-                # The final "CHAT cap" promotes based on score/priority.
-                if task and task.get("is_relevant_to_current_focus"):
-                    outcome = "INPUT"
-                else:
-                    outcome = "CHAT"
-            elif e_type == "FAILED":
-                summary = event.get("failure_summary") or event.get("summary") or "failed"
-                message = f"The {role} failed: {summary}"
-                # FAILED stays CHAT if relevant or relatively fresh
-                outcome = "CHAT" if (score > 10 or not is_stale) else "PANEL"
-                if task: task["last_failure_summary"] = summary
-            elif e_type == "COMPLETED":
-                summary = event.get("summary") or "has finished its task"
-                message = f"The {role} has completed its task: {summary}"
-                # Prioritize focused or high-attention completion
-                outcome = "CHAT" if (score > 30 or (attention in {"medium", "high"} and not is_stale)) else "PANEL"
-                if task: 
-                    task["announced_completion"] = (outcome == "CHAT")
-                    task["last_outcome"] = event.get("outcome", summary)
-            elif e_type == "PROGRESS":
-                summary = event.get("summary") or "making progress"
-                message = f"Status: {role} is {summary}."
-                outcome = "PANEL" if (score > 20 or attention == "high") else "SILENT"
-                if task: task["last_summary"] = summary
-            
-            decisions.append({
+            decision = {
                 "outcome": outcome,
                 "message": message,
                 "role": role,
                 "score": score,
-                "priority": event_priority,
+                "priority": SupervisorPolicy.PRIORITY_MAP.get(e_type, 0),
                 "focus": 1 if (task and task.get("is_relevant_to_current_focus")) else 0,
                 "distance": turn_dist,
                 "timestamp": event.get("timestamp", ""),
-                "event": event
-            })
-            if task: task["user_visible"] = (outcome != "SILENT")
+                "event_id": event.get("event_id"),
+                "task_id": task_id,
+            }
+            
+            if assessment:
+                decision["recovery_assessment"] = assessment.to_dict()
+                
+            decisions.append(decision)
+            
+            # Update task metadata for visibility
+            if task: 
+                task["user_visible"] = (outcome != SupervisorOutcome.SILENT)
+                if e_type == "WAITING_INPUT":
+                    task["waiting_user_response"] = True
+                elif e_type == "FAILED":
+                    task["last_failure_summary"] = event.get("failure_summary") or event.get("summary")
+                elif e_type == "COMPLETED":
+                    task["announced_completion"] = (outcome == SupervisorOutcome.CHAT)
+                    task["last_outcome"] = event.get("outcome", event.get("summary"))
+
+            # Trace individual decision
+            if not hasattr(session, "decision_traces"):
+                session.decision_traces = []
+            
+            trace = {
+                "decision_id": str(uuid.uuid4()),
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "decision_type": "EVENT_COORDINATION",
+                "selected_outcome": outcome,
+                "task_id": task_id,
+                "task_role": role,
+                "event_id": event.get("event_id"),
+                "event_type": e_type,
+                "scoring_factors": {
+                    "final_score": score,
+                    "is_stale": is_stale,
+                    "turn_distance": turn_dist,
+                    "attention": attention,
+                    "is_focused": bool(task and task.get("is_relevant_to_current_focus"))
+                },
+                "candidate_events": [event]
+            }
+            if assessment:
+                trace["recovery_assessment"] = assessment.to_dict()
+                
+            session.decision_traces.append(trace)
         
         # Always sort by deterministic tie-break rules:
         # 1. Focus (binary)
@@ -3135,6 +3479,166 @@ class AgentOrchestrator:
 
         return decisions
 
+    def _arbitrate_recovery(self, session: Session, event: Dict[str, Any], task: Optional[Dict[str, Any]]) -> Optional[Any]:
+        """
+        Consults the policy to produce an advisory execution assessment.
+        Also manages retry counters and fallback depth in the task registry.
+        """
+        task_id = event.get("task_id")
+        if not task:
+            return None
+            
+        # 1. Map event metadata to classification
+        raw_code = event.get("error_code")
+        try:
+            error_code = ErrorCode(raw_code) if raw_code else ErrorCode.UNKNOWN_ERROR
+        except ValueError:
+            error_code = ErrorCode.UNKNOWN_ERROR
+            
+        raw_cat = event.get("category")
+        try:
+            error_category = ErrorCategory(raw_cat) if raw_cat else None
+        except ValueError:
+            error_category = None
+
+        if not error_category:
+            error_category = AgentError("dummy", code=error_code).category
+
+        # 2. Extract Tool Metadata (Side-effects & Capabilities)
+        tool_name = task.get("task_role", "unknown_tool")
+        metadata = {}
+        skill_reg = getattr(self, "skill_registry", None)
+        if skill_reg:
+            metadata = skill_reg.get_action_metadata(tool_name)
+        
+        side_effect = metadata.get("side_effect", "none") if isinstance(metadata, dict) else "none"
+        
+        # 3. Get and check budgets
+        # attempt_count: total retries for THIS task instance
+        attempt_count = task.get("retry_count", 0)
+        
+        # fallback_depth: how many times we've tried a different tool for this goal
+        fallback_depth = task.get("fallback_depth", 0)
+        
+        # tool_retries: total failures for THIS tool in THIS session (global budget)
+        tool_retries = session.tool_failure_counts.get(tool_name, 0)
+        
+        # Enforce hard budgets before consulting policy
+        policy_cfg = SupervisorPolicy.RETRY_CONFIG
+        if attempt_count >= policy_cfg["max_retries_per_task"]:
+            error_category = ErrorCategory.FATAL # Escalates to replan/fallback
+        if tool_retries >= policy_cfg["max_retries_per_tool"]:
+            error_category = ErrorCategory.FATAL # Tool exhausted
+            
+        # 4. Consult Policy
+        assessment = SupervisorPolicy.evaluate_recovery(
+            task_id=task_id,
+            error_code=error_code,
+            error_category=error_category,
+            attempt_count=attempt_count,
+            side_effect=side_effect,
+            fallback_depth=fallback_depth
+        )
+        
+        # 5. Populate Fallback Action if needed
+        if assessment.recommendation == ExecutionRecommendation.FALLBACK:
+            fallback_action = self._select_fallback_action(tool_name, fallback_depth)
+            if fallback_action:
+                assessment.fallback_action = fallback_action
+            else:
+                # No valid fallback found, downgrade to REPLAN
+                assessment.recommendation = ExecutionRecommendation.REPLAN
+
+        # 6. Update task metadata
+        if assessment.recommendation == ExecutionRecommendation.RETRY:
+            task["retry_pending"] = True
+        elif assessment.recommendation == ExecutionRecommendation.FALLBACK:
+            task["fallback_pending"] = True
+            task["next_fallback_action"] = assessment.fallback_action
+
+        # 7. Circuit Breaker: Update tool health based on outcome
+        if not hasattr(session, "tool_failure_counts"):
+            session.tool_failure_counts = {}
+        if not hasattr(session, "tool_health"):
+            session.tool_health = {}
+
+        if assessment.recommendation in {ExecutionRecommendation.RETRY, ExecutionRecommendation.FALLBACK, ExecutionRecommendation.REPLAN}:
+            # Increment failure count
+            session.tool_failure_counts[tool_name] = tool_retries + 1
+            
+            # Transition Health
+            failures = session.tool_failure_counts[tool_name]
+            cb_config = SupervisorPolicy.CIRCUIT_BREAKER_CONFIG
+            
+            if failures >= cb_config["unavailable_threshold"]:
+                session.tool_health[tool_name] = "UNAVAILABLE"
+            elif failures >= cb_config["degraded_threshold"]:
+                session.tool_health[tool_name] = "DEGRADED"
+            else:
+                session.tool_health[tool_name] = "HEALTHY"
+
+        return assessment
+
+    def _reconcile_scheduling(self, session_id: str):
+        """
+        Re-evaluates task scheduling and applies state transitions (soft preemption).
+        """
+        session = self.get_session_robust(session_id)
+        if not session:
+            return
+
+        suggestions = SupervisorPolicy.evaluate_scheduling(
+            session.task_registry, 
+            active_focus_task_id=session.active_focus_task_id,
+            current_turn_id=session.turn_id
+        )
+
+        for s in suggestions:
+            task_id = s["task_id"]
+            state = s["suggested_state"]
+            reason = s.get("reason", "POLICY_RECONCILIATION")
+            
+            if state == "PAUSED":
+                logger.info(f"Scheduling Policy: Pausing task {task_id} ({reason})")
+                self.pause_task(session_id, task_id)
+            elif state == "RESUME":
+                logger.info(f"Scheduling Policy: Resuming task {task_id} ({reason})")
+                self.resume_task(session_id, task_id)
+
+    def _select_fallback_action(self, tool_name: str, current_depth: int) -> Optional[str]:
+        """
+        Selects a fallback action based on capability matching.
+        """
+        # 1. Direct manual fallback
+        manual_fallback = SupervisorPolicy.FALLBACK_MAP.get(tool_name)
+        if manual_fallback and current_depth == 0:
+            return manual_fallback
+            
+        # 2. Capability-based fallback
+        metadata = {}
+        if hasattr(self, "skill_registry"):
+            metadata = self.skill_registry.get_action_metadata(tool_name)
+            
+        capability = metadata.get("capability")
+        if not capability:
+            return None
+            
+        fallback_list = SupervisorPolicy.CAPABILITY_FALLBACK_MAP.get(capability, [])
+        if not fallback_list:
+            return None
+            
+        # Try to find a tool in the list that isn't the current one and isn't exhausted
+        # For simplicity, we use current_depth to pick the next one
+        try:
+            # Filter out the current tool if present
+            candidates = [t for t in fallback_list if t != tool_name]
+            if current_depth < len(candidates):
+                return candidates[current_depth]
+        except Exception:
+            pass
+            
+        return None
+
     def spawn_worker(
         self,
         session_id: str,
@@ -3143,6 +3647,10 @@ class AgentOrchestrator:
         base_turn_id: int,
         func: Optional[Callable] = None,
         intent_group_id: Optional[str] = None,
+        origin_type: TaskOrigin = TaskOrigin.SYSTEM,
+        parent_task_id: Optional[str] = None,
+        spawn_reason: TaskSpawnReason = TaskSpawnReason.USER_REQUEST,
+        checkpoint: Optional[Dict[str, Any]] = None,
         *args,
         **kwargs
     ) -> WorkerRuntime:
@@ -3166,11 +3674,139 @@ class AgentOrchestrator:
             turn_id=turn_id,
             base_turn_id=base_turn_id,
             intent_group_id=intent_group_id,
+            origin_type=origin_type,
+            parent_task_id=parent_task_id,
+            spawn_reason=spawn_reason,
             orchestrator=self
         )
         
+        # Phase 10: Inject checkpoint if resuming
+        if checkpoint:
+            worker.latest_checkpoint = checkpoint
+        
+        # Phase 11: Register function for potential automated resumption
+        if func:
+            self._task_func_registry[task_id] = func
+
         worker.spawn(func, *args, **kwargs)
         return worker
+
+    def inspect_task(self, session_id: str, task_id: str) -> Optional[Dict[str, Any]]:
+        """Returns a snapshot of the current task state and its latest checkpoint."""
+        session = self.get_session_robust(session_id)
+        if not session or task_id not in session.task_registry:
+            return None
+        return session.task_registry[task_id]
+
+    def summarize_task(self, session_id: str, task_id: str, mode: str = "user") -> str:
+        """Generates a contextual summary of task progress."""
+        session = self.get_session_robust(session_id)
+        if not session or task_id not in session.task_registry:
+            return "Task not found."
+            
+        task = session.task_registry[task_id]
+        timeline = task.get("timeline", [])
+        
+        # Filter timeline events for summarization
+        important_events = [e for e in timeline if e.get("type") in {"CHECKPOINT", "RECOVERY_NEEDED", "COMPLETED"}]
+        
+        # Simple heuristic summary for now
+        # In a real scenario, this might call the LLM to summarize the timeline
+        summary_lines = [f"Task: {task['task_role']} (Status: {task['status']})"]
+        if task.get("last_summary"):
+            summary_lines.append(f"Progress: {task['last_summary']}")
+        if task.get("checkpoint"):
+            cp = task["checkpoint"]
+            summary_lines.append(f"Last Checkpoint: Phase {cp.get('phase')} ({int(cp.get('progress', 0)*100)}%)")
+            
+        if mode == "supervisor":
+            summary_lines.append(f"Total Steps Recorded: {len(timeline)}")
+            summary_lines.append(f"Important Milestones: {len(important_events)}")
+            
+        return "\n".join(summary_lines)
+
+    def pause_task(self, session_id: str, task_id: str) -> bool:
+        """Attempts to stop a task gracefully and marks it as PAUSED."""
+        session = self.get_session_robust(session_id)
+        if not session or task_id not in session.task_registry:
+            return False
+            
+        # Find active worker runtime (if any)
+        # In current design, we don't hold global worker lists. 
+        # For Phase 10, we mark the registry and the Worker's monitor loop will see it.
+        task = session.task_registry[task_id]
+        task["status"] = "PAUSED"
+        task["is_superseded"] = True # Force worker to stop via existing loop check
+        
+        self._save_session(session)
+        logger.info(f"Task {task_id} paused by supervisor.")
+        return True
+
+    def resume_task(self, session_id: str, task_id: str, func: Optional[Callable] = None) -> Optional[WorkerRuntime]:
+        """Restarts a task from its last checkpoint."""
+        session = self.get_session_robust(session_id)
+        if not session or task_id not in session.task_registry:
+            return None
+            
+        task = session.task_registry[task_id]
+        checkpoint = task.get("checkpoint")
+        
+        # Phase 11: Try to retrieve original function if not provided
+        if not func:
+            func = self._task_func_registry.get(task_id)
+            
+        if not func:
+            logger.error(f"Cannot resume task {task_id}: No worker function available.")
+            return None
+
+        if not checkpoint:
+            logger.warning(f"Attempted to resume task {task_id} without checkpoint. Starting fresh.")
+        
+        # Spawn a new worker but inject the old task_id/checkpoint if relevant
+        # To avoid ID collisions, we spawn a NEW task but link it (Phase 7 mechanism)
+        return self.spawn_worker(
+            session_id=session_id,
+            task_role=task["task_role"],
+            turn_id=session.turn_id,
+            base_turn_id=task.get("base_turn_id", session.turn_id),
+            func=func,
+            intent_group_id=task.get("intent_group_id"),
+            origin_type=TaskOrigin.SUPERVISOR,
+            parent_task_id=task["task_id"], # Linked
+            spawn_reason=TaskSpawnReason.RECOVERY,
+            checkpoint=checkpoint
+        )
+
+    def request_task_input(self, session_id: str, task_id: str, prompt: str):
+        """Signals that a task is explicitly waiting for user input."""
+        session = self.get_session_robust(session_id)
+        if not session or task_id not in session.task_registry:
+            return
+            
+        task = session.task_registry[task_id]
+        task["status"] = "WAITING_INPUT"
+        task["waiting_user_response"] = True
+        
+        session.add_message("assistant", f"I need some input for task '{task['task_role']}': {prompt}", work_id=task_id)
+        self._save_session(session)
+
+    def mark_task_attention_required(self, session_id: str, task_id: str, reason: str):
+        """Manual signal to flag a task for supervisor/user attention."""
+        session = self.get_session_robust(session_id)
+        if not session or task_id not in session.task_registry:
+            return
+            
+        task = session.task_registry[task_id]
+        task["attention_level"] = "high"
+        task["attention_reason"] = reason
+        
+        # Add a timeline entry for this intervention
+        session._add_to_task_timeline(task_id, {
+            "event_type": "ATTENTION_REQUIRED",
+            "summary": f"Supervisor intervention: {reason}",
+            "attention_level": "high"
+        })
+        self._save_session(session)
 
     def _consolidate_memory(self, session: Session, force: bool = False):
         """
@@ -3350,7 +3986,17 @@ class AgentOrchestrator:
 
     @staticmethod
     def _serialize_action_result(result: Any) -> str:
-        """Serializes tool output preserving structured payloads when possible."""
+        """Serializes tool output preserving structured payloads while stripping forbidden conversational fields."""
+        if isinstance(result, dict):
+            forbidden = {"text", "message", "reply", "legacy_text"}
+            found_forbidden = [k for k in result.keys() if k in forbidden]
+            if found_forbidden:
+                logger.warning(
+                    f"CONTRACT_VIOLATION: Orchestrator detected legacy fields {found_forbidden} in tool result. Stripping from observation."
+                )
+                # Ensure we don't modify the original result in case other parts of the system rely on it (though they shouldn't)
+                result = {k: v for k, v in result.items() if k not in forbidden}
+
         if isinstance(result, (dict, list)):
             try:
                 return json.dumps(result, ensure_ascii=False)
@@ -3434,162 +4080,156 @@ class AgentOrchestrator:
         return cleaned[:240]
 
     @staticmethod
-    def _reply_from_last_success(
+    def _summarize_last_success_data(
+        self,
         *,
         action_id: Optional[str],
         structured_result: Optional[Dict[str, Any]],
         raw_output: Optional[str],
-        language: str = "en",
-    ) -> Optional[str]:
+    ) -> Dict[str, Any]:
         """
-        Builds a user-facing reply from the latest successful tool output.
-        Used when loop guard triggers after repeated successful actions.
+        Extracts structured data from the latest successful tool output.
+        Used to provide context for the LLM Recovery Loop.
         """
         payload = structured_result if isinstance(structured_result, dict) else {}
-        is_pt = str(language or "").lower().startswith("pt")
         action = (action_id or "").strip().lower()
-
-        def _log_reply_source(source_key: str, **extra: Any) -> None:
-            try:
-                details = " ".join(f"{k}={v}" for k, v in extra.items() if v is not None and v != "")
-                suffix = f" {details}" if details else ""
-                logger.debug(
-                    "reply_consolidation_source action=%s key=%s%s",
-                    action or "-",
-                    source_key,
-                    suffix,
-                )
-            except Exception:
-                pass
-
+        
+        data = {
+            "action_id": action,
+            "status": "success",
+            "timestamp": time.time(),
+        }
 
         if action == "system.control.screenshot":
-            path = str(payload.get("path") or "").strip()
-            if path:
-                return f"Pronto, capturei a tela: {path}" if is_pt else f"Done, I captured the screen: {path}"
-            return "Pronto, capturei a tela e já anexei para você." if is_pt else "Done, I captured the screen and attached it for you."
+            data.update({
+                "path": payload.get("path"),
+                "display": "screenshot_captured"
+            })
+        elif action.startswith("vision."):
+            data.update({
+                "observation": payload.get("text")
+            })
+        elif action == "weather.control.get":
+            data.update({
+                "location": payload.get("location"),
+                "current": payload.get("current")
+            })
+        elif action == "weather.control.forecast":
+            data.update({
+                "location": payload.get("location"),
+                "forecast": payload.get("forecast")
+            })
+        elif action == "wikipedia.search":
+            data.update({
+                "results": payload.get("results")
+            })
+        elif action == "maps.search":
+            data.update({
+                "places": payload.get("places"),
+                "is_fallback": str(payload.get("status") or "").strip().lower() == "fallback"
+            })
+        elif action == "research.retrieve.run":
+            data.update({
+                "answer_md": payload.get("answer_md") or payload.get("text")
+            })
+        elif action.startswith("overlay.assist."):
+            data.update({
+                "target_label": (payload.get("target") or {}).get("label") if isinstance(payload.get("target"), dict) else None
+            })
+        else:
+            # Generic extraction
+            data["result_text"] = payload.get("text") or raw_output
+            
+        return data
 
+    def _generate_recovery_reply(
+        self,
+        session: Session,
+        user_input: str,
+        reason: str,
+        last_tool_data: Optional[Dict[str, Any]] = None,
+        last_action_id: Optional[str] = None
+    ) -> str:
+        """
+        Bounded LLM Recovery Loop: Performs exactly ONE targeted LLM call to generate
+         a natural conversational response when standard resolution fails or is silent.
+        """
+        logger.info(f"Triggering LLM Recovery Loop | session={session.session_id} reason={reason}")
+        
+        # 1. Prepare context for the recovery prompt
+        history = session.get_context_for_llm(limit_msgs=5)
+        locale = self._session_locale(session)
+        
+        context_block = f"Reason for recovery: {reason}\n"
+        if last_action_id:
+            context_block += f"Last attempted action: {last_action_id}\n"
+        
+        # Map specific reasons to more descriptive context for the LLM
+        reason_guidance = ""
+        if reason == "media_busy_takeover":
+            reason_guidance = (
+                "CONFLICT: A new task was requested but the media/specialist driver is busy with another work item. "
+                "Ask the user if they want to force-cancel the previous task and take over control now."
+            )
+        elif reason == "session_busy":
+            reason_guidance = (
+                "STATE: The session already has a running background task. "
+                "Explain that I can only handle one active task per session and ask them to wait or cancel the current one."
+            )
+        elif reason == "intent_none":
+            reason_guidance = "STATE: Standard resolution failed to identify a clear intent. Ask for clarification or offer help."
+        
+        # Safeguard: Prevent raw internal signals (SYSTEM_SIGNAL:*) from leaking.
+        # These appear in user_input during certain recovery paths.
+        if "SYSTEM_SIGNAL:" in str(user_input) or "SYSTEM_SIGNAL:" in str(reason):
+            logger.warning(f"Aborting conversational recovery for raw signal trace: {reason}")
+            return self._t(session, "reply.generic_error")
 
-        text = payload.get("text")
-        if (
-            action.startswith("vision.")
-            and isinstance(text, str)
-            and text.strip()
-            and not AgentOrchestrator._looks_like_technical_text(text)
-        ):
-            return text.strip()
+        if reason_guidance:
+            context_block += f"Detailed Context: {reason_guidance}\n"
 
-        if action == "weather.control.get":
-            location = str(payload.get("location") or "").strip()
-            current = payload.get("current") if isinstance(payload.get("current"), dict) else {}
-            temp = current.get("temp")
-            desc = str(current.get("description") or "").strip()
-            feels = current.get("feels_like")
-            if temp is not None or desc or location:
-                place = location or ("sua região" if is_pt else "your region")
-                head = (
-                    f"Clima atual em {place}:"
-                    if is_pt
-                    else f"Current weather in {place}:"
-                )
-                details = []
-                if temp is not None:
-                    details.append(f"temperatura {temp}°C" if is_pt else f"temperature {temp}°C")
-                if feels is not None:
-                    details.append(f"sensação {feels}°C" if is_pt else f"feels like {feels}°C")
-                if desc:
-                    details.append(f"condição: {desc}" if is_pt else f"condition: {desc}")
-                if details:
-                    return f"{head} " + " | ".join(details)
-                return head
+        if last_tool_data:
+            context_block += f"Last tool output data: {json.dumps(last_tool_data, ensure_ascii=False)}\n"
 
-        if action == "weather.control.forecast":
-            location = str(payload.get("location") or "").strip()
-            forecast = payload.get("forecast")
-            if isinstance(forecast, list) and forecast:
-                lines = [
-                    f"Previsão para {location or 'sua região'}:"
-                    if is_pt
-                    else f"Forecast for {location or 'your region'}:"
-                ]
-                for day in forecast[:5]:
-                    if not isinstance(day, dict):
-                        continue
-                    date = str(day.get("date") or "").strip() or "?"
-                    desc = str(day.get("description") or "").strip()
-                    tmin = day.get("temp_min")
-                    tmax = day.get("temp_max")
-                    line = date
-                    if desc:
-                        line += f": {desc}"
-                    temps = []
-                    if tmin is not None:
-                        temps.append(f"min {tmin}°C")
-                    if tmax is not None:
-                        temps.append(f"max {tmax}°C")
-                    if temps:
-                        line += " | " + " | ".join(temps)
-                    lines.append(f"- {line}")
-                if len(lines) > 1:
-                    return "\n".join(lines)
+        system_prompt = (
+            "You are Atlas, a helpful AI assistant. Standard intent resolution produced an empty or low-confidence response, or a system conflict occurred.\n"
+            "Your task is to provide a natural, conversational reply to the user based on the context provided.\n"
+            f"User Language: {locale}\n"
+            "Rules:\n"
+            "- If there is a CONFLICT or STATE guidance, follow it naturally to explain the situation to the user.\n"
+            "- If the last tool succeeded, summarize the result conversationally.\n"
+            "- If the input was ambiguous, ask for clarification naturally.\n"
+            "- Do NOT use deterministic templates.\n"
+            "- Be concise and helpful.\n"
+        )
 
-        if action == "wikipedia.search":
-            results = payload.get("results")
-            if isinstance(results, list) and results:
-                first = results[0] if isinstance(results[0], dict) else {}
-                title = str(first.get("title") or "Wikipedia")
-                url = str(first.get("url") or "").strip()
-                raw_summary = str(first.get("content") or first.get("excerpt") or "").strip()
-                raw_summary = re.sub(r"\s+", " ", raw_summary)
-                summary = raw_summary
-                if raw_summary:
-                    parts = re.split(r"(?<=[.!?])\s+", raw_summary)
-                    summary = (" ".join(parts[:2]).strip() or raw_summary)
-                if len(summary) > 420:
-                    summary = summary[:420].rstrip() + "..."
-                if summary:
-                    if is_pt:
-                        message = f"Resumo rápido sobre {title}:\n{summary}"
-                        return f"{message}\n\nFonte: {url}" if url else message
-                    message = f"Quick summary about {title}:\n{summary}"
-                    return f"{message}\n\nSource: {url}" if url else message
+        recovery_prompt = f"{context_block}\nUser Input: {user_input}\n\nGenerate your conversational reply now:"
 
-        if action == "maps.search":
-            places = payload.get("places")
-            if isinstance(places, list) and places:
-                lines = []
-                if is_pt:
-                    if str(payload.get("status") or "").strip().lower() == "fallback":
-                        lines.append("A API de mapas está indisponível no momento. Usei fallback de busca web.")
-                    lines.append("Encontrei estes locais:")
-                else:
-                    if str(payload.get("status") or "").strip().lower() == "fallback":
-                        lines.append("Maps API is currently unavailable. I used a web-search fallback.")
-                    lines.append("I found these places:")
-                for idx, item in enumerate(places[:6], start=1):
-                    if not isinstance(item, dict):
-                        continue
-                    name = str(item.get("name") or item.get("title") or "Place").strip()
-                    address = str(item.get("address") or "").strip()
-                    url = str(item.get("url") or "").strip()
-                    source_url = str(item.get("source_url") or "").strip()
-                    line = f"{idx}. {name}"
-                    if address:
-                        line += f" — {address}"
-                    if url:
-                        line += f"\n{url}"
-                    if source_url and source_url != url:
-                        line += f"\n{source_url}"
-                    lines.append(line)
-                if len(lines) > 1:
-                    return "\n\n".join(lines)
-
-        if action == "research.retrieve.run":
-            answer_md = str(payload.get("answer_md") or payload.get("text") or "").strip()
-            if answer_md:
-                return answer_md
-
-        # Generic list summarization for actions not explicitly mapped above.
+        try:
+            # Observability: Trace trigger
+            start_ts = time.time()
+            
+            # Perform exactly ONE recovery call
+            response = self.llm_manager.generate_text(
+                prompt=recovery_prompt,
+                system_prompt=system_prompt,
+                max_tokens=256,
+                temperature=0.7
+            )
+            
+            latency = int((time.time() - start_ts) * 1000)
+            
+            if response and response.strip():
+                logger.info(f"Recovery reply generated | session={session.session_id} latency_ms={latency} source=recovery_llm")
+                return response.strip()
+            
+            # If still unsuccessful, yield a structured failure label
+            logger.warning(f"Recovery reply empty | session={session.session_id} latency_ms={latency}")
+            return "EMPTY_RESPONSE_TEXT"
+            
+        except Exception as e:
+            logger.error(f"Error in LLM Recovery Loop: {e}")
+            return "SYSTEM_ERROR: Conversational recovery failed."
         generic_list_keys = (
             "items",
             "entries",
@@ -3671,6 +4311,16 @@ class AgentOrchestrator:
 
         generic_text = str(payload.get("text") or payload.get("message") or "").strip()
         if generic_text:
+            # Do not leak worker/tool protocol phrasing to the user-facing chat.
+            technical_overlay_markers = (
+                "highlighted using draw_",
+                "overlay command",
+                "target '",
+            )
+            if any(marker in generic_text.lower() for marker in technical_overlay_markers):
+                if is_pt:
+                    return "Destaque aplicado na tela."
+                return "Highlight applied on screen."
             _log_reply_source("text_or_message", length=len(generic_text))
             return generic_text
 
@@ -3903,16 +4553,7 @@ class AgentOrchestrator:
         if not cls._looks_like_context_reset_request(text):
             return text
 
-        is_pt = str(language or "").lower().startswith("pt")
-        if is_pt:
-            return (
-                "Consigo continuar sem reiniciar o contexto. "
-                "Se faltar algo essencial, eu vou pedir so os dados especificos (ex.: arquivo, erro ou objetivo)."
-            )
-        return (
-            "I can continue without resetting context. "
-            "If anything essential is missing, I will ask only for the specific missing data (for example file, error, or target)."
-        )
+        return "CONTEXT_RESET_NOT_REQUIRED"
 
     @classmethod
     def _should_autocomplete_after_success_action(
@@ -3951,6 +4592,10 @@ class AgentOrchestrator:
 
         # Time/date is also a one-shot query and should not loop.
         if action == "system.control.time":
+            return True
+
+        # Overlay assist actions are one-shot visual operations.
+        if action.startswith("overlay.assist."):
             return True
 
         # Browser executor can be multi-step. Autocomplete only on explicit one-shot cases.
@@ -4009,17 +4654,7 @@ class AgentOrchestrator:
 
         reply = (response_text or "").strip()
         if not reply:
-            if is_pt:
-                return (
-                    f"A última ação `{last_action_id or 'unknown'}` falhou "
-                    f"({last_action_reason or 'sem motivo detalhado'}). "
-                    "Preciso ajustar a estratégia para concluir com segurança."
-                )
-            return (
-                f"The last action `{last_action_id or 'unknown'}` failed "
-                f"({last_action_reason or 'no detailed reason'}). "
-                "I need to adjust the strategy to finish safely."
-            )
+            return f"ACTION_FAILED_HALLUCINATION_DETECTED | action:{last_action_id or 'unknown'} | reason:{last_action_reason or 'no_reason'}"
 
         if cls._looks_like_failure_ack(reply):
             return reply
@@ -4028,19 +4663,25 @@ class AgentOrchestrator:
             output_excerpt = (last_action_output or "").strip()
             if len(output_excerpt) > 220:
                 output_excerpt = output_excerpt[:220] + "..."
-            if is_pt:
-                return (
-                    f"Não consegui concluir porque a ação `{last_action_id or 'unknown'}` falhou "
-                    f"({last_action_reason or 'erro'}). "
-                    f"Última saída: {output_excerpt or 'sem detalhes'}."
-                )
-            return (
-                f"I could not complete because action `{last_action_id or 'unknown'}` failed "
-                f"({last_action_reason or 'error'}). "
-                f"Last output: {output_excerpt or 'no details'}."
-            )
+            return f"SUCCESS_HALLUCINATION_DETECTED | action:{last_action_id or 'unknown'} | reason:{last_action_reason or 'error'} | output:{output_excerpt or 'no_details'}"
 
         return reply
+
+    @classmethod
+    def _sanitize_user_facing_response(cls, response_text: str, language: str = "en") -> str:
+        text = str(response_text or "").strip()
+        if not text:
+            return text
+        lowered = text.lower()
+        is_pt = str(language or "").lower().startswith("pt")
+        # Block protocol/tool leakage from overlay worker outputs.
+        if (
+            "highlighted using draw_" in lowered
+            or lowered.startswith("target '")
+            or lowered.startswith("overlay command")
+        ):
+            return "Destaque aplicado na tela." if is_pt else "Highlight applied on screen."
+        return text
 
     @staticmethod
     def _clip_text(value: Any, limit: int) -> str:
@@ -4388,6 +5029,15 @@ class AgentOrchestrator:
         # Phase 4: Task-Role Communication Directives
         presentation_directive += "- When referring to background tasks or workers, ALWAYS use their role (e.g., 'Web Researcher', 'Code Auditor') instead of internal task IDs.\n"
         presentation_directive += "- You are the sole voice of the system. Interpret worker events and represent them naturally to the user when relevant.\n"
+
+        # Phase 8: Execution Hardening - Degraded Mode Injection
+        if hasattr(session, "tool_health") and session.tool_health:
+            unhealthy_tools = {name: status for name, status in session.tool_health.items() if status != "HEALTHY"}
+            if unhealthy_tools:
+                presentation_directive += "\n[CRITICAL: DEGRADED CAPABILITIES]\n"
+                for name, status in unhealthy_tools.items():
+                    presentation_directive += f"- Tool/Worker '{name}' is currently {status}.\n"
+                presentation_directive += "You must operate in Degraded mode: avoid relying on these tools, prefer alternatives, and notify the user if a core capability is missing.\n"
 
         instruction_pack = self._build_instruction_pack(
             agent_name=agent_name,
@@ -4829,6 +5479,38 @@ class AgentOrchestrator:
         last_action_id: Optional[str],
         last_action_structured: Optional[Dict[str, Any]],
     ) -> ActionPlan:
+        is_assistive_request = self._looks_like_assistive_screen_request(user_input)
+        if is_assistive_request:
+            action = str(plan.action_id or "").strip().lower()
+            render_prefs = self._extract_assistive_render_preferences(user_input)
+            overlay_available = bool(self.skill_registry and self.skill_registry.get_skill_for_action("overlay.assist.highlight_target"))
+            # Guardrail (non-forcing): only enrich args when the model already chose
+            # assistive highlight action. Never rewrite a different action.
+            if overlay_available and action == "overlay.assist.highlight_target":
+                params = plan.args if isinstance(plan.args, dict) else {}
+                enriched = dict(params)
+                if not str(enriched.get("label") or "").strip():
+                    inferred_label = self._infer_assistive_target_label(user_input)
+                    if inferred_label:
+                        enriched["label"] = inferred_label
+                if "mark_type" not in enriched and render_prefs.get("mark_type"):
+                    enriched["mark_type"] = str(render_prefs.get("mark_type"))
+                if "color" not in enriched and render_prefs.get("color"):
+                    enriched["color"] = str(render_prefs.get("color"))
+                if "pulse" not in enriched and "pulse" in render_prefs:
+                    enriched["pulse"] = bool(render_prefs.get("pulse"))
+                if enriched != params:
+                    return ActionPlan(
+                        action_id=plan.action_id,
+                        args=enriched,
+                        confidence=plan.confidence,
+                        source=f"{plan.source}_assistive_nudge",
+                        response_text=plan.response_text,
+                        thought=plan.thought,
+                        metadata=dict(plan.metadata or {}),
+                        attachments=plan.attachments,
+                    )
+
         decision_cfg = self.config_manager.get("decision_policy", {}) if hasattr(self, "config_manager") else {}
         mode = str(decision_cfg.get("media_override_mode", "off")).strip().lower()
         if mode not in {"hard", "on", "strict"}:
@@ -4907,64 +5589,110 @@ class AgentOrchestrator:
         return default
 
     def _evaluate_memory_candidate(self, session: Session, candidate: Dict[str, Any]):
-        """
-        Evaluates a memory candidate against the Mediated Write Policy.
-        Decides whether to accept, reject, or keep as candidate.
-        """
-        # 1. Type vs Scope Matrix
-        type_scope_matrix = {
-            "preference": {"task", "session", "global"},
-            "fact": {"task", "session", "global"},
-            "task_outcome": {"task", "session"},
-            "unresolved_item": {"task", "session", "global"},
-            "summary": {"session", "global"}
-        }
+        """Evaluates a memory candidate against the refined Mediated Write Policy (Phase 6.5)."""
+        m_type = str(candidate.get("memory_type", "")).lower()
+        scope = str(candidate.get("scope", "")).lower()
+        confidence = float(candidate.get("confidence", 0.0))
+        source_id = candidate.get("source_id")
         
-        m_type = candidate.get("memory_type")
-        scope = candidate.get("scope")
-        
-        # Step 3: Global Memory is conservative and disabled by default for now
+        # Step 3 Safeguard: Global Memory disabled
         if scope == "global":
             candidate["status"] = "rejected"
             candidate["reason"] = "Global memory scope is currently disabled by policy"
+            self._record_rejected_memory(session, candidate, "scope_disabled")
             return
-            
-        confidence = candidate.get("confidence", 0.0)
-        source_type = candidate.get("source_type")
+
+        # Phase 6.5 Stricter Acceptance Table
+        policy_table = {
+            "preference": (0.9, True, lambda c: c.get("relevance") == "high"),
+            "fact": (0.8, True, lambda c: True),
+            "task_outcome": (0.7, False, lambda c: c.get("task_status") == "COMPLETED"),
+            "unresolved_item": (0.6, False, lambda c: c.get("is_unresolved") is True),
+            "summary": (0.8, True, lambda c: True)
+        }
         
-        # Policy Checks
-        # A. Allowed Type
-        allowed_scopes = type_scope_matrix.get(m_type, set())
-        if scope not in allowed_scopes:
+        if m_type not in policy_table:
             candidate["status"] = "rejected"
-            candidate["reason"] = f"Type '{m_type}' not allowed in scope '{scope}'"
+            candidate["reason"] = f"Unknown memory type: {m_type}"
+            self._record_rejected_memory(session, candidate, "unknown_type")
             return
             
-        # B. Confidence Threshold
-        threshold = 0.8 if source_type == "worker" else 0.6
-        if confidence < threshold:
+        min_conf, needs_source, extra_check = policy_table[m_type]
+        
+        # 1. Confidence Check
+        if confidence < min_conf:
             candidate["status"] = "rejected"
-            candidate["reason"] = f"Low confidence ({confidence} < {threshold})"
+            candidate["reason"] = f"Low confidence for {m_type} ({confidence} < {min_conf})"
+            self._record_rejected_memory(session, candidate, "low_confidence", scoring={"confidence": confidence, "min": min_conf})
             return
             
-        # C. Non-redundancy (Dedupe)
-        # Dedupe key: candidate provides it or we generate one from type:content
+        # 2. Provenance Check
+        if needs_source and not source_id:
+            candidate["status"] = "rejected"
+            candidate["reason"] = f"Provenance required: missing source_id for {m_type}"
+            self._record_rejected_memory(session, candidate, "missing_source")
+            return
+            
+        # 3. Additional Criteria
+        if not extra_check(candidate):
+            candidate["status"] = "rejected"
+            candidate["reason"] = f"Failed additional policy criteria for {m_type}"
+            self._record_rejected_memory(session, candidate, "policy_failed")
+            return
+            
+        # 4. Non-redundancy (Dedupe)
         dedupe_key = candidate.get("dedupe_key") or f"{m_type}:{candidate.get('content')}"
-        if any((e.get("dedupe_key") == dedupe_key or f"{e.get('memory_type')}:{e.get('content')}" == dedupe_key) 
-               for e in session.memory):
+        if any((e.get("dedupe_key") == dedupe_key) for e in session.memory):
             candidate["status"] = "rejected"
             candidate["reason"] = "Redundant with existing session memory"
+            self._record_rejected_memory(session, candidate, "redundant", scoring={"dedupe_key": dedupe_key})
             return
             
-        # D. Acceptance
+        # Final Acceptance
         candidate["status"] = "accepted"
         candidate["approved_by"] = "Supervisor/Policy"
         candidate["reason"] = "Policy criteria met"
         candidate["dedupe_key"] = dedupe_key
         
-        # Move to session memory
         session.memory.append(candidate)
+        
+        # Phase 7: Trace memory acceptance
+        self._trace_decision(
+            session,
+            decision_type="MEMORY_RETRIEVAL",
+            selected_outcome="ACCEPTED",
+            task_id=candidate.get("task_id"),
+            scoring_factors={
+                "confidence": confidence,
+                "min_required": min_conf
+            },
+            reason_codes=["policy_match"]
+        )
+        
         logger.info(f"Memory candidate accepted: {m_type} - {candidate['content'][:50]}")
+
+    def _record_rejected_memory(self, session: Session, candidate: Dict[str, Any], reason_code: str, scoring: Optional[Dict[str, Any]] = None):
+        """Helper to record rejected memory and trace the decision."""
+        if not hasattr(session, "rejected_memory"):
+            session.rejected_memory = []
+        
+        candidate["rejected_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        candidate["rejection_reason"] = reason_code
+        session.rejected_memory.append(candidate)
+        
+        # Keep buffer size manageable
+        if len(session.rejected_memory) > 50:
+            session.rejected_memory.pop(0)
+
+        self._trace_decision(
+            session,
+            decision_type="MEMORY_RETRIEVAL",
+            selected_outcome="REJECTED",
+            task_id=candidate.get("task_id"),
+            scoring_factors=scoring or {},
+            reason_codes=[reason_code]
+        )
+        logger.info(f"Memory candidate rejected: {candidate.get('memory_type')} -> {reason_code}")
 
     def _process_memory_candidates(self, session: Session):
         """Processes all pending candidates in the session."""
@@ -4980,23 +5708,246 @@ class AgentOrchestrator:
 
     def _retrieve_relevant_memory(self, session: Session, user_input: str) -> List[Dict[str, Any]]:
         """
-        Retrieves relevant memory entries based on opt-in criteria.
-        Step 4: Opt-in by context and forbidden for simple turns if possible.
+        Retrieves relevant memory entries based on tiered priority and safeguards.
+        1. Recent History/Session context first.
+        2. Persisted memory ONLY if explicit recall or unresolved.
         """
         if not session.memory:
             return []
             
-        # Basic Opt-in logic:
-        # 1. User explicitly asks for memory/recall/history
-        # 2. Complex user input (longer than 50 chars)
-        
         text = str(user_input or "").lower()
-        explicit_recall = any(m in text for m in ["lembra", "recor", "históric", "memory", "recall", "past"])
-        complex_input = len(text) > 50
         
-        # In this phase, we act conservatively: injection happens ONLY if explicitly useful
-        if not (explicit_recall or complex_input):
+        # Explicit triggers
+        explicit_recall = any(m in text for m in ["lembra", "recor", "históric", "memory", "recall", "past", "rememb"])
+        
+        # Auxiliary signals (Continuity/Ambiguity) - do NOT trigger persisted lookup alone
+        continuity_markers = ("it", "that", "previous", "before", "continuing", "as mentioned")
+        ambiguity_markers = ("last", "same", "those")
+        has_auxiliary = any(m in text for m in continuity_markers + ambiguity_markers)
+        
+        # Check Recent History (last 3 turns)
+        recent_history_content = " ".join([m.get("content", "").lower() for m in session.history[-6:]])
+        
+        # Decision: Trigger persisted memory?
+        trigger_persisted = explicit_recall
+        
+        if not trigger_persisted and has_auxiliary:
+            # If auxiliary markers are present, check if they are resolved by recent history
+            # This is a heuristic: if the marker's probable referent isn't in recent history, 
+            # we might need session memory.
+            resolved_by_history = any(m in recent_history_content for m in ["file", "task", "tool", "result"])
+            if not resolved_by_history:
+                trigger_persisted = True
+        
+        if not trigger_persisted:
             return []
             
-        # For now, return the most recent 5 session memory items
-        return session.memory[-5:]
+        # Candidates for injection
+        candidates = session.memory[:]
+        
+        # 1. Context Deduplication
+        # Skip if content already appears in history or summary
+        history_text = recent_history_content + (session.summary or "").lower()
+        filtered = [
+            m for m in candidates 
+            if m.get("content", "").lower() not in history_text
+        ]
+        
+        # 2. Ranking (Relevance, Recency, Confidence)
+        # For simplicity in this phase, we use: 
+        # Score = (0.2 * confidence) + (0.8 * recency_index/total)
+        total = len(filtered)
+        scored = []
+        for i, m in enumerate(filtered):
+            recency_score = (i + 1) / total if total > 0 else 1.0
+            confidence = m.get("confidence", 0.8)
+            score = (0.2 * confidence) + (0.8 * recency_score)
+            scored.append((score, m))
+            
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top_memories = [x[1] for x in scored[:5]] # Max 5 items
+        
+        return top_memories
+
+    def _trace_decision(
+        self,
+        session: Session,
+        decision_type: str,
+        selected_outcome: str,
+        task_id: Optional[str] = None,
+        candidate_events: Optional[List[Dict]] = None,
+        scoring_factors: Optional[Dict] = None,
+        reason_codes: Optional[List[str]] = None
+    ):
+        """
+        Records a structured decision trace for observability (Phase 7).
+        """
+        trace = {
+            "trace_id": str(uuid.uuid4()),
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "session_id": session.session_id,
+            "turn_id": getattr(session, "turn_id", 0),
+            "task_id": task_id,
+            "decision_type": decision_type,
+            "selected_outcome": selected_outcome,
+            "candidate_events": candidate_events or [],
+            "scoring_factors": scoring_factors or {},
+            "reason_codes": reason_codes or []
+        }
+        
+        # Persistence in session audit buffer
+        if not hasattr(session, "decision_traces"):
+            session.decision_traces = []
+            
+        session.decision_traces.append(trace)
+        
+        # Maintain ring buffer size
+        max_traces = getattr(session, "_max_trace_history", 50)
+        if len(session.decision_traces) > max_traces:
+            session.decision_traces.pop(0)
+            
+        logger.debug(f"Decision trace recorded: {decision_type} -> {selected_outcome} ({trace['trace_id']})")
+
+    def get_coordination_trace(self, session: Session, task_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves the latest coordination trace for a specific task."""
+        if not hasattr(session, "decision_traces"):
+            return None
+            
+        # Search backwards for the most recent EVENT_COORDINATION for this task
+        return None
+
+    def get_memory_governance(self, session: Session) -> Dict[str, Any]:
+        """Provides a consolidated view of memory states for the session."""
+        return {
+            "session_id": session.session_id,
+            "accepted_count": len(session.memory),
+            "rejected_count": len(getattr(session, "rejected_memory", [])),
+            "candidates_pending": len(getattr(session, "candidate_store", [])),
+            "recent_accepted": session.memory[-5:] if session.memory else [],
+            "recent_rejected": getattr(session, "rejected_memory", [])[-5:],
+            "persisted_memory_count": len(getattr(session, "global_memory", []))
+        }
+
+    def apply_memory_patch(self, session: Session, patch: Dict[str, Any], user_id: str) -> bool:
+        """
+        Applies a patch-based override to memory (Step 5).
+        Patches can:
+        - Move rejected -> accepted
+        - Delete accepted
+        - Edit content (recorded as patch)
+        """
+        op = patch.get("op")
+        memory_id = patch.get("memory_id")
+        
+        entry = None
+        source_list = None
+        
+        # Locate entry
+        for m in session.memory:
+            if m.get("memory_id") == memory_id:
+                entry = m
+                source_list = session.memory
+                break
+        
+        if not entry and hasattr(session, "rejected_memory"):
+            for m in session.rejected_memory:
+                if m.get("memory_id") == memory_id:
+                    entry = m
+                    source_list = session.rejected_memory
+                    break
+                    
+        if not entry:
+            return False
+            
+        # Record into audit trail
+        audit_entry = {
+            "audit_id": str(uuid.uuid4()),
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "user_id": user_id,
+            "op": op,
+            "target_memory_id": memory_id,
+            "patch": patch
+        }
+        if not hasattr(session, "audit_trail"):
+            session.audit_trail = []
+        session.audit_trail.append(audit_entry)
+        
+        # Execution
+        if op == "REVERSE_REJECTION" and source_list == session.rejected_memory:
+            session.rejected_memory.remove(entry)
+            entry["status"] = "accepted"
+            entry["approved_by"] = f"Admin:{user_id}"
+            session.memory.append(entry)
+        elif op == "DELETE" and source_list == session.memory:
+            session.memory.remove(entry)
+        elif op == "PATCH":
+            # Apply content changes safely
+            if "content" in patch:
+                entry["original_content"] = entry.get("content")
+                entry["content"] = patch["content"]
+                entry["modified_by"] = user_id
+                
+        return True
+
+    def _summarize_last_success_data(
+        self,
+        *,
+        action_id: Optional[str],
+        structured_result: Optional[Dict[str, Any]],
+        raw_output: Optional[str],
+    ) -> Dict[str, Any]:
+        """
+        Extracts structured data from the latest successful tool output.
+        Used to provide context for the LLM Recovery Loop.
+        """
+        payload = structured_result if isinstance(structured_result, dict) else {}
+        action = (action_id or "").strip().lower()
+        
+        data = {
+            "action_id": action,
+            "status": "success",
+            "timestamp": time.time(),
+        }
+
+        if action == "system.control.screenshot":
+            data.update({
+                "path": payload.get("path"),
+                "display": "screenshot_captured"
+            })
+        elif action.startswith("vision."):
+            data.update({
+                "observation": payload.get("text")
+            })
+        elif action == "weather.control.get":
+            data.update({
+                "location": payload.get("location"),
+                "current": payload.get("current")
+            })
+        elif action == "weather.control.forecast":
+            data.update({
+                "location": payload.get("location"),
+                "forecast": payload.get("forecast")
+            })
+        elif action == "wikipedia.search":
+            data.update({
+                "results": payload.get("results")
+            })
+        elif action == "maps.search":
+            data.update({
+                "places": payload.get("places"),
+                "is_fallback": str(payload.get("status") or "").strip().lower() == "fallback"
+            })
+        elif action == "research.retrieve.run":
+            data.update({
+                "answer_md": payload.get("answer_md") or payload.get("text")
+            })
+        elif action.startswith("overlay.assist."):
+            data.update({
+                "target_label": (payload.get("target") or {}).get("label") if isinstance(payload.get("target"), dict) else None
+            })
+        else:
+            # Generic extraction
+            data["result_text"] = payload.get("text") or raw_output
+            
+        return data
+

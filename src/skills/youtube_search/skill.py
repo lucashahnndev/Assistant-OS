@@ -127,41 +127,88 @@ class YouTubeSearchSkill(SkillBase):
 
     def _fallback_search_web(self, query: str, limit: int, search_type: str) -> List[Dict[str, Any]]:
         try:
-            target = "youtube.com"
-            q = f"site:{target} {query}"
             results: List[Dict[str, Any]] = []
+            seen_ids = set()
+            if search_type == "video":
+                with DDGS() as ddgs:
+                    try:
+                        try:
+                            video_gen = ddgs.videos(query, max_results=max(8, limit * 5), timeout=4)
+                        except TypeError:
+                            video_gen = ddgs.videos(query, max_results=max(8, limit * 5))
+                        for item in video_gen:
+                            if not isinstance(item, dict):
+                                continue
+                            url = (item.get("content") or item.get("url") or item.get("href") or "").strip()
+                            if not url:
+                                continue
+                            entry_id = self._extract_youtube_id(url, search_type)
+                            if not entry_id or entry_id in seen_ids:
+                                continue
+                            seen_ids.add(entry_id)
+                            results.append(
+                                {
+                                    "videoId": entry_id,
+                                    "playlistId": None,
+                                    "channelId": None,
+                                    "url": url,
+                                    "title": (item.get("title") or "YouTube result").strip(),
+                                    "channel": (item.get("uploader") or item.get("publisher") or "").strip() or None,
+                                    "descriptionSnippet": (item.get("description") or "").strip(),
+                                    "confidenceScore": 0.6,
+                                    "matchReason": "Video web fallback result",
+                                    "source": "duckduckgo_videos_fallback",
+                                }
+                            )
+                            if len(results) >= limit:
+                                return results
+                    except Exception as video_exc:
+                        logger.debug("YouTube fallback videos query failed: %s", video_exc)
+
+            queries = [
+                f"{query} site:youtube.com",
+                f"{query} youtube",
+                f"site:youtube.com {query}",
+            ]
             with DDGS() as ddgs:
-                try:
-                    generator = ddgs.text(q, max_results=max(5, limit * 4), timeout=3)
-                except TypeError:
-                    generator = ddgs.text(q, max_results=max(5, limit * 4))
-                for item in generator:
-                    if not isinstance(item, dict):
-                        continue
-                    url = (item.get("href") or "").strip()
-                    if not url:
-                        continue
-                    entry_id = self._extract_youtube_id(url, search_type)
-                    if not entry_id:
-                        continue
-                    title = (item.get("title") or "YouTube result").strip()
-                    snippet = (item.get("body") or "").strip()
-                    results.append(
-                        {
-                            "videoId": entry_id if search_type == "video" else None,
-                            "playlistId": entry_id if search_type == "playlist" else None,
-                            "channelId": entry_id if search_type == "channel" else None,
-                            "url": url,
-                            "title": title,
-                            "channel": None,
-                            "descriptionSnippet": snippet,
-                            "confidenceScore": 0.55,
-                            "matchReason": "Web fallback result",
-                            "source": "duckduckgo_fallback",
-                        }
-                    )
-                    if len(results) >= limit:
-                        break
+                for q in queries:
+                    try:
+                        try:
+                            generator = ddgs.text(q, max_results=max(8, limit * 5), timeout=4)
+                        except TypeError:
+                            generator = ddgs.text(q, max_results=max(8, limit * 5))
+
+                        for item in generator:
+                            if not isinstance(item, dict):
+                                continue
+                            url = (item.get("href") or item.get("url") or item.get("link") or "").strip()
+                            if not url:
+                                continue
+                            entry_id = self._extract_youtube_id(url, search_type)
+                            if not entry_id or entry_id in seen_ids:
+                                continue
+
+                            seen_ids.add(entry_id)
+                            title = (item.get("title") or "YouTube result").strip()
+                            snippet = (item.get("body") or item.get("snippet") or "").strip()
+                            results.append(
+                                {
+                                    "videoId": entry_id if search_type == "video" else None,
+                                    "playlistId": entry_id if search_type == "playlist" else None,
+                                    "channelId": entry_id if search_type == "channel" else None,
+                                    "url": url,
+                                    "title": title,
+                                    "channel": None,
+                                    "descriptionSnippet": snippet,
+                                    "confidenceScore": 0.55,
+                                    "matchReason": "Web fallback result",
+                                    "source": "duckduckgo_fallback",
+                                }
+                            )
+                            if len(results) >= limit:
+                                return results
+                    except Exception as q_exc:
+                        logger.debug("YouTube fallback query failed (%s): %s", q, q_exc)
             return results
         except Exception as e:
             logger.error("YouTube fallback search error: %s", e)

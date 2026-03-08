@@ -85,7 +85,7 @@ class PromptComposer:
         "session_summary": 1800,
         "scratchpad": 1400,
         "attachments": 1400,
-        "skills_summary": 3200,
+        "skills_summary": 2200,
         "relevant_memory": 2500,
     }
 
@@ -208,7 +208,7 @@ class PromptComposer:
             attachment_text = json.dumps(attachments, ensure_ascii=False, separators=(",", ":"))
             dynamic_sections.append(
                 "[SESSION ATTACHMENTS]\n"
-                "(Use vision/analyzer actions when needed.)\n"
+                "(Use `vision.analyze` for attached images/files. Use `vision.locate_screen` only for fresh screenshot localization.)\n"
                 f"{self._clip_block('attachments', attachment_text)}"
             )
 
@@ -233,9 +233,11 @@ class PromptComposer:
             prompt_parts.append(
                 "[ASSISTIVE MODE DIRECTIVE]\n"
                 "- User asked for visual guidance on their screen.\n"
-                "- Prefer `overlay.assist.highlight_target` as the primary action.\n"
-                "- Use `vision.locate_screen` only as a locator step to obtain bbox for overlay.\n"
-                "- Do NOT use `vision.search_screen` as final result for these requests.\n"
+                "- Prefer `overlay.assist.highlight_target` when visual marking is needed.\n"
+                "- Prefer `vision.locate_screen` as a locator step when you need bbox for overlay.\n"
+                "- Avoid using `vision.search_screen` as final result for these requests.\n"
+                "- Extract visual style when explicit: mark_type (arrow/rect/circle/focus_corners), color, pulse.\n"
+                "- `label` must be the UI target only (never retry/meta phrases like 'tenta novamente').\n"
                 "- Final outcome should be an overlay mark on target (or a structured failure with reason if target not found)."
             )
 
@@ -255,8 +257,8 @@ class PromptComposer:
             "- Output exactly one JSON object (no markdown).\n"
             "- No text outside JSON.\n"
             f"- Schema: {json.dumps(self._INTENT_SCHEMA, ensure_ascii=False, separators=(',', ':'))}\n"
-            "- action=reply only when done/blocked.\n"
-            "- If action!=reply, response_text must be progress ack only.\n"
+            "- Use `reply` for conversational answers, clarification, or when no tool action is needed.\n"
+            "- If action!=reply, response_text is optional and should be a short execution ack.\n"
             "- If same action+params fails 3x, stop and ask clarification."
         )
 

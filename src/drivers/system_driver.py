@@ -290,7 +290,18 @@ class SystemDriver(BaseDriver):
             if not session_id:
                 target_path = os.path.join(ws_service.get_workspace_dir(), filename)
             else:
-                target_path = os.path.join(ws_service.get_session_dir(session_id), "media", "image", filename)
+                normalized = os.path.normpath(str(filename or "screenshot.png")).replace("\\", "/")
+                if normalized.startswith("temp/"):
+                    # Ephemeral artifacts are persisted under workspace/temp/<session_id>/<execution_id>/...
+                    relative_temp = normalized[len("temp/") :].lstrip("/")
+                    target_path = os.path.join(
+                        ws_service.get_workspace_dir(),
+                        "temp",
+                        str(session_id),
+                        relative_temp,
+                    )
+                else:
+                    target_path = os.path.join(ws_service.get_session_dir(session_id), "media", "image", normalized)
                 os.makedirs(os.path.dirname(target_path), exist_ok=True)
             
             # 1. Try PyAutoGUI first (more reliable for HiDPI/Scaling)

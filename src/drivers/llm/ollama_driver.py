@@ -63,7 +63,7 @@ class OllamaProvider(ILLMProvider):
                      thought="Model failed to return JSON",
                      action="unknown",
                      params={},
-                     response_text="I couldn't process that request correctly."
+                     response_text="" # Trigger Orchestrator recovery
                 )
 
         except Exception as e:
@@ -91,7 +91,7 @@ class OllamaProvider(ILLMProvider):
             response = requests.post(self.api_url, json=payload, timeout=120)
             response.raise_for_status()
             data = response.json()
-            return data['message']['content'].strip() if 'message' in data else "Error: Resposta vazia do Ollama."
+            return data['message']['content'].strip() if 'message' in data else "ERROR_EMPTY_RESPONSE"
         except Exception as e:
             logger.error(f"Ollama generate_text error: {e}")
             raise e

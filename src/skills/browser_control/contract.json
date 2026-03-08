@@ -22,6 +22,11 @@
                     "type": "boolean",
                     "description": "Se true, abre o navegador sem som. Use quando o usuário pedir silêncio ou quando o som não for relevante. Padrão: false (com som).",
                     "required": false
+                },
+                "intent_class": {
+                    "type": "string",
+                    "description": "Classe de intenção de navegação para política interna de sessão/abas. Valores suportados: controlar_midia, realizar_pesquisa, automacao_ui, validacao_visual, manutencao.",
+                    "required": false
                 }
             },
             "output": {
@@ -31,7 +36,17 @@
                         "type": "boolean"
                     },
                     "result": {
-                        "type": "string"
+                        "type": "object"
+                    },
+                    "execution_context": {
+                        "type": "object"
+                    },
+                    "registry_snapshot": {
+                        "type": "object"
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Metadados operacionais da execução (ex.: registry_gc, media_singleton_cleanup). Em step, inclui continuation com reattach_to_tab/target_recovery."
                     },
                     "error": {
                         "type": "string"
@@ -54,6 +69,19 @@
                     "ok": {
                         "type": "boolean"
                     },
+                    "result": {
+                        "type": "object"
+                    },
+                    "execution_context": {
+                        "type": "object"
+                    },
+                    "registry_snapshot": {
+                        "type": "object"
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Metadados operacionais da execução. Em step, inclui continuation com reattach_to_tab/target_recovery."
+                    },
                     "error": {
                         "type": "string"
                     }
@@ -70,6 +98,128 @@
                     "ok": {
                         "type": "boolean"
                     }
+                }
+            }
+        },
+        "inspect": {
+            "description": "Lista inventário de instâncias/abas de browser registradas globalmente (com opção de filtrar por sessão).",
+            "risk_level": "low",
+            "params": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Filtra por sessão dona da instância.",
+                    "required": false
+                },
+                "only_current_session": {
+                    "type": "boolean",
+                    "description": "Quando true, usa a sessão atual do contexto para filtrar automaticamente.",
+                    "required": false
+                },
+                "include_tabs": {
+                    "type": "boolean",
+                    "description": "Inclui abas no retorno.",
+                    "required": false
+                },
+                "include_last_vision": {
+                    "type": "boolean",
+                    "description": "Inclui a última observação visual normalizada da execução corrente.",
+                    "required": false
+                }
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "ok": { "type": "boolean" },
+                    "instances": { "type": "array" },
+                    "count": { "type": "number" }
+                }
+            }
+        },
+        "close_tab": {
+            "description": "Fecha uma aba registrada por tab_id. Se for a aba ativa da instância corrente, encerra o runtime associado.",
+            "risk_level": "medium",
+            "params": {
+                "tab_id": {
+                    "type": "string",
+                    "description": "ID da aba no registry.",
+                    "required": true
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "Quando true, ignora bloqueios de ownership/in_use para fechamento administrativo.",
+                    "required": false
+                }
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "ok": { "type": "boolean" },
+                    "closed_tab_id": { "type": "string" },
+                    "instance_id": { "type": "string" }
+                }
+            }
+        },
+        "close_instance": {
+            "description": "Fecha uma instância de navegador por instance_id.",
+            "risk_level": "medium",
+            "params": {
+                "instance_id": {
+                    "type": "string",
+                    "description": "ID da instância no registry.",
+                    "required": true
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "Quando true, ignora bloqueios de ownership/in_use para fechamento administrativo.",
+                    "required": false
+                }
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "ok": { "type": "boolean" },
+                    "closed_instance_id": { "type": "string" }
+                }
+            }
+        },
+        "sync_registry": {
+            "description": "Sincroniza estado de runtime ativo com o registry global (instância/aba/porta).",
+            "risk_level": "low",
+            "params": {},
+            "output": {
+                "type": "object",
+                "properties": {
+                    "ok": { "type": "boolean" },
+                    "browser_instance_id": { "type": "string" },
+                    "tab_id": { "type": "string" },
+                    "debug_port": { "type": "number" },
+                    "cdp_target_id": { "type": "string" },
+                    "registry_snapshot": { "type": "object" },
+                    "last_vision_observation": { "type": "object" }
+                }
+            }
+        },
+        "gc": {
+            "description": "Executa garbage collection administrativo do registry de browser (locks expirados e instâncias ociosas).",
+            "risk_level": "low",
+            "params": {
+                "idle_seconds": {
+                    "type": "number",
+                    "description": "Tempo mínimo de ociosidade para fechar instâncias ativas sem uso.",
+                    "required": false
+                },
+                "keep_current_instance": {
+                    "type": "boolean",
+                    "description": "Quando true, preserva a instância atual da skill durante o GC.",
+                    "required": false
+                }
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "ok": { "type": "boolean" },
+                    "gc": { "type": "object" },
+                    "registry_snapshot": { "type": "object" }
                 }
             }
         }

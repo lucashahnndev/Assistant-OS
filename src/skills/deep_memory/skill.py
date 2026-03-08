@@ -41,7 +41,7 @@ class DeepMemorySkill(SkillBase):
                 "ok": False,
                 "status": "error",
                 "error": "MEMORY_SERVICE_UNAVAILABLE",
-                "text": "Deep memory unavailable.",
+                "error_details": "Deep memory unavailable.",
             }
 
         if action == "recall_memory":
@@ -54,7 +54,7 @@ class DeepMemorySkill(SkillBase):
                 "query": query,
                 "count": len(results),
                 "results": results,
-                "text": f"Deep memory returned {len(results)} result(s).",
+                "error_details": f"Deep memory returned {len(results)} result(s).",
             }
 
         if action == "store_memory":
@@ -64,7 +64,7 @@ class DeepMemorySkill(SkillBase):
                     "ok": False,
                     "status": "error",
                     "error": "MISSING_CONTENT",
-                    "text": "Missing 'content' parameter for store_memory.",
+                    "error_details": "Missing 'content' parameter for store_memory.",
                 }
             category = str(params.get("category") or "general")
             ms.add_fact(category, content)
@@ -74,12 +74,12 @@ class DeepMemorySkill(SkillBase):
                 "action": "store_memory",
                 "category": category,
                 "stored": True,
-                "text": "Deep memory fact stored.",
+                "error_details": "Deep memory fact stored.",
             }
 
         return {
             "ok": False,
             "status": "error",
             "error": "UNKNOWN_ACTION",
-            "text": f"Unknown deep memory action: {action_id}",
+            "error_details": f"Unknown deep memory action: {action_id}",
         }

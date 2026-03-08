@@ -66,6 +66,15 @@ class Kernel:
         from config.manager import ConfigManager
         self.config_manager = ConfigManager()
         self.base_data_dir = self.config_manager.base_data_dir
+
+        from skills.browser_control.session_registry import BrowserSessionRegistry
+        self.browser_session_registry = BrowserSessionRegistry(base_data_dir=self.base_data_dir)
+        reset_stats = self.browser_session_registry.reset_active_indexes_on_boot()
+        logger.info(
+            "Browser session registry reset on boot | stale_instances=%s stale_tabs=%s",
+            reset_stats.get("stale_instances", 0),
+            reset_stats.get("stale_tabs", 0),
+        )
         
         # 2. Initialize Infrastructure Services with consistent paths
         from services.workspace_service import WorkspaceService
@@ -342,6 +351,10 @@ class Kernel:
         return media_policy if self._is_media_action(action_id) else default_policy
 
     def _admission_gate(self, session_id: str, action_id: str) -> Tuple[str, List[str]]:
+        # 1. Bypass gate for control/interrupt signals
+        if action_id in {"cancel", "stop", "clear"}:
+            return "allow", []
+
         active = self.scheduler.get_active_works(session_id=session_id)
         if not active:
             return "allow", []
@@ -350,6 +363,14 @@ class Kernel:
             blockers = [w for w in active if self._is_media_action(w.key or "")]
         else:
             blockers = active
+
+        # Isolate recovery/replanning tasks: they don't block new conversational input
+        # unless strict serial execution is required (not typical for recovery)
+        blockers = [
+            w for w in blockers 
+            if w.status not in {WorkStatus.RECOVERY, WorkStatus.REPLANNING}
+        ]
+
         blockers = [w for w in blockers if not bool(getattr(w, "cancel_requested", False))]
 
         # Ignore stale self-conflicts where key/action is empty.
@@ -1041,9 +1062,10 @@ class Kernel:
 
             admission_decision, blocked_work_ids = self._admission_gate(session_id, plan.action_id)
             if admission_decision == "confirm_takeover":
-                prompt = self.orchestrator.i18n.t(
-                    "reply.media_busy_takeover_prompt",
-                    locale=self.orchestrator._session_locale(session),
+                prompt = self.orchestrator._generate_recovery_reply(
+                    session=session,
+                    user_input=text,
+                    reason="media_busy_takeover",
                 )
                 session.pending_action = {
                     "type": "media_takeover",
@@ -1071,9 +1093,10 @@ class Kernel:
                 return session_id
 
             if admission_decision == "reject":
-                busy_msg = self.orchestrator.i18n.t(
-                    "reply.session_busy",
-                    locale=self.orchestrator._session_locale(session),
+                busy_msg = self.orchestrator._generate_recovery_reply(
+                    session=session,
+                    user_input=text,
+                    reason="session_busy",
                 )
                 if hasattr(driver_instance, "send_status"):
                     driver_instance.send_status(
@@ -1148,27 +1171,21 @@ class Kernel:
                 attachments=attachments
             )
 
-            # 4. Immediate user-facing acknowledgment for async work start.
-            # This keeps the chat responsive while the worker runs in background.
-            ack_msg = self.orchestrator.build_work_start_ack(
-                session,
-                plan.action_id,
-                explicit_text=(plan.response_text or ""),
-                action_args=(plan.args if isinstance(plan.args, dict) else {}),
-            )
+            # 4. Immediate technical receipt (Status only)
+            # This keeps the driver UI updated without committing to a conversational response.
             driver_instance.send_status(
                 session_id,
                 "thinking",
                 {
                     "message": self.orchestrator.i18n.t("status.task_started", locale=self.orchestrator._session_locale(session)),
                     "work_id": work.work_id,
+                    "code": "receipt",
                 },
             )
-            driver_instance.send_response(ack_msg, target=session_id, is_chunk=True)
-            # Persist the initial assistant ack linked to this worker so refreshes
-            # can still render Work Details while execution is in progress.
-            session.add_message("assistant", ack_msg, work_id=work.work_id)
-            self.orchestrator._save_session(session)
+            
+            # Persist an empty placeholder or technical record if needed, 
+            # but do NOT add a conversational assistant message here.
+            # Commitment will be handled by the Orchestrator/Worker after validation.
             
             return work.work_id
         

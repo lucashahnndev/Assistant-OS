@@ -238,7 +238,7 @@ class ResearchRetrieveSkill(SkillBase):
                 {
                     "title": doc.get("title"),
                     "url": doc.get("url"),
-                    "text": str(doc.get("text") or "")[:2000],
+                    "content": str(doc.get("text") or "")[:2000],
                 }
             )
 
@@ -485,7 +485,7 @@ class ResearchRetrieveSkill(SkillBase):
                 {
                     "url": doc_source["url"],
                     "title": doc_title,
-                    "text": text_md,
+                    "content": text_md,
                 }
             )
             if docs_opened >= max_docs:
@@ -547,7 +547,7 @@ class ResearchRetrieveSkill(SkillBase):
                     "docs_opened": docs_opened,
                     "chars_read": chars_read,
                 },
-                "text": answer_md,
+                "content": answer_md,
             }
         )
 

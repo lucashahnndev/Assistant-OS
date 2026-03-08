@@ -9,6 +9,31 @@
         "headless": {
             "type": "boolean",
             "default": true
+        },
+        "registry_enabled": {
+            "type": "boolean",
+            "default": true
+        },
+        "policy_enabled": {
+            "type": "boolean",
+            "default": true
+        },
+        "media_singleton_enforced": {
+            "type": "boolean",
+            "default": true
+        },
+        "app_mode_enabled": {
+            "type": "boolean",
+            "default": true
+        },
+        "registry_gc_enabled": {
+            "type": "boolean",
+            "default": false
+        },
+        "registry_gc_idle_seconds": {
+            "type": "integer",
+            "default": 1800,
+            "minimum": 60
         }
     }
 }

@@ -6,7 +6,7 @@
   "reply.worker_session_missing": "I could not continue because this worker has no valid parent session. Start the task from an existing session.",
   "reply.loop_stuck": "I am stuck on action '{action_id}' with no real progress. Please refine the goal or allow a different strategy.",
   "reply.loop_stuck_recover": "Repeated action detected in {action_id}; consolidating the latest valid result.",
-  "reply.no_plan_resolved": "No pude concluir con seguridad con el contexto actual. Si quieres, lo intento de nuevo con otra estrategia.",
-  "reply.voice_rephrase": "No entendí todo. ¿Puedes repetirlo en una frase corta?",
+  "reply.no_plan_resolved": "PLAN_FAILED",
+  "reply.voice_rephrase": "REPHRASE_REQUIRED",
   "status.thinking_next_action": "Thinking of the next action..."
 }

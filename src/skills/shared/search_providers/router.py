@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 from typing import Any, Dict, List, Optional, Sequence
 
 from .base import SearchProvider, SearchRequest, SearchResultItem
+from .brave_provider import BraveProvider
 from .commoncrawl_provider import CommonCrawlCdxProvider
 from .ddg_provider import DdgProvider
 from .openalex_provider import OpenAlexProvider
@@ -14,8 +17,9 @@ logger = logging.getLogger("SearchRouter")
 
 _PROVIDER_WEIGHTS = {
     "searxng": 0.85,
+    "brave": 0.90,
     "commoncrawl": 0.65,
-    "openalex": 0.80,
+    "openalex": 0.70,
     "ddg": 0.55,
 }
 
@@ -24,6 +28,9 @@ class SearchRouter:
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         self.config = config or {}
         self.providers = self._build_providers(self.config)
+        self.strict_location_when_query_mentions_city = bool(
+            self.config.get("strict_location_when_query_mentions_city", True)
+        )
 
     @staticmethod
     def _provider_config(config: Dict[str, Any], key: str) -> Dict[str, Any]:
@@ -39,6 +46,7 @@ class SearchRouter:
         common_cfg = self._provider_config(config, "commoncrawl")
         openalex_cfg = self._provider_config(config, "openalex")
         ddg_cfg = self._provider_config(config, "ddg")
+        brave_cfg = self._provider_config(config, "brave")
 
         providers: List[SearchProvider] = [
             SearxngProvider(
@@ -57,6 +65,13 @@ class SearchRouter:
                 max_indexes=int(common_cfg.get("max_indexes") or 2),
                 enabled=bool(common_cfg.get("enabled", True)),
             ),
+            BraveProvider(
+                api_base=str(brave_cfg.get("api_base") or "https://api.search.brave.com/res/v1/web/search"),
+                api_key=str(brave_cfg.get("api_key") or ""),
+                timeout_ms=int(brave_cfg.get("timeout_ms") or timeout_ms),
+                retries=int(brave_cfg.get("retries") or retries),
+                enabled=bool(brave_cfg.get("enabled", False)),
+            ),
             OpenAlexProvider(
                 api_base=str(openalex_cfg.get("api_base") or "https://api.openalex.org"),
                 timeout_ms=int(openalex_cfg.get("timeout_ms") or timeout_ms),
@@ -68,7 +83,7 @@ class SearchRouter:
 
         order = config.get("provider_order") if isinstance(config.get("provider_order"), list) else []
         if not order:
-            order = ["searxng", "commoncrawl", "openalex", "ddg"]
+            order = ["searxng", "brave", "ddg", "openalex", "commoncrawl"]
 
         by_name = {p.name: p for p in providers}
         ordered: List[SearchProvider] = []
@@ -123,6 +138,9 @@ class SearchRouter:
 
         filtered = apply_domain_filters(raw_results, domains_allow=domains_allow, domains_deny=domains_deny)
         deduped = dedupe_results(filtered)
+        location_city = str((location or {}).get("city") or "").strip()
+        location_country = str((location or {}).get("country") or "").strip()
+        query_mentions_city = self._contains_location_token(query, location_city)
 
         for item in deduped:
             provider_weight = _PROVIDER_WEIGHTS.get(item.provider, 0.5)
@@ -132,8 +150,26 @@ class SearchRouter:
                 provider_weight=provider_weight,
                 recency_days=recency_days,
             )
+            if self._item_matches_location(item, city=location_city, country=location_country):
+                item.confidence_score = min(1.0, item.confidence_score + 0.18)
 
         deduped.sort(key=lambda x: (x.confidence_score, -x.rank), reverse=True)
+        if query_mentions_city and location_city:
+            city_matched = [
+                item for item in deduped if self._item_matches_location(item, city=location_city, country=location_country)
+            ]
+            if self.strict_location_when_query_mentions_city:
+                if city_matched:
+                    deduped = city_matched
+                else:
+                    warnings = merge_warnings(
+                        warnings,
+                        [f"LOCATION_STRICT_NO_MATCH:city={location_city}"],
+                    )
+                    deduped = []
+            elif city_matched:
+                deduped = city_matched + [item for item in deduped if item not in city_matched]
+
         ranked = cut_results(deduped, limit=limit)
 
         provider_name = "search_router"
@@ -149,9 +185,67 @@ class SearchRouter:
         }
 
     @staticmethod
+    def _normalize_text(value: str) -> str:
+        raw = str(value or "").strip().lower()
+        if not raw:
+            return ""
+        norm = unicodedata.normalize("NFKD", raw)
+        ascii_only = "".join(ch for ch in norm if not unicodedata.combining(ch))
+        return re.sub(r"\s+", " ", ascii_only).strip()
+
+    @classmethod
+    def _contains_location_token(cls, text: str, token: str) -> bool:
+        lhs = cls._normalize_text(text)
+        rhs = cls._normalize_text(token)
+        if not lhs or not rhs:
+            return False
+        return rhs in lhs
+
+    @classmethod
+    def _item_matches_location(cls, item: SearchResultItem, *, city: str, country: str) -> bool:
+        haystack = cls._normalize_text(f"{item.title} {item.snippet} {item.url}")
+        city_norm = cls._normalize_text(city)
+        country_norm = cls._normalize_text(country)
+        city_ok = bool(city_norm and city_norm in haystack)
+        country_ok = bool(country_norm and country_norm in haystack)
+        return city_ok or country_ok
+
+    @staticmethod
+    def _is_location_sensitive_query(query: str) -> bool:
+        q = SearchRouter._normalize_text(query)
+        if not q:
+            return False
+        markers = (
+            "near me",
+            "nearby",
+            "in ",
+            "at ",
+            "em ",
+            "na ",
+            "no ",
+            "onde",
+            "where",
+            "restaurante",
+            "restaurant",
+            "cafeteria",
+            "cafe",
+            "hotel",
+            "farmacia",
+            "pharmacy",
+            "hospital",
+            "loja",
+            "store",
+            "mercado",
+            "market",
+        )
+        return any(marker in q for marker in markers)
+
+    @staticmethod
     def _apply_geo_bias(query: str, *, location: Optional[Dict[str, Any]]) -> str:
         base = str(query or "").strip()
         if not base:
+            return base
+        if not SearchRouter._is_location_sensitive_query(base):
             return base
         if not isinstance(location, dict):
             return base

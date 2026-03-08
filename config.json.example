@@ -278,7 +278,14 @@
             "allow_wayland": false
         },
         "browser_control": {
-            "enabled": true
+            "enabled": true,
+            "headless": false,
+            "registry_enabled": true,
+            "policy_enabled": true,
+            "media_singleton_enforced": true,
+            "app_mode_enabled": true,
+            "registry_gc_enabled": false,
+            "registry_gc_idle_seconds": 1800
         },
         "spotify_search": {
             "enabled": false,

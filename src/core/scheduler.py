@@ -21,6 +21,8 @@ class WorkStatus(Enum):
     RUNNING = "running"
     WAITING_USER = "waiting_user"
     PAUSED = "paused"
+    RECOVERY = "recovery"
+    REPLANNING = "replanning"
     FAILED = "failed"
     SUCCEEDED = "succeeded"
     CANCELLED = "cancelled"
@@ -224,7 +226,14 @@ class Scheduler:
 
     @staticmethod
     def _is_active_work_status(status: WorkStatus) -> bool:
-        return status in {WorkStatus.QUEUED, WorkStatus.RUNNING, WorkStatus.WAITING_USER, WorkStatus.PAUSED}
+        return status in {
+            WorkStatus.QUEUED,
+            WorkStatus.RUNNING,
+            WorkStatus.WAITING_USER,
+            WorkStatus.PAUSED,
+            WorkStatus.RECOVERY,
+            WorkStatus.REPLANNING,
+        }
 
     @staticmethod
     def _is_terminal_work_status(status: WorkStatus) -> bool:
@@ -236,9 +245,19 @@ class Scheduler:
             return True
         allowed = {
             WorkStatus.QUEUED: {WorkStatus.RUNNING, WorkStatus.CANCELLED, WorkStatus.FAILED},
-            WorkStatus.RUNNING: {WorkStatus.WAITING_USER, WorkStatus.PAUSED, WorkStatus.SUCCEEDED, WorkStatus.FAILED, WorkStatus.CANCELLED},
-            WorkStatus.WAITING_USER: {WorkStatus.RUNNING, WorkStatus.CANCELLED, WorkStatus.FAILED},
+            WorkStatus.RUNNING: {
+                WorkStatus.WAITING_USER,
+                WorkStatus.PAUSED,
+                WorkStatus.RECOVERY,
+                WorkStatus.REPLANNING,
+                WorkStatus.SUCCEEDED,
+                WorkStatus.FAILED,
+                WorkStatus.CANCELLED,
+            },
+            WorkStatus.WAITING_USER: {WorkStatus.RUNNING, WorkStatus.RECOVERY, WorkStatus.CANCELLED, WorkStatus.FAILED},
             WorkStatus.PAUSED: {WorkStatus.RUNNING, WorkStatus.CANCELLED, WorkStatus.FAILED},
+            WorkStatus.RECOVERY: {WorkStatus.RUNNING, WorkStatus.REPLANNING, WorkStatus.CANCELLED, WorkStatus.FAILED},
+            WorkStatus.REPLANNING: {WorkStatus.RUNNING, WorkStatus.RECOVERY, WorkStatus.CANCELLED, WorkStatus.FAILED},
             WorkStatus.SUCCEEDED: set(),
             WorkStatus.FAILED: set(),
             WorkStatus.CANCELLED: set(),

@@ -7,6 +7,8 @@ import asyncio
 import logging
 import time
 import base64
+import socket
+import urllib.parse
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Union, Literal
 from pydantic import BaseModel
@@ -20,19 +22,24 @@ class BrowserRuntime:
                  chrome_path: str = "/usr/bin/google-chrome",
                  base_profile_path: str = "src/skills/browser_control/profiles/fixed_base",
                  overlay_profile_parent: str = "src/skills/browser_control/profiles/session_overlay",
-                 remote_debugging_port: int = 9222,
+                 remote_debugging_port: Optional[int] = None,
                  headless: bool = False,
-                 muted: bool = False):
+                 muted: bool = False,
+                 app_mode: bool = False,
+                 launch_url: str = "about:blank"):
         self.chrome_path = chrome_path
         self.base_profile_path = os.path.abspath(base_profile_path)
         self.overlay_profile_parent = os.path.abspath(overlay_profile_parent)
         self.remote_debugging_port = remote_debugging_port
         self.headless = headless
         self.muted = muted
+        self.app_mode = app_mode
+        self.launch_url = str(launch_url or "about:blank")
         
         self.session_profile_path: Optional[str] = None
         self.chrome_process: Optional[subprocess.Popen] = None
         self.ws_url: Optional[str] = None
+        self.target_id: Optional[str] = None
         self.websocket: Optional[Any] = None
         self._next_id = 1
         self._trace_id = f"trace_{int(time.time())}"
@@ -42,9 +49,18 @@ class BrowserRuntime:
         self.console_logs: List[str] = []
         self.network_failures: List[Dict[str, Any]] = []
 
+    @staticmethod
+    def _pick_free_port() -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            return int(s.getsockname()[1])
+
     async def launch(self):
         """Step 0: Launch Chrome with profile overlay and connect to CDP."""
         logger.info(f"Launching Chrome from {self.chrome_path}")
+
+        if not self.remote_debugging_port or int(self.remote_debugging_port) <= 0:
+            self.remote_debugging_port = self._pick_free_port()
         
         # Create session overlay (Copy-on-Write template)
         self.session_profile_path = os.path.join(self.overlay_profile_parent, f"session_{int(time.time())}")
@@ -86,13 +102,16 @@ class BrowserRuntime:
             "--no-pings",
             "--password-store=basic",
             "--use-mock-keychain",
-            "about:blank"
         ]
 
         if self.headless:
             args.append("--headless=new")
         if self.muted:
             args.append("--mute-audio")
+        if self.app_mode:
+            args.append(f"--app={self.launch_url}")
+        else:
+            args.append(self.launch_url)
 
         self.chrome_process = subprocess.Popen(args, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         
@@ -120,8 +139,14 @@ class BrowserRuntime:
         async with httpx.AsyncClient() as client:
             resp = await client.get(f"http://localhost:{self.remote_debugging_port}/json/list")
             targets = resp.json()
-            page_target = next((t for t in targets if t['type'] == 'page'), None)
+            page_targets = [t for t in targets if t.get("type") == "page"]
+            page_target = None
+            if self.launch_url and self.launch_url != "about:blank":
+                page_target = next((t for t in page_targets if str(t.get("url", "")).startswith(self.launch_url)), None)
+            if page_target is None and page_targets:
+                page_target = page_targets[-1]
             if page_target and 'webSocketDebuggerUrl' in page_target:
+                self.target_id = str(page_target.get("id", "") or "")
                 self.ws_url = page_target['webSocketDebuggerUrl']
                 logger.info(f"Targeting page WS: {self.ws_url}")
 
@@ -132,6 +157,114 @@ class BrowserRuntime:
             await self._call_cdp(f"{domain}.enable")
             
         logger.info("CDP Handshake successful and domains enabled.")
+
+    def get_connection_metadata(self) -> Dict[str, Any]:
+        return {
+            "debug_port": self.remote_debugging_port,
+            "ws_url": self.ws_url,
+            "target_id": self.target_id,
+            "app_mode": self.app_mode,
+            "launch_url": self.launch_url,
+        }
+
+    async def attach_to_target(self, target_id: str) -> bool:
+        """
+        Reattach websocket to a specific page target by CDP target id.
+        Returns True when reattached.
+        """
+        wanted = str(target_id or "").strip()
+        if not wanted or not self.remote_debugging_port:
+            return False
+        if wanted == str(self.target_id or ""):
+            return True
+        try:
+            import httpx
+            import websockets
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"http://localhost:{self.remote_debugging_port}/json/list")
+                targets = resp.json() if resp.status_code == 200 else []
+            page = next((t for t in targets if str(t.get("id", "")) == wanted and t.get("type") == "page"), None)
+            if not page or "webSocketDebuggerUrl" not in page:
+                return False
+
+            if self.websocket:
+                try:
+                    await self.websocket.close()
+                except Exception:
+                    pass
+            self.ws_url = str(page["webSocketDebuggerUrl"])
+            self.target_id = wanted
+            self.websocket = await websockets.connect(self.ws_url, max_size=2**24)
+            for domain in self.enabled_domains:
+                await self._call_cdp(f"{domain}.enable")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to attach to target {wanted}: {e}")
+            return False
+
+    async def list_page_targets(self) -> List[Dict[str, Any]]:
+        """
+        Returns current CDP page targets from /json/list.
+        """
+        if not self.remote_debugging_port:
+            return []
+        try:
+            import httpx
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"http://localhost:{self.remote_debugging_port}/json/list")
+                targets = resp.json() if resp.status_code == 200 else []
+            return [t for t in targets if isinstance(t, dict) and t.get("type") == "page"]
+        except Exception:
+            return []
+
+    async def attach_to_any_page(self, preferred_target_ids: Optional[List[str]] = None) -> Optional[str]:
+        """
+        Fallback attach: tries preferred target ids first, then any available page target.
+        Returns the attached target id or None.
+        """
+        targets = await self.list_page_targets()
+        if not targets:
+            return None
+
+        preferred = [str(t or "").strip() for t in (preferred_target_ids or []) if str(t or "").strip()]
+        ordered: List[str] = []
+        ordered.extend(preferred)
+        ordered.extend([str(t.get("id") or "") for t in targets if str(t.get("id") or "").strip() not in preferred])
+
+        for target_id in ordered:
+            if not target_id:
+                continue
+            ok = await self.attach_to_target(target_id)
+            if ok:
+                return target_id
+        return None
+
+    async def open_new_tab(self, url: str = "about:blank") -> Optional[str]:
+        """
+        Opens a new page tab via Chrome remote debugging endpoint and attaches to it.
+        Returns target id when successful.
+        """
+        if not self.remote_debugging_port:
+            return None
+        target_url = str(url or "about:blank").strip() or "about:blank"
+        encoded = urllib.parse.quote(target_url, safe=":/?&=#%")
+        created_target = ""
+        try:
+            import httpx
+            async with httpx.AsyncClient() as client:
+                # Legacy/new endpoint supported by Chrome's remote debugging server.
+                resp = await client.get(f"http://localhost:{self.remote_debugging_port}/json/new?{encoded}")
+                if resp.status_code in {200, 201}:
+                    data = resp.json() if resp.text else {}
+                    created_target = str(data.get("id") or "")
+        except Exception:
+            created_target = ""
+
+        if created_target and await self.attach_to_target(created_target):
+            return created_target
+        # Fallback: try attach any page, preferring the newly created id if present.
+        recovered = await self.attach_to_any_page([created_target] if created_target else None)
+        return recovered
 
     async def _call_cdp(self, method: str, params: Optional[Dict[str, Any]] = None) -> Any:
         if not self.websocket:

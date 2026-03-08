@@ -50,15 +50,33 @@ class CommonCrawlCdxProvider(SearchProvider):
         if not isinstance(payload, list):
             return []
         urls: List[str] = []
+        seen: set[str] = set()
         for item in payload:
             if not isinstance(item, dict):
                 continue
             api_url = str(item.get("cdx-api") or "").strip()
-            if api_url:
+            if not api_url or api_url in seen:
+                continue
+            seen.add(api_url)
+            if self._is_index_live(client, api_url):
                 urls.append(api_url)
             if len(urls) >= self.max_indexes:
                 break
         return urls
+
+    def _is_index_live(self, client: httpx.Client, index_url: str) -> bool:
+        """
+        Some entries in collinfo can appear before the index is queryable.
+        Probe with a minimal request and keep only live indexes.
+        """
+        try:
+            probe = client.get(
+                index_url,
+                params={"url": "*", "output": "json", "limit": "1"},
+            )
+            return int(probe.status_code) == 200
+        except Exception:
+            return False
 
     def _search_index(self, client: httpx.Client, index_url: str, request: SearchRequest) -> List[SearchResultItem]:
         params = {

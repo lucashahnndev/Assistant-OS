@@ -15,7 +15,22 @@ class SkillBase(ABC):
         pass
 
     @abstractmethod
-    def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
+    def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Executes the skill action and returns a structured dictionary.
+        
+        CANONICAL RESULT SHAPE:
+        {
+            "ok": bool,
+            "status": "success" | "error" | "empty",
+            "provider": str,
+            "data": Dict[str, Any],       # Technical payload
+            "metadata": Dict[str, Any]    # Optional technical metadata
+        }
+        
+        CRITICAL: Conversational fields (text, message, reply, legacy_text, etc.) are FORBIDDEN.
+        Skills must only return technical signals/data.
+        """
         pass
 
     def get_reflex_rules(self) -> List[Dict[str, Any]]:

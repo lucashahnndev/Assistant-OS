@@ -110,11 +110,7 @@ class SafetyService:
             return self.i18n.t("safety.confirm_service", unit=params.get("unit"), action=action)
         elif action in {"system.control.fs.write", "system.control.fs.delete", "fs_write", "fs_delete"}:
             path = str((params or {}).get("path") or "").strip() or "<empty-path>"
-            return (
-                f"Sensitive filesystem action outside workspace detected: `{action}`.\n"
-                f"Target path: `{path}`.\n"
-                "Do you authorize execution?"
-            )
+            return self.i18n.t("safety.confirm_fs_outside_workspace", action=action, path=path)
             
         return self.i18n.t("safety.confirm_generic", action=action)
 

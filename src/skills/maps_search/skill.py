@@ -252,8 +252,8 @@ class MapsSearchSkill(SkillBase):
         if response.status_code != 200 or (status not in {"OK", "ZERO_RESULTS"}):
             return {
                 "ok": False,
-                "error": "GOOGLE_MAPS_API_ERROR",
-                "message": data.get("error_message") or status or f"HTTP {response.status_code}",
+                "error_code": "GOOGLE_MAPS_API_ERROR",
+                "error_details": data.get("error_message") or status or f"HTTP {response.status_code}",
             }
 
         places = [self._normalize_place(item, rank=i + 1) for i, item in enumerate(data.get("results") or [])]
@@ -388,7 +388,7 @@ class MapsSearchSkill(SkillBase):
             return self._result(
                 ok=False,
                 status="error",
-                error="UNKNOWN_ACTION",
+                error_code="UNKNOWN_ACTION",
                 message=f"Unknown action para maps_search: {action_id}",
             )
 
@@ -406,7 +406,7 @@ class MapsSearchSkill(SkillBase):
             return self._result(
                 ok=False,
                 status="error",
-                error="MISSING_QUERY",
+                error_code="MISSING_QUERY",
                 message="query/category/city are required",
             )
 
@@ -444,7 +444,7 @@ class MapsSearchSkill(SkillBase):
             return self._result(
                 ok=False,
                 status="error",
-                error="MISSING_AUTH",
+                error_code="MISSING_AUTH",
                 message=f"Google Maps auth unavailable: {auth.get('reason')}",
                 missing_fields=["apiKey_or_linked_google_account"],
             )
@@ -484,7 +484,7 @@ class MapsSearchSkill(SkillBase):
                     return self._result(
                         ok=False,
                         status="error",
-                        error=provider_error,
+                        error_code=provider_error,
                         message=provider_message,
                         provider="google_maps",
                         fallback_action="web.search.discover" if can_fallback_to_web else None,
@@ -542,7 +542,7 @@ class MapsSearchSkill(SkillBase):
             return self._result(
                 ok=False,
                 status="error",
-                error="MAPS_SEARCH_EXCEPTION",
+                error_code="MAPS_SEARCH_EXCEPTION",
                 message=str(e),
                 provider="google_maps",
             )

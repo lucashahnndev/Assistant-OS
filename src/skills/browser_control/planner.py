@@ -4,10 +4,12 @@ import logging
 import asyncio
 import time
 import re
+import copy
 from typing import Dict, Any, List, Optional, Union
 
 from .schemas import ToonResponse, EvidencePack, BBox
 from .runtime import BrowserRuntime
+from .vision_contract import normalize_vision_observation
 
 logger = logging.getLogger("aosd.skills.browser_control.planner")
 
@@ -75,6 +77,36 @@ class BrowserSubagent:
         self._current_step_idx = 0
         self._consecutive_parse_failures = 0
         self._max_parse_failures = 2
+        self._locked_target_id = str(getattr(runtime, "target_id", "") or "")
+        self._last_vision_observation: Dict[str, Any] = {}
+
+    @staticmethod
+    def _normalize_visual_coord(value: Any) -> Optional[float]:
+        try:
+            v = float(value)
+        except Exception:
+            return None
+        if v < 0 or v > 1000:
+            return None
+        return v
+
+    def _resolve_click_visual_coords(self, args: Dict[str, Any]) -> Optional[Dict[str, float]]:
+        x = self._normalize_visual_coord(args.get("x"))
+        y = self._normalize_visual_coord(args.get("y"))
+        if x is not None and y is not None:
+            return {"x": x, "y": y, "source": "args"}  # type: ignore[return-value]
+
+        coords = self._last_vision_observation.get("coordinates")
+        if isinstance(coords, list):
+            for c in coords:
+                if not isinstance(c, dict):
+                    continue
+                cx = self._normalize_visual_coord(c.get("x"))
+                cy = self._normalize_visual_coord(c.get("y"))
+                if cx is None or cy is None:
+                    continue
+                return {"x": cx, "y": cy, "source": "vision_fallback"}  # type: ignore[return-value]
+        return None
 
     async def _generate_master_plan(self, goal: str):
         """Phase 1: Decompose the complex goal into a Checklist."""
@@ -108,6 +140,11 @@ Example:
         response = str(result)
         self._plan = [line.strip() for line in response.split('\n') if line.strip() and re.match(r'^\d+\.', line.strip())]
         logger.info(f"\n{'='*60}\n📋 MASTER PLAN GENERATED:\n" + "\n".join(self._plan) + f"\n{'='*60}")
+
+    def get_last_vision_observation(self) -> Dict[str, Any]:
+        if not isinstance(self._last_vision_observation, dict):
+            return {}
+        return copy.deepcopy(self._last_vision_observation)
 
     def _extract_url(self, goal: str) -> str:
         goal_lower = goal.lower()
@@ -212,6 +249,7 @@ Example:
 
     async def _get_page_state(self) -> Dict[str, Any]:
         """Captures skeletal DOM state restricted to the viewport with extreme logging."""
+        await self._ensure_target_binding()
         url = await self._get_current_url()
         title = ""
         try:
@@ -266,8 +304,36 @@ Example:
             "global_trust": global_trust
         }
 
-    async def _get_vision_context(self, goal: str, state: Dict[str, Any]) -> str:
-        """Takes a CDP screenshot and returns a descriptive visual analysis."""
+    async def _ensure_target_binding(self) -> None:
+        """
+        Keep all planner actions attached to the same page target whenever possible.
+        This reduces the chance of acting on a wrong tab/window after reuses.
+        """
+        if not self._locked_target_id:
+            self._locked_target_id = str(getattr(self.runtime, "target_id", "") or "")
+        if not self._locked_target_id:
+            return
+        if not hasattr(self.runtime, "attach_to_target"):
+            return
+        try:
+            attached = await self.runtime.attach_to_target(self._locked_target_id)
+            if attached:
+                return
+            # Recovery path: if locked target is stale, re-lock to current/available target.
+            meta = self.runtime.get_connection_metadata() if hasattr(self.runtime, "get_connection_metadata") else {}
+            current_target = str(meta.get("target_id") or getattr(self.runtime, "target_id", "") or "")
+            if current_target:
+                self._locked_target_id = current_target
+                return
+            if hasattr(self.runtime, "attach_to_any_page"):
+                recovered = await self.runtime.attach_to_any_page([self._locked_target_id])
+                if recovered:
+                    self._locked_target_id = str(recovered)
+        except Exception as e:
+            logger.warning(f"Target binding check failed: {e}")
+
+    async def _get_vision_observation(self, goal: str, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Takes a CDP screenshot and returns a normalized visual observation contract."""
         path = await self.runtime.capture_screenshot_to_file()
         prompt = (
             f"You are the visual eyes of a browser agent. Goal: {goal}. URL: {state['url']}. "
@@ -277,9 +343,9 @@ Example:
         try:
             result = await asyncio.to_thread(self.llm_manager.analyze_image, image_path=path, prompt=prompt)
             logger.info(f"[Vision] Observer Feedback: {str(result)[:200]}...")
-            return str(result)
+            return normalize_vision_observation(result, goal=goal, url=str(state.get("url", "")))
         except Exception as e:
-            return f"Vision fallback failed: {e}"
+            return normalize_vision_observation(f"Vision fallback failed: {e}", goal=goal, url=str(state.get("url", "")))
         finally:
             if path and os.path.exists(str(path)):
                 try: os.remove(str(path))
@@ -396,6 +462,7 @@ Example:
 
     async def _execute_action(self, action: str, args: Dict[str, Any], step_id: str, trace_id: str) -> ToonResponse:
         try:
+            await self._ensure_target_binding()
             # Action Pacing: Wait 1.5s before every interactive action to allow SPA settling
             if action in ["click", "type", "scroll", "click_visual"]:
                 await asyncio.sleep(1.5)
@@ -406,13 +473,28 @@ Example:
 
             elif action == "vision":
                 logger.info(f"[{step_id}] 👁️ Action: vision (CDP Screenshot)")
-                obs = await self._get_vision_context("", await self._get_page_state())
-                return ToonResponse(command_id="vision", component="planner", action="vision", trace_id=trace_id, step_id=step_id, status="success", execution_time=1.5, message=obs)
+                obs = await self._get_vision_observation("", await self._get_page_state())
+                self._last_vision_observation = obs if isinstance(obs, dict) else {}
+                return ToonResponse(
+                    command_id="vision",
+                    component="planner",
+                    action="vision",
+                    trace_id=trace_id,
+                    step_id=step_id,
+                    status="success",
+                    execution_time=1.5,
+                    message=str(obs.get("prompt_view") or obs.get("summary") or ""),
+                )
 
             elif action == "click_visual":
-                logger.info(f"[{step_id}] 🖱️ Action: click_visual -> x:{args.get('x')}, y:{args.get('y')}")
-                tx = (float(args.get('x', 0)) / 1000.0) * self._viewport['w']
-                ty = (float(args.get('y', 0)) / 1000.0) * self._viewport['h']
+                resolved = self._resolve_click_visual_coords(args)
+                if not resolved:
+                    return self._fail("click_visual requires valid x/y or prior vision coordinates", trace_id, step_id)
+                logger.info(
+                    f"[{step_id}] 🖱️ Action: click_visual -> x:{resolved['x']}, y:{resolved['y']} (source={resolved['source']})"
+                )
+                tx = (float(resolved["x"]) / 1000.0) * self._viewport['w']
+                ty = (float(resolved["y"]) / 1000.0) * self._viewport['h']
                 return await self.runtime.click(x=tx, y=ty)
 
             elif action == "click":

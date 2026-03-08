@@ -135,7 +135,7 @@ class OpenAIChatProvider(ILLMProvider):
                         "thought": "Model returned non-JSON content without tool_calls.",
                         "action": "reply",
                         "params": {},
-                        "response_text": content or "Não consegui interpretar a resposta do modelo.",
+                        "response_text": "", # Trigger Orchestrator recovery
                     }
 
             attachments = function_args.get("attachments")
@@ -200,7 +200,7 @@ class OpenAIChatProvider(ILLMProvider):
                 temperature=0.3,
                 max_tokens=kwargs.get("max_tokens", self.max_tokens)
             )
-            return response.choices[0].message.content.strip() if response.choices else "Error: Resposta vazia da OpenAI."
+            return response.choices[0].message.content.strip() if response.choices else "ERROR_EMPTY_RESPONSE"
         except Exception as e:
             logger.error(f"OpenAI generate_text error: {e}")
             raise e

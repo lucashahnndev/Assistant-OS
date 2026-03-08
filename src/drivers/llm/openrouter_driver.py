@@ -14,12 +14,14 @@ logger = get_logger("OpenRouterDriver")
 
 class OpenRouterProvider(ILLMProvider):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
+        cfg = config or {}
         # OpenRouter uses the same library/protocol as OpenAI
-        self.api_key = config.get('api_key')
-        self.model = config.get('model', 'openai/gpt-3.5-turbo') # Default
+        self.api_key = cfg.get('api_key')
+        self.model = cfg.get('model', 'openai/gpt-3.5-turbo') # Default
         
         if not self.api_key:
              # Try to get from global config if not passed specifically
+             from config.manager import ConfigManager
              cm = ConfigManager()
              self.api_key = cm.get('openrouter', {}).get('api_key')
 
@@ -84,7 +86,7 @@ class OpenRouterProvider(ILLMProvider):
                     thought="Model returned empty response.",
                     action="reply",
                     params={},
-                    response_text="Sorry, my brain is a bit slow right now. Could you repeat that?"
+                    response_text="" # Trigger Orchestrator recovery
                 )
 
             content = response.choices[0].message.content.strip()
@@ -323,7 +325,7 @@ class OpenRouterProvider(ILLMProvider):
 
             if response.choices and response.choices[0].message.content:
                 return response.choices[0].message.content.strip()
-            return "The model returned no description."
+            return response.choices[0].message.content.strip() if response.choices else "ERROR_EMPTY_VISION_RESPONSE"
         except Exception as e:
             logger.error(f"OpenRouter Vision Error: {e}")
             raise e
@@ -342,7 +344,7 @@ class OpenRouterProvider(ILLMProvider):
                 temperature=0.3,
                 max_tokens=kwargs.get("max_tokens", 512)
             )
-            return response.choices[0].message.content.strip() if response.choices else "Error: Empty response from OpenRouter."
+            return response.choices[0].message.content.strip() if response.choices else "ERROR_EMPTY_RESPONSE"
         except Exception as e:
             logger.error(f"OpenRouter generate_text error: {e}")
             raise e

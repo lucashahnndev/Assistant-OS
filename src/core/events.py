@@ -8,16 +8,35 @@ class WorkerEventType(str, Enum):
     STARTED = "STARTED"
     PROGRESS = "PROGRESS"
     SLOW = "SLOW"
+    STALLED = "STALLED"
     WAITING_INPUT = "WAITING_INPUT"
+    RECOVERY_NEEDED = "RECOVERY_NEEDED"
+    DEGRADED_EXECUTION = "DEGRADED_EXECUTION"
+    ATTENTION_REQUIRED = "ATTENTION_REQUIRED"
     FAILED = "FAILED"
     COMPLETED = "COMPLETED"
     MEMORY_CANDIDATE = "MEMORY_CANDIDATE"
+    CHECKPOINT = "CHECKPOINT"
+    SCHEDULING_UPDATE = "SCHEDULING_UPDATE"
 
 class AttentionLevel(str, Enum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
+
+class TaskOrigin(str, Enum):
+    USER = "user"
+    SUPERVISOR = "supervisor"
+    SYSTEM = "system"
+    TASK = "task" # Derived from another task
+
+class TaskSpawnReason(str, Enum):
+    USER_REQUEST = "user_request"
+    PLAN_STEP = "plan_step"
+    RECOVERY = "recovery"
+    PROACTIVE = "proactive"
+    SUBTASK = "subtask"
 
 class WorkerEvent(BaseModel):
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -28,6 +47,11 @@ class WorkerEvent(BaseModel):
     run_id: str
     task_role: str
     intent_group_id: Optional[str] = None
+    
+    # Task-Centric Phase 7.1 metadata
+    origin_type: TaskOrigin = TaskOrigin.SYSTEM
+    parent_task_id: Optional[str] = None
+    spawn_reason: TaskSpawnReason = TaskSpawnReason.USER_REQUEST
     
     # Flow control (anti-"reply from the past")
     turn_id: int
@@ -48,6 +72,18 @@ class WorkerEvent(BaseModel):
     
     # Structured outputs
     artifacts: List[Dict[str, Any]] = Field(default_factory=list)
+
+    # Phase 10: Checkpointing & Structured Summaries
+    checkpoint: Optional[Dict[str, Any]] = None
+    completion_summary: Optional[Dict[str, Any]] = None
+
+    # Phase 11: Cognitive Scheduling
+    priority_level: Optional[str] = None # low, medium, high, critical
+    urgency: Optional[float] = None      # 0.0 to 1.0
+    attention_score: Optional[float] = None
+    user_waiting: bool = False
+    depends_on: List[str] = Field(default_factory=list)
+    blocks: List[str] = Field(default_factory=list)
 
     @field_validator('timestamp')
     @classmethod

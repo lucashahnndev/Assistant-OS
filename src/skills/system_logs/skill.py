@@ -37,7 +37,7 @@ class SystemLogsSkill(SkillBase):
                 "action": "list",
                 "count": len(items),
                 "logs": items,
-                "text": "\n".join(lines),
+                "content": "\n".join(lines),
             }
 
         elif action == "read":
@@ -62,7 +62,7 @@ class SystemLogsSkill(SkillBase):
                     "lines_requested": lines,
                     "lines_returned": len(log_content),
                     "content": joined,
-                    "text": f"Leitura de {filename}: {len(log_content)} linha(s).",
+                    "error_details": f"Leitura de {filename}: {len(log_content)} linha(s).",
                 }
             return {
                 "ok": False,
@@ -71,14 +71,14 @@ class SystemLogsSkill(SkillBase):
                 "file": filename,
                 "lines_requested": lines,
                 "error": "READ_FAILED",
-                "message": str(log_content),
-                "text": f"Erro ao ler log '{filename}': {str(log_content)}",
+                "error_details": str(log_content),
+                "error_details": f"Erro ao ler log '{filename}': {str(log_content)}",
             }
 
         return {
             "ok": False,
             "status": "error",
             "error": "UNKNOWN_ACTION",
-            "message": f"Unknown action: {action_id}",
-            "text": f"Unknown action em system_logs: {action_id}",
+            "error_details": f"Unknown action: {action_id}",
+            "error_details": f"Unknown action em system_logs: {action_id}",
         }

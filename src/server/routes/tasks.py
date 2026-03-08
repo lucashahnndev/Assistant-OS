@@ -474,6 +474,16 @@ def get_work_overwatch(
         "events": events,
     }
 
+@router.get("/sessions/{session_id}")
+def list_session_tasks(session_id: str, request: Request, user: User = Depends(get_current_user)):
+    """Lists all tasks registered in a specific session's registry."""
+    kernel = request.app.state.kernel
+    orch = kernel.orchestrator
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session.task_registry
+
 @router.get("/active")
 def list_active_works(request: Request, requester_session_id: Optional[str] = None, user: User = Depends(get_current_user)):
     """List active works."""

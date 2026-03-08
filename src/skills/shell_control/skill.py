@@ -84,13 +84,12 @@ class ShellSkill(SkillBase):
             return {
                 "ok": False,
                 "status": "error",
-                "error": "MISSING_COMMAND",
-                "message": "Missing command.",
+                "error_code": "MISSING_COMMAND",
+                "error_details": "Missing command.",
                 "command": "",
                 "exit_code": None,
                 "stdout": "",
                 "stderr": "",
-                "text": "Error: parâmetro 'command' é obrigatório para shell.control.execute.",
             }
         
         ws_dir = getattr(self.kernel.workspace_service, "get_workspace_dir", lambda: None)() if self.kernel and hasattr(self.kernel, "workspace_service") else None
@@ -240,8 +239,8 @@ class ShellSkill(SkillBase):
                 return {
                     "ok": False,
                     "status": "error",
-                    "error": "TIMEOUT",
-                    "message": f"Command exceeded timeout of {timeout_sec} seconds.",
+                    "error_code": "TIMEOUT",
+                    "error_details": f"Command exceeded timeout of {timeout_sec} seconds.",
                     "command": cmd,
                     "command_effective": normalized_cmd,
                     "cwd": ws_dir,
@@ -249,7 +248,6 @@ class ShellSkill(SkillBase):
                     "stdout": self._trim(output_tail.strip()),
                     "stderr": "",
                     "terminal_id": terminal_id,
-                    "text": f"Error: o comando excedeu o tempo limite de {timeout_sec} segundos.",
                 }
 
             output = self._trim(output_tail.strip())
@@ -289,14 +287,13 @@ class ShellSkill(SkillBase):
                     "stdout": output,
                     "stderr": error,
                     "terminal_id": terminal_id,
-                    "text": text,
                 }
 
             return {
                 "ok": False,
                 "status": "error",
-                "error": "NON_ZERO_EXIT",
-                "message": f"Command exited with code {exit_code}",
+                "error_code": "NON_ZERO_EXIT",
+                "error_details": f"Command exited with code {exit_code}",
                 "command": cmd,
                 "command_effective": normalized_cmd,
                 "cwd": ws_dir,
@@ -304,20 +301,9 @@ class ShellSkill(SkillBase):
                 "stdout": output,
                 "stderr": error,
                 "terminal_id": terminal_id,
-                "text": (
-                    "Error: sudo requires non-interactive credentials (password prompt blocked). "
-                    "Run `python agent.py doctor --setup-privileged` once (or `agent.py doctor --setup-privileged`), "
-                    "then retry. You can also use a non-sudo command or run manually."
-                    if (
-                        normalized_cmd.startswith("sudo ")
-                        and (
-                            "a password is required" in (output or "").lower()
-                            or "senha" in (output or "").lower()
-                            or "sudo:" in (output or "").lower()
-                        )
-                    )
-                    else f"Error: comando retornou código {exit_code}. STDERR:\n{error or '(vazio)'}"
-                ),
+                "stdout": output,
+                "stderr": error,
+                "terminal_id": terminal_id,
             }
         except Exception as e:
             self._touch_terminal_context(
@@ -336,14 +322,14 @@ class ShellSkill(SkillBase):
                     "transcript": self._append_limited(f"$ {normalized_cmd}\n", output_full + f"\n[exception] {str(e)}\n", full_limit + len(normalized_cmd) + 80),
                     "timeout_sec": timeout_sec,
                     "exit_code": None,
-                    "error": str(e),
+                    "error_code": str(e),
                 },
             )
             return {
                 "ok": False,
                 "status": "error",
-                "error": "EXCEPTION",
-                "message": str(e),
+                "error_code": "EXCEPTION",
+                "error_details": str(e),
                 "command": cmd,
                 "command_effective": normalized_cmd,
                 "cwd": ws_dir,
@@ -351,5 +337,4 @@ class ShellSkill(SkillBase):
                 "stdout": "",
                 "stderr": "",
                 "terminal_id": terminal_id,
-                "text": f"Erro inesperado ao executar comando shell: {str(e)}",
             }

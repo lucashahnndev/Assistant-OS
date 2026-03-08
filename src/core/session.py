@@ -39,8 +39,15 @@ class Session:
         self.turn_id: int = 0 # Monotonic turn counter
         self.active_focus_task_id: Optional[str] = None
         self.active_focus_group: Optional[str] = None
+        self.tool_health: Dict[str, str] = {} # tool_name -> HEALTHY | DEGRADED | UNAVAILABLE
+        self.tool_failure_counts: Dict[str, int] = {} # tool_name -> continuous failure count
         self.memory: List[Dict[str, Any]] = [] # Session-scope memory (accepted)
         self.candidate_store: List[Dict[str, Any]] = [] # Worker-proposed candidates
+        self.decision_traces: List[Dict[str, Any]] = [] # Refined Phase 7 structured tracing
+        self.event_timeline: List[Dict[str, Any]] = [] # Holistic session event log
+        self.rejected_memory: List[Dict[str, Any]] = [] # Audit store for memory governance
+        self.audit_trail: List[Dict[str, Any]] = [] # Auditable ledger of admin changes
+        self._max_trace_history = 50
 
     def add_message(self, role: str, content: str, file: Optional[Dict] = None, attachments: Optional[List[Dict]] = None, msg_type: str = "default", summary: str = None, work_id: str = None):
         # Rough token estimation (chars / 4)
@@ -94,6 +101,24 @@ class Session:
                 changed = True
         return changed
 
+    def apply_memory_patch(self, memory_id: str, patch: dict, author: str, reason: str):
+        """Applies a patch to a memory entry. Tombstone-based 'deletion' is patch: {'is_deleted': True}."""
+        for entry in self.memory:
+            if entry.get("id") == memory_id:
+                old_value = entry.copy()
+                entry.update(patch)
+                self.audit_trail.append({
+                    "ts": time.time(),
+                    "type": "memory_patch",
+                    "id": memory_id,
+                    "author": author,
+                    "reason": reason,
+                    "old_value": old_value,
+                    "new_value": entry.copy()
+                })
+                return True
+        return False
+
     def get_unread_count(self, role: str = "assistant") -> int:
         """Returns the number of unread messages from a specific role."""
         return sum(1 for msg in self.history if msg.get("role") == role and not msg.get("is_read", False))
@@ -125,7 +150,13 @@ class Session:
             "active_focus_task_id": self.active_focus_task_id,
             "active_focus_group": self.active_focus_group,
             "memory": self.memory,
-            "candidate_store": self.candidate_store
+            "candidate_store": self.candidate_store,
+            "decision_traces": self.decision_traces,
+            "event_timeline": self.event_timeline,
+            "rejected_memory": self.rejected_memory,
+            "audit_trail": self.audit_trail,
+            "tool_health": self.tool_health,
+            "tool_failure_counts": self.tool_failure_counts
         }
 
     @classmethod
@@ -172,6 +203,12 @@ class Session:
         session.active_focus_group = data.get("active_focus_group")
         session.memory = data.get("memory", [])
         session.candidate_store = data.get("candidate_store", [])
+        session.decision_traces = data.get("decision_traces", [])
+        session.event_timeline = data.get("event_timeline", [])
+        session.rejected_memory = data.get("rejected_memory", [])
+        session.audit_trail = data.get("audit_trail", [])
+        session.tool_health = data.get("tool_health", {})
+        session.tool_failure_counts = data.get("tool_failure_counts", {})
         return session
 
     def publish_event(self, event: Dict[str, Any]):
@@ -207,11 +244,11 @@ class Session:
         if task_id:
             e_type = str(event.get("event_type") or "").upper()
             if task_id not in self.task_registry:
-                # Initialization
                 self.task_registry[task_id] = {
                     "task_id": task_id,
                     "task_role": event.get("task_role", "unknown task"),
                     "status": e_type,
+                    "turn_id": event.get("turn_id", self.turn_id),
                     "base_turn_id": event.get("base_turn_id", self.turn_id),
                     "created_at": time.time(),
                     "last_event_at": time.time(),
@@ -226,13 +263,26 @@ class Session:
                     "announced_completion": False,
                     "last_summary": event.get("summary", ""),
                     "last_failure_summary": event.get("failure_summary", ""),
-                    "last_outcome": event.get("outcome", "")
+                    "last_outcome": event.get("outcome", ""),
+                    "origin_type": event.get("origin_type", "system"),
+                    "parent_task_id": event.get("parent_task_id"),
+                    "spawn_reason": event.get("spawn_reason", "user_request"),
+                    "priority_level": event.get("priority_level"),
+                    "urgency": event.get("urgency", 0.0),
+                    "attention_score": event.get("attention_score", 0.0),
+                    "user_waiting": event.get("user_waiting", False),
+                    "depends_on": event.get("depends_on", []),
+                    "blocks": event.get("blocks", []),
+                    "timeline": [] # Phase 7: Task-specific timeline
                 }
+                # Add initial event to timeline
+                self._add_to_task_timeline(task_id, event)
             else:
                 # Update
                 task = self.task_registry[task_id]
                 task["status"] = e_type
                 task["last_event_at"] = time.time()
+                task["turn_id"] = event.get("turn_id", task.get("turn_id", self.turn_id))
                 task["attention_level"] = event.get("attention_level", task["attention_level"])
                 # Merge summaries if present
                 if event.get("summary"): 
@@ -243,6 +293,66 @@ class Session:
                     task["last_outcome"] = event["outcome"]
                 if event.get("intent_group_id"):
                     task["intent_group_id"] = event["intent_group_id"]
+                
+                # Phase 10: Store checkpoint and completion summary
+                if event.get("checkpoint"):
+                    task["checkpoint"] = event["checkpoint"]
+                if event.get("completion_summary"):
+                    task["completion_summary"] = event["completion_summary"]
+                
+                # Phase 11: Task Scheduling Metadata
+                if event.get("priority_level"):
+                    task["priority_level"] = event["priority_level"]
+                if event.get("urgency") is not None:
+                    task["urgency"] = event["urgency"]
+                if event.get("attention_score") is not None:
+                    task["attention_score"] = event["attention_score"]
+                if "user_waiting" in event:
+                    task["user_waiting"] = event["user_waiting"]
+                if event.get("depends_on"):
+                    task["depends_on"] = event["depends_on"]
+                if event.get("blocks"):
+                    task["blocks"] = event["blocks"]
+                
+                # Phase 7: Update timeline
+                self._add_to_task_timeline(task_id, event)
+
+    def _add_to_task_timeline(self, task_id: str, event: Dict[str, Any]):
+        """Helper to record task-specific lifecycle events."""
+        task = self.task_registry.get(task_id)
+        if not task:
+            return
+            
+        if "timeline" not in task:
+            task["timeline"] = []
+            
+        timeline_entry = {
+            "event_id": event.get("event_id") or str(uuid.uuid4()),
+            "timestamp": event.get("timestamp") or datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "type": str(event.get("event_type") or "PROGRESS").upper(),
+            "delta": {k: v for k, v in event.items() if k not in {"event_id", "timestamp", "task_id", "event_type"}},
+            "user_visible": task.get("user_visible", False)
+        }
+        
+        # Link to current decision trace if one exists for this turn
+        if hasattr(self, "decision_traces") and self.decision_traces:
+            # Heuristic: the last trace in the same turn
+            last_trace = self.decision_traces[-1]
+            if last_trace.get("turn_id") == self.turn_id:
+                timeline_entry["trace_id"] = last_trace.get("trace_id")
+                
+        task["timeline"].append(timeline_entry)
+        
+        # Also log to session-level event_timeline
+        if not hasattr(self, "event_timeline"):
+            self.event_timeline = []
+        self.event_timeline.append({
+            "scope": "TASK",
+            "task_id": task_id,
+            "event_id": timeline_entry["event_id"],
+            "timestamp": timeline_entry["timestamp"],
+            "type": timeline_entry["type"]
+        })
 
     def drain_events(self, limit: int = 10) -> List[Dict[str, Any]]:
         """Drains the earliest N events from the history (FIFO)."""

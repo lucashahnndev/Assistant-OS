@@ -41,12 +41,17 @@ def build_draw_payload_from_box(
 
     located_screen_id = located.get("screen_id") if isinstance(located, dict) else None
     param_screen_id = params.get("screen_id")
+    screen_id = None
     if located_screen_id is not None:
-        screen_id = int(located_screen_id)
+        try:
+            screen_id = int(located_screen_id)
+        except Exception:
+            screen_id = None
     elif param_screen_id is not None:
-        screen_id = int(param_screen_id)
-    else:
-        screen_id = 0
+        try:
+            screen_id = int(param_screen_id)
+        except Exception:
+            screen_id = None
 
     explicit_coordinate_space = str(params.get("coordinate_space") or located.get("coordinate_space") or "").strip().lower()
     if explicit_coordinate_space in {"global", "screen", "local"}:
@@ -66,9 +71,10 @@ def build_draw_payload_from_box(
         "opacity": float(params.get("opacity") or 0.95),
         "ttl_ms": int(params.get("ttl_ms") or default_ttl_ms),
         "pulse": bool(params.get("pulse", True)),
-        "screen_id": screen_id,
         "coordinate_space": coordinate_space,
     }
+    if screen_id is not None:
+        payload["screen_id"] = screen_id
 
     if mark_type == "draw_circle":
         payload["radius"] = float(params.get("radius") or max(width, height) / 2.0 or 18.0)

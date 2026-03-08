@@ -593,6 +593,25 @@ def get_session_media(session_id: str, request: Request, user: User = Depends(ge
     orch = kernel.orchestrator
     
     return orch.get_session_media(session_id)
+@router.get("/{session_id}/traces")
+def get_session_decision_traces(session_id: str, request: Request, user: User = Depends(get_current_user)):
+    """Returns structured decision traces for a session."""
+    kernel = get_kernel(request)
+    orch = kernel.orchestrator
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return getattr(session, "decision_traces", [])
+
+@router.get("/{session_id}/timeline")
+def get_session_timeline(session_id: str, request: Request, user: User = Depends(get_current_user)):
+    """Returns the holistic event timeline for a session."""
+    kernel = get_kernel(request)
+    orch = kernel.orchestrator
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return getattr(session, "event_timeline", [])
 
 @router.get("/{session_id}/events")
 async def stream_session_events(session_id: str, request: Request, user: User = Depends(get_current_user)):
@@ -825,6 +844,12 @@ def get_session_file(session_id: str, filename: str, request: Request, user: Use
         os.path.join(orch.sessions_dir, session_id, "uploads", filename),
         os.path.join(orch.sessions_dir, session_id, filename), # Supports media/type/filename
         os.path.join(kernel.workspace_service.get_workspace_dir(), filename),
+        os.path.join(
+            kernel.workspace_service.get_workspace_dir(),
+            "temp",
+            session_id,
+            filename[len("media/image/temp/") :] if filename.startswith("media/image/temp/") else filename,
+        ),
         os.path.join(kernel.workspace_service.output_dir, "exports", filename)
     ]
     

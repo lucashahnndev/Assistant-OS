@@ -37,9 +37,8 @@ class MemorySkill(SkillBase):
             return {
                 "ok": False,
                 "status": "error",
-                "error": "MEMORY_SERVICE_UNAVAILABLE",
-                "message": "MemoryService not available.",
-                "text": "Error: serviço de memória indisponível.",
+                "error_code": "MEMORY_SERVICE_UNAVAILABLE",
+                "error_details": "MemoryService not available.",
             }
 
         if action == "recall":
@@ -58,11 +57,6 @@ class MemorySkill(SkillBase):
                 "query": query,
                 "count": count,
                 "results": results if isinstance(results, list) else [],
-                "text": (
-                    f"Memória: {count} resultado(s) para '{query}'."
-                    if count == 0 else
-                    f"Memória: {count} resultado(s) para '{query}'. Primeiro resultado: {preview}"
-                ),
             }
         elif action == "store":
             content = self._resolve_content(params)
@@ -70,9 +64,8 @@ class MemorySkill(SkillBase):
                 return {
                     "ok": False,
                     "status": "error",
-                    "error": "MISSING_CONTENT",
-                    "message": "Missing 'content' parameter.",
-                    "text": "Error: parâmetro 'content' é obrigatório para memory.store.",
+                    "error_code": "MISSING_CONTENT",
+                    "error_details": "Missing 'content' parameter.",
                 }
             category = params.get("category", "general")
             ms.add_fact(category, content)
@@ -82,12 +75,10 @@ class MemorySkill(SkillBase):
                 "action": "store",
                 "category": category,
                 "stored": True,
-                "text": f"Fato armazenado na memória (categoria: {category}).",
             }
         return {
             "ok": False,
             "status": "error",
-            "error": "UNKNOWN_ACTION",
-            "message": f"Unknown memory action: {action_id}",
-            "text": f"Ação de memória desconhecida: {action_id}",
+            "error_code": "UNKNOWN_ACTION",
+            "error_details": f"Unknown memory action: {action_id}",
         }

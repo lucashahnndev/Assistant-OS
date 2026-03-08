@@ -88,7 +88,7 @@ class GeminiProvider(ILLMProvider):
 
             if not response.text:
                 logger.error("Gemini returned an empty response.")
-                return AgentIntent(thought="Empty response", action="reply", params={}, response_text="Erro no cérebro.")
+                return AgentIntent(thought="Empty response", action="reply", params={}, response_text="") # Trigger Orchestrator recovery
 
             content = response.text.strip()
             
@@ -172,7 +172,7 @@ class GeminiProvider(ILLMProvider):
                 contents=[prompt],
                 config=config
             )
-            return response.text.strip() if response.text else "Error: Resposta vazia do Gemini."
+            return response.text.strip() if response.text else "ERROR_EMPTY_RESPONSE"
         except Exception as e:
             logger.error(f"Gemini generate_text error: {e}")
             raise e
@@ -201,7 +201,7 @@ class GeminiProvider(ILLMProvider):
                 config=types.GenerateContentConfig(temperature=0.4)
             )
             
-            return response.text or "O modelo não retornou nenhuma descrição."
+            return response.text or "ERROR_EMPTY_VISION_RESPONSE"
         except Exception as e:
             logger.error(f"Gemini Vision Error: {e}")
             raise e

@@ -121,20 +121,9 @@ def _qt_overlay_loop(command_q: Any, status_q: Any) -> None:
                 stroke = max(1.0, float(cmd.get("stroke_width") or 3))
                 painter.setOpacity(opacity)
                 painter.setPen(QPen(color, stroke))
-
-                if ctype == "draw_text":
-                    text = str(cmd.get("text") or "")
-                    font_size = max(10, int(cmd.get("font_size") or 20))
-                    font = QFont("Sans Serif", font_size)
-                    painter.setFont(font)
-                    painter.drawText(int(cmd.get("x") or 0), int(cmd.get("y") or 0), text)
-                    continue
-
+                coordinate_space = str(cmd.get("coordinate_space") or "global").strip().lower()
                 x = float(cmd.get("x") or 0)
                 y = float(cmd.get("y") or 0)
-                w = float(cmd.get("width") or 0)
-                h = float(cmd.get("height") or 0)
-                coordinate_space = str(cmd.get("coordinate_space") or "global").strip().lower()
                 x, y = _map_point_to_window_local(
                     x=x,
                     y=y,
@@ -144,6 +133,17 @@ def _qt_overlay_loop(command_q: Any, status_q: Any) -> None:
                     screen_width=screen_w,
                     screen_height=screen_h,
                 )
+
+                if ctype == "draw_text":
+                    text = str(cmd.get("text") or "")
+                    font_size = max(10, int(cmd.get("font_size") or 20))
+                    font = QFont("Sans Serif", font_size)
+                    painter.setFont(font)
+                    painter.drawText(int(x), int(y), text)
+                    continue
+
+                w = float(cmd.get("width") or 0)
+                h = float(cmd.get("height") or 0)
                 scale = self._pulse_scale(cmd, now_ms)
                 if w > 0 and h > 0 and scale != 1.0:
                     dw = (w * scale - w) / 2.0

@@ -91,8 +91,8 @@ class WeatherSkill(SkillBase):
             return {
                 "ok": False,
                 "status": "error",
-                "error": "LOCATION_UNAVAILABLE",
-                "message": "Location not detected and city not provided.",
+                "error_code": "LOCATION_UNAVAILABLE",
+                "error_details": "Location not detected and city not provided.",
             }
 
         response = requests.get(url, timeout=10)
@@ -101,8 +101,8 @@ class WeatherSkill(SkillBase):
             return {
                 "ok": False,
                 "status": "error",
-                "error": "API_ERROR",
-                "message": data.get("message", f"HTTP {response.status_code}"),
+                "error_code": "API_ERROR",
+                "error_details": data.get("message", f"HTTP {response.status_code}"),
             }
 
         name = data.get("name", city or "your location")
@@ -134,8 +134,8 @@ class WeatherSkill(SkillBase):
             return {
                 "ok": False,
                 "status": "error",
-                "error": "LOCATION_UNAVAILABLE",
-                "message": "Location not detected and city not provided.",
+                "error_code": "LOCATION_UNAVAILABLE",
+                "error_details": "Location not detected and city not provided.",
             }
 
         response = requests.get(url, timeout=10)
@@ -144,8 +144,8 @@ class WeatherSkill(SkillBase):
             return {
                 "ok": False,
                 "status": "error",
-                "error": "API_ERROR",
-                "message": data.get("message", f"HTTP {response.status_code}"),
+                "error_code": "API_ERROR",
+                "error_details": data.get("message", f"HTTP {response.status_code}"),
             }
 
         name = (data.get("city") or {}).get("name", city or "your location")
@@ -175,8 +175,8 @@ class WeatherSkill(SkillBase):
                 return {
                     "ok": False,
                     "status": "error",
-                    "error": "WTTR_HTTP_ERROR",
-                    "message": f"wttr.in HTTP {response.status_code}",
+                    "error_code": "WTTR_HTTP_ERROR",
+                    "error_details": f"wttr.in HTTP {response.status_code}",
                 }
 
             data = response.json()
@@ -223,8 +223,8 @@ class WeatherSkill(SkillBase):
             return {
                 "ok": False,
                 "status": "error",
-                "error": "WTTR_EXCEPTION",
-                "message": str(e),
+                "error_code": "WTTR_EXCEPTION",
+                "error_details": str(e),
             }
 
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
@@ -257,8 +257,8 @@ class WeatherSkill(SkillBase):
             return {
                 "ok": False,
                 "status": "error",
-                "error": "WEATHER_UNAVAILABLE",
-                "message": fallback.get("message", "Weather service unavailable."),
+                "error_code": "WEATHER_UNAVAILABLE",
+                "error_details": fallback.get("message", "Weather service unavailable."),
             }
 
         if action == "forecast":
@@ -282,13 +282,13 @@ class WeatherSkill(SkillBase):
             return {
                 "ok": False,
                 "status": "error",
-                "error": "FORECAST_UNAVAILABLE",
-                "message": fallback.get("message", "Forecast service unavailable."),
+                "error_code": "FORECAST_UNAVAILABLE",
+                "error_details": fallback.get("message", "Forecast service unavailable."),
             }
 
         return {
             "ok": False,
             "status": "error",
-            "error": "UNKNOWN_ACTION",
-            "message": f"Unknown action: {action_id}",
+            "error_code": "UNKNOWN_ACTION",
+            "error_details": f"Unknown action: {action_id}",
         }

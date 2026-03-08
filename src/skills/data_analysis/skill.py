@@ -119,7 +119,7 @@ class DataAnalysisSkill(SkillBase):
                 "ok": False,
                 "status": "error",
                 "error": "UNKNOWN_ACTION",
-                "text": f"Unknown action: {action_id}",
+                "error_details": f"Unknown action: {action_id}",
             }
 
         max_points = self._max_points(params)
@@ -132,7 +132,7 @@ class DataAnalysisSkill(SkillBase):
                 "ok": False,
                 "status": "error",
                 "error": "INSUFFICIENT_DATA",
-                "text": "Could not build a numeric series with at least 2 points.",
+                "error_details": "Could not build a numeric series with at least 2 points.",
             }
 
         x_key = x_key or "Category"
@@ -148,7 +148,7 @@ class DataAnalysisSkill(SkillBase):
         return {
             "ok": True,
             "status": "success",
-            "text": summary,
+            "error_details": summary,
             "title": title,
             "x_label": x_key,
             "y_label": y_key,

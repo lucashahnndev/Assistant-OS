@@ -7,6 +7,24 @@ import re
 
 logger = logging.getLogger("SkillRegistry")
 
+# Phase 8.1 Polish: Inference Maps
+CAPABILITY_MAP = {
+    "web": "retrieval",
+    "browser": "navigation",
+    "shell": "filesystem",
+    "terminal": "filesystem",
+    "os": "filesystem",
+    "task": "orchestration",
+    "memory": "memory",
+    "vision": "perception"
+}
+
+SIDE_EFFECT_KEYWORDS = {
+    "destructive": ["delete", "remove", "wipe", "format", "terminate", "kill", "drop"],
+    "idempotent": ["create", "update", "set", "write", "save", "ensure"],
+    "none": ["get", "read", "list", "search", "check", "find", "describe"]
+}
+
 class SkillRegistry:
     def __init__(self):
         self.skills: Dict[str, SkillBase] = {}
@@ -68,17 +86,47 @@ class SkillRegistry:
                 "status": "error",
                 "error": "SKILL_REMOVED_USE_BROWSER_CONTROL",
                 "error_code": "SKILL_REMOVED_USE_BROWSER_CONTROL",
-                "text": "Skill removed. Use browser.control.run or browser.control.step.",
+                "message": "Skill removed. Use browser.control.run or browser.control.step.",
             }
         skill = self.get_skill_for_action(action_id)
         if skill:
             try:
-                return skill.execute(action_id, params, context)
+                result = skill.execute(action_id, params, context)
+                return self._validate_result(action_id, skill.name, result)
             except Exception as e:
                 logger.error(f"Error executing action '{action_id}' in skill '{skill.name}': {e}")
-                return f"Error executing {action_id}: {str(e)}"
+                return {
+                    "ok": False,
+                    "status": "error",
+                    "error_code": "SKILL_EXECUTION_ERROR",
+                    "error_details": str(e)
+                }
         
-        return f"Unknown action: {action_id}"
+        return {
+            "ok": False,
+            "status": "error",
+            "error_code": "UNKNOWN_ACTION",
+            "error_details": f"Action {action_id} is not registered."
+        }
+
+    def _validate_result(self, action_id: str, skill_name: str, result: Any) -> Any:
+        """Enforces the structured result contract, stripping forbidden conversational fields."""
+        if not isinstance(result, dict):
+            return result
+
+        forbidden = {"text", "message", "reply", "legacy_text"}
+        found_forbidden = [k for k in result.keys() if k in forbidden]
+        
+        if found_forbidden:
+            logger.warning(
+                "CONTRACT_VIOLATION: Skill '%s' returned forbidden fields %s for action '%s'. Stripping.",
+                skill_name, found_forbidden, action_id
+            )
+            # Create a clean copy without forbidden fields
+            clean_result = {k: v for k, v in result.items() if k not in forbidden}
+            return clean_result
+
+        return result
 
     def list_actions(self) -> List[str]:
         return [a for a, s in self.action_map.items() if self._is_discoverable_action(a, s)]
@@ -159,9 +207,27 @@ class SkillRegistry:
             return {}
 
         action_entry = self._find_action_contract_entry(action_id, skill)
-        if not action_entry:
-            return {}
-        return dict(action_entry)
+        metadata = dict(action_entry) if action_entry else {}
+        
+        # Phase 8.1 Polish: Automatic Inference
+        if "capability" not in metadata:
+            # Infer from namespace
+            prefix = action_id.split(".")[0]
+            metadata["capability"] = CAPABILITY_MAP.get(prefix, "general")
+            
+        if "side_effect" not in metadata:
+            # Infer from risk_level or name patterns
+            risk = str(metadata.get("risk_level", "low")).lower()
+            local_id = action_id.split(".")[-1].lower()
+            
+            if risk == "high" or any(k in local_id for k in SIDE_EFFECT_KEYWORDS["destructive"]):
+                metadata["side_effect"] = "destructive"
+            elif any(k in local_id for k in SIDE_EFFECT_KEYWORDS["idempotent"]):
+                metadata["side_effect"] = "idempotent"
+            else:
+                metadata["side_effect"] = "none"
+                
+        return metadata
 
     def _describe_action(self, action_id: str, skill: SkillBase) -> str:
         """Best-effort description from contract metadata."""

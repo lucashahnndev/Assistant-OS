@@ -138,7 +138,7 @@ class HuggingFaceProvider(ILLMProvider):
                     thought="Model returned non-JSON output.",
                     action="reply",
                     params={},
-                    response_text=content or "Desculpe, não consegui interpretar a resposta do modelo.",
+                    response_text="", # Trigger Orchestrator recovery
                 )
 
             action = str(data.get("action") or "reply").strip() or "reply"

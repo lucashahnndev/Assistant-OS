@@ -190,7 +190,13 @@ class WebSearchSkill(SkillBase):
                     return self._normalize_locale(default_locale)
 
         defaults = self.config.get("defaults", {}) if isinstance(self.config, dict) else {}
-        return self._normalize_locale(str(defaults.get("language") or "en"))
+        language = self._normalize_locale(str(defaults.get("language") or "en"))
+        if language in {"en", "en-us", "en-gb"}:
+            loc_hint = self._extract_location_from_dict(context) or {}
+            cc = str(loc_hint.get("country") or "").strip().lower()
+            if cc in {"brazil", "brasil", "br"}:
+                return "pt-BR"
+        return language
 
     def _resolve_location(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         # 1) explicit params from app/web call
@@ -375,7 +381,7 @@ class WebSearchSkill(SkillBase):
                             "title": doc.get("title"),
                             "url": url,
                             "chunk_id": chunk.get("id"),
-                            "text": chunk.get("text"),
+                            "error_details": chunk.get("text"),
                             "start": chunk.get("start"),
                             "end": chunk.get("end"),
                         }

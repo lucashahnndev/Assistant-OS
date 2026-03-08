@@ -29,7 +29,8 @@ class AssistiveOverlaySkill(SkillBase):
 
         renderer_cfg = self.config.get("overlay") if isinstance(self.config.get("overlay"), dict) else self.config
         self.renderer = OverlayRendererService.get_instance(renderer_cfg or {})
-        self.locator = VisionLocator(kernel)
+        temp_artifacts_ttl_ms = int(renderer_cfg.get("temp_artifacts_ttl_ms") or self.config.get("temp_artifacts_ttl_ms") or 300000)
+        self.locator = VisionLocator(kernel, temp_artifacts_ttl_ms=temp_artifacts_ttl_ms)
         debug_cfg = renderer_cfg.get("debug") if isinstance(renderer_cfg.get("debug"), dict) else {}
         self.debug_enabled = bool(debug_cfg.get("enabled", False))
         self.debug_save_on_draw = bool(debug_cfg.get("save_on_draw", False))
@@ -54,6 +55,10 @@ class AssistiveOverlaySkill(SkillBase):
         ]
 
     def get_reflex_rules(self) -> List[Dict[str, Any]]:
+        overlay_cfg = self.config.get("overlay") if isinstance(self.config.get("overlay"), dict) else self.config
+        if not bool((overlay_cfg or {}).get("enable_reflex_shortcuts", False)):
+            return []
+
         def _to_params(match: Any) -> Dict[str, Any]:
             target = str((match.group(1) or "")).strip(" .,:;!?")
             return {
@@ -79,13 +84,13 @@ class AssistiveOverlaySkill(SkillBase):
 
     @staticmethod
     def _ok(text: str, **extra: Any) -> Dict[str, Any]:
-        payload = {"ok": True, "status": "success", "text": text}
+        payload = {"ok": True, "status": "success"}
         payload.update(extra)
         return payload
 
     @staticmethod
     def _err(code: str, text: str, **extra: Any) -> Dict[str, Any]:
-        payload = {"ok": False, "status": "error", "error": code, "text": text}
+        payload = {"ok": False, "status": "error", "error": code}
         payload.update(extra)
         return payload
 
@@ -140,13 +145,13 @@ class AssistiveOverlaySkill(SkillBase):
     def _validate_draw_params(action: str, params: Dict[str, Any]) -> Dict[str, Any]:
         if action in {"draw_circle", "draw_rect", "draw_focus_corners", "draw_text"}:
             if "x" not in params or "y" not in params:
-                return {"ok": False, "error": "MISSING_COORDS", "text": "Parameters 'x' and 'y' are required."}
+                return {"ok": False, "error": "MISSING_COORDS", "error_details": "Parameters 'x' and 'y' are required."}
         if action in {"draw_rect", "draw_focus_corners"}:
             if "width" not in params or "height" not in params:
                 return {
                     "ok": False,
                     "error": "MISSING_SIZE",
-                    "text": "Parameters 'width' and 'height' are required.",
+                    "error_details": "Parameters 'width' and 'height' are required.",
                 }
         if action in {"draw_line", "draw_arrow"}:
             required = {"x", "y", "x2", "y2"}
@@ -155,17 +160,17 @@ class AssistiveOverlaySkill(SkillBase):
                 return {
                     "ok": False,
                     "error": "MISSING_LINE_COORDS",
-                    "text": f"Missing required parameters for {action}: {', '.join(sorted(missing))}.",
+                    "error_details": f"Missing required parameters for {action}: {', '.join(sorted(missing))}.",
                 }
         if action == "draw_text" and not str(params.get("text") or "").strip():
-            return {"ok": False, "error": "MISSING_TEXT", "text": "Parameter 'text' is required for draw_text."}
+            return {"ok": False, "error": "MISSING_TEXT", "error_details": "Parameter 'text' is required for draw_text."}
         if action == "draw_path":
             points = params.get("points")
             if not isinstance(points, list) or len(points) < 2:
                 return {
                     "ok": False,
                     "error": "INVALID_PATH",
-                    "text": "Parameter 'points' must be a list with at least 2 points.",
+                    "error_details": "Parameter 'points' must be a list with at least 2 points.",
                 }
         return {"ok": True}
 
@@ -222,6 +227,8 @@ class AssistiveOverlaySkill(SkillBase):
 
         session_id = str(context.get("session_id") or "").strip() or None
         hint = str(params.get("hint") or params.get("target_description") or "").strip()
+        if not hint:
+            hint = str(context.get("user_input") or "").strip()
         locator_result = self.locator.locate(label=label, session_id=session_id, hint=hint, context=context)
         if not locator_result.get("ok"):
             return self._err(

@@ -594,7 +594,7 @@ const AtlasOrbCanvas = forwardRef((props, ref) => {
 
             const params = orbCtrl.getAnimParams(t);
             // Smaller radius ratio based on height for better proportionality
-            const baseR = ph * 0.18;
+            const baseR = ph * 0.165;
             const r = baseR * params.radiusScale;
 
             drawBackground(ctx, pw, ph, orbCtrl.theme);
@@ -603,7 +603,6 @@ const AtlasOrbCanvas = forwardRef((props, ref) => {
             drawOuterHalo(ctx, cx, cy, r, params.shellIntensity, params.palette);
             drawInternalRays(ctx, cx, cy, r, t, params.raysStrength, params.jitter, params.density, params.palette);
             drawFilaments(ctx, cx, cy, r, t, params.jitter, params.density, params.palette);
-            drawSpecks(ctx, cx, cy, r, t, params.density, pw, ph);
             drawShell(ctx, cx, cy, r, params.shellIntensity, params.palette);
             drawCore(ctx, cx, cy, r, t, params.coreIntensity, params.density, params.palette);
             drawOrbitNode(ctx, cx, cy, r, t, params.s, params.nodeSpeed, params.palette);

@@ -172,7 +172,7 @@ class WikipediaSearchSkill(SkillBase):
                         "title": title,
                         "url": url,
                         "chunk_id": chunk.get("id"),
-                        "text": chunk.get("text"),
+                        "snippet": chunk.get("text"),
                         "start": chunk.get("start"),
                         "end": chunk.get("end"),
                     }

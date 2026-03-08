@@ -22,8 +22,8 @@ class ReflexSkill(SkillBase):
         return ["status", "cancel"]
 
     @staticmethod
-    def _result(ok: bool, status: str, text: str, **extra: Any) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"ok": ok, "status": status, "text": text}
+    def _result(ok: bool, status: str, error_details: str = "", **extra: Any) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"ok": ok, "status": status, "error_details": text}
         payload.update(extra)
         return payload
 
@@ -63,7 +63,7 @@ class ReflexSkill(SkillBase):
             return self._result(
                 ok=True,
                 status="success",
-                text=str(delegated),
+                error_details=str(delegated),
                 legacy_alias="reflex",
                 delegated_action=action_id,
                 result=delegated,
@@ -74,7 +74,7 @@ class ReflexSkill(SkillBase):
             return self._result(
                 ok=False,
                 status="error",
-                text="Ação reflex.status descontinuada. Use system.control.status.",
+                error_details="Ação reflex.status descontinuada. Use system.control.status.",
                 error="DEPRECATED_ACTION",
                 replacement="system.control.status",
             )
@@ -82,14 +82,14 @@ class ReflexSkill(SkillBase):
             return self._result(
                 ok=False,
                 status="error",
-                text="Ação reflex.cancel descontinuada. Use system.control.cancel.",
+                error_details="Ação reflex.cancel descontinuada. Use system.control.cancel.",
                 error="DEPRECATED_ACTION",
                 replacement="system.control.cancel",
             )
         return self._result(
             ok=False,
             status="error",
-            text=f"Unknown reflex action: {action_id}",
+            error_details=f"Unknown reflex action: {action_id}",
             error="UNKNOWN_ACTION",
         )
 

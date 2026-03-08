@@ -31,14 +31,14 @@ class TaskSkill(SkillBase):
         return raw
 
     @staticmethod
-    def _ok(message: str, **extra) -> Dict[str, Any]:
-        payload = {"ok": True, "status": "success", "text": message}
+    def _ok(error_details: str = "", **extra) -> Dict[str, Any]:
+        payload = {"ok": True, "status": "success", "error_details": message}
         payload.update(extra)
         return payload
 
     @staticmethod
-    def _err(code: str, message: str, **extra) -> Dict[str, Any]:
-        payload = {"ok": False, "status": "error", "error": code, "text": message}
+    def _err(code: str, error_details: str = "", **extra) -> Dict[str, Any]:
+        payload = {"ok": False, "status": "error", "error": code, "error_details": message}
         payload.update(extra)
         return payload
 

@@ -130,3 +130,51 @@ def update_memory(mem_type: str, mem_id: str, payload: dict, request: Request, u
         raise HTTPException(status_code=400, detail="Invalid memory type")
     
     return {"status": "updated"}
+
+@router.get("/sessions/{session_id}/candidates")
+def get_memory_candidates(session_id: str, request: Request, user: User = Depends(get_current_user)):
+    """Returns memory candidates for a session."""
+    orch = get_orchestrator(request)
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return getattr(session, "candidate_store", [])
+
+@router.get("/sessions/{session_id}/rejected")
+def get_rejected_memory(session_id: str, request: Request, user: User = Depends(get_current_user)):
+    """Returns rejected memory candidates for a session."""
+    orch = get_orchestrator(request)
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return getattr(session, "rejected_memory", [])
+
+@router.get("/sessions/{session_id}/audit")
+def get_memory_audit_trail(session_id: str, request: Request, user: User = Depends(get_current_user)):
+    """Returns the memory audit trail (admin changes) for a session."""
+    orch = get_orchestrator(request)
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return getattr(session, "audit_trail", [])
+
+@router.patch("/sessions/{session_id}/entries/{entry_id}")
+def patch_session_memory(session_id: str, entry_id: str, payload: dict, request: Request, user: User = Depends(get_current_user)):
+    """Patches a session memory entry (auditable)."""
+    if user.role not in ["admin", "operator"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    
+    orch = get_orchestrator(request)
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    patch = payload.get("patch", {})
+    reason = payload.get("reason", "Admin override")
+    
+    success = session.apply_memory_patch(entry_id, patch, author=user.username, reason=reason)
+    if not success:
+        raise HTTPException(status_code=404, detail="Memory entry not found")
+        
+    orch._save_session(session)
+    return {"status": "patched"}

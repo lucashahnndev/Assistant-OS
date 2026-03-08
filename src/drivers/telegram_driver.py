@@ -168,13 +168,15 @@ class TelegramDriver(BaseDriver):
                 message = payload.get('message', 'Unknown error.')
                 action = payload.get('action', 'tool')
                 
-                error_msg = message
+                # Use structured signals for conversational events
                 if code == 'loop_break':
-                    error_msg = f"⚠️ **System Warning**: I appear to be stuck trying to use the tool `{action}` repeatedly without success. I will stop to avoid an infinite loop."
+                    error_msg = f"⚠️ **SYSTEM_SIGNAL:LOOP_DETECTED** [{action}]"
                 elif code == 'action_error':
-                    error_msg = f"❌ **Execution Error**:\n{message}"
+                    error_msg = f"❌ **ACTION_ERROR**\n{message}"
                 elif code == 'system_error':
-                    error_msg = f"❗ **Technical Failure**:\n{message}"
+                    error_msg = f"❗ **SYSTEM_FAILURE**\n{message}"
+                else:
+                    error_msg = message
                 
                 # We use send_response (which handles markdownify and types)
                 self.send_response(error_msg, target=target)
@@ -266,7 +268,7 @@ class TelegramDriver(BaseDriver):
         if message.strip().startswith("/new"):
             import uuid
             session_id = f"telegram_{user_id}_{str(uuid.uuid4())[:8]}"
-            message = "New session started. How can I help you?" if message.strip() == "/new" else message.replace("/new", "").strip()
+            message = "/start" if message.strip() == "/new" else message.replace("/new", "").strip()
 
         user_data = {
             "channel": "Telegram",
@@ -332,7 +334,11 @@ class TelegramDriver(BaseDriver):
                         self.kernel.orchestrator.index_manager.register_session(session)
             except Exception as e:
                 logger.error(f"Error in background processing: {e}")
-                self.send_response("Sorry, there was an internal error while processing your message.", target=f"telegram_{user_id}")
+                # We do not send a hardcoded conversational error message here.
+                # The kernel/orchestrator will handle specific error reporting if appropriate.
+                # However, we must ensure we don't leave the user in the dark.
+                # In AGENT mode, silence is better than a canned reply if it's a technical fail.
+                pass
             finally:
                 # Ensure we signal complete to stop typing if not already stopped by send_response
                 self.send_complete(f"telegram_{target_id}")

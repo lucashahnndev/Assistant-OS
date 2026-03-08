@@ -1,4 +1,6 @@
 from src.skills.assistive_overlay.intent import build_draw_payload_from_box
+from src.skills.assistive_overlay.locator import VisionLocator
+from src.skills.vision.skill import VisionSkill
 from src.skills.assistive_overlay.backends.qt_process import _map_point_to_window_local
 
 
@@ -37,6 +39,23 @@ def test_build_draw_payload_keeps_explicit_global_coordinate_space():
     assert payload["coordinate_space"] == "global"
 
 
+def test_build_draw_payload_does_not_force_screen_id_when_missing():
+    payload = build_draw_payload_from_box(
+        mark_type="draw_rect",
+        located={
+            "label": "target",
+            "x": 120.0,
+            "y": 220.0,
+            "width": 30.0,
+            "height": 20.0,
+        },
+        params={},
+        default_ttl_ms=2200,
+    )
+    assert "screen_id" not in payload
+    assert payload["coordinate_space"] == "global"
+
+
 def test_map_point_global_to_local_normal_case():
     x, y = _map_point_to_window_local(
         x=2500.0,
@@ -63,3 +82,19 @@ def test_map_point_global_falls_back_when_point_looks_local():
     )
     assert x == 919.0
     assert y == 881.0
+
+
+def test_locator_normalize_bbox_does_not_force_screen_id():
+    bbox = VisionLocator._normalize_bbox(
+        {"label": "target", "x": 10, "y": 20, "width": 30, "height": 40},
+        fallback_label="target",
+    )
+    assert "screen_id" not in bbox
+
+
+def test_vision_normalize_bbox_does_not_force_screen_id():
+    bbox = VisionSkill._normalize_bbox(
+        {"label": "target", "x": 10, "y": 20, "width": 30, "height": 40},
+        fallback_label="target",
+    )
+    assert "screen_id" not in bbox
