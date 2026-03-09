@@ -103,6 +103,7 @@ class PromptComposer:
         *,
         agent_name: str,
         personality: str,
+        response_persona: str = "",
         specialist_prompt: str,
         presentation_directive: str,
         instruction_pack: str = "",
@@ -125,15 +126,24 @@ class PromptComposer:
         skills_summary: str,
         skill_scope: str,
         relevant_memory: List[Dict[str, Any]] = None,
+        cognitive_frame: Dict[str, Any] = None,
     ) -> str:
         prompt_parts: List[str] = []
 
         base_header = (
-            f"You are {agent_name}. {personality}\n"
+            f"You are {agent_name}.\n"
             f"{specialist_prompt or ''}\n"
             "You control a Linux system and must use actions to complete tasks."
         ).strip()
         prompt_parts.append(base_header)
+        scoped_persona = str(response_persona or "").strip()
+        if scoped_persona:
+            prompt_parts.append(
+                "[RESPONSE PERSONA]\n"
+                "- Apply this style ONLY to `response_text` (user-facing output).\n"
+                "- Never apply persona/tone to `thought`, `plan`, `action`, `params`, or `state_summary`.\n"
+                f"{self._clip_block('response_persona', scoped_persona)}"
+            )
 
         if instruction_pack:
             prompt_parts.append("[INSTRUCTION PACK]\n" + instruction_pack)
@@ -147,17 +157,40 @@ class PromptComposer:
 
         prompt_parts.append(presentation_directive.strip())
 
-        prompt_parts.append(
-            "[SYSTEM CONTEXT]\n"
-            f"Date: {sys_info.get('date', 'unknown')} | Time: {sys_info.get('time', 'unknown')}\n"
-            f"Location: {location}\n"
-            f"OS: {sys_info.get('os', 'unknown')} | User: {sys_info.get('user', 'unknown')}"
-        )
+        if cognitive_frame:
+            # Phase 15: Foreground Cognition Layer
+            foreground = []
+            if cognitive_frame.get("objective") and cognitive_frame.get("objective") != "Standby":
+                foreground.append(f"Current Objective: {cognitive_frame['objective']}")
+            
+            if cognitive_frame.get("primary_task"):
+                pt = cognitive_frame["primary_task"]
+                foreground.append(f"Primary Task in Focus: [{pt['task_id']}] {pt['role']} (Status: {pt['status']}) - {pt['summary']}")
+            else:
+                foreground.append("Primary Task in Focus: None (Awaiting instruction or processing background events)")
+
+            if cognitive_frame.get("blockers"):
+                foreground.append("Active Blockers:\n" + "\n".join(f"- {b}" for b in cognitive_frame["blockers"]))
+                
+            prompt_parts.append("[COGNITIVE FRAME - FOREGROUND]\n" + "\n".join(foreground))
+
+            # Phase 15: Supporting Context Layer
+            supporting = []
+            if cognitive_frame.get("secondary_tasks"):
+                supporting.append("Secondary/Background Tasks:")
+                for st in cognitive_frame["secondary_tasks"]:
+                     supporting.append(f"- [{st['task_id']}] {st['role']} (Status: {st['status']})")
+                     
+            if cognitive_frame.get("constraints"):
+                supporting.append("Active Constraints:\n" + "\n".join(f"- {c}" for c in cognitive_frame["constraints"]))
+
+            if supporting:
+                prompt_parts.append("[COGNITIVE FRAME - SUPPORTING]\n" + "\n".join(supporting))
 
         prompt_parts.append(
-            "[CHANNEL CONTEXT]\n"
-            f"Channel: {channel}\n"
-            f"User Name: {user_name}"
+            "[BACKGROUND CONTEXT - SYSTEM & ENVIRONMENT]\n"
+            f"Date: {sys_info.get('date', 'unknown')} | Time: {sys_info.get('time', 'unknown')} | OS: {sys_info.get('os', 'unknown')}\n"
+            f"Location: {location} | Channel: {channel} | User Name: {user_name}"
         )
 
         prompt_parts.append(
@@ -228,10 +261,22 @@ class PromptComposer:
             f"Scope: {skill_scope}\n"
             f"{self._clip_block('skills_summary', skills_summary or '- No actions available for this principal.')}"
         )
+        if "browser.control.run" in str(skills_summary or ""):
+            prompt_parts.append(
+                "[BROWSER INTENT CLASSES]\n"
+                "- browser.control.run requires intent_class.\n"
+                "- Allowed values:\n"
+                "  controlar_midia: media playback/stream control.\n"
+                "  realizar_pesquisa: browse/search/read web content.\n"
+                "  automacao_ui: form filling/click-through UI workflows.\n"
+                "  validacao_visual: visual verification/checks on page state.\n"
+                "  manutencao: inspect/health/gc/administrative browser operations."
+            )
 
         if self._is_assistive_request(user_input):
             prompt_parts.append(
                 "[ASSISTIVE MODE DIRECTIVE]\n"
+                "- CRITICAL OVERRIDE: YOU HAVE VISION CAPABILITIES VIA TOOLS. NEVER say you cannot see the screen or lack direct visibility. Do not apologize.\n"
                 "- User asked for visual guidance on their screen.\n"
                 "- Prefer `overlay.assist.highlight_target` when visual marking is needed.\n"
                 "- Prefer `vision.locate_screen` as a locator step when you need bbox for overlay.\n"
@@ -246,6 +291,13 @@ class PromptComposer:
             "- Use full namespaced action ids exactly.\n"
             "- Prefer read/discovery before destructive actions.\n"
             "- Browser actions only for real UI interaction.\n"
+            "- For browser.control.run, set intent_class deterministically when implied by user goal:\n"
+            "  controlar_midia (play/listen/stream on YouTube/Spotify/Deezer),\n"
+            "  realizar_pesquisa (browse/search/read websites),\n"
+            "  automacao_ui (fill forms/click workflow),\n"
+            "  validacao_visual (verify/check if element/result is visible),\n"
+            "  manutencao (inspect/close/gc/health operations).\n"
+            "- Do not ask the user to choose intent_class when intent is already inferable from their request.\n"
             "- On failure: report honestly and choose an alternative.\n"
             "- Use memory.recall only when older context is needed.\n"
             "- Never ask user to restart/send a new context; ask only for specific missing data.\n"

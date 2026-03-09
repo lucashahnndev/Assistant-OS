@@ -7,7 +7,7 @@ from drivers.voice.interface import AssistantInterface
 from utils.cli import clear_console
 from services.tts.manager import TTSManager
 from utils.logging_config import get_logger
-from utils.voice_text import sanitize_voice_text, normalize_agent_name_for_tts
+from utils.voice_text import sanitize_tts_text, sanitize_voice_text, normalize_agent_name_for_tts
 import os
 
 class VoiceDriver(BaseDriver):
@@ -119,7 +119,7 @@ class VoiceDriver(BaseDriver):
             return
         raw_text = str(text or "")
         tts_raw = normalize_agent_name_for_tts(raw_text, self.agent_name, self.agent_spoken_name)
-        speak_text = sanitize_voice_text(tts_raw) if self.sanitize_tts_text else tts_raw.strip()
+        speak_text = sanitize_tts_text(tts_raw) if self.sanitize_tts_text else tts_raw.strip()
         if not speak_text:
             return
             

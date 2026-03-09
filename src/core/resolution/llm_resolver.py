@@ -13,7 +13,7 @@ class LLMResolver(IntentResolver):
         self.threshold = threshold
         self.skill_registry = skill_registry
 
-    def resolve(self, user_input: str, context: Dict[str, Any]) -> Optional[ActionPlan]:
+    def resolve(self, user_input: str, context: Dict[str, Any], attempt: int = 1) -> Optional[ActionPlan]:
         session = context.get("session")
         if not session:
             logger.warning("No session provided for LLMResolver")
@@ -66,13 +66,38 @@ class LLMResolver(IntentResolver):
                 }
             )
         except Exception as e:
-            logger.error(f"LLM resolution failed: {e}")
-            error_code = ErrorCode.PLANNER_SCHEMA_MISMATCH if "json" in str(e).lower() else ErrorCode.UNKNOWN_ERROR
+            err_str = str(e).lower()
+            is_parse_error = "json" in err_str or "parse" in err_str or "validation" in err_str
+            
+            # Telemetry
+            if session:
+                metrics = session.context.get("metrics", {})
+                metrics["planner_parse_error_count"] = metrics.get("planner_parse_error_count", 0) + 1
+                session.context["metrics"] = metrics
+            
+            if is_parse_error and attempt == 1:
+                logger.warning(f"Planner JSON validation failed: {str(e)}. Attempting repair (1/1)...")
+                
+                if session:
+                    metrics["planner_repair_attempts"] = metrics.get("planner_repair_attempts", 0) + 1
+                    session.context["metrics"] = metrics
+                    
+                # Append repair prompt and retry
+                repair_prompt = f"{system_prompt}\n\nERROR: The previous response was invalid JSON or failed schema validation: {str(e)}\nPlease return ONLY valid JSON matching the exact schema."
+                
+                # Recursive call with attempt=2
+                logger.info("Retrying resolution for repair attempt.")
+                new_context = dict(context)
+                new_context["system_prompt"] = repair_prompt
+                return self.resolve(user_input, new_context, attempt=2)
+
+            logger.error(f"LLM resolution failed (attempt={attempt}): {e}")
+            error_code = ErrorCode.PLANNER_SCHEMA_MISMATCH if is_parse_error else ErrorCode.UNKNOWN_ERROR
             return ActionPlan(
                 action_id="error",
                 args={},
                 source="llm_error",
-                thought=f"Planning failed: {str(e)}",
+                thought=f"Planning failed after {attempt} attempts: {str(e)}",
                 metadata={"error_code": error_code.value}
             )
 

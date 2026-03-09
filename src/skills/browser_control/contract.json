@@ -26,7 +26,8 @@
                 "intent_class": {
                     "type": "string",
                     "description": "Classe de intenção de navegação para política interna de sessão/abas. Valores suportados: controlar_midia, realizar_pesquisa, automacao_ui, validacao_visual, manutencao.",
-                    "required": false
+                    "enum": ["controlar_midia", "realizar_pesquisa", "automacao_ui", "validacao_visual", "manutencao"],
+                    "required": true
                 }
             },
             "output": {
@@ -218,6 +219,48 @@
                 "type": "object",
                 "properties": {
                     "ok": { "type": "boolean" },
+                    "gc": { "type": "object" },
+                    "registry_snapshot": { "type": "object" }
+                }
+            }
+        },
+        "health": {
+            "description": "Executa diagnóstico consolidado da skill (inspect + sync_registry + opcionalmente gc).",
+            "risk_level": "low",
+            "params": {
+                "run_gc": {
+                    "type": "boolean",
+                    "description": "Quando true, executa GC junto do diagnóstico.",
+                    "required": false
+                },
+                "include_tabs": {
+                    "type": "boolean",
+                    "description": "Inclui abas no bloco inspect.",
+                    "required": false
+                },
+                "include_last_vision": {
+                    "type": "boolean",
+                    "description": "Inclui última visão no bloco inspect.",
+                    "required": false
+                },
+                "only_current_session": {
+                    "type": "boolean",
+                    "description": "Filtra diagnóstico para a sessão atual.",
+                    "required": false
+                },
+                "gc_params": {
+                    "type": "object",
+                    "description": "Parâmetros opcionais repassados para browser.control.gc.",
+                    "required": false
+                }
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "ok": { "type": "boolean" },
+                    "health": { "type": "object" },
+                    "inspect": { "type": "object" },
+                    "sync": { "type": "object" },
                     "gc": { "type": "object" },
                     "registry_snapshot": { "type": "object" }
                 }

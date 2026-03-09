@@ -240,7 +240,8 @@
     "agent": {
         "agent_name": "Atlas",
         "spoken_name": "",
-        "personality": "You are a proactive, technical assistant focused on solving problems with precision. Your communication is clear, friendly, and professional."
+        "personality": "You are a proactive, technical assistant focused on solving problems with precision. Your communication is clear, friendly, and professional.",
+        "personality_scope": "response_text_only"
     },
     "location": {
         "mode": "auto",

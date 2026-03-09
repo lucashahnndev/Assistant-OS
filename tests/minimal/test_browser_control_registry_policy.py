@@ -710,6 +710,32 @@ def test_gc_action_closes_idle_instances_on_demand():
         assert str(inst.get("status", "")).lower() == "closed"
 
 
+def test_health_action_returns_consolidated_diagnostics():
+    with tempfile.TemporaryDirectory() as tmp:
+        kernel = _FakeKernel(tmp)
+        skill = BrowserControlSkill(kernel, {})
+        skill._runtime = _FakeRuntime()
+        skill._subagent = _FakeSubagent()
+        skill._owner_session_id = "sess-health"
+        skill._runtime_intent_class = "realizar_pesquisa"
+
+        async def _run():
+            await skill._ensure_registry_instance({"session_id": "sess-health", "work_id": "work-health"}, "realizar_pesquisa")
+            await skill._sync_registry_tab()
+            return await skill.health(
+                params={"run_gc": False, "only_current_session": True},
+                context={"session_id": "sess-health", "work_id": "work-health"},
+            )
+
+        result = asyncio.run(_run())
+        assert result.get("ok") is True
+        health = result.get("health") or {}
+        assert health.get("status") in {"ok", "degraded"}
+        assert isinstance(result.get("inspect"), dict)
+        assert isinstance(result.get("sync"), dict)
+        assert isinstance(result.get("registry_snapshot"), dict)
+
+
 def test_run_goal_emits_media_singleton_cleanup_status():
     with tempfile.TemporaryDirectory() as tmp:
         kernel = _FakeKernel(tmp)

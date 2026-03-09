@@ -9,6 +9,8 @@ import time
 import base64
 import socket
 import urllib.parse
+import random
+import math
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Union, Literal
 from pydantic import BaseModel
@@ -26,7 +28,11 @@ class BrowserRuntime:
                  headless: bool = False,
                  muted: bool = False,
                  app_mode: bool = False,
-                 launch_url: str = "about:blank"):
+                 launch_url: str = "about:blank",
+                 humanize_input_enabled: bool = True,
+                 visual_cursor_enabled: bool = True,
+                 tab_user_lock_enabled: bool = True,
+                 tab_control_bar_enabled: bool = True):
         self.chrome_path = chrome_path
         self.base_profile_path = os.path.abspath(base_profile_path)
         self.overlay_profile_parent = os.path.abspath(overlay_profile_parent)
@@ -35,6 +41,10 @@ class BrowserRuntime:
         self.muted = muted
         self.app_mode = app_mode
         self.launch_url = str(launch_url or "about:blank")
+        self.humanize_input_enabled = bool(humanize_input_enabled)
+        self.visual_cursor_enabled = bool(visual_cursor_enabled)
+        self.tab_user_lock_enabled = bool(tab_user_lock_enabled)
+        self.tab_control_bar_enabled = bool(tab_control_bar_enabled)
         
         self.session_profile_path: Optional[str] = None
         self.chrome_process: Optional[subprocess.Popen] = None
@@ -48,6 +58,10 @@ class BrowserRuntime:
         self.enabled_domains = ["Page", "DOM", "Runtime", "Network", "Log"]
         self.console_logs: List[str] = []
         self.network_failures: List[Dict[str, Any]] = []
+        self._mouse_pos: Dict[str, float] = {"x": 32.0, "y": 32.0}
+        self._agent_control_active: bool = False
+        self._overlay_refresh_task: Optional[asyncio.Task] = None
+        self._overlay_script_registered: bool = False
 
     @staticmethod
     def _pick_free_port() -> int:
@@ -155,6 +169,9 @@ class BrowserRuntime:
         self.websocket = await websockets.connect(self.ws_url, max_size=2**24) # 16MB limit
         for domain in self.enabled_domains:
             await self._call_cdp(f"{domain}.enable")
+        await self._register_overlay_script_on_new_document()
+        await self._wait_for_load(timeout=8.0)
+        await self._ensure_control_overlay()
             
         logger.info("CDP Handshake successful and domains enabled.")
 
@@ -165,7 +182,418 @@ class BrowserRuntime:
             "target_id": self.target_id,
             "app_mode": self.app_mode,
             "launch_url": self.launch_url,
+            "humanize_input_enabled": self.humanize_input_enabled,
+            "visual_cursor_enabled": self.visual_cursor_enabled,
+            "tab_user_lock_enabled": self.tab_user_lock_enabled,
+            "tab_control_bar_enabled": self.tab_control_bar_enabled,
         }
+
+    async def _ensure_control_overlay(self) -> None:
+        if not (self.visual_cursor_enabled or self.tab_user_lock_enabled or self.tab_control_bar_enabled):
+            return
+        if not await self._is_document_complete():
+            return
+        js = f"""
+        (() => {{
+          if (!window.__aosd_control) {{
+            window.__aosd_control = {{
+              active: false,
+              paused: false,
+              agent_input: false,
+              resume_requested: false,
+              resume_context: "",
+              lock_enabled: {str(self.tab_user_lock_enabled).lower()},
+              cursor_enabled: {str(self.visual_cursor_enabled).lower()},
+              bar_enabled: {str(self.tab_control_bar_enabled).lower()},
+              cursor_x: 32,
+              cursor_y: 32
+            }};
+          }}
+          const st = window.__aosd_control;
+          st.lock_enabled = {str(self.tab_user_lock_enabled).lower()};
+          st.cursor_enabled = {str(self.visual_cursor_enabled).lower()};
+          st.bar_enabled = {str(self.tab_control_bar_enabled).lower()};
+          st.active = {str(bool(self._agent_control_active)).lower()};
+          st.cursor_x = {float(self._mouse_pos.get("x", 32.0))};
+          st.cursor_y = {float(self._mouse_pos.get("y", 32.0))};
+
+          const ensure = (id, html) => {{
+            let el = document.getElementById(id);
+            if (!el) {{
+              const wrap = document.createElement('div');
+              wrap.innerHTML = html.trim();
+              el = wrap.firstElementChild;
+              document.documentElement.appendChild(el);
+            }}
+            return el;
+          }};
+
+          ensure("aosd-style", `
+            <style id="aosd-style">
+              #aosd-lock-layer {{
+                position: fixed; inset: 0; z-index: 2147483645; display: none;
+                background: rgba(3, 10, 24, 0.12);
+                backdrop-filter: blur(0.5px);
+              }}
+              #aosd-cursor {{
+                position: fixed; left: 32px; top: 32px; width: 14px; height: 14px; border-radius: 50%;
+                border: 2px solid #61d4ff; background: rgba(10, 132, 255, 0.55);
+                box-shadow: 0 0 0 6px rgba(10,132,255,0.2); pointer-events: none;
+                z-index: 2147483646; display: none; transform: translate(-50%, -50%);
+                transition: left .02s linear, top .02s linear;
+              }}
+              #aosd-bar {{
+                position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%);
+                z-index: 2147483647; display: none; min-width: 360px; max-width: min(92vw, 760px);
+                background: rgba(9, 18, 36, 0.92); border: 1px solid rgba(99,174,255,.35);
+                border-radius: 12px; padding: 10px; color: #dbe9ff;
+                font: 12px/1.35 -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;
+              }}
+              #aosd-bar .aosd-row {{ display: flex; gap: 8px; align-items: center; }}
+              #aosd-bar button {{
+                border: 0; border-radius: 8px; padding: 6px 10px; cursor: pointer;
+                color: #fff; background: #0f5cc8; font-weight: 600;
+              }}
+              #aosd-bar button#aosd-pause {{ background: #c53f3f; }}
+              #aosd-bar button#aosd-resume {{ background: #2d8a4e; }}
+              #aosd-bar input {{
+                flex: 1; border: 1px solid #375d91; background: #0b1325; color: #dbe9ff;
+                border-radius: 8px; padding: 6px 8px;
+              }}
+              #aosd-bar .aosd-label {{ opacity: .92; margin-bottom: 6px; }}
+            </style>
+          `);
+
+          const lockLayer = ensure("aosd-lock-layer", `<div id="aosd-lock-layer"></div>`);
+          const cursor = ensure("aosd-cursor", `<div id="aosd-cursor"></div>`);
+          const bar = ensure("aosd-bar", `
+            <div id="aosd-bar">
+              <div class="aosd-label">Agent is controlling this tab.</div>
+              <div class="aosd-row">
+                <button id="aosd-pause" type="button">Pause</button>
+                <input id="aosd-context" type="text" placeholder="Context while paused (optional)" />
+                <button id="aosd-resume" type="button">Resume</button>
+              </div>
+            </div>
+          `);
+
+          const pauseBtn = document.getElementById("aosd-pause");
+          const resumeBtn = document.getElementById("aosd-resume");
+          const ctxInput = document.getElementById("aosd-context");
+          if (pauseBtn && !pauseBtn.dataset.aosdBound) {{
+            pauseBtn.dataset.aosdBound = "1";
+            pauseBtn.addEventListener("click", () => {{
+              st.paused = true;
+              st.resume_requested = false;
+            }});
+          }}
+          if (resumeBtn && !resumeBtn.dataset.aosdBound) {{
+            resumeBtn.dataset.aosdBound = "1";
+            resumeBtn.addEventListener("click", () => {{
+              const val = (ctxInput && ctxInput.value ? String(ctxInput.value) : "").trim();
+              st.resume_context = val;
+              st.paused = false;
+              st.resume_requested = true;
+              if (ctxInput) ctxInput.value = "";
+            }});
+          }}
+          if (lockLayer && !lockLayer.dataset.aosdBound) {{
+            lockLayer.dataset.aosdBound = "1";
+            const swallow = (ev) => {{
+              const active = !!st.active && !!st.lock_enabled && !st.paused && !st.agent_input;
+              if (!active) return;
+              ev.preventDefault();
+              ev.stopPropagation();
+            }};
+            ["click","dblclick","mousedown","mouseup","mousemove","wheel","contextmenu","touchstart","touchmove","touchend"].forEach((evt) => {{
+              lockLayer.addEventListener(evt, swallow, true);
+            }});
+            const keySwallow = (ev) => {{
+              const active = !!st.active && !!st.lock_enabled && !st.paused && !st.agent_input;
+              if (!active) return;
+              const tgt = ev.target;
+              if (bar && tgt && bar.contains(tgt)) return;
+              ev.preventDefault();
+              ev.stopPropagation();
+            }};
+            window.addEventListener("keydown", keySwallow, true);
+            window.addEventListener("keyup", keySwallow, true);
+          }}
+
+          window.__aosd_apply_state = () => {{
+            const active = !!st.active;
+            const paused = !!st.paused;
+            const agentInput = !!st.agent_input;
+            if (lockLayer) lockLayer.style.display = (active && st.lock_enabled && !paused && !agentInput) ? "block" : "none";
+            if (cursor) {{
+              cursor.style.display = (active && st.cursor_enabled) ? "block" : "none";
+              cursor.style.left = `${{Math.round(st.cursor_x)}}px`;
+              cursor.style.top = `${{Math.round(st.cursor_y)}}px`;
+            }}
+            if (bar) bar.style.display = (active && st.bar_enabled) ? "block" : "none";
+          }};
+          window.__aosd_apply_state();
+          return true;
+        }})()
+        """
+        try:
+            await self._call_cdp("Runtime.evaluate", {"expression": js, "returnByValue": True})
+            await self._verify_control_overlay_state()
+        except Exception:
+            pass
+
+    async def _register_overlay_script_on_new_document(self) -> None:
+        """
+        Register a tiny bootstrap script so new documents already have control state
+        placeholders; full style/handlers are reinforced by _ensure_control_overlay.
+        """
+        if self._overlay_script_registered:
+            return
+        expr = f"""
+        (() => {{
+          if (!window.__aosd_control) {{
+            window.__aosd_control = {{
+              active: false,
+              paused: false,
+              agent_input: false,
+              resume_requested: false,
+              resume_context: "",
+              lock_enabled: {str(self.tab_user_lock_enabled).lower()},
+              cursor_enabled: {str(self.visual_cursor_enabled).lower()},
+              bar_enabled: {str(self.tab_control_bar_enabled).lower()},
+              cursor_x: 32,
+              cursor_y: 32
+            }};
+          }}
+          window.__aosd_control.lock_enabled = {str(self.tab_user_lock_enabled).lower()};
+          window.__aosd_control.cursor_enabled = {str(self.visual_cursor_enabled).lower()};
+          window.__aosd_control.bar_enabled = {str(self.tab_control_bar_enabled).lower()};
+          window.__aosd_control.active = {str(bool(self._agent_control_active)).lower()};
+          window.__aosd_control.cursor_x = {float(self._mouse_pos.get("x", 32.0))};
+          window.__aosd_control.cursor_y = {float(self._mouse_pos.get("y", 32.0))};
+        }})()
+        """
+        try:
+            await self._call_cdp(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {"source": expr},
+            )
+            self._overlay_script_registered = True
+        except Exception as e:
+            logger.debug(f"Overlay bootstrap registration skipped: {e}")
+
+    async def _is_document_complete(self) -> bool:
+        try:
+            res = await self._call_cdp("Runtime.evaluate", {"expression": "document.readyState", "returnByValue": True})
+            return str(res.get("result", {}).get("value", "")) == "complete"
+        except Exception:
+            return False
+
+    async def _read_control_overlay_state(self) -> Dict[str, Any]:
+        expr = """
+        (() => {
+          const st = window.__aosd_control || null;
+          const byId = (id) => document.getElementById(id);
+          const vis = (el) => {
+            if (!el) return false;
+            const cs = window.getComputedStyle(el);
+            return cs.display !== "none" && cs.visibility !== "hidden" && parseFloat(cs.opacity || "1") > 0.01;
+          };
+          const lock = byId("aosd-lock-layer");
+          const cursor = byId("aosd-cursor");
+          const bar = byId("aosd-bar");
+          return {
+            ready_state: String(document.readyState || ""),
+            control_present: !!st,
+            active: !!(st && st.active),
+            paused: !!(st && st.paused),
+            lock_present: !!lock,
+            cursor_present: !!cursor,
+            bar_present: !!bar,
+            lock_visible: vis(lock),
+            cursor_visible: vis(cursor),
+            bar_visible: vis(bar),
+          };
+        })()
+        """
+        try:
+            res = await self._call_cdp("Runtime.evaluate", {"expression": expr, "returnByValue": True})
+            value = res.get("result", {}).get("value", {})
+            return value if isinstance(value, dict) else {}
+        except Exception:
+            return {}
+
+    async def _verify_control_overlay_state(self, retries: int = 3, delay_s: float = 0.12) -> Dict[str, Any]:
+        """
+        Validate that overlay elements exist and, when active, are visible as expected.
+        """
+        last: Dict[str, Any] = {}
+        for _ in range(max(1, int(retries))):
+            state = await self._read_control_overlay_state()
+            last = state
+            if not state:
+                await asyncio.sleep(delay_s)
+                continue
+            if not state.get("control_present"):
+                await asyncio.sleep(delay_s)
+                continue
+            if not (state.get("lock_present") and state.get("cursor_present") and state.get("bar_present")):
+                await asyncio.sleep(delay_s)
+                continue
+            if self._agent_control_active:
+                cursor_ok = (not self.visual_cursor_enabled) or bool(state.get("cursor_visible"))
+                bar_ok = (not self.tab_control_bar_enabled) or bool(state.get("bar_visible"))
+                if cursor_ok and bar_ok:
+                    return state
+                await asyncio.sleep(delay_s)
+                continue
+            return state
+
+        if last:
+            logger.warning(f"Overlay verification failed: {last}")
+        else:
+            logger.warning("Overlay verification failed: no state returned.")
+        return last
+
+    def _schedule_overlay_refresh(self) -> None:
+        if not self._agent_control_active:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._overlay_refresh_task and not self._overlay_refresh_task.done():
+            return
+
+        async def _refresh() -> None:
+            try:
+                await self._wait_for_load(timeout=8.0)
+                await self._ensure_control_overlay()
+                if self._agent_control_active:
+                    await self.set_agent_control_active(True)
+                await self._verify_control_overlay_state()
+            except Exception:
+                pass
+
+        self._overlay_refresh_task = loop.create_task(_refresh())
+
+    async def set_agent_control_active(self, active: bool) -> None:
+        self._agent_control_active = bool(active)
+        if self._agent_control_active:
+            try:
+                await self._wait_for_load(timeout=8.0)
+            except Exception:
+                pass
+        await self._ensure_control_overlay()
+        expr = f"""
+        (() => {{
+          if (!window.__aosd_control) return false;
+          window.__aosd_control.active = {str(bool(active)).lower()};
+          if (!{str(bool(active)).lower()}) {{
+            window.__aosd_control.paused = false;
+            window.__aosd_control.resume_requested = false;
+            window.__aosd_control.agent_input = false;
+          }}
+          if (window.__aosd_apply_state) window.__aosd_apply_state();
+          return true;
+        }})()
+        """
+        try:
+            await self._call_cdp("Runtime.evaluate", {"expression": expr, "returnByValue": True})
+        except Exception:
+            pass
+
+    async def get_tab_control_state(self) -> Dict[str, Any]:
+        if not self.tab_control_bar_enabled:
+            return {"paused": False, "resume_requested": False, "resume_context": "", "active": self._agent_control_active}
+        await self._ensure_control_overlay()
+        expr = """
+        (() => {
+          const st = window.__aosd_control || {};
+          const out = {
+            paused: !!st.paused,
+            resume_requested: !!st.resume_requested,
+            resume_context: String(st.resume_context || ""),
+            active: !!st.active
+          };
+          if (st.resume_requested) {
+            st.resume_requested = false;
+            st.resume_context = "";
+          }
+          return out;
+        })()
+        """
+        try:
+            res = await self._call_cdp("Runtime.evaluate", {"expression": expr, "returnByValue": True})
+            value = res.get("result", {}).get("value", {})
+            if isinstance(value, dict):
+                return value
+        except Exception:
+            pass
+        return {"paused": False, "resume_requested": False, "resume_context": "", "active": self._agent_control_active}
+
+    async def _update_cursor_overlay(self, x: float, y: float) -> None:
+        self._mouse_pos = {"x": float(x), "y": float(y)}
+        if not self.visual_cursor_enabled:
+            return
+        expr = f"""
+        (() => {{
+          if (!window.__aosd_control) return false;
+          window.__aosd_control.cursor_x = {float(x)};
+          window.__aosd_control.cursor_y = {float(y)};
+          if (window.__aosd_apply_state) window.__aosd_apply_state();
+          return true;
+        }})()
+        """
+        try:
+            await self._call_cdp("Runtime.evaluate", {"expression": expr, "returnByValue": True})
+        except Exception:
+            pass
+
+    async def _human_move_to(self, target_x: float, target_y: float) -> None:
+        sx = float(self._mouse_pos.get("x", 32.0))
+        sy = float(self._mouse_pos.get("y", 32.0))
+        tx = float(target_x)
+        ty = float(target_y)
+        distance = math.hypot(tx - sx, ty - sy)
+        steps = int(max(8, min(40, distance / 15.0)))
+        for i in range(1, steps + 1):
+            t = i / steps
+            eased = (3 * (t ** 2)) - (2 * (t ** 3))
+            jitter = min(2.0, max(0.0, distance / 250.0))
+            px = sx + (tx - sx) * eased + random.uniform(-jitter, jitter)
+            py = sy + (ty - sy) * eased + random.uniform(-jitter, jitter)
+            await self._call_cdp("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": px, "y": py})
+            await self._update_cursor_overlay(px, py)
+            await asyncio.sleep(random.uniform(0.008, 0.022))
+        await self._call_cdp("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": tx, "y": ty})
+        await self._update_cursor_overlay(tx, ty)
+
+    async def _human_click(self, x: float, y: float) -> None:
+        await self._human_move_to(x, y)
+        await asyncio.sleep(random.uniform(0.02, 0.08))
+        await self._call_cdp("Input.dispatchMouseEvent", {
+            "type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1
+        })
+        await asyncio.sleep(random.uniform(0.035, 0.13))
+        await self._call_cdp("Input.dispatchMouseEvent", {
+            "type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1
+        })
+        await self._update_cursor_overlay(x, y)
+
+    async def _set_agent_input_window(self, enabled: bool) -> None:
+        expr = f"""
+        (() => {{
+          if (!window.__aosd_control) return false;
+          window.__aosd_control.agent_input = {str(bool(enabled)).lower()};
+          if (window.__aosd_apply_state) window.__aosd_apply_state();
+          return true;
+        }})()
+        """
+        try:
+            await self._call_cdp("Runtime.evaluate", {"expression": expr, "returnByValue": True})
+        except Exception:
+            pass
 
     async def attach_to_target(self, target_id: str) -> bool:
         """
@@ -197,6 +625,7 @@ class BrowserRuntime:
             self.websocket = await websockets.connect(self.ws_url, max_size=2**24)
             for domain in self.enabled_domains:
                 await self._call_cdp(f"{domain}.enable")
+            await self._ensure_control_overlay()
             return True
         except Exception as e:
             logger.warning(f"Failed to attach to target {wanted}: {e}")
@@ -317,6 +746,8 @@ class BrowserRuntime:
                 "errorText": params.get("errorText"),
                 "canceled": params.get("canceled")
             })
+        elif method == "Page.loadEventFired":
+            self._schedule_overlay_refresh()
 
     async def get_skeletal_dom(self) -> Dict[str, Any]:
         """
@@ -436,6 +867,10 @@ class BrowserRuntime:
         return res.get("result", {}).get("value", {"nodes": [], "markers": [], "total_count": 0, "viewport_count": 0})
 
     async def close(self):
+        try:
+            await self.set_agent_control_active(False)
+        except Exception:
+            pass
         if self.websocket:
             await self.websocket.close()
         if self.chrome_process:
@@ -444,6 +879,32 @@ class BrowserRuntime:
         if self.session_profile_path and os.path.exists(self.session_profile_path):
             shutil.rmtree(self.session_profile_path, ignore_errors=True)
         logger.info("BrowserRuntime closed and session profile cleaned.")
+
+    def force_close(self):
+        """
+        Best-effort synchronous close for cross-loop teardown.
+        Avoids awaiting websocket on a different event loop.
+        """
+        try:
+            if self.chrome_process:
+                self.chrome_process.terminate()
+                try:
+                    self.chrome_process.wait(timeout=3)
+                except Exception:
+                    try:
+                        self.chrome_process.kill()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        try:
+            if self.session_profile_path and os.path.exists(self.session_profile_path):
+                shutil.rmtree(self.session_profile_path, ignore_errors=True)
+        except Exception:
+            pass
+        self.websocket = None
+        self.chrome_process = None
+        logger.info("BrowserRuntime force-closed (sync teardown).")
 
     async def _wait_for_load(self, timeout: float = 12.0):
         """Wait for document.readyState == 'complete' and check for common SPA loaders."""
@@ -499,6 +960,7 @@ class BrowserRuntime:
     async def navigate(self, url: str) -> ToonResponse:
         start_time = time.time()
         try:
+            await self._ensure_control_overlay()
             # Get current state before
             before_url = await self._get_current_url()
             before_title = await self._get_current_title()
@@ -556,6 +1018,8 @@ class BrowserRuntime:
     async def click(self, selector: Optional[str] = None, x: Optional[float] = None, y: Optional[float] = None) -> ToonResponse:
         start_time = time.time()
         try:
+            await self._ensure_control_overlay()
+            await self._set_agent_input_window(True)
             if selector:
                 bbox = await self._get_bbox_from_selector(selector)
                 x = bbox.x + bbox.width / 2
@@ -583,14 +1047,16 @@ class BrowserRuntime:
                 # Note: lx remains same as we don't handle horizontal auto-scroll yet
             # -------------------------------
 
-            # Mouse Pressed
-            await self._call_cdp("Input.dispatchMouseEvent", {
-                "type": "mousePressed", "x": lx, "y": ly, "button": "left", "clickCount": 1
-            })
-            # Mouse Released
-            await self._call_cdp("Input.dispatchMouseEvent", {
-                "type": "mouseReleased", "x": lx, "y": ly, "button": "left", "clickCount": 1
-            })
+            if self.humanize_input_enabled:
+                await self._human_click(lx, ly)
+            else:
+                await self._call_cdp("Input.dispatchMouseEvent", {
+                    "type": "mousePressed", "x": lx, "y": ly, "button": "left", "clickCount": 1
+                })
+                await self._call_cdp("Input.dispatchMouseEvent", {
+                    "type": "mouseReleased", "x": lx, "y": ly, "button": "left", "clickCount": 1
+                })
+                await self._update_cursor_overlay(lx, ly)
             
             evidence = await self._generate_evidence("", "", "click", {"x": lx, "y": ly}, target_bbox=BBox(x=lx-5, y=ly-5, width=10, height=10))
             return ToonResponse(
@@ -605,16 +1071,42 @@ class BrowserRuntime:
             )
         except Exception as e:
             return self._error_response("click", str(e), start_time)
+        finally:
+            await self._set_agent_input_window(False)
 
-    async def type_text(self, text: str, selector: Optional[str] = None) -> ToonResponse:
+    async def type_text(
+        self,
+        text: str,
+        selector: Optional[str] = None,
+        x: Optional[float] = None,
+        y: Optional[float] = None,
+        press_enter: bool = False,
+        focus_before_type: bool = True,
+        clear_existing: bool = False,
+    ) -> ToonResponse:
         start_time = time.time()
         try:
-            if selector:
-                await self.click(selector=selector)
+            await self._ensure_control_overlay()
+            await self._set_agent_input_window(True)
+            if focus_before_type:
+                if selector:
+                    await self.click(selector=selector)
+                elif x is not None and y is not None:
+                    await self.click(x=float(x), y=float(y))
+            if clear_existing:
+                await self._call_cdp("Input.dispatchKeyEvent", {"type": "keyDown", "modifiers": 2, "windowsVirtualKeyCode": 65, "key": "a"})
+                await self._call_cdp("Input.dispatchKeyEvent", {"type": "keyUp", "modifiers": 2, "windowsVirtualKeyCode": 65, "key": "a"})
+                await self._call_cdp("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 8, "key": "Backspace"})
+                await self._call_cdp("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 8, "key": "Backspace"})
             
             for char in text:
                 await self._call_cdp("Input.dispatchKeyEvent", {"type": "keyDown", "text": char})
                 await self._call_cdp("Input.dispatchKeyEvent", {"type": "keyUp", "text": char})
+                if self.humanize_input_enabled:
+                    await asyncio.sleep(random.uniform(0.025, 0.13))
+            if press_enter:
+                await self._call_cdp("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Enter", "windowsVirtualKeyCode": 13})
+                await self._call_cdp("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Enter", "windowsVirtualKeyCode": 13})
             
             return ToonResponse(
                 command_id=f"cmd_{int(time.time())}",
@@ -628,6 +1120,8 @@ class BrowserRuntime:
             )
         except Exception as e:
             return self._error_response("type", str(e), start_time)
+        finally:
+            await self._set_agent_input_window(False)
 
     async def _get_bbox_from_selector(self, selector: str) -> BBox:
         # Get nodes to find the one matching selector
@@ -681,6 +1175,7 @@ class BrowserRuntime:
     async def scroll_into_view(self, selector: str) -> ToonResponse:
         start_time = time.time()
         try:
+            await self._ensure_control_overlay()
             res = await self._call_cdp("DOM.getFlattenedDocument", {"depth": 1, "pierce": False})
             root_node_id = res["nodes"][0]["nodeId"]
             node_id_res = await self._call_cdp("DOM.querySelector", {"nodeId": root_node_id, "selector": selector})
@@ -706,7 +1201,13 @@ class BrowserRuntime:
     async def mouse_move(self, x: float, y: float) -> ToonResponse:
         start_time = time.time()
         try:
-            await self._call_cdp("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
+            await self._ensure_control_overlay()
+            await self._set_agent_input_window(True)
+            if self.humanize_input_enabled:
+                await self._human_move_to(float(x), float(y))
+            else:
+                await self._call_cdp("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
+                await self._update_cursor_overlay(float(x), float(y))
             return ToonResponse(
                 command_id=f"cmd_{int(time.time())}",
                 component="runtime",
@@ -719,9 +1220,12 @@ class BrowserRuntime:
             )
         except Exception as e:
             return self._error_response("scroll", str(e), start_time)
+        finally:
+            await self._set_agent_input_window(False)
 
     async def wait(self, seconds: float) -> ToonResponse:
         start_time = time.time()
+        await self._ensure_control_overlay()
         await asyncio.sleep(seconds)
         return ToonResponse(
             command_id=f"cmd_{int(time.time())}",

@@ -1427,7 +1427,9 @@ class AgentOrchestrator:
             return
 
         # 3. Send and persist
-        callbacks["send_response"](commit_msg, is_chunk=True)
+        callbacks["send_response"](commit_msg, is_chunk=False)
+        if "send_complete" in callbacks:
+            callbacks["send_complete"]()
         if session:
             session.add_message("assistant", commit_msg, work_id=work_id)
             self._save_session(session)
@@ -1643,6 +1645,15 @@ class AgentOrchestrator:
                     session = self.create_session(session_id, interface=interface)
 
             session.last_interaction = time.time()
+            
+            # Phase 16: Intent Tracking and Re-entry
+            if hasattr(session, "intent_agenda"):
+                session.intent_agenda.evaluate_reentry_signals(session.task_registry)
+                if user_input:
+                    for intent in session.intent_agenda.get_active_intents():
+                        if intent.status == "PAUSED" and intent.blocking_reason in {"waiting_user_input", "approval_pending"}:
+                            session.intent_agenda.update_intent_status(intent.intent_id, "OPEN")
+            
             if user_data:
                 session.context.update(user_data)
             session.context["user_language"] = self._detect_user_language(
@@ -1652,9 +1663,7 @@ class AgentOrchestrator:
             if context:
                 session.context["principal_context"] = context.model_dump()
                 
-            # Trigger auto-naming for web sessions on first user messages
-            if session.source == "web" and not session.name_generated and len(session.history) <= 3:
-                threading.Thread(target=self._auto_name_session, args=(session, user_input), daemon=True).start()
+            # Note: Auto-naming logic was moved to main.py process_input to ensure it runs even for quick replies.
             
             plan = initial_plan
 
@@ -1933,6 +1942,19 @@ class AgentOrchestrator:
                         self._release_if_owned(lock)
                         try:
                             plan = self.intent_resolver_chain.resolve(user_input, reasoning_context)
+                            
+                            # Fix #4: Check Tool Override Cooldown
+                            if plan and plan.action_id == "browser.control.run":
+                                cooldowns = session.context.get("cooldowns", {})
+                                if "browser.control.run" in cooldowns and cooldowns["browser.control.run"] > 0:
+                                    logger.warning("Action browser.control.run is in cooldown. Blocking planner override.")
+                                    # Overwrite the plan to force a different strategy or halt
+                                    plan = ActionPlan(
+                                        action_id="reply",
+                                        args={},
+                                        response_text="Estou enfrentando problemas técnicos com o navegador no momento. Por favor, tente algo diferente ou aguarde um instante.",
+                                        source="cooldown_block"
+                                    )
                         finally:
                             self._reacquire_lock(lock)
                             if cancel_check and cancel_check():
@@ -2442,6 +2464,18 @@ class AgentOrchestrator:
                         final_response_persisted = True
                         session.scratchpad = ""
                         session.plan = []
+                        
+                        logger.info(
+                            "Tool goal completed | action=%s session_id=%s work_id=%s",
+                            plan.action_id, session_id, work_id,
+                            extra={
+                                "action": plan.action_id,
+                                "session_id": session_id,
+                                "work_id": work_id,
+                                "status": "goal_done"
+                            }
+                        )
+
                         if callbacks and 'send_response' in callbacks:
                             callbacks['send_response'](final_response, is_chunk=True, attachments=structured_attachments)
                             final_response_streamed = True
@@ -2647,6 +2681,10 @@ class AgentOrchestrator:
                             else:
                                 # No work channel available: keep classic in-session pending action.
                                 session.pending_action = {"action": plan.action_id, "params": plan.args}
+                                # Phase 16: Open Loop tracking (Pause on approval)
+                                if hasattr(session, "intent_agenda"):
+                                    for intent in session.intent_agenda.get_active_intents():
+                                        session.intent_agenda.update_intent_status(intent.intent_id, "PAUSED", blocking_reason="approval_pending")
                                 session.add_message("assistant", approval_msg, work_id=work_id)
                                 if callbacks and 'send_complete' in callbacks:
                                     callbacks['send_complete']()
@@ -2705,14 +2743,14 @@ class AgentOrchestrator:
                         
                         latency_ms = int((time.time() - start_ts) * 1000)
                         logger.info(
-                            "Tool execution successful | action=%s session_id=%s work_id=%s latency_ms=%d",
+                            "Tool dispatch completed | action=%s session_id=%s work_id=%s latency_ms=%d",
                             plan.action_id, session_id, work_id, latency_ms,
                             extra={
                                 "action": plan.action_id,
                                 "session_id": session_id,
                                 "work_id": work_id,
                                 "latency_ms": latency_ms,
-                                "status": "success"
+                                "status": "dispatch_ok"
                             }
                         )
                     except Exception as e:
@@ -2893,6 +2931,13 @@ class AgentOrchestrator:
                                 event_key=f"failure_recovery:{plan.action_id}:{loops}",
                             )
                         session.state_summary["last_error"] = result_reason
+
+                        # Fix #4: Track tool cooldown on failure
+                        if plan.action_id == "browser.control.run" and result_reason in {"PLANNER_OUTPUT_INVALID", "SKILL_EXECUTION_ERROR", "ACTION_DISPATCH_FAILURE", "failure_marker_detected", "timeout"}:
+                            if "cooldowns" not in session.context:
+                                session.context["cooldowns"] = {}
+                            session.context["cooldowns"][plan.action_id] = 2 # Block for 2 turns
+
                         if planner_tree:
                             self._mark_planner_blocked(planner_tree)
                             session.plan = self._flatten_plan_lines(planner_tree)
@@ -2903,6 +2948,18 @@ class AgentOrchestrator:
                         last_success_structured = structured_result
                         repeated_failure_count = 0
                         last_failure_signature = None
+
+                        logger.info(
+                            "Tool goal progress | action=%s session_id=%s work_id=%s",
+                            plan.action_id, session_id, work_id,
+                            extra={
+                                "action": plan.action_id,
+                                "session_id": session_id,
+                                "work_id": work_id,
+                                "status": "goal_progress_ok"
+                            }
+                        )
+
                         if planner_tree:
                             self._advance_planner_on_success(planner_tree)
                             session.plan = self._flatten_plan_lines(planner_tree)
@@ -4034,6 +4091,12 @@ class AgentOrchestrator:
             status = str(structured.get("status") or "").strip().lower()
             error_code = structured.get("error")
 
+            # Fix #3: Harden Result Assessment
+            if "result" in structured and isinstance(structured["result"], dict):
+                nested_status = str(structured["result"].get("status") or "").strip().lower()
+                if nested_status in {"error", "failed", "failure"}:
+                    return "failure", str(structured["result"].get("error") or nested_status)
+
             if ok is False:
                 return "failure", str(error_code or status or "ok_false")
 
@@ -4197,7 +4260,8 @@ class AgentOrchestrator:
             f"User Language: {locale}\n"
             "Rules:\n"
             "- If there is a CONFLICT or STATE guidance, follow it naturally to explain the situation to the user.\n"
-            "- If the last tool succeeded, summarize the result conversationally.\n"
+            "- CRITICAL RULE: Unless there is explicit evidence of goal completion in the tool output, you MUST remain neutral. Use progress statements (e.g., 'I am attempting X', 'I have initiated X') instead of success claims (e.g., 'I opened X', 'I completed X').\n"
+            "- If the last tool succeeded, summarize the result conversationally, but do not claim final goal completion unless explicitly stated in the output.\n"
             "- If the input was ambiguous, ask for clarification naturally.\n"
             "- Do NOT use deterministic templates.\n"
             "- Be concise and helpful.\n"
@@ -4230,6 +4294,28 @@ class AgentOrchestrator:
         except Exception as e:
             logger.error(f"Error in LLM Recovery Loop: {e}")
             return "SYSTEM_ERROR: Conversational recovery failed."
+
+    def _guard_browser_recovery_confirmation(
+        self,
+        *,
+        session: Session,
+        reason: str,
+        last_action_id: Optional[str],
+        candidate_reply: str,
+    ) -> str:
+        """
+        Prevent optimistic claims in browser recovery paths when no explicit user
+        confirmation exists yet. This avoids replies like "deu certo" right after
+        technical completion of browser.control.run.
+        """
+        action = str(last_action_id or "").strip().lower()
+        if action != "browser.control.run":
+            return candidate_reply
+        if str(reason or "").strip().lower() not in {"autocomplete_after_success", "empty_result_success"}:
+            return candidate_reply
+        if not self._looks_like_success_claim(candidate_reply):
+            return candidate_reply
+        return self._t(session, "reply.browser_result_needs_confirmation")
         generic_list_keys = (
             "items",
             "entries",
@@ -4695,6 +4781,7 @@ class AgentOrchestrator:
         *,
         agent_name: str,
         personality: str,
+        personality_scope: str = "response_text_only",
         specialist_hint: str = "",
         user_language: str,
         presentation_mode: str,
@@ -4719,18 +4806,31 @@ class AgentOrchestrator:
         pack = {
             "v": "ip.v1",
             "n": self._clip_text(agent_name, 40),
-            "p": self._clip_text(personality, max(80, personality_limit)),
+            "persona_scope": str(personality_scope or "response_text_only").strip().lower(),
             "lang": {"think": "en", "actions": "en", "reply": user_language or "auto", "single_reply_lang": True},
             "present": {
                 "mode": presentation_mode,
                 "markdown": bool(markdown_supported),
             },
             "policy": policy_compact,
+            "browser_intent_classes": {
+                "required_for": "browser.control.run",
+                "allowed": {
+                    "controlar_midia": "media playback and stream control",
+                    "realizar_pesquisa": "general browsing/search/reading",
+                    "automacao_ui": "UI workflow automation",
+                    "validacao_visual": "visual verification",
+                    "manutencao": "inspect/health/gc admin actions",
+                },
+                "rule": "never ask user to choose when inferable from request",
+            },
             "output": {
                 "format": "json_only",
                 "schema_keys": ["thought", "plan", "state_summary", "action", "params", "task_label", "response_text", "attachments"],
             },
         }
+        if str(personality_scope or "").strip().lower() == "global":
+            pack["p"] = self._clip_text(personality, max(80, personality_limit))
         if voice_interaction:
             pack["reply_constraints"] = {
                 "apply_to": "response_text_only",
@@ -4983,6 +5083,12 @@ class AgentOrchestrator:
         agent_config = self.config_manager.get("agent", {})
         agent_name = agent_config.get("agent_name", "Assistant")
         personality = agent_config.get("personality", "You are a proactive Reasoning Agent.")
+        raw_personality_scope = agent_config.get("personality_scope", "response_text_only")
+        personality_scope = str(raw_personality_scope or "response_text_only").strip().lower()
+        if personality_scope not in {"global", "response_text_only", "off"}:
+            personality_scope = "response_text_only"
+        planner_personality = personality if personality_scope == "global" else ""
+        response_persona = personality if personality_scope == "response_text_only" else ""
         active_specialist = str(session.context.get("active_specialist", "") or "").strip()
         specialist_prompt_raw = self.specialist_manager.get_specialist_prompt(active_specialist) or ""
         specialist_mode = str(prompt_cfg.get("specialist_prompt_mode", "ultra_compact")).strip().lower()
@@ -5041,7 +5147,8 @@ class AgentOrchestrator:
 
         instruction_pack = self._build_instruction_pack(
             agent_name=agent_name,
-            personality=personality,
+            personality=planner_personality,
+            personality_scope=personality_scope,
             specialist_hint=specialist_hint,
             user_language=session.context.get("user_language", "en"),
             presentation_mode=presentation_mode,
@@ -5073,7 +5180,8 @@ class AgentOrchestrator:
 
         prompt = self.prompt_composer.compose(
             agent_name=agent_name,
-            personality=personality,
+            personality=planner_personality,
+            response_persona=response_persona,
             specialist_prompt=specialist_prompt,
             presentation_directive=presentation_directive,
             instruction_pack=instruction_pack,
@@ -5096,6 +5204,7 @@ class AgentOrchestrator:
             skills_summary=skills_summary,
             skill_scope=skill_scope,
             relevant_memory=relevant_memory,
+            cognitive_frame=session.get_cognitive_frame(user_input).to_dict(),
         )
         # Inject Worker Updates if present
         if worker_updates:
@@ -5470,6 +5579,28 @@ class AgentOrchestrator:
         has_music_hint = bool(re.search(r"\b(lofi|music|musica|m[uú]sica|song|track|playlist)\b", value))
         return mentions_youtube and playback_verb and has_music_hint
 
+    @staticmethod
+    def _looks_like_browser_capability_refusal(response_text: str) -> bool:
+        value = str(response_text or "").strip().lower()
+        if not value:
+            return False
+        markers = (
+            "browser.control.run",
+            "browser.open",
+            "não possuo ações como",
+            "nao possuo acoes como",
+            "ferramentas listadas",
+            "sessão de navegador pré-existente",
+            "sessao de navegador pre-existente",
+            "não está diretamente exposta",
+            "nao esta diretamente exposta",
+            "minha função principal é processar informações",
+            "cannot open browser",
+            "need a pre-existing browser session",
+            "not directly exposed",
+        )
+        return any(marker in value for marker in markers)
+
     def _apply_media_decision_policy(
         self,
         *,
@@ -5519,6 +5650,28 @@ class AgentOrchestrator:
         if not self._is_youtube_playback_request(user_input):
             return plan
 
+        if (
+            plan.action_id == "reply"
+            and self.skill_registry.get_skill_for_action("browser.control.run")
+            and self._looks_like_browser_capability_refusal(plan.response_text or "")
+        ):
+            logger.info(
+                "Decision policy override: reply(capability_refusal) -> browser.control.run for YouTube playback request."
+            )
+            return ActionPlan(
+                action_id="browser.control.run",
+                args={
+                    "goal": (user_input or "").strip(),
+                    "intent_class": "controlar_midia",
+                },
+                confidence=max(float(plan.confidence or 0.0), 0.76),
+                source=f"{plan.source}_policy_refusal_recover",
+                response_text=plan.response_text,
+                thought=plan.thought,
+                metadata=dict(plan.metadata or {}),
+                attachments=plan.attachments,
+            )
+
         metadata_actions = {
             "youtube.search.find",
             "youtube.retrieve.get",
@@ -5534,7 +5687,10 @@ class AgentOrchestrator:
             )
             return ActionPlan(
                 action_id="browser.control.run",
-                args={"goal": (user_input or "").strip()},
+                args={
+                    "goal": (user_input or "").strip(),
+                    "intent_class": "controlar_midia",
+                },
                 confidence=max(float(plan.confidence or 0.0), 0.75),
                 source=f"{plan.source}_policy",
                 response_text=plan.response_text,
@@ -5950,4 +6106,3 @@ class AgentOrchestrator:
             data["result_text"] = payload.get("text") or raw_output
             
         return data
-

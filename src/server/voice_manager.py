@@ -6,7 +6,7 @@ import queue
 import re
 from typing import Dict, Optional
 from utils.logging_config import get_logger
-from utils.voice_text import sanitize_voice_text, normalize_agent_name_for_tts
+from utils.voice_text import sanitize_tts_text, sanitize_voice_text, normalize_agent_name_for_tts
 
 logger = get_logger("VoiceManager")
 
@@ -422,10 +422,12 @@ class VoiceManager:
                     self.sentence_buffer = ""
                     self.in_fenced_code = False
                     self.in_inline_code = False
+                    self.fenced_marker_pending = False
+                    self.inline_marker_pending = False
                     self.first_response_sent = False
                     self.last_queued_tts = ""
 
-                def _strip_code_tokens_streaming(self, value: str) -> str:
+                def _replace_code_tokens_streaming(self, value: str) -> str:
                     text = str(value or "")
                     if not text:
                         return ""
@@ -436,6 +438,11 @@ class VoiceManager:
                         # Fenced blocks: ``` ... ``` (stateful across chunks)
                         if text.startswith("```", i):
                             self.in_fenced_code = not self.in_fenced_code
+                            if self.in_fenced_code and not self.fenced_marker_pending:
+                                out.append(" bloco de código ")
+                                self.fenced_marker_pending = True
+                            if not self.in_fenced_code:
+                                self.fenced_marker_pending = False
                             i += 3
                             # Skip optional fence language token on opening line.
                             if self.in_fenced_code:
@@ -450,6 +457,11 @@ class VoiceManager:
                         # Inline code: `...` (stateful across chunks)
                         if text[i] == "`":
                             self.in_inline_code = not self.in_inline_code
+                            if self.in_inline_code and not self.inline_marker_pending:
+                                out.append(" código ")
+                                self.inline_marker_pending = True
+                            if not self.in_inline_code:
+                                self.inline_marker_pending = False
                             i += 1
                             continue
 
@@ -471,9 +483,9 @@ class VoiceManager:
                         self.manager.agent_name,
                         self.manager.agent_spoken_name,
                     )
-                    tts_raw = self._strip_code_tokens_streaming(tts_raw)
+                    tts_raw = self._replace_code_tokens_streaming(tts_raw)
                     speech_text = (
-                        sanitize_voice_text(tts_raw)
+                        sanitize_tts_text(tts_raw)
                         if self.manager._sanitize_tts_enabled()
                         else tts_raw.strip()
                     )
@@ -665,7 +677,7 @@ class VoiceManager:
             self.agent_name,
             self.agent_spoken_name,
         )
-        speak_text = sanitize_voice_text(tts_raw) if self._sanitize_tts_enabled() else tts_raw.strip()
+        speak_text = sanitize_tts_text(tts_raw) if self._sanitize_tts_enabled() else tts_raw.strip()
         
         try:
             if not speak_text:

@@ -40,11 +40,12 @@ Este plano detalha a execucao do roadmap considerando a arquitetura atual do ker
   - `inspect` com opcao de expor `last_vision_observation` para supervisao manual.
   - `sync_registry` incluindo `last_vision_observation` para consulta rapida de estado.
   - Acao administrativa `browser.control.gc` para GC sob demanda do registry (alem do modo automatico por flag).
+  - Acao administrativa `browser.control.health` com diagnostico consolidado (inspect + sync + opcional gc).
   - Singleton de midia com fechamento remoto best-effort por `debug_port` das instancias substituidas.
   - Telemetria de `media_singleton_cleanup` emitida via `send_status` para supervisao em tempo real.
   - Retorno estruturado da skill com `metadata` (run/step, inclusive falhas de lock; incluindo cleanup de midia e GC) para analise offline.
   - `metadata.continuation` no `step` com resumo direto de `reattach_to_tab` e `target_recovery`.
-  - Playbook operacional de troubleshooting em `docs/browser_control_playbook.md`.
+  - Playbook operacional de troubleshooting em `docs/browser_control_playbook.md` com fluxo `health first`.
 - Parcial:
   - Singleton de midia fecha no registry, mas ainda sem garantia de encerramento de processo externo em todos os casos.
   - Roteamento ainda pode evoluir para regras mais finas por tipo de dominio/fluxo, mas `reuse_tab/new_tab` base ja esta ativo.

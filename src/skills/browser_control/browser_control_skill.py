@@ -17,6 +17,10 @@ class BrowserControlSkill(SkillBase):
         self._app_mode_enabled = self._cfg_bool("app_mode_enabled", True)
         self._registry_gc_enabled = self._cfg_bool("registry_gc_enabled", False)
         self._registry_gc_idle_seconds = int(self._config.get("registry_gc_idle_seconds", 1800)) if isinstance(self._config, dict) else 1800
+        self._humanize_input_enabled = self._cfg_bool("humanize_input_enabled", True)
+        self._visual_cursor_enabled = self._cfg_bool("visual_cursor_enabled", True)
+        self._tab_user_lock_enabled = self._cfg_bool("tab_user_lock_enabled", True)
+        self._tab_control_bar_enabled = self._cfg_bool("tab_control_bar_enabled", True)
         self._runtime: Optional[Any] = None
         self._subagent: Optional[Any] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -39,7 +43,7 @@ class BrowserControlSkill(SkillBase):
 
     @property
     def actions(self) -> List[str]:
-        return ["run", "step", "close", "inspect", "close_tab", "close_instance", "sync_registry", "gc"]
+        return ["run", "step", "close", "inspect", "close_tab", "close_instance", "sync_registry", "gc", "health"]
 
     def get_reflex_rules(self) -> List[Dict[str, Any]]:
         return [
@@ -69,15 +73,21 @@ class BrowserControlSkill(SkillBase):
         from .planner import BrowserSubagent
         current_loop = asyncio.get_running_loop()
         should_recreate = force_new_instance
+        loop_changed = False
 
         # Re-init if loop changed or launch options differ
         if self._runtime and self._loop != current_loop:
             logger.info("Event loop changed, re-initializing runtime")
             should_recreate = True
+            loop_changed = True
 
         if should_recreate and self._runtime:
             try:
-                await self._runtime.close()
+                if loop_changed and hasattr(self._runtime, "force_close"):
+                    # Cross-loop teardown must be synchronous to avoid "Future attached to a different loop".
+                    self._runtime.force_close()
+                else:
+                    await self._runtime.close()
             finally:
                 self._runtime = None
                 self._subagent = None
@@ -93,6 +103,10 @@ class BrowserControlSkill(SkillBase):
                 muted=muted,
                 app_mode=use_app_mode,
                 launch_url=launch_url,
+                humanize_input_enabled=self._humanize_input_enabled,
+                visual_cursor_enabled=self._visual_cursor_enabled,
+                tab_user_lock_enabled=self._tab_user_lock_enabled,
+                tab_control_bar_enabled=self._tab_control_bar_enabled,
             )
             await self._runtime.launch()
             self._subagent = BrowserSubagent(self._runtime, self.kernel.llm_manager)
@@ -232,7 +246,10 @@ class BrowserControlSkill(SkillBase):
             # Optional launch params — agent can pass these or they default to sane values
             headless = bool(params.get("headless", self._config.get("headless", False)))
             muted = bool(params.get("muted", False))
-            intent_class = self._resolve_intent_class(params.get("intent_class"))
+            try:
+                intent_class = self._resolve_intent_class(params.get("intent_class"))
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
             logger.info(f"Resolved goal for 'run': '{goal}' (from params keys: {list(params.keys())})")
             return self._run_sync(self.run_goal(goal, headless=headless, muted=muted, intent_class=intent_class, context=context))
         elif action == "step":
@@ -261,22 +278,27 @@ class BrowserControlSkill(SkillBase):
             return self._run_sync(self.sync_registry(context=context))
         elif action == "gc":
             return self._run_sync(self.gc(params=params, context=context))
+        elif action == "health":
+            return self._run_sync(self.health(params=params, context=context))
         
         return {"error": f"Unknown action: {action_id}"}
 
     @staticmethod
     def _resolve_intent_class(raw: Any) -> str:
-        allowed = {
+        allowed = [
             "controlar_midia",
             "realizar_pesquisa",
             "automacao_ui",
             "validacao_visual",
             "manutencao",
-        }
+        ]
         value = str(raw or "").strip().lower()
         if value in allowed:
             return value
-        return "realizar_pesquisa"
+        joined = ", ".join(allowed)
+        if not value:
+            raise ValueError(f"intent_class is required for browser.control.run. Allowed values: {joined}")
+        raise ValueError(f"Invalid intent_class '{value}'. Allowed values: {joined}")
 
     @staticmethod
     def _build_execution_context(
@@ -723,11 +745,15 @@ class BrowserControlSkill(SkillBase):
         goal: str,
         headless: bool = False,
         muted: bool = False,
-        intent_class: str = "realizar_pesquisa",
+        intent_class: str = "",
         context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         logger.info(f"Skill executing run_goal with intent: '{goal}'")
         ctx = context or {}
+        try:
+            intent_class = self._resolve_intent_class(intent_class)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
         callbacks = ctx.get("callbacks") if isinstance(ctx.get("callbacks"), dict) else {}
         gc_info = self._maybe_run_registry_gc(ctx)
         reused_instance = self._runtime is not None
@@ -862,14 +888,29 @@ class BrowserControlSkill(SkillBase):
                 )
                 return {"ok": False, "error": reason, "execution_context": exec_ctx}
             # subagent.run_to_goal returns a ToonResponse Pydantic model
-            response = await self._subagent.run_to_goal(goal, playback_service=playback_service, run_id=run_id, session_id=session_id)
+            response = await self._subagent.run_to_goal(
+                goal,
+                playback_service=playback_service,
+                run_id=run_id,
+                session_id=session_id,
+                callbacks=callbacks,
+            )
 
             # Prepare structured result with playback metadata if available
-            result_data = {"ok": True}
+            response_payload: Dict[str, Any]
             if hasattr(response, "model_dump"):
-                result_data["result"] = response.model_dump(mode='json')
+                response_payload = response.model_dump(mode='json')
             else:
-                result_data["result"] = str(response)
+                response_payload = {"status": "unknown", "raw": str(response)}
+            response_status = str(response_payload.get("status") or "").strip().lower()
+            is_error_response = response_status in {"error", "failed", "failure"}
+            if is_error_response:
+                run_status = "failed"
+            result_data = {
+                "ok": not is_error_response,
+                "status": "error" if is_error_response else "success",
+                "result": response_payload,
+            }
             final_tab_id = await self._sync_registry_tab()
             if final_tab_id:
                 exec_ctx["tab_id"] = final_tab_id
@@ -887,7 +928,7 @@ class BrowserControlSkill(SkillBase):
                 result_data["playback"] = {
                     "run_id": run_id,
                     "session_id": session_id,
-                    "status": "completed"
+                    "status": run_status,
                 }
             self._touch_work_context(
                 ctx,
@@ -899,6 +940,8 @@ class BrowserControlSkill(SkillBase):
                     }
                 },
             )
+            if is_error_response:
+                result_data["error"] = str(response_payload.get("error_details") or response_payload.get("error") or "planner_error")
             return result_data
         except Exception as e:
             logger.error(f"Error in run_goal: {e}")
@@ -964,7 +1007,15 @@ class BrowserControlSkill(SkillBase):
             reattach_ok = False
             recovery = {"ok": False, "strategy": "exception"}
 
-        intent_class = self._runtime_intent_class or self._resolve_intent_class(None)
+        intent_class = str(self._runtime_intent_class or "").strip().lower()
+        if not intent_class:
+            return {
+                "ok": False,
+                "error": (
+                    "Missing runtime intent_class for browser continuation. "
+                    "Run browser.control.run again with explicit intent_class."
+                ),
+            }
         browser_instance_id = await self._ensure_registry_instance(ctx, intent_class)
         tab_id = await self._sync_registry_tab()
         step_policy_decision: Dict[str, Any] = {
@@ -1032,6 +1083,7 @@ class BrowserControlSkill(SkillBase):
                 playback_service=ctx.get("playback_service"),
                 run_id=f"browser_step_{int(asyncio.get_running_loop().time() * 1000)}",
                 session_id=ctx.get("session_id", "default"),
+                callbacks=callbacks,
             )
             result_data: Dict[str, Any] = {"ok": True}
             if hasattr(response, "model_dump"):
@@ -1275,4 +1327,51 @@ class BrowserControlSkill(SkillBase):
             "ok": bool(run_gc.get("ok", False)),
             "gc": run_gc,
             "registry_snapshot": self._build_registry_snapshot(ctx),
+        }
+
+    async def health(self, params: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        p = params or {}
+        ctx = context or {}
+        run_gc = bool(p.get("run_gc", False))
+        include_tabs = bool(p.get("include_tabs", True))
+        include_last_vision = bool(p.get("include_last_vision", True))
+        only_current_session = bool(p.get("only_current_session", True))
+
+        inspect_result = await self.inspect(
+            params={
+                "only_current_session": only_current_session,
+                "include_tabs": include_tabs,
+                "include_last_vision": include_last_vision,
+            },
+            context=ctx,
+        )
+        sync_result = await self.sync_registry(context=ctx)
+        gc_result: Dict[str, Any] = {"enabled": False, "ok": False}
+        if run_gc:
+            gc_result = (await self.gc(params=p.get("gc_params") if isinstance(p.get("gc_params"), dict) else {}, context=ctx)).get("gc", {})
+
+        snapshot = self._build_registry_snapshot(ctx)
+        issues: List[str] = []
+        current_exec = inspect_result.get("current_execution") if isinstance(inspect_result, dict) else {}
+        if not isinstance(current_exec, dict):
+            current_exec = {}
+        if not str(current_exec.get("browser_instance_id", "")).strip():
+            issues.append("no_active_browser_instance_bound")
+        if not str(sync_result.get("cdp_target_id", "")).strip():
+            issues.append("no_active_cdp_target")
+        if run_gc and not bool(gc_result.get("ok", False)):
+            issues.append("gc_execution_failed")
+        if isinstance(snapshot, dict) and int(snapshot.get("count_instances", 0) or 0) == 0:
+            issues.append("no_registry_instances_for_scope")
+
+        return {
+            "ok": True,
+            "health": {
+                "status": "ok" if not issues else "degraded",
+                "issues": issues,
+            },
+            "inspect": inspect_result,
+            "sync": sync_result,
+            "gc": gc_result,
+            "registry_snapshot": snapshot,
         }

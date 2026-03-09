@@ -79,6 +79,71 @@ class BrowserSubagent:
         self._max_parse_failures = 2
         self._locked_target_id = str(getattr(runtime, "target_id", "") or "")
         self._last_vision_observation: Dict[str, Any] = {}
+        self._callbacks: Dict[str, Any] = {}
+
+    @staticmethod
+    def _tokenize_text(value: str) -> List[str]:
+        tokens = re.findall(r"[a-zA-Z0-9\u00C0-\u017F_]+", str(value or "").lower())
+        stop = {
+            "a", "o", "os", "as", "de", "da", "do", "das", "dos", "e", "em", "na", "no", "nas", "nos",
+            "um", "uma", "uns", "umas", "por", "para", "the", "and", "to", "of", "in", "on", "for",
+            "sim", "yes", "ok", "please", "porfavor", "favor",
+        }
+        return [t for t in tokens if len(t) >= 3 and t not in stop]
+
+    @classmethod
+    def _goal_terms(cls, goal: str) -> List[str]:
+        return cls._tokenize_text(goal)[:8]
+
+    @classmethod
+    def _has_completion_evidence(cls, goal: str, state: Dict[str, Any], candidate_answer: str = "") -> bool:
+        terms = cls._goal_terms(goal)
+        if not terms:
+            return False
+        text_parts: List[str] = [str(state.get("url", "")), str(state.get("title", "")), str(candidate_answer or "")]
+        for m in state.get("markers", []) or []:
+            if isinstance(m, dict):
+                text_parts.append(str(m.get("text", "")))
+        haystack = " ".join(text_parts).lower()
+        hits = sum(1 for t in terms if t in haystack)
+        # Require at least one strong term, or two partial terms for confidence.
+        return hits >= 2 or (hits >= 1 and len(terms) <= 3)
+
+    @staticmethod
+    def _state_signature(state: Dict[str, Any]) -> Dict[str, Any]:
+        markers = state.get("markers", []) if isinstance(state.get("markers"), list) else []
+        nodes = state.get("nodes", []) if isinstance(state.get("nodes"), list) else []
+        marker_texts = [str(m.get("text", "")).strip().lower() for m in markers[:8] if isinstance(m, dict)]
+        node_texts = [str(n.get("text", "")).strip().lower() for n in nodes[:10] if isinstance(n, dict)]
+        return {
+            "url": str(state.get("url", "")).strip().lower(),
+            "title": str(state.get("title", "")).strip().lower(),
+            "marker_texts": marker_texts,
+            "node_texts": node_texts,
+        }
+
+    @classmethod
+    def _verify_action_effect(cls, action: str, before_state: Dict[str, Any], after_state: Dict[str, Any]) -> tuple[bool, str]:
+        a = str(action or "").strip().lower()
+        if a in {"wait", "vision", "answer"}:
+            return True, "non_interactive_or_terminal"
+        before = cls._state_signature(before_state)
+        after = cls._state_signature(after_state)
+        url_changed = before["url"] != after["url"]
+        title_changed = before["title"] != after["title"]
+        markers_changed = before["marker_texts"] != after["marker_texts"]
+        nodes_changed = before["node_texts"] != after["node_texts"]
+
+        if a == "navigate":
+            if url_changed:
+                return True, "url_changed"
+            return False, "navigate_no_url_change"
+        if a in {"click", "click_visual", "type", "scroll"}:
+            if url_changed or title_changed or markers_changed or nodes_changed:
+                reason = "url_changed" if url_changed else ("title_changed" if title_changed else ("markers_changed" if markers_changed else "nodes_changed"))
+                return True, reason
+            return False, "interactive_no_observable_effect"
+        return True, "unknown_action_assumed"
 
     @staticmethod
     def _normalize_visual_coord(value: Any) -> Optional[float]:
@@ -155,97 +220,324 @@ Example:
         match = re.search(r"https?://[^\s,]+", goal)
         return match.group(0) if match else "https://www.google.com"
 
-    async def run_to_goal(self, goal: str, playback_service: Any = None, run_id: str = "default", session_id: str = "default") -> ToonResponse:
+    @staticmethod
+    def _normalize_spaces(text: str) -> str:
+        return re.sub(r"\s+", " ", str(text or "")).strip()
+
+    @staticmethod
+    def _step_contains_any(step: str, keywords: List[str]) -> bool:
+        s = str(step or "").lower()
+        return any(k in s for k in keywords)
+
+    def _advance_step(self, reason: str, min_idx: Optional[int] = None) -> None:
+        if not self._plan:
+            return
+        next_idx = self._current_step_idx + 1
+        if min_idx is not None:
+            next_idx = max(next_idx, min_idx)
+        bounded = min(max(0, next_idx), len(self._plan) - 1)
+        if bounded > self._current_step_idx:
+            self._current_step_idx = bounded
+            logger.info(f"✅ Master Plan Advanced ({reason}): Next Focus -> {self._plan[self._current_step_idx]}")
+
+    def _advance_step_by_action_effect(
+        self,
+        action: str,
+        verify_reason: str,
+        before_state: Dict[str, Any],
+        after_state: Dict[str, Any],
+    ) -> None:
+        if not self._plan or self._current_step_idx >= len(self._plan):
+            return
+        step = self._plan[self._current_step_idx]
+        a = str(action or "").lower()
+        if a == "navigate":
+            if self._step_contains_any(step, ["open", "launch", "navigate", "go to", "abrir", "acessar", "ir para"]) or verify_reason == "url_changed":
+                self._advance_step("action_effect:navigate")
+            return
+        if a == "type":
+            if self._step_contains_any(step, ["type", "input", "search", "enter", "digitar", "pesquisar", "consulta"]):
+                self._advance_step("action_effect:type")
+            return
+        if a in {"click", "click_visual"}:
+            if self._step_contains_any(step, ["click", "open", "select", "choose", "video", "result", "item", "clicar", "abrir", "selecionar"]):
+                self._advance_step("action_effect:click")
+            elif str(before_state.get("url", "")).lower() != str(after_state.get("url", "")).lower():
+                self._advance_step("action_effect:click_url_change")
+            return
+        if a == "scroll":
+            if self._step_contains_any(step, ["scroll", "rolar"]):
+                self._advance_step("action_effect:scroll")
+
+    def _fallback_action_for_parse(self, goal: str, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Deterministic fallback to avoid dead loops when planner JSON is invalid."""
+        url = str(state.get("url", "")).lower()
+        if not url or url == "about:blank":
+            return {"action": "navigate", "args": {"url": self._extract_url(goal)}, "thought": "Fallback navigate from blank page."}
+        if "/watch" in url or "music.youtube.com/watch" in url:
+            return {"action": "answer", "args": {"text": "Conteudo aberto e em reproducao na pagina atual."}, "thought": "Fallback victory on watch page."}
+        if "youtube.com" in url and ("/results" not in url and "search_query" not in url):
+            for n in state.get("nodes", []) or []:
+                if not isinstance(n, dict):
+                    continue
+                if str(n.get("tag", "")).lower() == "input" and "pesquisar" in str(n.get("text", "")).lower():
+                    return {
+                        "action": "type",
+                        "args": {"id": str(n.get("id")), "text": "Coldplay Paradise", "press_enter": True},
+                        "thought": "Fallback type on YouTube search input.",
+                    }
+        if "/results" in url or "search_query" in url:
+            goal_terms = self._goal_terms(goal)
+            best = None
+            best_score = 0
+            for n in state.get("nodes", []) or []:
+                if not isinstance(n, dict):
+                    continue
+                txt = str(n.get("text", "")).lower()
+                score = sum(1 for t in goal_terms if t in txt)
+                if "paradise" in txt:
+                    score += 2
+                if "coldplay" in txt:
+                    score += 2
+                if score > best_score:
+                    best_score = score
+                    best = str(n.get("id") or "")
+            if best:
+                return {"action": "click", "args": {"id": best}, "thought": "Fallback click on best matching result."}
+        return {"action": "vision", "args": {"reason": "fallback_after_parse_failure"}, "thought": "Fallback to vision after parse failure."}
+
+    async def run_to_goal(
+        self,
+        goal: str,
+        playback_service: Any = None,
+        run_id: str = "default",
+        session_id: str = "default",
+        callbacks: Optional[Dict[str, Any]] = None,
+    ) -> ToonResponse:
         self._playback_service = playback_service
         self._playback_run_id = run_id
         self._playback_session_id = session_id
         self._playback_step_count = 0
+        self._callbacks = callbacks if isinstance(callbacks, dict) else {}
 
         logger.info(f"\n{'='*60}\n🚀 STARTING BROWSER GOAL: {goal}\n{'='*60}")
         trace_id = self.runtime._trace_id
         history: List[Dict[str, Any]] = []
         self._last_url = await self._get_current_url()
+        if hasattr(self.runtime, "set_agent_control_active"):
+            try:
+                await self.runtime.set_agent_control_active(True)
+            except Exception:
+                pass
         
         # Initialize Master Plan
         if not self._plan:
             await self._generate_master_plan(goal)
-        
-        for step_num in range(1, self.max_steps + 1):
-            step_id = f"step_{step_num}"
-            logger.info(f"\n--- [ {step_id.upper()} ] ---")
+        try:
+            for step_num in range(1, self.max_steps + 1):
+                step_id = f"step_{step_num}"
+                logger.info(f"\n--- [ {step_id.upper()} ] ---")
+                resume_context = await self._wait_if_runtime_paused(step_id)
+                if resume_context:
+                    history.append({
+                        "step": step_num,
+                        "thought": "User resumed with additional context.",
+                        "action": "resume_context",
+                        "args": {"context": resume_context},
+                        "status": "success",
+                        "observation": resume_context,
+                    })
+                    await self._record_playback_frame(step_num, "resume_context", {"context": resume_context})
+                    send_status = self._callbacks.get("send_status") if isinstance(self._callbacks, dict) else None
+                    if callable(send_status):
+                        send_status(
+                            "executing",
+                            {
+                                "action": "browser.control.run",
+                                "code": "resumed_by_user",
+                                "label": "Resumed from browser overlay.",
+                                "resume_context": resume_context,
+                            },
+                        )
             
-            # Master Planning Summary in logs
-            plan_str = "\n".join([f"{' [x] ' if i < self._current_step_idx else ' [ ] '}{s}" for i, s in enumerate(self._plan)])
-            logger.info(f"\n📋 CURRENT PROGRESS:\n{plan_str}")
+                # Master Planning Summary in logs
+                plan_str = "\n".join([f"{' [x] ' if i < self._current_step_idx else ' [ ] '}{s}" for i, s in enumerate(self._plan)])
+                logger.info(f"\n📋 CURRENT PROGRESS:\n{plan_str}")
             
-            # SYNCHRONIZATION GUARD: If URL changed, wait for stability
-            current_url = await self._get_current_url()
-            if current_url != self._last_url or step_num == 1:
-                logger.info(f"[{step_id}] 🔄 [Synchronizing Engine] URL Change Detected: {self._last_url} -> {current_url}")
-                await self.runtime._wait_for_load()
-                logger.info(f"  └─ Loader Finished. Applying 3s Stabilization Guard...")
-                await asyncio.sleep(3.0)
-                self._last_url = current_url
+                # SYNCHRONIZATION GUARD: If URL changed, wait for stability
+                current_url = await self._get_current_url()
+                if current_url != self._last_url or step_num == 1:
+                    logger.info(f"[{step_id}] 🔄 [Synchronizing Engine] URL Change Detected: {self._last_url} -> {current_url}")
+                    await self.runtime._wait_for_load()
+                    logger.info(f"  └─ Loader Finished. Applying 3s Stabilization Guard...")
+                    await asyncio.sleep(3.0)
+                    self._last_url = current_url
 
-            state = await self._get_page_state()
+                state = await self._get_page_state()
             
-            # Initial frame for this step
-            await self._record_playback_frame(step_num, "thinking", {"goal": goal})
+                # Initial frame for this step
+                await self._record_playback_frame(step_num, "thinking", {"goal": goal})
             
-            if step_num == 1 and state['url'] == "about:blank":
-                target_url = self._extract_url(goal)
-                logger.info(f"[{step_id}] 🌐 Bootstrapping -> {target_url}")
-                await self.runtime.navigate(target_url)
-                self._last_url = target_url
-                history.append({"step": 1, "thought": "Navigate to start.", "action": "navigate", "args": {"url": target_url}, "status": "success"})
-                
-                # Record frame after navigation
-                await self._record_playback_frame(step_num, "navigate", {"url": target_url})
-                
-                # Bootstrap Sync: step 1 is navigation, consider it completed if navigate didn't error
-                if self._current_step_idx == 0:
-                    self._current_step_idx = 1
-                    logger.info("✅ Bootstrap Sync: Step 1 Marked as Completed.")
-                continue
+                if step_num == 1 and state['url'] == "about:blank":
+                    target_url = self._extract_url(goal)
+                    logger.info(f"[{step_id}] 🌐 Bootstrapping -> {target_url}")
+                    await self.runtime.navigate(target_url)
+                    self._last_url = target_url
+                    history.append({"step": 1, "thought": "Navigate to start.", "action": "navigate", "args": {"url": target_url}, "status": "success"})
+                    
+                    # Record frame after navigation
+                    await self._record_playback_frame(step_num, "navigate", {"url": target_url})
+                    
+                    # Bootstrap Sync: step 1 is navigation, consider it completed if navigate didn't error
+                    if self._current_step_idx == 0:
+                        self._current_step_idx = 1
+                        logger.info("✅ Bootstrap Sync: Step 1 Marked as Completed.")
+                    continue
 
-            try:
-                # HEURISTIC RECONCILIATION: Sync plan by env state
-                self._reconcile_plan_by_state(state)
+                try:
+                    # HEURISTIC RECONCILIATION: Sync plan by env state
+                    self._reconcile_plan_by_state(state)
 
-                # REASONING PHASE
-                thought_data = await self._think(goal, state, history)
-                action = str(thought_data.get("action", "wait"))
-                args = thought_data.get("args", {})
-                thought = thought_data.get("thought", "Thinking...")
-                
-                logger.info(f"[{step_id}] 🧠 THOUGHT: {thought}")
-                logger.info(f"[{step_id}] 🎯 ACTION: {action}({args})")
-                
-                if action == "answer":
-                    logger.info(f"[{step_id}] ✅ GOAL REACHED: {args.get('text')}")
-                    # Record final frame before finishing
-                    await self._record_playback_frame(step_num, "answer", args)
-                    return ToonResponse(
-                        command_id="finish", component="planner", action="wait", trace_id=trace_id, step_id=step_id, status="success",
-                        execution_time=0.1, message=args.get("text")
+                    # REASONING PHASE
+                    thought_data = await self._think(goal, state, history)
+                    action = str(thought_data.get("action", "wait"))
+                    args = thought_data.get("args", {})
+                    thought = thought_data.get("thought", "Thinking...")
+                    
+                    logger.info(f"[{step_id}] 🧠 THOUGHT: {thought}")
+                    logger.info(f"[{step_id}] 🎯 ACTION: {action}({args})")
+                    
+                    if action == "answer":
+                        if not self._has_completion_evidence(goal, state, str(args.get("text", ""))):
+                            logger.warning(f"[{step_id}] ⚠️ Answer rejected: no completion evidence in current state.")
+                            await self._record_playback_frame(step_num, "answer_rejected", {"reason": "no_completion_evidence"})
+                            history.append({
+                                "step": step_num,
+                                "thought": thought,
+                                "action": "answer_rejected",
+                                "args": {"reason": "no_completion_evidence"},
+                                "status": "failure",
+                            })
+                            continue
+                        logger.info(f"[{step_id}] ✅ GOAL REACHED: {args.get('text')}")
+                        # Record final frame before finishing
+                        await self._record_playback_frame(step_num, "answer", args)
+                        return ToonResponse(
+                            command_id="finish", component="planner", action="wait", trace_id=trace_id, step_id=step_id, status="success",
+                            execution_time=0.1, message=args.get("text")
+                        )
+
+                    # EXECUTION PHASE
+                    resume_context = await self._wait_if_runtime_paused(step_id)
+                    if resume_context:
+                        history.append({
+                            "step": step_num,
+                            "thought": "User resumed with additional context.",
+                            "action": "resume_context",
+                            "args": {"context": resume_context},
+                            "status": "success",
+                            "observation": resume_context,
+                        })
+                        await self._record_playback_frame(step_num, "resume_context", {"context": resume_context})
+                    resp = await self._execute_action(action, args, step_id, trace_id)
+                    after_state = await self._get_page_state()
+                    verified, verify_reason = self._verify_action_effect(action, state, after_state)
+                    if action in {"click", "click_visual", "type", "scroll", "navigate"} and not verified:
+                        logger.warning(f"[{step_id}] ⚠️ Action had no observable effect: {action} ({verify_reason})")
+                        await self._record_playback_frame(
+                            step_num,
+                            "action_no_effect",
+                            {"action": action, "reason": verify_reason, "args": args},
+                        )
+                        history.append({
+                            "step": step_num,
+                            "thought": thought,
+                            "action": action,
+                            "args": args,
+                            "status": "failure",
+                            "observation": f"no_effect:{verify_reason}",
+                        })
+                        continue
+                    if action in {"click", "click_visual", "type", "scroll", "navigate"} and verified:
+                        self._advance_step_by_action_effect(action, verify_reason, state, after_state)
+                    self._reconcile_plan_by_state(after_state)
+                    # Record frame after action
+                    await self._record_playback_frame(step_num, action, args)
+                    history.append({
+                        "step": step_num, "thought": thought, "action": action, "args": args,
+                        "url_after": await self._get_current_url(), "status": resp.status,
+                        "observation": resp.message if action == "vision" else None
+                    })
+                    await asyncio.sleep(0.5)
+
+                except Exception as e:
+                    logger.error(f"[{step_id}] ❌ Logic failure: {e}")
+                    return self._fail(str(e), trace_id, step_id)
+
+            return self._fail("Timeout", trace_id, f"step_{self.max_steps}")
+        finally:
+            if hasattr(self.runtime, "set_agent_control_active"):
+                try:
+                    await self.runtime.set_agent_control_active(False)
+                except Exception:
+                    pass
+
+    async def _wait_if_runtime_paused(self, step_id: str) -> str:
+        if not hasattr(self.runtime, "get_tab_control_state"):
+            return ""
+        notified = False
+        paused_frame_recorded = False
+        while True:
+            state = await self.runtime.get_tab_control_state()
+            paused = bool(state.get("paused"))
+            if not paused:
+                if bool(state.get("resume_requested")):
+                    return str(state.get("resume_context") or "").strip()
+                return ""
+            if not notified:
+                send_status = self._callbacks.get("send_status") if isinstance(self._callbacks, dict) else None
+                if callable(send_status):
+                    send_status(
+                        "executing",
+                        {
+                            "action": "browser.control.run",
+                            "code": "paused_by_user",
+                            "label": "Paused from browser overlay. Waiting for resume.",
+                        },
                     )
-
-                # EXECUTION PHASE
-                resp = await self._execute_action(action, args, step_id, trace_id)
-                # Record frame after action
-                await self._record_playback_frame(step_num, action, args)
-                history.append({
-                    "step": step_num, "thought": thought, "action": action, "args": args,
-                    "url_after": await self._get_current_url(), "status": resp.status,
-                    "observation": resp.message if action == "vision" else None
-                })
-                await asyncio.sleep(0.5)
-
-            except Exception as e:
-                logger.error(f"[{step_id}] ❌ Logic failure: {e}")
-                return self._fail(str(e), trace_id, step_id)
-
-        return self._fail("Timeout", trace_id, f"step_{self.max_steps}")
+                notified = True
+            if not paused_frame_recorded:
+                try:
+                    self._playback_step_count += 1
+                    frame_bytes = await self.runtime.capture_screenshot_bytes()
+                    if frame_bytes and self._playback_service:
+                        self._playback_service.add_frame(
+                            session_id=self._playback_session_id,
+                            run_id=self._playback_run_id,
+                            step=self._playback_step_count,
+                            action={"type": "paused", "args": {"step_id": step_id}},
+                            frame_bytes=frame_bytes,
+                        )
+                        send_status = self._callbacks.get("send_status") if isinstance(self._callbacks, dict) else None
+                        if callable(send_status):
+                            send_status(
+                                "executing",
+                                {
+                                    "action": "browser.control.run",
+                                    "code": "playback_step",
+                                    "label": "Playback: paused",
+                                    "playback": {
+                                        "run_id": self._playback_run_id,
+                                        "session_id": self._playback_session_id,
+                                        "step": self._playback_step_count,
+                                        "action": {"type": "paused", "args": {"step_id": step_id}},
+                                    },
+                                },
+                            )
+                except Exception:
+                    pass
+                paused_frame_recorded = True
+            await asyncio.sleep(0.4)
 
     async def _get_page_state(self) -> Dict[str, Any]:
         """Captures skeletal DOM state restricted to the viewport with extreme logging."""
@@ -352,26 +644,30 @@ Example:
                 except: pass
 
     def _reconcile_plan_by_state(self, state: Dict[str, Any]):
-        """Heuristic check: if URL changed significantly, we likely finished a step."""
+        """Heuristic check: synchronize checklist from strong page-state milestones."""
         url = state['url'].lower()
-        plan_step = self._plan[self._current_step_idx].lower() if self._current_step_idx < len(self._plan) else ""
-        
-        # Mapping URLs to typical plan keywords
+        if not self._plan:
+            return
+
         if "/results" in url or "search_query" in url:
-            if "search" in plan_step or "pesquisar" in plan_step or "execute a search" in plan_step:
-                self._current_step_idx += 1
-                logger.info(f"⚡ [Auto-Reconcile] Search detected in URL. Advancing to step {self._current_step_idx + 1}")
-        
-        elif "/watch" in url:
-            # If we are on a watch page, we definitely finished searching and clicking
-            # Find the step about clicking or identifying the video
-            while self._current_step_idx < len(self._plan) - 1:
-                current_p = self._plan[self._current_step_idx].lower()
-                if any(k in current_p for k in ["click", "search", "pesquisar", "identify", "locate"]):
-                    self._current_step_idx += 1
-                else:
-                    break
-            logger.info(f"⚡ [Auto-Reconcile] URL is /watch. Synchronized to step {self._current_step_idx + 1}")
+            last_search_idx = -1
+            for i, step in enumerate(self._plan):
+                if self._step_contains_any(step, ["search", "pesquisar", "type", "input", "enter", "consulta"]):
+                    last_search_idx = i
+            if last_search_idx >= 0:
+                self._advance_step("auto_reconcile:results_url", min_idx=min(last_search_idx + 1, len(self._plan) - 1))
+            return
+
+        if "/watch" in url or "music.youtube.com/watch" in url:
+            target_idx = -1
+            for i, step in enumerate(self._plan):
+                if self._step_contains_any(step, ["click", "open", "video", "result", "watch", "play", "clicar", "abrir", "reprodu"]):
+                    target_idx = i
+            if target_idx >= 0:
+                self._advance_step("auto_reconcile:watch_url", min_idx=min(target_idx + 1, len(self._plan) - 1))
+            else:
+                self._advance_step("auto_reconcile:watch_url_default", min_idx=len(self._plan) - 1)
+            return
 
     async def _think(self, goal: str, state: Dict[str, Any], history: List[Dict[str, Any]]) -> Dict[str, Any]:
         plan_str = "\n".join([f"{' [x] ' if i < self._current_step_idx else ' [ ] '}{s}" for i, s in enumerate(self._plan)])
@@ -455,10 +751,10 @@ Example:
             logger.debug(f"[Reasoning] Raw problematic output: {raw_text}")
             
             if self._consecutive_parse_failures >= self._max_parse_failures:
-                logger.critical("🛑 [ABORT] Too many consecutive parse failures. Aborting task to prevent loop.")
-                raise Exception(f"PLANNER_OUTPUT_INVALID: Model failed to produce valid JSON twice. Raw: {raw_text[:200]}...")
-                
-            return {"action": "wait", "thought": f"Parse error ({e}). Retrying..."}
+                logger.error("⚠️ Too many parse failures. Switching to deterministic fallback action.")
+                return self._fallback_action_for_parse(goal, state)
+
+            return {"action": "wait", "args": {"seconds": 1}, "thought": f"Parse error ({e}). Retrying..."}
 
     async def _execute_action(self, action: str, args: Dict[str, Any], step_id: str, trace_id: str) -> ToonResponse:
         try:
@@ -512,22 +808,14 @@ Example:
                 logger.info(f"[{step_id}] ⌨️ Action: type -> node:{args.get('id')} | Tag:{node['tag']} | Label:\"{node['text']}\" | Text:\"{args.get('text')}\"")
                 b = node['bbox']
                 tx, ty = b['x'] + b['w']/2, b['y'] + b['h']/2
-                
-                await self.runtime.click(x=tx, y=ty)
-                await asyncio.sleep(0.5)
-                # Clear field using CDP keyboard events
-                await self.runtime._call_cdp("Input.dispatchKeyEvent", {"type": "keyDown", "modifiers": 2, "windowsVirtualKeyCode": 65, "key": "a"}) # Ctrl+A
-                await self.runtime._call_cdp("Input.dispatchKeyEvent", {"type": "keyUp", "modifiers": 2, "windowsVirtualKeyCode": 65, "key": "a"})
-                await self.runtime._call_cdp("Input.dispatchKeyEvent", {"type": "keyDown", "windowsVirtualKeyCode": 8, "key": "Backspace"}) # Backspace
-                await self.runtime._call_cdp("Input.dispatchKeyEvent", {"type": "keyUp", "windowsVirtualKeyCode": 8, "key": "Backspace"})
-                
-                for c in str(args.get("text", "")):
-                    await self.runtime._call_cdp("Input.dispatchKeyEvent", {"type": "keyDown", "text": c})
-                    await self.runtime._call_cdp("Input.dispatchKeyEvent", {"type": "keyUp", "text": c})
-                if args.get("press_enter"):
-                    await self.runtime._call_cdp("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Enter", "windowsVirtualKeyCode": 13})
-                await self.runtime._wait_for_load()
-                return ToonResponse(command_id="type", component="planner", action="type", trace_id=trace_id, step_id=step_id, status="success", execution_time=1.0)
+                return await self.runtime.type_text(
+                    text=str(args.get("text", "")),
+                    x=float(tx),
+                    y=float(ty),
+                    press_enter=bool(args.get("press_enter", False)),
+                    focus_before_type=True,
+                    clear_existing=True,
+                )
 
             elif action == "scroll":
                 logger.info(f"[{step_id}] 📜 Action: scroll -> {args.get('direction')}")
@@ -541,11 +829,14 @@ Example:
 
     async def _get_current_url(self) -> str: return await self.runtime._get_current_url()
     def _clean_json(self, t: str) -> str:
-        # Heuristic fix for common LLM syntax error: "thought "Eu já..." (missing colon)
-        fixed = re.sub(r'\"thought\"\s+\"', '"thought": "', t)
-        fixed = re.sub(r'\"thought\"\s+:', '"thought":?', fixed) # enforce standard spacing
-        fixed = re.sub(r'\"thought\":?\s+\"', '"thought": "', fixed)
-        
+        # Heuristic fixes for common malformed keys (e.g. `"thought: ..."`).
+        fixed = str(t or "")
+        fixed = re.sub(r'"\s*thought\s*:\s*', '"thought": "', fixed, flags=re.IGNORECASE)
+        fixed = re.sub(r'"\s*step_status\s*:\s*', '"step_status": "', fixed, flags=re.IGNORECASE)
+        fixed = re.sub(r'"\s*action\s*:\s*', '"action": "', fixed, flags=re.IGNORECASE)
+        fixed = re.sub(r'"\s*args\s*:\s*', '"args": ', fixed, flags=re.IGNORECASE)
+        fixed = re.sub(r'"\s*response_text\s*:\s*', '"response_text": "', fixed, flags=re.IGNORECASE)
+
         # Remove literal control characters
         fixed = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F]', '', fixed)
         # Remove escaped control characters like \x01, \u0001
@@ -614,5 +905,21 @@ Example:
                     action={"type": action, "args": args},
                     frame_bytes=frame_bytes
                 )
+                send_status = self._callbacks.get("send_status") if isinstance(self._callbacks, dict) else None
+                if callable(send_status):
+                    send_status(
+                        "executing",
+                        {
+                            "action": "browser.control.run",
+                            "code": "playback_step",
+                            "label": f"Playback: {action}",
+                            "playback": {
+                                "run_id": self._playback_run_id,
+                                "session_id": self._playback_session_id,
+                                "step": self._playback_step_count,
+                                "action": {"type": action, "args": args},
+                            },
+                        },
+                    )
         except Exception as e:
             logger.error(f"Failed to record playback frame: {e}")

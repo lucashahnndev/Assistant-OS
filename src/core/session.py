@@ -5,6 +5,8 @@ import datetime
 import time
 from typing import Optional, List, Dict, Callable, Any
 from utils.event_bus import global_event_bus
+from core.cognition import build_cognitive_frame, CognitiveFrame
+from core.intents import IntentAgenda
 
 class Session:
     def __init__(self, session_id: str, source: str = "web"):
@@ -48,6 +50,12 @@ class Session:
         self.rejected_memory: List[Dict[str, Any]] = [] # Audit store for memory governance
         self.audit_trail: List[Dict[str, Any]] = [] # Auditable ledger of admin changes
         self._max_trace_history = 50
+        
+        # Phase 15: Lightweight persistent snapshot of the last active frame
+        self.last_cognitive_frame_snapshot: Optional[Dict[str, Any]] = None
+        
+        # Phase 16: Intent Agenda for tracking open loops
+        self.intent_agenda = IntentAgenda()
 
     def add_message(self, role: str, content: str, file: Optional[Dict] = None, attachments: Optional[List[Dict]] = None, msg_type: str = "default", summary: str = None, work_id: str = None):
         # Rough token estimation (chars / 4)
@@ -156,7 +164,9 @@ class Session:
             "rejected_memory": self.rejected_memory,
             "audit_trail": self.audit_trail,
             "tool_health": self.tool_health,
-            "tool_failure_counts": self.tool_failure_counts
+            "tool_failure_counts": self.tool_failure_counts,
+            "last_cognitive_frame_snapshot": self.last_cognitive_frame_snapshot,
+            "intent_agenda": self.intent_agenda.to_dict()
         }
 
     @classmethod
@@ -209,6 +219,9 @@ class Session:
         session.audit_trail = data.get("audit_trail", [])
         session.tool_health = data.get("tool_health", {})
         session.tool_failure_counts = data.get("tool_failure_counts", {})
+        session.last_cognitive_frame_snapshot = data.get("last_cognitive_frame_snapshot")
+        if "intent_agenda" in data:
+            session.intent_agenda = IntentAgenda.from_dict(data["intent_agenda"])
         return session
 
     def publish_event(self, event: Dict[str, Any]):
@@ -360,37 +373,70 @@ class Session:
         self.event_history = self.event_history[limit:]
         return drained
 
-    def get_context_for_llm(self, limit_tokens: int = 6000, limit_msgs: int = 30) -> List[Dict[str, str]]:
-        """Returns the last N messages within the token limit."""
+    def get_cognitive_frame(self, user_input: str = "") -> CognitiveFrame:
+        """Dynamically generates the current Cognitive Frame from session truth."""
+        frame = build_cognitive_frame(self, user_input)
+        # Store lightweight snapshot for observability
+        self.last_cognitive_frame_snapshot = {
+            "objective": frame.objective,
+            "context_sources": frame.context_sources,
+            "timestamp": frame.timestamp
+        }
+        return frame
+
+    def get_context_for_llm(self, limit_tokens: int = 6000, limit_msgs: int = 30) -> List[Dict[str, Any]]:
+        """Returns the compressed conversation context within bounds."""
         context = []
         total_tokens = 0
         
         # Iterate backwards through history
+        # Phase 15: Aggressive Context Compression Strategy
+        recent_threshold = 5 # Strict raw limit for recent turns
+        turns_added = 0
+        
         for msg in reversed(self.history):
-            msg_tokens = msg.get("tokens", len(msg["content"]) // 4)
+            content_str = str(msg.get("content", ""))
+            tokens_val = msg.get("tokens")
+            if tokens_val is None:
+                msg_tokens = len(content_str) // 4
+            else:
+                msg_tokens = int(tokens_val)
+
             if total_tokens + msg_tokens > limit_tokens or len(context) >= limit_msgs:
                 break
             
-            # Create a clean message for the LLM
-            # Preference: summary > content
-            llm_content = msg.get("summary", msg["content"])
+            clean_role = str(msg.get("role", "user"))
+            is_recent = turns_added < recent_threshold
             
-            # Open-weight models often drop mid-conversation "system" messages.
-            # Convert system observations to "user" role to guarantee processing.
-            clean_role = msg["role"]
+            # Demotion Rule: System observations older than recent threshold are discarded 
+            # (they are already captured in task_registry state/summaries)
+            if not is_recent and clean_role == "system" and not (msg.get("file") or msg.get("attachments")):
+                continue
+
+            # Preferences: Use summary if older than recent threshold, else content
+            if is_recent:
+                llm_content = content_str
+            else:
+                summary_str = msg.get("summary")
+                llm_content = str(summary_str) if summary_str else content_str
+                # Add demotion label prefix
+                if llm_content and not llm_content.startswith("[COMPRESSED"):
+                    llm_content = f"[COMPRESSED TURN]: {llm_content}"
+            
             if clean_role == "system":
                 clean_role = "user"
                 llm_content = f"[SYSTEM/OBSERVATION]:\n{llm_content}"
                 
-            clean_msg = {"role": clean_role, "content": llm_content}
+            clean_msg: Dict[str, Any] = {"role": clean_role, "content": llm_content}
             
-            # Preserve attachments and file metadata for agent awareness
             if "attachments" in msg:
                 clean_msg["attachments"] = msg["attachments"]
             if "file" in msg:
                 clean_msg["file"] = msg["file"]
                 
             context.insert(0, clean_msg)
+            turns_added += 1
             total_tokens += msg_tokens
+            turns_added += 1
             
         return context

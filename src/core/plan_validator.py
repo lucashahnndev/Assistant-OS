@@ -133,15 +133,15 @@ class PlanValidator:
                 logger.error(f"Validation engine error: {e}")
 
         # 4. Dependency Validation (Basic step dependencies)
-        if plan.action_id.startswith("browser.") and plan.action_id != "browser.open":
-            # Check if browser is actually open in drivers_state
-            # This is a 'soft' dependency check
+        # Browser Control namespace manages its own runtime/session lifecycle and
+        # must not be blocked by legacy `browser.open` preconditions.
+        if plan.action_id.startswith("browser.") and not plan.action_id.startswith("browser.control."):
             drivers_state = getattr(session, "drivers_state", {})
             if "browser" not in drivers_state and "playwright" not in drivers_state:
                 return ValidationResult(
                     is_valid=False,
                     error_code=ErrorCode.SYSTEM_DRIVER_UNAVAILABLE,
-                    message=f"Action '{plan.action_id}' requires an active browser session. Use 'browser.open' first.",
+                    message=f"Action '{plan.action_id}' requires an active browser session.",
                     diagnostics={"missing_dependency": "browser_session"}
                 )
 

@@ -1018,6 +1018,10 @@ class Kernel:
             if session:
                 session.add_message("user", text, attachments=attachments)
                 self.orchestrator._save_session(session)
+                
+                # Trigger auto-naming for web sessions on first user messages
+                if session.source == "web" and not session.name_generated and len(session.history) <= 3:
+                    threading.Thread(target=self.orchestrator._auto_name_session, args=(session, text), daemon=True).start()
 
             if not plan:
                 caps = user_data.get("driver_capabilities", {}) if isinstance(user_data, dict) else {}

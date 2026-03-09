@@ -7,6 +7,7 @@ _INLINE_CODE_RE = re.compile(r"`[^`]*`")
 _UNCLOSED_INLINE_RE = re.compile(r"`[^`]*$")
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
+_URL_RE = re.compile(r"(?:(?:https?|ftp)://|www\.)[^\s<>()\"']+", re.IGNORECASE)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _LIST_MARKER_RE = re.compile(r"^\s*[-*+]\s+", re.MULTILINE)
 _ORDERED_LIST_RE = re.compile(r"^\s*\d+\.\s+", re.MULTILINE)
@@ -41,6 +42,41 @@ def sanitize_voice_text(text: str) -> str:
     value = _EMPHASIS_RE.sub("", value)
     value = value.replace("\\n", " ").replace("\\t", " ")
     value = value.replace("```", " ").replace("`", " ")
+    value = _WS_RE.sub(" ", value).strip()
+    return value
+
+
+def sanitize_tts_text(
+    text: str,
+    *,
+    code_block_label: str = "bloco de código",
+    inline_code_label: str = "código",
+    url_label: str = "link",
+) -> str:
+    """
+    Sanitizes model output for TTS and replaces technical/noisy fragments by
+    short speakable labels.
+    """
+    value = str(text or "")
+    if not value.strip():
+        return ""
+
+    value = _CODE_BLOCK_RE.sub(f" {code_block_label} ", value)
+    value = _UNCLOSED_CODE_BLOCK_RE.sub(f" {code_block_label} ", value)
+    value = _MD_IMAGE_RE.sub(" ", value)
+    value = _MD_LINK_RE.sub(r"\1", value)
+    value = _URL_RE.sub(f" {url_label} ", value)
+    value = _INLINE_CODE_RE.sub(f" {inline_code_label} ", value)
+    value = _UNCLOSED_INLINE_RE.sub(f" {inline_code_label} ", value)
+    value = _HTML_TAG_RE.sub(" ", value)
+    value = _HEADING_RE.sub("", value)
+    value = _LIST_MARKER_RE.sub("", value)
+    value = _ORDERED_LIST_RE.sub("", value)
+    value = _QUOTE_RE.sub("", value)
+    value = _TABLE_SEP_RE.sub(" ", value)
+    value = _EMPHASIS_RE.sub("", value)
+    value = value.replace("\\n", " ").replace("\\t", " ")
+    value = value.replace("```", f" {code_block_label} ").replace("`", f" {inline_code_label} ")
     value = _WS_RE.sub(" ", value).strip()
     return value
 

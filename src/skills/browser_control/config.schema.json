@@ -34,6 +34,22 @@
             "type": "integer",
             "default": 1800,
             "minimum": 60
+        },
+        "humanize_input_enabled": {
+            "type": "boolean",
+            "default": true
+        },
+        "visual_cursor_enabled": {
+            "type": "boolean",
+            "default": true
+        },
+        "tab_user_lock_enabled": {
+            "type": "boolean",
+            "default": true
+        },
+        "tab_control_bar_enabled": {
+            "type": "boolean",
+            "default": true
         }
     }
 }
