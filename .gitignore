@@ -167,3 +167,4 @@ tests/*
 # Explicit local runtime config
 data/config.json
 src/skills/browser_control/profiles/session_overlay/
+src/skills/browser_control/profiles/fixed_base/
