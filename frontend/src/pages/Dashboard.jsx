@@ -49,6 +49,7 @@ import {
 } from '../components/AssistCards';
 import { useAssistCards } from '../hooks/useAssistCards';
 import AtlasOrbCanvas from '../components/AtlasOrbCanvas';
+import SystemMetricsFloatingCard from '../components/SystemMetricsFloatingCard';
 import LinkPreviewCard from '../components/LinkPreviewCard';
 import PlaybackCard from '../components/PlaybackCard';
 // ============================================================================
@@ -1098,7 +1099,7 @@ const StageAssistCard = ({ type, payload, sessionId, isMobile = false }) => {
         text: assistText,
         isUser: false,
         isStreaming: false,
-        skillsUsed: Array.isArray(payload?.skills_used) ? payload.skills_used : [],
+        capabilitiesUsed: Array.isArray(payload?.capabilities_used) ? payload.capabilities_used : [],
         actionsUsed: Array.isArray(payload?.actions_used) ? payload.actions_used : [],
         sourcesUsed: Array.isArray(payload?.sources_used) ? payload.sources_used : [],
     });
@@ -2750,9 +2751,9 @@ const Dashboard = () => {
                         const content = String(msg.content || '').trim();
                         if (!content) return;
                         const workId = msg.work_id || msg?.context?.work_id || null;
-                        const skillHints = [
-                            ...(Array.isArray(msg?.skills_used) ? msg.skills_used : []),
-                            ...(Array.isArray(msg?.context?.data?.skills_used) ? msg.context.data.skills_used : []),
+                        const capabilityHints = [
+                            ...(Array.isArray(msg?.capabilities_used) ? msg.capabilities_used : []),
+                            ...(Array.isArray(msg?.context?.data?.capabilities_used) ? msg.context.data.capabilities_used : []),
                         ];
                         const actionHints = [
                             ...(Array.isArray(msg?.actions_used) ? msg.actions_used : []),
@@ -2769,10 +2770,10 @@ const Dashboard = () => {
                         if (looksLikeNoise) return;
 
                         const hasSignal = (items, re) => (Array.isArray(items) ? items : []).some((it) => re.test(String(it || '')));
-                        const weatherSignal = hasSignal(skillHints, /weather|weather_control|weather\.control/i) || hasSignal(actionHints, /weather|forecast/i);
-                        const systemSignal = hasSignal(skillHints, /system[\._-]?health|host[\._-]?health|system[\._-]?status/i) || hasSignal(actionHints, /system[\._-]?health|system[\._-]?status/i);
-                        const mapSignal = hasSignal(skillHints, /maps?|google[\._-]?maps|openstreetmap/i) || hasSignal(actionHints, /maps?|map/i);
-                        const wikiSignal = hasSignal(skillHints, /wiki|wikipedia/i) || hasSignal(actionHints, /wiki|wikipedia/i);
+                        const weatherSignal = hasSignal(capabilityHints, /weather|weather_control|weather\.control/i) || hasSignal(actionHints, /weather|forecast/i);
+                        const systemSignal = hasSignal(capabilityHints, /system[\._-]?health|host[\._-]?health|system[\._-]?status/i) || hasSignal(actionHints, /system[\._-]?health|system[\._-]?status/i);
+                        const mapSignal = hasSignal(capabilityHints, /maps?|google[\._-]?maps|openstreetmap/i) || hasSignal(actionHints, /maps?|map/i);
+                        const wikiSignal = hasSignal(capabilityHints, /wiki|wikipedia/i) || hasSignal(actionHints, /wiki|wikipedia/i);
                         const chartSignal = !!tryParseMarkdownTable(content);
                         const weatherReport = /(temperatura|sens[aã]ção|umidade|vento|weather|forecast|clima)/i.test(content) && /(°c|umidade|vento|humidity|wind)/i.test(content);
                         const systemReport = /(cpu|mem[oó]ria|memory|disk|disco|load|uptime|network|rede)/i.test(content) && /(%|gb|mb|tb|rx|tx)/i.test(content);
@@ -2782,7 +2783,7 @@ const Dashboard = () => {
                         const commonPayload = {
                             content,
                             work_id: workId,
-                            skills_used: skillHints,
+                            capabilities_used: capabilityHints,
                             actions_used: actionHints,
                             sources_used: sourceHints,
                         };
@@ -3039,6 +3040,7 @@ const Dashboard = () => {
             }}>
                 <StageOrbLayer state={state} voice={voice} ttsIntensity={ttsIntensity} theme={theme} />
             </div>
+            <SystemMetricsFloatingCard sys={sys} isMobile={isMobile} />
             <style>{`
                 @keyframes slideInRight {
                     from { transform: translateX(100%); opacity: 0; }

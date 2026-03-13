@@ -7,10 +7,30 @@ set -e
 
 echo "🚀 Starting AOSD Setup..."
 
+if [ "$(id -u)" -eq 0 ] && [ "${AOSD_ALLOW_ROOT_SETUP:-0}" != "1" ]; then
+    echo "⚠️  Warning: Running setup.sh as root/sudo is not recommended for the entire script."
+    echo "   The script will request sudo password only when installing system dependencies."
+    echo "   Running as root may cause issues with systemd user-mode services and file permissions."
+    echo "   Press Ctrl+C to abort and run as normal user, or Wait 5 seconds to continue anyway..."
+    sleep 5
+fi
+
+# Detect root-owned files if running as normal user
+if [ "$(id -u)" -ne 0 ]; then
+    if find . -maxdepth 3 -user root -print -quit 2>/dev/null | grep -q .; then
+        echo "❌ Error: Found files owned by 'root' in the project directory."
+        echo "   This was likely caused by a previous 'sudo' run and will cause permission errors."
+        echo "   Please fix ownership by running:"
+        echo "   sudo chown -R $USER:$USER $(pwd)"
+        exit 1
+    fi
+fi
+
 APT_INSTALL_CMD=""
 MISSING_SYSTEM_DEPS=()
-NODE_MIN_MAJOR=20
-NODE_MIN_MINOR=19
+NODE_MIN_MAJOR=18
+NODE_MIN_MINOR=0
+SETUP_CHROMIUM="${AOSD_SETUP_CHROMIUM:-1}"
 
 node_version_ok() {
     if ! command -v node >/dev/null 2>&1; then
@@ -111,6 +131,16 @@ if can_use_apt; then
     MISSING_SYSTEM_DEPS+=("libxcb-cursor0")
 fi
 
+# 3.2 Optional managed Chromium bootstrap dependencies
+if [ "$SETUP_CHROMIUM" = "1" ]; then
+    if ! command -v curl &> /dev/null; then
+        MISSING_SYSTEM_DEPS+=("curl")
+    fi
+    if ! command -v unzip &> /dev/null; then
+        MISSING_SYSTEM_DEPS+=("unzip")
+    fi
+fi
+
 try_install_system_deps
 
 if ! command -v python3 &> /dev/null; then
@@ -186,7 +216,11 @@ if [ -d "frontend" ]; then
     echo "⚛️  Installing Frontend dependencies..."
     cd frontend
     if [ -f "package-lock.json" ]; then
-        npm ci
+        echo "📦 detected package-lock.json, attempting clean install..."
+        if ! npm ci; then
+            echo "⚠️  npm ci failed (likely lockfile out of sync). Falling back to npm install..."
+            npm install
+        fi
     else
         npm install
     fi
@@ -272,6 +306,56 @@ if [ -f ".env" ]; then
     ensure_external_accounts_key ".env"
 fi
 
+# 7.1 Ensure unified secret-management keys
+generate_urlsafe_secret() {
+    python3 - <<'PY'
+import os, base64
+print(base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("="))
+PY
+}
+
+set_env_kv() {
+    local env_file="$1"
+    local key="$2"
+    local value="$3"
+    [ -f "$env_file" ] || return 0
+    if grep -qE "^${key}=" "$env_file"; then
+        sed -i "s|^${key}=.*$|${key}=${value}|g" "$env_file"
+    else
+        printf "\n%s=%s\n" "$key" "$value" >> "$env_file"
+    fi
+}
+
+ensure_secret_management_key() {
+    local env_file="$1"
+    [ -f "$env_file" ] || return 0
+
+    local existing_line existing_value generated_key
+    existing_line="$(grep -E '^SECRET_MANAGEMENT_KEY=' "$env_file" 2>/dev/null || true)"
+    existing_value="${existing_line#SECRET_MANAGEMENT_KEY=}"
+
+    if [ -n "$existing_line" ] && [ -n "$existing_value" ]; then
+        echo "✅ SECRET_MANAGEMENT_KEY already set in $env_file"
+        return 0
+    fi
+
+    generated_key="$(generate_urlsafe_secret)"
+    if [ -z "$generated_key" ]; then
+        echo "⚠️  Could not generate SECRET_MANAGEMENT_KEY for $env_file"
+        return 0
+    fi
+
+    set_env_kv "$env_file" "SECRET_MANAGEMENT_KEY" "$generated_key"
+    echo "🔐 Generated SECRET_MANAGEMENT_KEY in $env_file"
+}
+
+ensure_secret_vault_key "$DATA_DIR/.env" "$DATA_DIR"
+ensure_secret_management_key "$DATA_DIR/.env"
+if [ -f ".env" ]; then
+    ensure_secret_vault_key ".env" "$DATA_DIR"
+    ensure_secret_management_key ".env"
+fi
+
 ensure_local_https_cert() {
     local cert_dir="$1"
     local cert_file="$cert_dir/localhost.crt"
@@ -329,6 +413,19 @@ EOF
 
 ensure_local_https_cert "$DATA_DIR/certs"
 
+if [ "$SETUP_CHROMIUM" = "1" ]; then
+    echo "🌐 Bootstrapping managed Chromium into $DATA_DIR/browser_bin/chromium..."
+    if [ -x "./scripts/bootstrap_chromium_portable.sh" ]; then
+        if ! ./scripts/bootstrap_chromium_portable.sh "$DATA_DIR"; then
+            echo "⚠️  Managed Chromium bootstrap failed. Runtime will fallback to system browser."
+        fi
+    else
+        echo "⚠️  scripts/bootstrap_chromium_portable.sh not found/executable. Skipping managed Chromium bootstrap."
+    fi
+else
+    echo "ℹ️  Managed Chromium bootstrap skipped (AOSD_SETUP_CHROMIUM=$SETUP_CHROMIUM)."
+fi
+
 echo ""
 echo "✨ Setup complete! ✨"
 
@@ -358,8 +455,33 @@ if [ "${AOSD_SKIP_PRIVILEGED_SETUP:-0}" != "1" ] && [ -x "./env/bin/python" ] &&
     fi
 fi
 
+if [ "${AOSD_SKIP_SERVICE_INSTALL:-0}" != "1" ] && [ -x "./env/bin/python" ] && [ -f "$CLI_ENTRY" ]; then
+    echo ""
+    echo "⚙️  Optional: install Assistant-OS as systemd services (aosd-kernel, aosd-ui)."
+    if [ -t 0 ]; then
+        read -r -p "Install services now? (user mode) [y/N]: " _svc_install_ans
+        case "${_svc_install_ans}" in
+            y|Y|yes|YES)
+                echo "Installing services..."
+                ./env/bin/python "$CLI_ENTRY" doctor --install-services || echo "⚠️  Service installation was not completed."
+                ;;
+            *)
+                echo "Skipped service installation. You can run later:"
+                echo "  ./env/bin/python $CLI_ENTRY doctor --install-services"
+                ;;
+        esac
+    elif [ "${AOSD_AUTO_INSTALL_SERVICES:-0}" = "1" ]; then
+        echo "Non-interactive mode: installing services (AOSD_AUTO_INSTALL_SERVICES=1)..."
+        ./env/bin/python "$CLI_ENTRY" doctor --install-services || echo "⚠️  Service installation was not completed."
+    else
+        echo "Tip: run this once to install as OS services:"
+        echo "  ./env/bin/python $CLI_ENTRY doctor --install-services"
+    fi
+fi
+
 echo "Next steps:
 1. Configure your API keys in the $DATA_DIR/.env file.
-2. Start the full system (Backend + Frontend) with: ./start.sh
-   (Or run separately with ./run_server.sh and 'npm run dev' in frontend/)
+2. Start the full system with:
+   Option A (Service): systemctl --user start aosd.target
+   Option B (Manual):  ./start.sh
 "

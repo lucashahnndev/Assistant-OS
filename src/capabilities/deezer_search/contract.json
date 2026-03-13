@@ -1,0 +1,61 @@
+{
+  "contract_version": "1.0",
+  "capability": {
+    "id": "deezer_search",
+    "namespace": "deezer.search",
+    "version": "1.0.0",
+    "title": "deezer.search",
+    "description": "Encontra músicas, artistas, álbuns e playlists no Deezer, com retorno estruturado para recomendação e reprodução."
+  },
+  "runtime": {
+    "module": "capabilities.deezer_search",
+    "factory": "create_capability",
+    "config_schema": "./config.schema.json"
+  },
+  "actions": [
+    {
+      "id": "deezer.search.search",
+      "title": "Search",
+      "description": "Pesquisa catálogo do Deezer por tipo de conteúdo e retorna melhor correspondência + lista.",
+      "handler": "search",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "deezer:search:search"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Termo de busca"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "track",
+              "artist",
+              "album",
+              "playlist"
+            ],
+            "default": "track"
+          },
+          "limit": {
+            "type": "integer",
+            "default": 5
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    }
+  ],
+  "auth": {
+    "mode": "none",
+    "required": false,
+    "fields": []
+  }
+}

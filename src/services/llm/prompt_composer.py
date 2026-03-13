@@ -62,19 +62,19 @@ class PromptComposer:
     )
 
     _INTENT_SCHEMA = {
-        "thought": "Internal reasoning in English",
+        "thought": "Internal reasoning in English (MANDATORY). Describe what you see and what you are planning next.",
         "plan": ["[ ] pending step", "[/] in progress", "[x] done"],
         "state_summary": {
-            "goal": "Current objective",
-            "cursor": "Current position",
-            "done_steps": [],
-            "last_outcome": "Last meaningful observation",
-            "last_error": "Last error if any",
+            "goal": "Current long-term objective",
+            "cursor": "Current position in plan",
+            "done_steps": ["List of completed milestones"],
+            "last_outcome": "Result of the last action",
+            "last_error": "Error message if last action failed",
         },
-        "action": "Full namespaced action id OR reply/error",
+        "action": "Full namespaced action id (e.g. 'deezer.search.search') OR 'reply' (talk/wait) OR 'error'",
         "params": {"key": "value"},
-        "task_label": "Short status label (optional)",
-        "response_text": "Final user-facing text",
+        "task_label": "Short status label for UI (optional)",
+        "response_text": "Final user-facing text (optional if action!=reply)",
         "attachments": ["/absolute/path/to/file"],
     }
 
@@ -85,7 +85,7 @@ class PromptComposer:
         "session_summary": 1800,
         "scratchpad": 1400,
         "attachments": 1400,
-        "skills_summary": 2200,
+        "capabilities_summary": 2200,
         "relevant_memory": 2500,
     }
 
@@ -115,6 +115,7 @@ class PromptComposer:
         toon_state: str,
         toon_deltas: List[Dict[str, Any]],
         user_input: str,
+        initial_user_request: str = "",
         project_path: str,
         workspace_path: str,
         venv_python: str,
@@ -123,8 +124,8 @@ class PromptComposer:
         session_summary: str,
         scratchpad: str,
         attachments: List[Any],
-        skills_summary: str,
-        skill_scope: str,
+        capabilities_summary: str,
+        capability_scope: str,
         relevant_memory: List[Dict[str, Any]] = None,
         cognitive_frame: Dict[str, Any] = None,
     ) -> str:
@@ -153,6 +154,12 @@ class PromptComposer:
                 "- thought/action/params in English.\n"
                 f"- response_text language: {user_language or 'auto'}.\n"
                 "- Never mix languages in response_text."
+            )
+            
+        if initial_user_request:
+            prompt_parts.append(
+                "[ORIGINAL USER DIRECTIVE]\n"
+                f"{initial_user_request}\n"
             )
 
         prompt_parts.append(presentation_directive.strip())
@@ -258,10 +265,10 @@ class PromptComposer:
 
         prompt_parts.append(
             "[AVAILABLE ACTIONS]\n"
-            f"Scope: {skill_scope}\n"
-            f"{self._clip_block('skills_summary', skills_summary or '- No actions available for this principal.')}"
+            f"Scope: {capability_scope}\n"
+            f"{self._clip_block('capabilities_summary', capabilities_summary or '- No actions available for this principal.')}"
         )
-        if "browser.control.run" in str(skills_summary or ""):
+        if "browser.control.run" in str(capabilities_summary or ""):
             prompt_parts.append(
                 "[BROWSER INTENT CLASSES]\n"
                 "- browser.control.run requires intent_class.\n"
@@ -301,7 +308,20 @@ class PromptComposer:
             "- On failure: report honestly and choose an alternative.\n"
             "- Use memory.recall only when older context is needed.\n"
             "- Never ask user to restart/send a new context; ask only for specific missing data.\n"
-            "- Suggest next step only when grounded in current result."
+            "- Suggest next step only when grounded in current result.\n"
+            "- Be proactively helpful without over-asking:\n"
+            "  - If user request is ambiguous (especially completion criteria), ask one concise clarification in persona.\n"
+            "  - If request is clear, execute directly and avoid unnecessary clarification.\n"
+            "  - After a meaningful result, propose 1-2 concrete continuity actions (no generic filler).\n"
+            "- Artifact mindset:\n"
+            "  - If user asks for report/summary/audit, prefer producing a structured deliverable when tools allow (e.g., markdown/json file) and offer it naturally.\n"
+            "  - If user did not explicitly ask for a file but the task benefits from one, offer the option in one sentence.\n"
+            "  - Never fabricate files; only claim artifacts that were actually produced by actions.\n"
+            "- Agentic clarification policy (no hardcoded templates):\n"
+            "  - If task completion expectation is ambiguous, you may choose `reply` first to clarify in your persona/tone.\n"
+            "  - Keep clarification to one concise question and preserve user goal semantics.\n"
+            "  - After user clarifies, proceed with `browser.control.run` and include `params.completion_mode` when applicable:\n"
+            "    `execution_only` (execute in browser) or `artifact_report` (execute + return structured findings)."
         )
 
         prompt_parts.append(
@@ -311,6 +331,7 @@ class PromptComposer:
             f"- Schema: {json.dumps(self._INTENT_SCHEMA, ensure_ascii=False, separators=(',', ':'))}\n"
             "- Use `reply` for conversational answers, clarification, or when no tool action is needed.\n"
             "- If action!=reply, response_text is optional and should be a short execution ack.\n"
+            "- If replying with a clarifying question, keep it single-turn and actionable.\n"
             "- If same action+params fails 3x, stop and ask clarification."
         )
 

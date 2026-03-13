@@ -1,0 +1,228 @@
+{
+  "contract_version": "1.0",
+  "capability": {
+    "id": "task_management",
+    "namespace": "task",
+    "version": "1.0.0",
+    "title": "Task",
+    "description": "Manages session operational state and scheduler operations (task definitions, triggers, and runs)."
+  },
+  "runtime": {
+    "module": "capabilities.task_management",
+    "factory": "create_capability"
+  },
+  "actions": [
+    {
+      "id": "task.notes",
+      "title": "Notes",
+      "description": "Session scratchpad operations (read, append, update, clear).",
+      "handler": "notes",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "task:scheduler:notes"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "properties": {
+            "type": "string"
+          },
+          "required": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "task.specialist",
+      "title": "Specialist",
+      "description": "Activates/deactivates the execution specialist for the current session.",
+      "handler": "specialist",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "task:scheduler:specialist"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "properties": {
+            "type": "string"
+          },
+          "required": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "task.scheduler.create",
+      "title": "Create",
+      "description": "Creates a scheduler task definition (like Tasks page create).",
+      "handler": "scheduler.create",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "task:scheduler:scheduler_create"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "properties": {
+            "type": "string"
+          },
+          "required": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "idempotent"
+    },
+    {
+      "id": "task.scheduler.add_trigger",
+      "title": "Add Trigger",
+      "description": "Adds a trigger to an existing scheduler task definition.",
+      "handler": "scheduler.add_trigger",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "task:scheduler:scheduler_add_trigger"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "properties": {
+            "type": "string"
+          },
+          "required": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "task.scheduler.list",
+      "title": "List",
+      "description": "Lists scheduler task definitions or gets one by task_id.",
+      "handler": "scheduler.list",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "task:scheduler:scheduler_list"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "properties": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "task.scheduler.list_triggers",
+      "title": "List Triggers",
+      "description": "Lists triggers globally or for a specific task_id.",
+      "handler": "scheduler.list_triggers",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "task:scheduler:scheduler_list_triggers"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "properties": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "task.scheduler.run",
+      "title": "Run",
+      "description": "Triggers immediate execution for a scheduler task definition.",
+      "handler": "scheduler.run",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "task:scheduler:scheduler_run"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "properties": {
+            "type": "string"
+          },
+          "required": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "idempotent"
+    },
+    {
+      "id": "task.scheduler.list_works",
+      "title": "List Works",
+      "description": "Lists worker instances (active or completed) globally, with optional owner/favorite/session filters.",
+      "handler": "scheduler.list_works",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "task:scheduler:scheduler_list_works"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "properties": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    }
+  ],
+  "auth": {
+    "mode": "none",
+    "required": false,
+    "fields": []
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "contract_version": "1.0",
+  "capability": {
+    "id": "system_logs",
+    "namespace": "system.logs",
+    "version": "1.0.0",
+    "title": "system_logs",
+    "description": "Consulta e leitura de logs técnicos do sistema, API, capabilities e interfaces."
+  },
+  "runtime": {
+    "module": "capabilities.system_logs",
+    "factory": "create_capability",
+    "config_schema": "./config.schema.json"
+  },
+  "actions": [
+    {
+      "id": "system.logs.list",
+      "title": "List",
+      "description": "Lista categorias de logs disponíveis e seus arquivos.",
+      "handler": "list",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:logs:list"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.logs.read",
+      "title": "Read",
+      "description": "Lê as últimas N linhas de um arquivo de log específico.",
+      "handler": "read",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:logs:read"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "properties": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    }
+  ],
+  "auth": {
+    "mode": "none",
+    "required": false,
+    "fields": []
+  }
+}

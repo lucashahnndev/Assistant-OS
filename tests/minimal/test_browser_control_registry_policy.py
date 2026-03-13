@@ -1,9 +1,9 @@
 import asyncio
 import tempfile
 
-from src.skills.browser_control.browser_control_skill import BrowserControlSkill
-from src.skills.browser_control.session_policy import BrowserSessionPolicy
-from src.skills.browser_control.session_registry import BrowserSessionRegistry
+from src.capabilities.browser_control.browser_control_capability import BrowserControlCapability
+from src.capabilities.browser_control.session_policy import BrowserSessionPolicy
+from src.capabilities.browser_control.session_registry import BrowserSessionRegistry
 
 
 class _FakeRuntime:
@@ -148,11 +148,11 @@ def test_registry_tab_and_media_singleton():
 def test_run_goal_emits_execution_context_and_touches_work_context():
     with tempfile.TemporaryDirectory() as tmp:
         kernel = _FakeKernel(tmp)
-        skill = BrowserControlSkill(kernel, {})
-        skill._runtime = _FakeRuntime()
-        skill._subagent = _FakeSubagent()
-        skill._owner_session_id = "sess-a"
-        skill._runtime_intent_class = "realizar_pesquisa"
+        capability = BrowserControlCapability(kernel, {})
+        capability._runtime = _FakeRuntime()
+        capability._subagent = _FakeSubagent()
+        capability._owner_session_id = "sess-a"
+        capability._runtime_intent_class = "realizar_pesquisa"
 
         async def _fake_apply_session_policy(**kwargs):
             _ = kwargs
@@ -164,7 +164,7 @@ def test_run_goal_emits_execution_context_and_touches_work_context():
                 "launch_url": "https://example.com",
             }
 
-        skill._apply_session_policy = _fake_apply_session_policy  # type: ignore[method-assign]
+        capability._apply_session_policy = _fake_apply_session_policy  # type: ignore[method-assign]
 
         touched = []
 
@@ -172,7 +172,7 @@ def test_run_goal_emits_execution_context_and_touches_work_context():
             touched.append((work_id, patch))
 
         async def _run():
-            return await skill.run_goal(
+            return await capability.run_goal(
                 goal="abrir example",
                 intent_class="realizar_pesquisa",
                 context={
@@ -202,7 +202,7 @@ def test_run_goal_emits_execution_context_and_touches_work_context():
 def test_run_goal_with_policy_and_registry_disabled():
     with tempfile.TemporaryDirectory() as tmp:
         kernel = _FakeKernel(tmp)
-        skill = BrowserControlSkill(
+        capability = BrowserControlCapability(
             kernel,
             {
                 "policy_enabled": False,
@@ -211,18 +211,18 @@ def test_run_goal_with_policy_and_registry_disabled():
                 "app_mode_enabled": False,
             },
         )
-        skill._runtime = _FakeRuntime()
-        skill._subagent = _FakeSubagent()
-        skill._owner_session_id = "sess-disabled"
-        skill._runtime_intent_class = "realizar_pesquisa"
+        capability._runtime = _FakeRuntime()
+        capability._subagent = _FakeSubagent()
+        capability._owner_session_id = "sess-disabled"
+        capability._runtime_intent_class = "realizar_pesquisa"
         
         async def _noop_ensure_runtime(**kwargs):
             _ = kwargs
             return None
-        skill._ensure_runtime = _noop_ensure_runtime  # type: ignore[method-assign]
+        capability._ensure_runtime = _noop_ensure_runtime  # type: ignore[method-assign]
 
         async def _run():
-            return await skill.run_goal(
+            return await capability.run_goal(
                 goal="abrir example",
                 intent_class="realizar_pesquisa",
                 context={
@@ -243,7 +243,7 @@ def test_run_goal_with_policy_and_registry_disabled():
 def test_media_singleton_flag_disabled_omits_media_counter():
     with tempfile.TemporaryDirectory() as tmp:
         kernel = _FakeKernel(tmp)
-        skill = BrowserControlSkill(
+        capability = BrowserControlCapability(
             kernel,
             {
                 "media_singleton_enforced": False,
@@ -251,10 +251,10 @@ def test_media_singleton_flag_disabled_omits_media_counter():
                 "registry_enabled": True,
             },
         )
-        skill._runtime = _FakeRuntime()
-        skill._subagent = _FakeSubagent()
-        skill._owner_session_id = "sess-media-off"
-        skill._runtime_intent_class = "controlar_midia"
+        capability._runtime = _FakeRuntime()
+        capability._subagent = _FakeSubagent()
+        capability._owner_session_id = "sess-media-off"
+        capability._runtime_intent_class = "controlar_midia"
 
         async def _fake_apply_session_policy(**kwargs):
             _ = kwargs
@@ -266,10 +266,10 @@ def test_media_singleton_flag_disabled_omits_media_counter():
                 "launch_url": "https://example.com",
             }
 
-        skill._apply_session_policy = _fake_apply_session_policy  # type: ignore[method-assign]
+        capability._apply_session_policy = _fake_apply_session_policy  # type: ignore[method-assign]
 
         async def _run():
-            return await skill.run_goal(
+            return await capability.run_goal(
                 goal="tocar musica",
                 intent_class="controlar_midia",
                 context={
@@ -288,11 +288,11 @@ def test_media_singleton_flag_disabled_omits_media_counter():
 def test_step_continues_active_runtime_and_returns_snapshot():
     with tempfile.TemporaryDirectory() as tmp:
         kernel = _FakeKernel(tmp)
-        skill = BrowserControlSkill(kernel, {})
-        skill._runtime = _FakeRuntime()
-        skill._subagent = _FakeSubagent()
-        skill._owner_session_id = "sess-step"
-        skill._runtime_intent_class = "realizar_pesquisa"
+        capability = BrowserControlCapability(kernel, {})
+        capability._runtime = _FakeRuntime()
+        capability._subagent = _FakeSubagent()
+        capability._owner_session_id = "sess-step"
+        capability._runtime_intent_class = "realizar_pesquisa"
 
         touched = []
 
@@ -300,9 +300,9 @@ def test_step_continues_active_runtime_and_returns_snapshot():
             touched.append((work_id, patch))
 
         async def _run():
-            await skill._ensure_registry_instance({"session_id": "sess-step", "work_id": "work-step"}, "realizar_pesquisa")
-            await skill._sync_registry_tab()
-            return await skill.step(
+            await capability._ensure_registry_instance({"session_id": "sess-step", "work_id": "work-step"}, "realizar_pesquisa")
+            await capability._sync_registry_tab()
+            return await capability.step(
                 "clique no botão",
                 context={
                     "session_id": "sess-step",
@@ -331,16 +331,16 @@ def test_step_continues_active_runtime_and_returns_snapshot():
 def test_step_recovery_when_primary_attach_fails():
     with tempfile.TemporaryDirectory() as tmp:
         kernel = _FakeKernel(tmp)
-        skill = BrowserControlSkill(kernel, {})
-        skill._runtime = _FakeRuntimeRecover()
-        skill._subagent = _FakeSubagent()
-        skill._owner_session_id = "sess-step-recover"
-        skill._runtime_intent_class = "realizar_pesquisa"
+        capability = BrowserControlCapability(kernel, {})
+        capability._runtime = _FakeRuntimeRecover()
+        capability._subagent = _FakeSubagent()
+        capability._owner_session_id = "sess-step-recover"
+        capability._runtime_intent_class = "realizar_pesquisa"
 
         async def _run():
-            await skill._ensure_registry_instance({"session_id": "sess-step-recover", "work_id": "work-step-recover"}, "realizar_pesquisa")
-            await skill._sync_registry_tab()
-            return await skill.step(
+            await capability._ensure_registry_instance({"session_id": "sess-step-recover", "work_id": "work-step-recover"}, "realizar_pesquisa")
+            await capability._sync_registry_tab()
+            return await capability.step(
                 "pule o anuncio",
                 context={"session_id": "sess-step-recover", "work_id": "work-step-recover"},
             )
@@ -358,7 +358,7 @@ def test_step_recovery_when_primary_attach_fails():
 def test_close_instance_blocks_cross_work_without_force():
     with tempfile.TemporaryDirectory() as tmp:
         kernel = _FakeKernel(tmp)
-        skill = BrowserControlSkill(kernel, {})
+        capability = BrowserControlCapability(kernel, {})
         instance_id = kernel.browser_session_registry.register_instance(
             owner_session_id="sess-owner",
             work_id="work-owner",
@@ -367,7 +367,7 @@ def test_close_instance_blocks_cross_work_without_force():
             cdp_ws_url="ws://x/1",
         )
         result = asyncio.run(
-            skill.close_instance(
+            capability.close_instance(
                 instance_id=instance_id,
                 context={"session_id": "sess-owner", "work_id": "work-other"},
                 force=False,
@@ -380,7 +380,7 @@ def test_close_instance_blocks_cross_work_without_force():
 def test_close_tab_allows_force_override():
     with tempfile.TemporaryDirectory() as tmp:
         kernel = _FakeKernel(tmp)
-        skill = BrowserControlSkill(kernel, {})
+        capability = BrowserControlCapability(kernel, {})
         instance_id = kernel.browser_session_registry.register_instance(
             owner_session_id="sess-owner",
             work_id="work-owner",
@@ -397,7 +397,7 @@ def test_close_tab_allows_force_override():
         )
         assert tab_id
         blocked = asyncio.run(
-            skill.close_tab(
+            capability.close_tab(
                 tab_id=tab_id,
                 context={"session_id": "sess-owner", "work_id": "work-other"},
                 force=False,
@@ -405,7 +405,7 @@ def test_close_tab_allows_force_override():
         )
         assert blocked.get("ok") is False
         forced = asyncio.run(
-            skill.close_tab(
+            capability.close_tab(
                 tab_id=tab_id,
                 context={"session_id": "sess-owner", "work_id": "work-other"},
                 force=True,
@@ -461,25 +461,25 @@ def test_registry_instance_lock_acquire_conflict_and_release():
 def test_step_denied_when_instance_locked_by_other_work():
     with tempfile.TemporaryDirectory() as tmp:
         kernel = _FakeKernel(tmp)
-        skill = BrowserControlSkill(kernel, {})
-        skill._runtime = _FakeRuntime()
-        skill._subagent = _FakeSubagent()
-        skill._owner_session_id = "sess-lock"
-        skill._runtime_intent_class = "realizar_pesquisa"
+        capability = BrowserControlCapability(kernel, {})
+        capability._runtime = _FakeRuntime()
+        capability._subagent = _FakeSubagent()
+        capability._owner_session_id = "sess-lock"
+        capability._runtime_intent_class = "realizar_pesquisa"
 
         async def _run():
-            await skill._ensure_registry_instance({"session_id": "sess-lock", "work_id": "work-a"}, "realizar_pesquisa")
-            await skill._sync_registry_tab()
-            assert skill._browser_instance_id
+            await capability._ensure_registry_instance({"session_id": "sess-lock", "work_id": "work-a"}, "realizar_pesquisa")
+            await capability._sync_registry_tab()
+            assert capability._browser_instance_id
             reg = kernel.browser_session_registry
             lock = reg.acquire_instance_lock(
-                skill._browser_instance_id,
+                capability._browser_instance_id,
                 owner_session_id="sess-lock",
                 work_id="work-b",
                 lease_seconds=120,
             )
             assert lock.get("ok") is True
-            return await skill.step(
+            return await capability.step(
                 "clique no botao",
                 context={"session_id": "sess-lock", "work_id": "work-a"},
             )
@@ -547,26 +547,26 @@ def test_registry_tab_lock_acquire_conflict_and_release():
 def test_step_denied_when_tab_locked_by_other_work():
     with tempfile.TemporaryDirectory() as tmp:
         kernel = _FakeKernel(tmp)
-        skill = BrowserControlSkill(kernel, {})
-        skill._runtime = _FakeRuntime()
-        skill._subagent = _FakeSubagent()
-        skill._owner_session_id = "sess-tab-lock"
-        skill._runtime_intent_class = "realizar_pesquisa"
+        capability = BrowserControlCapability(kernel, {})
+        capability._runtime = _FakeRuntime()
+        capability._subagent = _FakeSubagent()
+        capability._owner_session_id = "sess-tab-lock"
+        capability._runtime_intent_class = "realizar_pesquisa"
 
         async def _run():
-            await skill._ensure_registry_instance({"session_id": "sess-tab-lock", "work_id": "work-a"}, "realizar_pesquisa")
-            await skill._sync_registry_tab()
-            assert skill._browser_instance_id and skill._tab_id
+            await capability._ensure_registry_instance({"session_id": "sess-tab-lock", "work_id": "work-a"}, "realizar_pesquisa")
+            await capability._sync_registry_tab()
+            assert capability._browser_instance_id and capability._tab_id
             reg = kernel.browser_session_registry
             lock = reg.acquire_tab_lock(
-                skill._browser_instance_id,
-                skill._tab_id,
+                capability._browser_instance_id,
+                capability._tab_id,
                 owner_session_id="sess-tab-lock",
                 work_id="work-b",
                 lease_seconds=120,
             )
             assert lock.get("ok") is True
-            return await skill.step(
+            return await capability.step(
                 "clique no botao",
                 context={"session_id": "sess-tab-lock", "work_id": "work-a"},
             )
@@ -633,16 +633,16 @@ def test_registry_cleanup_expired_locks_and_close_idle_instances():
 def test_inspect_can_include_last_vision():
     with tempfile.TemporaryDirectory() as tmp:
         kernel = _FakeKernel(tmp)
-        skill = BrowserControlSkill(kernel, {})
-        skill._runtime = _FakeRuntime()
-        skill._subagent = _FakeSubagent()
-        skill._owner_session_id = "sess-inspect"
-        skill._runtime_intent_class = "realizar_pesquisa"
+        capability = BrowserControlCapability(kernel, {})
+        capability._runtime = _FakeRuntime()
+        capability._subagent = _FakeSubagent()
+        capability._owner_session_id = "sess-inspect"
+        capability._runtime_intent_class = "realizar_pesquisa"
 
         async def _run():
-            await skill._ensure_registry_instance({"session_id": "sess-inspect", "work_id": "work-inspect"}, "realizar_pesquisa")
-            await skill._sync_registry_tab()
-            return await skill.inspect(
+            await capability._ensure_registry_instance({"session_id": "sess-inspect", "work_id": "work-inspect"}, "realizar_pesquisa")
+            await capability._sync_registry_tab()
+            return await capability.inspect(
                 params={"only_current_session": True, "include_tabs": True, "include_last_vision": True},
                 context={"session_id": "sess-inspect"},
             )
@@ -657,14 +657,14 @@ def test_inspect_can_include_last_vision():
 def test_sync_registry_includes_last_vision():
     with tempfile.TemporaryDirectory() as tmp:
         kernel = _FakeKernel(tmp)
-        skill = BrowserControlSkill(kernel, {})
-        skill._runtime = _FakeRuntime()
-        skill._subagent = _FakeSubagent()
-        skill._owner_session_id = "sess-sync"
-        skill._runtime_intent_class = "realizar_pesquisa"
+        capability = BrowserControlCapability(kernel, {})
+        capability._runtime = _FakeRuntime()
+        capability._subagent = _FakeSubagent()
+        capability._owner_session_id = "sess-sync"
+        capability._runtime_intent_class = "realizar_pesquisa"
 
         async def _run():
-            return await skill.sync_registry(context={"session_id": "sess-sync", "work_id": "work-sync"})
+            return await capability.sync_registry(context={"session_id": "sess-sync", "work_id": "work-sync"})
 
         result = asyncio.run(_run())
         assert result.get("ok") is True
@@ -675,7 +675,7 @@ def test_sync_registry_includes_last_vision():
 def test_gc_action_closes_idle_instances_on_demand():
     with tempfile.TemporaryDirectory() as tmp:
         kernel = _FakeKernel(tmp)
-        skill = BrowserControlSkill(
+        capability = BrowserControlCapability(
             kernel,
             {
                 "registry_enabled": True,
@@ -697,7 +697,7 @@ def test_gc_action_closes_idle_instances_on_demand():
         )
 
         async def _run():
-            return await skill.gc(
+            return await capability.gc(
                 params={"idle_seconds": 60, "keep_current_instance": False},
                 context={"session_id": "sess-gc-action", "work_id": "work-gc-action"},
             )
@@ -713,16 +713,16 @@ def test_gc_action_closes_idle_instances_on_demand():
 def test_health_action_returns_consolidated_diagnostics():
     with tempfile.TemporaryDirectory() as tmp:
         kernel = _FakeKernel(tmp)
-        skill = BrowserControlSkill(kernel, {})
-        skill._runtime = _FakeRuntime()
-        skill._subagent = _FakeSubagent()
-        skill._owner_session_id = "sess-health"
-        skill._runtime_intent_class = "realizar_pesquisa"
+        capability = BrowserControlCapability(kernel, {})
+        capability._runtime = _FakeRuntime()
+        capability._subagent = _FakeSubagent()
+        capability._owner_session_id = "sess-health"
+        capability._runtime_intent_class = "realizar_pesquisa"
 
         async def _run():
-            await skill._ensure_registry_instance({"session_id": "sess-health", "work_id": "work-health"}, "realizar_pesquisa")
-            await skill._sync_registry_tab()
-            return await skill.health(
+            await capability._ensure_registry_instance({"session_id": "sess-health", "work_id": "work-health"}, "realizar_pesquisa")
+            await capability._sync_registry_tab()
+            return await capability.health(
                 params={"run_gc": False, "only_current_session": True},
                 context={"session_id": "sess-health", "work_id": "work-health"},
             )
@@ -747,11 +747,11 @@ def test_run_goal_emits_media_singleton_cleanup_status():
             debug_port=9111,
             cdp_ws_url="ws://x/old",
         )
-        skill = BrowserControlSkill(kernel, {})
-        skill._runtime = _FakeRuntime()
-        skill._subagent = _FakeSubagent()
-        skill._owner_session_id = "sess-media-status"
-        skill._runtime_intent_class = "controlar_midia"
+        capability = BrowserControlCapability(kernel, {})
+        capability._runtime = _FakeRuntime()
+        capability._subagent = _FakeSubagent()
+        capability._owner_session_id = "sess-media-status"
+        capability._runtime_intent_class = "controlar_midia"
 
         async def _fake_apply_session_policy(**kwargs):
             _ = kwargs
@@ -767,8 +767,8 @@ def test_run_goal_emits_media_singleton_cleanup_status():
             _ = instances
             return {"attempted_instances": 1, "closed_targets": 1, "errors": 0}
 
-        skill._apply_session_policy = _fake_apply_session_policy  # type: ignore[method-assign]
-        skill._close_replaced_media_instances = _fake_remote_close  # type: ignore[method-assign]
+        capability._apply_session_policy = _fake_apply_session_policy  # type: ignore[method-assign]
+        capability._close_replaced_media_instances = _fake_remote_close  # type: ignore[method-assign]
 
         statuses = []
 
@@ -776,7 +776,7 @@ def test_run_goal_emits_media_singleton_cleanup_status():
             statuses.append((phase, payload or {}))
 
         async def _run():
-            return await skill.run_goal(
+            return await capability.run_goal(
                 goal="tocar musica",
                 intent_class="controlar_midia",
                 context={

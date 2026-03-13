@@ -1,0 +1,105 @@
+{
+  "contract_version": "1.0",
+  "capability": {
+    "id": "youtube_search",
+    "namespace": "youtube",
+    "version": "1.0.0",
+    "title": "youtube",
+    "description": "Busca v\u00eddeos, playlists e canais no YouTube (API oficial com fallback web)."
+  },
+  "runtime": {
+    "module": "capabilities.youtube_search",
+    "factory": "create_capability",
+    "config_schema": "./config.schema.json"
+  },
+  "actions": [
+    {
+      "id": "youtube.search.find",
+      "title": "Find",
+      "description": "Encontra conte\u00fado no YouTube e retorna metadados estruturados com melhor candidato.",
+      "handler": "search.find",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "youtube:search:find"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Termo de busca"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "video",
+              "playlist",
+              "channel"
+            ],
+            "default": "video"
+          },
+          "surface": {
+            "type": "string",
+            "enum": [
+              "youtube",
+              "music",
+              "auto"
+            ],
+            "default": "auto"
+          },
+          "limit": {
+            "type": "integer",
+            "default": 5
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    }
+  ],
+  "auth": {
+    "mode": "hybrid",
+    "required": false,
+    "source_config_path": "authSource",
+    "default_source": "auto",
+    "sources": [
+      {
+        "id": "auto",
+        "type": "strategy",
+        "title": "Automatic",
+        "description": "Prefer linked Google account and fallback to API key when available."
+      },
+      {
+        "id": "linked_account",
+        "type": "oauth_account",
+        "title": "Linked Google Account Only",
+        "description": "Use only a connected Google account for this capability.",
+        "provider": "google"
+      },
+      {
+        "id": "api_key",
+        "type": "secret_ref",
+        "title": "API Key Only",
+        "description": "Use only the configured API key for this capability.",
+        "field_id": "apikey"
+      }
+    ],
+    "fields": [
+      {
+        "id": "apikey",
+        "type": "secret_ref",
+        "config_path": "apiKey",
+        "required": false,
+        "title": "YouTube Data API Key",
+        "secret_policy": {
+          "allow_create": true,
+          "allow_select": true
+        }
+      }
+    ]
+  }
+}

@@ -1,11 +1,11 @@
-from skills.shared.search_providers.commoncrawl_provider import CommonCrawlCdxProvider
-from skills.shared.search_providers.base import SearchRequest
-from skills.shared.search_providers.base import SearchResultItem
-from skills.shared.search_providers.ddg_provider import DdgProvider
-from skills.shared.search_providers.openalex_provider import OpenAlexProvider
-from skills.shared.search_providers.router import SearchRouter
-from skills.youtube_search import skill as youtube_skill_module
-from skills.youtube_search.skill import YouTubeSearchSkill
+from capabilities.shared.search_providers.commoncrawl_provider import CommonCrawlCdxProvider
+from capabilities.shared.search_providers.base import SearchRequest
+from capabilities.shared.search_providers.base import SearchResultItem
+from capabilities.shared.search_providers.ddg_provider import DdgProvider
+from capabilities.shared.search_providers.openalex_provider import OpenAlexProvider
+from capabilities.shared.search_providers.router import SearchRouter
+from capabilities.youtube_search import capability as youtube_capability_module
+from capabilities.youtube_search.capability import YouTubeSearchCapability
 
 
 class _FakeResponse:
@@ -70,9 +70,9 @@ class _FakeDDGS:
 
 
 def test_youtube_fallback_uses_video_search_results(monkeypatch):
-    monkeypatch.setattr(youtube_skill_module, "DDGS", _FakeDDGS)
-    skill = YouTubeSearchSkill(config={})
-    results = skill._fallback_search_web("never gonna give you up", limit=3, search_type="video")
+    monkeypatch.setattr(youtube_capability_module, "DDGS", _FakeDDGS)
+    capability = YouTubeSearchCapability(config={})
+    results = capability._fallback_search_web("never gonna give you up", limit=3, search_type="video")
     assert len(results) == 1
     assert results[0]["videoId"] == "dQw4w9WgXcQ"
     assert results[0]["source"] == "duckduckgo_videos_fallback"
@@ -161,7 +161,7 @@ class _FakeDDGSTextOnly:
 
 
 def test_ddg_filters_obvious_language_mismatch(monkeypatch):
-    from skills.shared.search_providers import ddg_provider as ddg_mod
+    from capabilities.shared.search_providers import ddg_provider as ddg_mod
 
     monkeypatch.setattr(ddg_mod, "DDGS", _FakeDDGSTextOnly)
     provider = DdgProvider(enabled=True)

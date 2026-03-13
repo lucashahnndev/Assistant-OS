@@ -29,8 +29,8 @@ class GroupCreateRequest(BaseModel):
     id: str
     name: str
     description: Optional[str] = ""
-    allow_skills: List[str] = Field(default_factory=list)
-    deny_skills: List[str] = Field(default_factory=list)
+    allow_capabilities: List[str] = Field(default_factory=list)
+    deny_capabilities: List[str] = Field(default_factory=list)
     allow_actions: List[str] = Field(default_factory=list)
     deny_actions: List[str] = Field(default_factory=list)
     worker_view_scope: str = "owner_identity"
@@ -39,8 +39,8 @@ class GroupCreateRequest(BaseModel):
 class GroupPatchRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    allow_skills: Optional[List[str]] = None
-    deny_skills: Optional[List[str]] = None
+    allow_capabilities: Optional[List[str]] = None
+    deny_capabilities: Optional[List[str]] = None
     allow_actions: Optional[List[str]] = None
     deny_actions: Optional[List[str]] = None
     worker_view_scope: Optional[str] = None
@@ -300,8 +300,8 @@ async def create_group(payload: GroupCreateRequest, request: Request, user_ctx: 
         id=group_id,
         name=payload.name.strip(),
         description=(payload.description or "").strip(),
-        allow_skills=payload.allow_skills,
-        deny_skills=payload.deny_skills,
+        allow_capabilities=payload.allow_capabilities,
+        deny_capabilities=payload.deny_capabilities,
         allow_actions=payload.allow_actions,
         deny_actions=payload.deny_actions,
         worker_view_scope=payload.worker_view_scope,

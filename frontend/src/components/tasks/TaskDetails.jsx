@@ -238,7 +238,7 @@ const TaskDetails = ({ taskId, onDelete }) => {
                                     )}
                                 </div>
                                 <div className="glass" style={{ padding: '14px', borderRadius: '12px' }}>
-                                    <div><b>Skills Used:</b> {(overwatch?.skills_used || []).join(', ') || '-'}</div>
+                                    <div><b>Capabilities Used:</b> {(overwatch?.capabilities_used || []).join(', ') || '-'}</div>
                                     <div style={{ marginTop: '8px' }}><b>Actions Used:</b></div>
                                     <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--text-muted)' }}>
                                         {(overwatch?.actions_used || []).slice(-30).join(' | ') || 'No actions recorded yet.'}

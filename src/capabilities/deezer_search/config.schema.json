@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": false,
+      "title": "Enabled"
+    },
+    "api": {
+      "type": "object",
+      "title": "API",
+      "properties": {
+        "baseUrl": {
+          "type": "string",
+          "title": "Base URL",
+          "default": "https://api.deezer.com"
+        }
+      },
+      "additionalProperties": true
+    },
+    "defaults": {
+      "type": "object",
+      "title": "Defaults",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "title": "Default Limit",
+          "default": 5
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

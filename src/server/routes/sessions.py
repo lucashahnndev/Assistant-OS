@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, File, UploadFile
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from core.identity import PrincipalContext
-from skills.weather_control.skill import WeatherSkill
+from capabilities.weather_control.capability import WeatherCapability
 from ..auth import get_current_user
 from ..core.models import User, AuditLog
 from ..core.database import get_db
@@ -696,7 +696,7 @@ def get_weather_card(
 ):
     """
     Returns structured weather data for assistive chat cards.
-    Uses weather skill + current session context (location fallback included).
+    Uses weather capability + current session context (location fallback included).
     """
     kernel = get_kernel(request)
     orch = kernel.orchestrator
@@ -704,15 +704,15 @@ def get_weather_card(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    skills_cfg = kernel.config_manager.get("skills", {}) if hasattr(kernel, "config_manager") else {}
-    weather_cfg = skills_cfg.get("weather_control", {}) if isinstance(skills_cfg, dict) else {}
-    weather_skill = WeatherSkill(kernel=kernel, config=weather_cfg)
+    capabilities_cfg = kernel.config_manager.get("capabilities", {}) if hasattr(kernel, "config_manager") else {}
+    weather_cfg = capabilities_cfg.get("weather_control", {}) if isinstance(capabilities_cfg, dict) else {}
+    weather_capability = WeatherCapability(kernel=kernel, config=weather_cfg)
     safe_days = max(1, min(int(days or 3), 5))
     ctx = {"session": session}
     inferred_city = _infer_weather_city_from_text(hint or "") or _infer_weather_city_from_history(session)
     weather_params = {"city": inferred_city} if inferred_city else {}
 
-    current_payload = weather_skill.execute("weather.control.get", weather_params, ctx)
+    current_payload = weather_capability.execute("weather.control.get", weather_params, ctx)
     if not isinstance(current_payload, dict) or not current_payload.get("ok"):
         return {
             "ok": False,
@@ -722,7 +722,7 @@ def get_weather_card(
         }
 
     forecast_params = {"days": safe_days, **weather_params}
-    forecast_payload = weather_skill.execute("weather.control.forecast", forecast_params, ctx)
+    forecast_payload = weather_capability.execute("weather.control.forecast", forecast_params, ctx)
     if not isinstance(forecast_payload, dict) or not forecast_payload.get("ok"):
         forecast_payload = {"ok": False, "forecast": [], "days": 0}
 

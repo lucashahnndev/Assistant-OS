@@ -1,39 +1,50 @@
 {
-    "provider": "openrouter",
-    "display_name": "OpenRouter",
-    "supports": [
-        "chat",
-        "vision"
-    ],
-    "defaults": {
-        "model": "arcee-ai/trinity-large-preview:free",
-        "timeout": 90,
-        "max_tokens": 1024
-    },
+  "provider": "openrouter",
+  "display_name": "OpenRouter",
+  "supports": [
+    "chat",
+    "vision"
+  ],
+  "defaults": {
+    "model": "arcee-ai/trinity-large-preview:free",
+    "timeout": 90,
+    "max_tokens": 1024
+  },
+  "models": [
+    "arcee-ai/trinity-large-preview:free",
+    "google/gemma-3-4b-it:free",
+    "openai/gpt-3.5-turbo",
+    "anthropic/claude-3-haiku"
+  ],
+  "auth": {
+    "mode": "api_key",
     "fields": [
-        {
-            "name": "api_key_ref",
-            "type": "env_ref",
-            "label": "API Key",
-            "required": true
-        },
-        {
-            "name": "model",
-            "type": "string",
-            "label": "Model ID",
-            "required": true
-        },
-        {
-            "name": "max_tokens",
-            "type": "number",
-            "label": "Max Tokens",
-            "required": false
-        }
-    ],
-    "models": [
-        "arcee-ai/trinity-large-preview:free",
-        "google/gemma-3-4b-it:free",
-        "openai/gpt-3.5-turbo",
-        "anthropic/claude-3-haiku"
+      {
+        "key": "secret_ref",
+        "type": "secret_ref",
+        "title": "API Key",
+        "required": true,
+        "description": "",
+        "placeholder": ""
+      }
     ]
+  },
+  "settings_fields": [
+    {
+      "key": "model",
+      "type": "string",
+      "title": "Model ID",
+      "required": true,
+      "description": "",
+      "placeholder": ""
+    },
+    {
+      "key": "max_tokens",
+      "type": "number",
+      "title": "Max Tokens",
+      "required": false,
+      "description": "",
+      "placeholder": ""
+    }
+  ]
 }

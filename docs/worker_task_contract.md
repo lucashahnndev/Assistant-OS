@@ -7,7 +7,7 @@ This document defines the **authoritative contract** for asynchronous execution 
 - `TaskExecution` (audit trail for scheduled runs)
 - `Work` (runtime unit for both scheduled and interactive jobs)
 
-All future changes to scheduler, worker orchestration, APIs, UI, and skills **must comply** with this contract.
+All future changes to scheduler, worker orchestration, APIs, UI, and capabilities **must comply** with this contract.
 
 ## 2. Scope
 This contract applies to:
@@ -103,7 +103,7 @@ Each work context file (`context.json`) contains at minimum:
 - `planner.replan_budget`
 - `planner.replans_used`
 - `data.actions_used`
-- `data.skills_used`
+- `data.capabilities_used`
 - `data.media_used`
 - `data.queued_messages`
 - `data.task_id`
@@ -114,7 +114,7 @@ Each work context file (`context.json`) contains at minimum:
 ### 6.2 Context rules
 - Writers MUST patch/merge; never blindly overwrite entire file from unrelated flow.
 - Unknown keys MUST be preserved.
-- Lists SHOULD be bounded (`actions_used`, `skills_used`, `media_used`, etc.) to avoid unbounded growth.
+- Lists SHOULD be bounded (`actions_used`, `capabilities_used`, `media_used`, etc.) to avoid unbounded growth.
 
 ## 7. Event Contract (Observability)
 `events.jsonl` is append-only and chronological.
@@ -172,7 +172,7 @@ Compatibility requirements:
 Task Overwatch UI MUST expose at minimum:
 - `Overview`: goal, cursor, status, last thought/action, origin metadata
 - `Flow`: live/recent events
-- `Skills`: skill/action usage
+- `Capabilities`: capability/action usage
 - `Media`: media artifacts
 - `Triggers/Executions`: trigger info + execution counts/history
 - `Notes`: contextual annotations

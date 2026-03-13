@@ -1,26 +1,34 @@
 {
-    "provider": "system",
-    "display_name": "System Native TTS",
-    "supports": [
-        "tts"
-    ],
-    "defaults": {
-        "rate": 150,
-        "volume": 1.0
+  "provider": "system",
+  "display_name": "System Native TTS",
+  "supports": [
+    "tts"
+  ],
+  "defaults": {
+    "rate": 150,
+    "volume": 1
+  },
+  "models": [],
+  "auth": {
+    "mode": "none",
+    "fields": []
+  },
+  "settings_fields": [
+    {
+      "key": "rate",
+      "type": "number",
+      "title": "Speech Rate",
+      "required": false,
+      "description": "",
+      "placeholder": ""
     },
-    "fields": [
-        {
-            "name": "rate",
-            "type": "number",
-            "label": "Speech Rate",
-            "required": false
-        },
-        {
-            "name": "volume",
-            "type": "number",
-            "label": "Volume (0.0 to 1.0)",
-            "required": false
-        }
-    ],
-    "models": []
+    {
+      "key": "volume",
+      "type": "number",
+      "title": "Volume (0.0 to 1.0)",
+      "required": false,
+      "description": "",
+      "placeholder": ""
+    }
+  ]
 }

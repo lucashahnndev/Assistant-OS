@@ -1,0 +1,89 @@
+{
+  "contract_version": "1.0",
+  "capability": {
+    "id": "spotify_search",
+    "namespace": "spotify.search",
+    "version": "1.0.0",
+    "title": "spotify.search",
+    "description": "Busca conteúdo no Spotify (música, artista, álbum, playlist), com fallback quando credenciais não estiverem disponíveis."
+  },
+  "runtime": {
+    "module": "capabilities.spotify_search",
+    "factory": "create_capability",
+    "config_schema": "./config.schema.json"
+  },
+  "actions": [
+    {
+      "id": "spotify.search.search",
+      "title": "Search",
+      "description": "Pesquisa o catálogo do Spotify e retorna melhor resultado + lista estruturada.",
+      "handler": "search",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "spotify:search:search"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Termo de busca"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "track",
+              "artist",
+              "album",
+              "playlist"
+            ],
+            "default": "track"
+          },
+          "market": {
+            "type": "string",
+            "description": "Código ISO do mercado (ex: BR)",
+            "default": "BR"
+          },
+          "limit": {
+            "type": "integer",
+            "default": 5
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    }
+  ],
+  "auth": {
+    "mode": "client_credentials",
+    "required": false,
+    "fields": [
+      {
+        "id": "auth_clientid",
+        "type": "secret_ref",
+        "config_path": "auth.clientId",
+        "required": false,
+        "title": "Client ID",
+        "secret_policy": {
+          "allow_create": true,
+          "allow_select": true
+        }
+      },
+      {
+        "id": "auth_clientsecret",
+        "type": "secret_ref",
+        "config_path": "auth.clientSecret",
+        "required": false,
+        "title": "Client Secret",
+        "secret_policy": {
+          "allow_create": true,
+          "allow_select": true
+        }
+      }
+    ]
+  }
+}

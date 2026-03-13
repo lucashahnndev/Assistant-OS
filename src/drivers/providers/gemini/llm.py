@@ -8,6 +8,7 @@ from google import genai
 from google.genai import types
 from core.intent import AgentIntent
 from drivers.llm.base import ILLMProvider, ProviderContractError
+from server.core.secret_manager import resolve_secret_ref
 from utils.logging_config import get_logger
 from utils.contract_artifacts import write_contract_violation
 from .parser import extract_and_parse_json
@@ -16,21 +17,15 @@ logger = get_logger("GeminiDriver")
 
 class GeminiProvider(ILLMProvider):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
-        if config:
-            self.api_key = config.get("api_key")
-            self.model_name = config.get("model", "gemini-2.0-flash")
-        else:
-            from config.manager import ConfigManager
-            cm = ConfigManager()
-            providers = cm.get_llm_config().get("providers", {})
-            cfg = providers.get("google") or providers.get("gemini", {})
-            self.api_key = cfg.get("api_key")
-            self.model_name = cfg.get("model", "gemini-2.0-flash")
+        if not config:
+            raise ValueError("GeminiProvider requires explicit pool configuration.")
+        self.api_key = resolve_secret_ref(config.get("secret_ref"))
+        self.model_name = config.get("model", "gemini-2.0-flash")
         
-        self.max_tokens = int(config.get("max_tokens", 4096)) if config else 4096
+        self.max_tokens = int(config.get("max_tokens", 4096))
         # The new SDK takes http_options in the Client constructor.
         # Note: http_options['timeout'] expects MILLISECONDS.
-        timeout_sec = int(config.get("timeout", 60)) if config else 60
+        timeout_sec = int(config.get("timeout", 60))
         self.client = genai.Client(api_key=self.api_key, http_options={'timeout': timeout_sec * 1000})
 
     @staticmethod
@@ -130,6 +125,15 @@ class GeminiProvider(ILLMProvider):
             )
         except Exception as artifact_err:
             logger.warning("Gemini artifact logger failed: %s", artifact_err)
+
+    @staticmethod
+    def _artifact_trace_ctx(kwargs: Dict[str, Any]) -> Dict[str, str]:
+        return {
+            "session_id": str(kwargs.get("session_id") or ""),
+            "work_id": str(kwargs.get("work_id") or ""),
+            "trace_id": str(kwargs.get("trace_id") or ""),
+            "step_id": str(kwargs.get("step_id") or ""),
+        }
 
     def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] | None = None, **kwargs) -> AgentIntent:
         contents = []
@@ -289,7 +293,7 @@ class GeminiProvider(ILLMProvider):
                             ).hexdigest(),
                             "stage": "generate_structured_attempt",
                         },
-                        **kwargs,
+                        **self._artifact_trace_ctx(kwargs),
                     )
                     logger.warning(
                         "Gemini structured contract violation contract=%s attempt=%s/%s error=%s",
@@ -383,7 +387,7 @@ class GeminiProvider(ILLMProvider):
                     max_attempts=1,
                     expected_action="vision_contract",
                     extra={"stage": "analyze_image_structured"},
-                    **kwargs,
+                    **self._artifact_trace_ctx(kwargs),
                 )
                 artifact_emitted = True
                 raise err
@@ -407,7 +411,7 @@ class GeminiProvider(ILLMProvider):
                     max_attempts=1,
                     expected_action="vision_contract",
                     extra={"stage": "analyze_image_structured_exception"},
-                    **kwargs,
+                    **self._artifact_trace_ctx(kwargs),
                 )
             logger.error(f"Gemini analyze_image_structured error: {e}")
             raise e

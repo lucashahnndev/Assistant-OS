@@ -1,41 +1,52 @@
 {
-    "provider": "google",
-    "display_name": "Google / Gemini",
-    "supports": [
-        "chat",
-        "vision",
-        "stt"
-    ],
-    "defaults": {
-        "model": "gemini-2.0-flash",
-        "timeout": 90,
-        "max_tokens": 1024
-    },
+  "provider": "google",
+  "display_name": "Google / Gemini",
+  "supports": [
+    "chat",
+    "vision",
+    "stt"
+  ],
+  "defaults": {
+    "model": "gemini-2.0-flash",
+    "timeout": 90,
+    "max_tokens": 1024
+  },
+  "models": [
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash"
+  ],
+  "auth": {
+    "mode": "api_key",
     "fields": [
-        {
-            "name": "api_key_ref",
-            "type": "env_ref",
-            "label": "API Key",
-            "required": true
-        },
-        {
-            "name": "model",
-            "type": "string",
-            "label": "Model Name",
-            "required": true
-        },
-        {
-            "name": "language",
-            "type": "string",
-            "label": "Language (for STT)",
-            "required": false,
-            "default": "pt-BR"
-        }
-    ],
-    "models": [
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash"
+      {
+        "key": "secret_ref",
+        "type": "secret_ref",
+        "title": "API Key",
+        "required": true,
+        "description": "",
+        "placeholder": ""
+      }
     ]
+  },
+  "settings_fields": [
+    {
+      "key": "model",
+      "type": "string",
+      "title": "Model Name",
+      "required": true,
+      "description": "",
+      "placeholder": ""
+    },
+    {
+      "key": "language",
+      "type": "string",
+      "title": "Language (for STT)",
+      "required": false,
+      "description": "",
+      "placeholder": "",
+      "default": "pt-BR"
+    }
+  ]
 }

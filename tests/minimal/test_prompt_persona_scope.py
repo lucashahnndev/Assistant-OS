@@ -36,8 +36,8 @@ def _compose(response_persona: str) -> str:
         session_summary="",
         scratchpad="",
         attachments=[],
-        skills_summary="- `reply`: ...",
-        skill_scope="principal-filtered",
+        capabilities_summary="- `reply`: ...",
+        capability_scope="principal-filtered",
     )
 
 

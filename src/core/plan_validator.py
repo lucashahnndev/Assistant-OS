@@ -1,9 +1,10 @@
 import logging
-import jsonschema
 from dataclasses import dataclass
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
+
 from core.errors import ErrorCode
 from core.resolution.action_plan import ActionPlan
+from utils.schema_utils import SchemaError, ValidationError, validate_json_instance
 
 logger = logging.getLogger("PlanValidator")
 
@@ -31,7 +32,7 @@ class PlanValidator:
     @staticmethod
     def validate(
         plan: ActionPlan, 
-        skill_registry: Any,
+        capability_registry: Any,
         session: Any,
         context: Optional[Dict[str, Any]] = None
     ) -> ValidationResult:
@@ -42,15 +43,15 @@ class PlanValidator:
             return ValidationResult(is_valid=True)
 
         # 1. Action Existence & Registry Integrity
-        skill = skill_registry.get_skill_for_action(plan.action_id)
-        if not skill:
+        capability = capability_registry.get_capability_for_action(plan.action_id)
+        if not capability:
             return ValidationResult(
                 is_valid=False,
                 error_code=ErrorCode.TOOL_NOT_FOUND,
                 message=f"Action '{plan.action_id}' not registered.",
                 diagnostics={
                     "action_id": plan.action_id, 
-                    "suggestions": skill_registry.suggest_actions(plan.action_id)
+                    "suggestions": capability_registry.suggest_actions(plan.action_id)
                 }
             )
 
@@ -65,72 +66,40 @@ class PlanValidator:
                 diagnostics={"action_id": plan.action_id, "health": "UNAVAILABLE", "recovery": "replan"}
             )
 
-        # 3. Argument/Schema Validation
-        contract = getattr(skill, "_contract", {}) or {}
-        actions_schema = contract.get("actions", {})
-        
-        action_found = False
-        schema = None
-        
-        # Exact match in contract
-        if isinstance(actions_schema, dict):
-            entry = actions_schema.get(plan.action_id.split(".")[-1])
-            if entry:
-                schema = entry.get("params")
-                action_found = True
-        elif isinstance(actions_schema, list):
-            for entry in actions_schema:
-                if entry.get("id") == plan.action_id or entry.get("name") == plan.action_id.split(".")[-1]:
-                    schema = entry.get("params")
-                    action_found = True
-                    break
-        
-        if action_found and schema:
-            try:
-                # Standardize the custom 'params' format into a valid JSON Schema
-                properties = {}
-                required = []
-                for p_name, p_info in schema.items():
-                    if not isinstance(p_info, dict):
-                        properties[p_name] = {"type": str(p_info)}
-                        continue
-                    
-                    # Clone to avoid mutating registry data
-                    clean_info = dict(p_info)
-                    if clean_info.pop("required", False) is True:
-                        required.append(p_name)
-                    
-                    # jsonschema 'type' must be standard. Some contracts use custom types.
-                    # We'll just pass it through; if jsonschema fails, it's a dev error.
-                    properties[p_name] = clean_info
+        # 3. Argument/Schema Validation (canonical contract only)
+        action_metadata = capability_registry.get_action_metadata(plan.action_id)
+        schema = action_metadata.get("parameters")
 
-                full_schema = {
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
-                    "additionalProperties": True # Be permissive by default
-                }
-                
-                jsonschema.validate(instance=plan.args, schema=full_schema)
-            except jsonschema.exceptions.ValidationError as e:
+        if schema:
+            try:
+                validate_json_instance(instance=plan.args, schema=schema)
+            except ValidationError as e:
                 return ValidationResult(
                     is_valid=False,
                     error_code=ErrorCode.TOOL_INVALID_INPUT,
-                    message=f"Schema validation failed for '{plan.action_id}': {e.message}",
+                    message=f"Schema validation failed for '{plan.action_id}': {e}",
                     diagnostics={
                         "action_id": plan.action_id,
                         "validation_error": str(e),
                         "provided_args": plan.args,
-                        "required_params": required
                     }
                 )
-            except jsonschema.exceptions.SchemaError as e:
+            except SchemaError as e:
                 logger.error(f"Internal Schema error in contract for '{plan.action_id}': {e}")
-                # We don't block execution if our validation engine itself has a bug/incompatibility
-                # unless it's critical. But for now, we pass.
-                return ValidationResult(is_valid=True)
+                return ValidationResult(
+                    is_valid=False,
+                    error_code=ErrorCode.POLICY_BLOCKED,
+                    message=f"Invalid canonical parameter schema for '{plan.action_id}'.",
+                    diagnostics={"action_id": plan.action_id, "schema_error": str(e)},
+                )
             except Exception as e:
                 logger.error(f"Validation engine error: {e}")
+                return ValidationResult(
+                    is_valid=False,
+                    error_code=ErrorCode.POLICY_BLOCKED,
+                    message=f"Validation engine failed for '{plan.action_id}'.",
+                    diagnostics={"action_id": plan.action_id, "error": str(e)},
+                )
 
         # 4. Dependency Validation (Basic step dependencies)
         # Browser Control namespace manages its own runtime/session lifecycle and
@@ -146,7 +115,7 @@ class PlanValidator:
                 )
 
         # 5. Policy & Side-Effect Safety
-        metadata = skill_registry.get_action_metadata(plan.action_id)
+        metadata = capability_registry.get_action_metadata(plan.action_id)
         side_effect = metadata.get("side_effect", "none")
         if side_effect == "destructive":
             # Policy: Destructive actions in system turns must be authorized

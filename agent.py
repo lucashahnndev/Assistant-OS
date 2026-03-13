@@ -15,6 +15,8 @@ sys.path.append(os.path.join(project_root, 'src'))
 from core.identity import PrincipalContext
 from utils.logging_config import setup_logging
 from utils.privileged_setup import setup_privileged_access, check_privileged_access
+from utils.service_manager import ServiceManager
+from config.manager import ConfigManager
 import main as init_main
 
 # Color codes
@@ -111,15 +113,15 @@ class AgentCLI:
 {BLUE}Internal Commands:{RESET}
   /memory   - Show session history
   /clear    - Clear current session
-  /skills   - List available tools
+  /capabilities   - List available tools
   /exit     - Exit CLI
             """)
         elif main_cmd == "/memory":
             session = self.orchestrator.get_session_robust(self.session_id)
             for m in session.history:
                 print(f"{DIM}[{m['role'].upper()}]:{RESET} {m['content']}")
-        elif main_cmd == "/skills":
-            print(self.orchestrator.skill_registry.get_summary())
+        elif main_cmd == "/capabilities":
+            print(self.orchestrator.capability_registry.get_summary())
         elif main_cmd == "/clear":
             self.orchestrator.delete_session(self.session_id)
             print(f"{YELLOW}Session cleared.{RESET}")
@@ -170,15 +172,46 @@ def main():
     parser.add_argument("--setup-privileged", action="store_true", help="(doctor mode) Configure sudoers for safe approved sudo commands")
     parser.add_argument("--check-privileged", action="store_true", help="(doctor mode) Check whether privileged sudo setup is active")
     parser.add_argument("--user", help="(doctor mode) Target system user for sudoers rule")
-    parser.add_argument("--dry-run", action="store_true", help="(doctor mode) Print generated sudoers content without installing")
+    parser.add_argument("--dry-run", action="store_true", help="(doctor mode) Print generated content without installing")
+    parser.add_argument("--install-services", action="store_true", help="(doctor mode) Install systemd services (aosd.target)")
+    parser.add_argument("--system", action="store_true", help="(doctor mode) Install services as system units (requires sudo)")
+    parser.add_argument("--status-services", action="store_true", help="(doctor mode) Check status of installed systemd services")
     
     args = parser.parse_args()
-    if args.setup_privileged:
-        args.mode = "doctor"
-    if args.check_privileged:
+    if args.check_privileged or args.setup_privileged or args.install_services or args.status_services:
         args.mode = "doctor"
 
     if args.mode == "doctor":
+        # Initialize ServiceManager early if needed
+        data_dir = ConfigManager.get_data_dir()
+        sm = ServiceManager(project_root=project_root, data_dir=data_dir)
+
+        if args.status_services:
+            status = sm.get_status(system_mode=args.system)
+            print(f"{BLUE}--- AOSD Service Status ({'system' if args.system else 'user'} mode) ---{RESET}")
+            for unit, state in status.items():
+                color = GREEN if state == "active" else RED
+                print(f"{unit}: {color}{state}{RESET}")
+            raise SystemExit(0)
+
+        if args.install_services:
+            if args.dry_run:
+                print(f"{BLUE}--- Dry-run: Systemd Unit Files ---{RESET}")
+                units = sm.generate_units()
+                for name, content in units.items():
+                    print(f"\n{YELLOW}[ {name} ]{RESET}")
+                    print(content)
+                raise SystemExit(0)
+            
+            result = sm.install(system_mode=args.system)
+            if result.success:
+                print(f"{GREEN}{result.message}{RESET}")
+                print(f"{DIM}Use 'agent.py doctor --status-services' to check runtime state.{RESET}")
+                raise SystemExit(0)
+            else:
+                print(f"{RED}Error: {result.message}{RESET}")
+                raise SystemExit(1)
+
         if args.check_privileged:
             result = check_privileged_access(user=args.user)
             color = GREEN if result.ok else YELLOW

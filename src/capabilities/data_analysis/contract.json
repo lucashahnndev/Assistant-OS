@@ -1,0 +1,72 @@
+{
+  "contract_version": "1.0",
+  "capability": {
+    "id": "data_analysis",
+    "namespace": "data.analysis",
+    "version": "1.0.0",
+    "title": "data.analysis",
+    "description": "Analisa dados tabulares/séries numéricas e gera resumo, estatísticas e tabela markdown para visualização em cards."
+  },
+  "runtime": {
+    "module": "capabilities.data_analysis",
+    "factory": "create_capability",
+    "config_schema": "./config.schema.json"
+  },
+  "actions": [
+    {
+      "id": "data.analysis.summarize",
+      "title": "Summarize",
+      "description": "Gera resumo estatístico e tabela markdown de uma série numérica.",
+      "handler": "summarize",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "data:analysis:summarize"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "description": "Lista de registros (objetos) com campos para eixo X e Y."
+          },
+          "x_key": {
+            "type": "string",
+            "description": "Nome da coluna X (categoria/tempo)."
+          },
+          "y_key": {
+            "type": "string",
+            "description": "Nome da coluna Y (valor numérico)."
+          },
+          "labels": {
+            "type": "array",
+            "description": "Labels para série quando rows não for usado."
+          },
+          "values": {
+            "type": "array",
+            "description": "Valores numéricos da série quando rows não for usado."
+          },
+          "title": {
+            "type": "string",
+            "description": "Título opcional para o conjunto analisado."
+          },
+          "max_points": {
+            "type": "integer",
+            "description": "Limite máximo de pontos processados.",
+            "default": 24
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    }
+  ],
+  "auth": {
+    "mode": "none",
+    "required": false,
+    "fields": []
+  }
+}

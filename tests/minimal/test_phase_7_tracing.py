@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 def test_structured_decision_trace():
     with patch('src.core.orchestrator.LLMManager'), \
-         patch('src.core.orchestrator.SkillLoader'), \
+         patch('src.core.orchestrator.CapabilityLoader'), \
          patch('src.core.orchestrator.ConfigManager'), \
          patch('src.core.orchestrator.SessionIndexManager'):
         orchestrator = AgentOrchestrator()
@@ -56,7 +56,7 @@ def test_structured_decision_trace():
 
 def test_memory_trace_generation():
     with patch('src.core.orchestrator.LLMManager'), \
-         patch('src.core.orchestrator.SkillLoader'), \
+         patch('src.core.orchestrator.CapabilityLoader'), \
          patch('src.core.orchestrator.ConfigManager'), \
          patch('src.core.orchestrator.SessionIndexManager'):
         orchestrator = AgentOrchestrator()

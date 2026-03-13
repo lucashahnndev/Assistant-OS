@@ -74,7 +74,7 @@ class MemoryService:
     def search_memory(self, query: str, n_results: int = 5) -> List[Dict]:
         """Vector-based semantic search.
 
-        Returns a structured list to keep the contract stable for skills/API.
+        Returns a structured list to keep the contract stable for capabilities/API.
         """
         if not self.collection:
             return []

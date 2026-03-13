@@ -69,7 +69,7 @@ class VoiceManager:
 
     def _ensure_engines(self):
         if self.assistant: return
-        from drivers.voice.assistant import Assistant
+        from drivers.interfaces.voice.assistant import Assistant
         from services.tts.manager import TTSManager
         from config.manager import ConfigManager
         

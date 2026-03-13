@@ -1,51 +1,66 @@
 {
-    "provider": "huggingface",
-    "display_name": "HuggingFace",
-    "supports": [
-        "chat",
-        "vision"
-    ],
-    "defaults": {
-        "model": "HuggingFaceTB/SmolLM3-3B",
-        "base_url": "https://router.huggingface.co/v1",
-        "timeout": 90,
-        "max_tokens": 512
-    },
+  "provider": "huggingface",
+  "display_name": "HuggingFace",
+  "supports": [
+    "chat",
+    "vision"
+  ],
+  "defaults": {
+    "model": "HuggingFaceTB/SmolLM3-3B",
+    "base_url": "https://router.huggingface.co/v1",
+    "timeout": 90,
+    "max_tokens": 512
+  },
+  "models": [
+    "HuggingFaceTB/SmolLM3-3B",
+    "llava-hf/llava-1.5-13b-hf",
+    "Qwen/Qwen2.5-VL-7B-Instruct"
+  ],
+  "auth": {
+    "mode": "api_key",
     "fields": [
-        {
-            "name": "api_key_ref",
-            "type": "env_ref",
-            "label": "API Key HF",
-            "required": true
-        },
-        {
-            "name": "model",
-            "type": "string",
-            "label": "Repository Model / ID",
-            "required": true
-        },
-        {
-            "name": "base_url",
-            "type": "string",
-            "label": "Base URL",
-            "required": false
-        },
-        {
-            "name": "timeout",
-            "type": "number",
-            "label": "Timeout (s)",
-            "required": false
-        },
-        {
-            "name": "max_tokens",
-            "type": "number",
-            "label": "Max Tokens",
-            "required": false
-        }
-    ],
-    "models": [
-        "HuggingFaceTB/SmolLM3-3B",
-        "llava-hf/llava-1.5-13b-hf",
-        "Qwen/Qwen2.5-VL-7B-Instruct"
+      {
+        "key": "secret_ref",
+        "type": "secret_ref",
+        "title": "API Key HF",
+        "required": true,
+        "description": "",
+        "placeholder": ""
+      }
     ]
+  },
+  "settings_fields": [
+    {
+      "key": "model",
+      "type": "string",
+      "title": "Repository Model / ID",
+      "required": true,
+      "description": "",
+      "placeholder": ""
+    },
+    {
+      "key": "base_url",
+      "type": "string",
+      "title": "Base URL",
+      "required": false,
+      "description": "",
+      "placeholder": ""
+    },
+    {
+      "key": "timeout",
+      "type": "number",
+      "title": "Timeout (s)",
+      "required": false,
+      "description": "",
+      "placeholder": ""
+    },
+    {
+      "key": "max_tokens",
+      "type": "number",
+      "title": "Max Tokens",
+      "required": false,
+      "description": "",
+      "placeholder": ""
+    }
+  ]
 }

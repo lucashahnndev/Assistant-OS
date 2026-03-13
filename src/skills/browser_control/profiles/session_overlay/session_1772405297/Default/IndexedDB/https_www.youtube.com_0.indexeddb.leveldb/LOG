@@ -1,5 +1,0 @@
-2026/03/01-19:48:22.645 1d61e Creating DB /home/lucas/Documentos/GitHub/Assistant-OS/src/skills/browser_control/profiles/session_overlay/session_1772405297/Default/IndexedDB/https_www.youtube.com_0.indexeddb.leveldb since it was missing.
-2026/03/01-19:48:22.648 1d61e Reusing MANIFEST /home/lucas/Documentos/GitHub/Assistant-OS/src/skills/browser_control/profiles/session_overlay/session_1772405297/Default/IndexedDB/https_www.youtube.com_0.indexeddb.leveldb/MANIFEST-000001
-2026/03/01-19:52:47.349 1d61d Level-0 table #5: started
-2026/03/01-19:52:47.362 1d61d Level-0 table #5: 1303428 bytes OK
-2026/03/01-19:52:47.365 1d61d Delete type=0 #3

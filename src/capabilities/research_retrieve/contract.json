@@ -1,0 +1,77 @@
+{
+  "contract_version": "1.0",
+  "capability": {
+    "id": "research_retrieve",
+    "namespace": "research.retrieve",
+    "version": "1.0.0",
+    "title": "research.retrieve",
+    "description": "Subagente de pesquisa web semi-isolado para busca, leitura e síntese com evidências."
+  },
+  "runtime": {
+    "module": "capabilities.research_retrieve",
+    "factory": "create_capability"
+  },
+  "actions": [
+    {
+      "id": "research.retrieve.run",
+      "title": "Run",
+      "description": "Executa pipeline de pesquisa web com budget rígido e retorno mitigado para o planner global.",
+      "handler": "run",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "research:retrieve:run"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Consulta principal de pesquisa."
+          },
+          "goal": {
+            "type": "string",
+            "description": "Objetivo da tarefa (alias de query)."
+          },
+          "constraints": {
+            "type": "object",
+            "description": "Restrições de budget/escopo: lang, recency_days, domains_allow/deny, max_links_to_open, max_docs, max_total_chars, max_steps, extract_schema."
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "md",
+              "toon"
+            ],
+            "default": "md"
+          }
+        },
+        "additionalProperties": true
+      },
+      "examples": [
+        {
+          "input": {
+            "query": "Compare top open-source vector databases for RAG in 2026",
+            "constraints": {
+              "lang": "en",
+              "max_links_to_open": 3,
+              "max_docs": 3,
+              "max_total_chars": 10000,
+              "max_steps": 7
+            },
+            "output_format": "md"
+          }
+        }
+      ],
+      "side_effect": "none"
+    }
+  ],
+  "auth": {
+    "mode": "none",
+    "required": false,
+    "fields": []
+  }
+}

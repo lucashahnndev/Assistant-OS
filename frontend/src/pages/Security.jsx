@@ -30,7 +30,7 @@ import {
 import { api } from '../hooks/api';
 import { toast } from 'react-hot-toast';
 import ConfirmDialog from '../components/ConfirmDialog';
-import SkillIcon from '../components/SkillIcon';
+import CapabilityIcon from '../components/CapabilityIcon';
 
 const API_BASE = '/messaging_access';
 const INTERFACE_META = {
@@ -99,8 +99,8 @@ const Security = () => {
         description: '',
         allow_actions: '',
         deny_actions: '',
-        allow_skills: '',
-        deny_skills: '',
+        allow_capabilities: '',
+        deny_capabilities: '',
         worker_view_scope: 'owner_identity',
         worker_control_scope: 'owner_identity'
     });
@@ -143,7 +143,7 @@ const Security = () => {
                 api.get(`${API_BASE}/interfaces`),
                 api.get(`${API_BASE}/users`),
                 api.get(`${API_BASE}/chats`),
-                api.get('/skills/registry'),
+                api.get('/capabilities/registry'),
                 api.get(`${API_BASE}/groups`),
                 api.get(`${API_BASE}/approval-audit?limit=150`)
             ]);
@@ -264,8 +264,8 @@ const Security = () => {
             ...group,
             allow_actions: joinPatterns(group.allow_actions),
             deny_actions: joinPatterns(group.deny_actions),
-            allow_skills: joinPatterns(group.allow_skills),
-            deny_skills: joinPatterns(group.deny_skills),
+            allow_capabilities: joinPatterns(group.allow_capabilities),
+            deny_capabilities: joinPatterns(group.deny_capabilities),
             worker_view_scope: group.worker_view_scope || 'owner_identity',
             worker_control_scope: group.worker_control_scope || 'owner_identity'
         });
@@ -335,8 +335,8 @@ const Security = () => {
                 description: newGroup.description,
                 allow_actions: splitPatterns(newGroup.allow_actions),
                 deny_actions: splitPatterns(newGroup.deny_actions),
-                allow_skills: splitPatterns(newGroup.allow_skills),
-                deny_skills: splitPatterns(newGroup.deny_skills),
+                allow_capabilities: splitPatterns(newGroup.allow_capabilities),
+                deny_capabilities: splitPatterns(newGroup.deny_capabilities),
                 worker_view_scope: newGroup.worker_view_scope,
                 worker_control_scope: newGroup.worker_control_scope
             });
@@ -347,8 +347,8 @@ const Security = () => {
                 description: '',
                 allow_actions: '',
                 deny_actions: '',
-                allow_skills: '',
-                deny_skills: '',
+                allow_capabilities: '',
+                deny_capabilities: '',
                 worker_view_scope: 'owner_identity',
                 worker_control_scope: 'owner_identity'
             });
@@ -369,8 +369,8 @@ const Security = () => {
                 description: editingGroup.description,
                 allow_actions: splitPatterns(editingGroup.allow_actions),
                 deny_actions: splitPatterns(editingGroup.deny_actions),
-                allow_skills: splitPatterns(editingGroup.allow_skills),
-                deny_skills: splitPatterns(editingGroup.deny_skills),
+                allow_capabilities: splitPatterns(editingGroup.allow_capabilities),
+                deny_capabilities: splitPatterns(editingGroup.deny_capabilities),
                 worker_view_scope: editingGroup.worker_view_scope,
                 worker_control_scope: editingGroup.worker_control_scope
             });
@@ -405,7 +405,7 @@ const Security = () => {
             if (!query) return true;
             return (
                 action.id.toLowerCase().includes(query) ||
-                (action.skill_name || '').toLowerCase().includes(query) ||
+                (action.capability_name || '').toLowerCase().includes(query) ||
                 (action.description || '').toLowerCase().includes(query)
             );
         });
@@ -445,10 +445,10 @@ const Security = () => {
                             >
                                 <div style={{ minWidth: 0, flex: 1 }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                                        <SkillIcon
+                                        <CapabilityIcon
                                             variant="inline"
                                             actionId={action.id}
-                                            skillName={action.skill_name}
+                                            capabilityName={action.capability_name}
                                             iconKey={action.icon_key}
                                             iconUrl={action.icon_url}
                                         />
@@ -1218,7 +1218,7 @@ const Security = () => {
                                                                 onClick={() => setEditingOverrides({ type: assignmentsType, data: JSON.parse(JSON.stringify(item)) })}
                                                                 className="btn-ghost"
                                                                 style={{ padding: '6px', borderRadius: '8px' }}
-                                                                title="Edit skill overrides"
+                                                                title="Edit capability overrides"
                                                             >
                                                                 <Edit size={14} />
                                                             </button>
@@ -1327,7 +1327,7 @@ const Security = () => {
                                         <ShieldAlert size={18} />
                                     </div>
                                     <div style={{ minWidth: 0 }}>
-                                        <h3 style={{ fontSize: '1rem', fontWeight: '800' }}>Skill Overrides</h3>
+                                        <h3 style={{ fontSize: '1rem', fontWeight: '800' }}>Capability Overrides</h3>
                                         <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                             {editingOverrides.data.display_name || editingOverrides.data.title}
                                         </p>
@@ -1347,18 +1347,18 @@ const Security = () => {
                                 </div>
 
                                 <section>
-                                    <div style={{ fontSize: '10px', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '16px' }}>Explicit Skill Permissions</div>
+                                    <div style={{ fontSize: '10px', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '16px' }}>Explicit Capability Permissions</div>
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                         {registry.map(action => {
-                                            const isAllowed = editingOverrides.data.overrides.allow_skills.includes(action.id);
-                                            const isDenied = editingOverrides.data.overrides.deny_skills.includes(action.id);
+                                            const isAllowed = editingOverrides.data.overrides.allow_capabilities.includes(action.id);
+                                            const isDenied = editingOverrides.data.overrides.deny_capabilities.includes(action.id);
 
                                             return (
                                                 <div key={action.id} className="glass" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderRadius: '14px', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--card-border)' }}>
                                                     <div style={{ flex: 1, minWidth: 0 }}>
                                                         <div style={{ fontWeight: '800', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                             {action.id}
-                                                            <span style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '4px', background: 'rgba(0,0,0,0.2)', color: 'var(--text-muted)', fontWeight: '900' }}>SKILL</span>
+                                                            <span style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '4px', background: 'rgba(0,0,0,0.2)', color: 'var(--text-muted)', fontWeight: '900' }}>CAPABILITY</span>
                                                         </div>
                                                         <div style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{action.description}</div>
                                                     </div>
@@ -1373,14 +1373,14 @@ const Security = () => {
                                                                 onClick={() => {
                                                                     const o = editingOverrides.data.overrides;
                                                                     if (mode.id === 'allow') {
-                                                                        o.allow_skills = [action.id]; // simplifying for UI, assuming one override at a time per row or similar
-                                                                        o.deny_skills = o.deny_skills.filter(s => s !== action.id);
+                                                                        o.allow_capabilities = [action.id]; // simplifying for UI, assuming one override at a time per row or similar
+                                                                        o.deny_capabilities = o.deny_capabilities.filter(s => s !== action.id);
                                                                     } else if (mode.id === 'deny') {
-                                                                        o.deny_skills = [action.id];
-                                                                        o.allow_skills = o.allow_skills.filter(s => s !== action.id);
+                                                                        o.deny_capabilities = [action.id];
+                                                                        o.allow_capabilities = o.allow_capabilities.filter(s => s !== action.id);
                                                                     } else {
-                                                                        o.allow_skills = o.allow_skills.filter(s => s !== action.id);
-                                                                        o.deny_skills = o.deny_skills.filter(s => s !== action.id);
+                                                                        o.allow_capabilities = o.allow_capabilities.filter(s => s !== action.id);
+                                                                        o.deny_capabilities = o.deny_capabilities.filter(s => s !== action.id);
                                                                     }
                                                                     setEditingOverrides({ ...editingOverrides });
                                                                 }}
@@ -1507,7 +1507,7 @@ const Security = () => {
 
                             <details>
                                 <summary style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', borderRadius: '8px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--card-border)', fontSize: '11px', fontWeight: '800', color: 'var(--text-secondary)', listStyle: 'none' }}>
-                                    <span>⚙ Skill Permissions (optional)</span>
+                                    <span>⚙ Capability Permissions (optional)</span>
                                     <span style={{ display: 'flex', gap: '8px' }}>
                                         <span style={{ fontSize: '10px', fontWeight: '900', color: 'var(--text-main)', background: soberBg.success, padding: '2px 6px', borderRadius: '999px' }}>+{newGroupAllowCount}</span>
                                         <span style={{ fontSize: '10px', fontWeight: '900', color: 'var(--text-main)', background: soberBg.danger, padding: '2px 6px', borderRadius: '999px' }}>-{newGroupDenyCount}</span>
@@ -1599,7 +1599,7 @@ const Security = () => {
                                 <div style={{ display: 'flex', gap: '6px', borderBottom: '1px solid var(--card-border)', paddingBottom: '10px', flexWrap: 'wrap' }}>
                                     {[
                                         { id: 'profile_details', label: 'Profile Detail' },
-                                        { id: 'skill_manager', label: 'Skill Manager' },
+                                        { id: 'capability_manager', label: 'Capability Manager' },
                                         { id: 'command_scope', label: 'Command Scope' },
                                     ].map(tab => (
                                         <button
@@ -1680,11 +1680,11 @@ const Security = () => {
                                     </>
                                 )}
 
-                                {profileEditorTab === 'skill_manager' && (
+                                {profileEditorTab === 'capability_manager' && (
                                     <div style={{ borderTop: '1px solid var(--card-border)', paddingTop: '12px' }}>
                                         <div style={{ display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', justifyContent: 'space-between', marginBottom: '12px', flexDirection: isMobile ? 'column' : 'row', gap: '8px' }}>
                                             <div>
-                                                <div style={{ fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Skill Permissions</div>
+                                                <div style={{ fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Capability Permissions</div>
                                                 <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
                                                     {splitPatterns(editingGroup.allow_actions).length} allowed | {splitPatterns(editingGroup.deny_actions).length} denied
                                                 </div>

@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Enabled"
+    },
+    "api_key": {
+      "type": "string",
+      "title": "OpenWeather API Key",
+      "x-ui": {
+        "placeholder": "Sua chave da API do OpenWeather"
+      }
+    },
+    "lat": {
+      "type": "string",
+      "title": "Latitude Override",
+      "description": "Optional: Override global latitude"
+    },
+    "lon": {
+      "type": "string",
+      "title": "Longitude Override",
+      "description": "Optional: Override global longitude"
+    }
+  }
+}

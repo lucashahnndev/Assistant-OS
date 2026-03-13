@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": false,
+      "title": "Enabled"
+    },
+    "auth": {
+      "type": "object",
+      "title": "Spotify API Credentials",
+      "properties": {
+        "clientId": {
+          "type": "string",
+          "title": "Client ID",
+          "x-ui": {
+            "placeholder": "Spotify Client ID"
+          }
+        },
+        "clientSecret": {
+          "type": "string",
+          "title": "Client Secret",
+          "x-ui": {
+            "placeholder": "Spotify Client Secret"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "defaults": {
+      "type": "object",
+      "title": "Defaults",
+      "properties": {
+        "market": {
+          "type": "string",
+          "title": "Default Market",
+          "default": "BR"
+        },
+        "limit": {
+          "type": "integer",
+          "title": "Default Limit",
+          "default": 5
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

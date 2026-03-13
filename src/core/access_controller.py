@@ -56,7 +56,7 @@ class IdentityService:
             "master": PermissionGroup(
                 id="master",
                 name="Master",
-                description="Acesso total. Novas skills entram automaticamente via wildcard.",
+                description="Acesso total. Novas capabilities entram automaticamente via wildcard.",
                 allow_actions=["*"],
                 worker_view_scope="global",
                 worker_control_scope="global",
@@ -78,7 +78,7 @@ class IdentityService:
                     "spotify.*",
                     "vision.*",
                     "overlay.assist.*",
-                    "system_logs.*",
+                    "system.logs.*",
                     "system.apps.*",
                     "system.control.info",
                     "system.control.time",
@@ -119,7 +119,7 @@ class IdentityService:
                     "youtube.retrieve.get",
                     "research.retrieve.run",
                     "deezer.search.search",
-                    "system_logs.*",
+                    "system.logs.*",
                     "system.control.info",
                     "system.control.time",
                     "system.control.status",
@@ -587,57 +587,57 @@ class AccessController:
         # Allow lists are evaluated by layer (group -> user -> entity) so that
         # user/chat overrides can narrow permissions even if group has wildcard.
         group_allow_actions = list(group.allow_actions if group else [])
-        group_allow_skills = list(group.allow_skills if group else [])
+        group_allow_capabilities = list(group.allow_capabilities if group else [])
         user_allow_actions = list(user.overrides.allow_actions)
-        user_allow_skills = list(user.overrides.allow_skills)
+        user_allow_capabilities = list(user.overrides.allow_capabilities)
 
         entity_allow_actions: List[str] = []
-        entity_allow_skills: List[str] = []
+        entity_allow_capabilities: List[str] = []
         if context.is_group and chat:
             entity_allow_actions = list(chat.overrides.allow_actions)
-            entity_allow_skills = list(chat.overrides.allow_skills)
+            entity_allow_capabilities = list(chat.overrides.allow_capabilities)
         deny_actions = self._merge_unique(
             group.deny_actions if group else [],
             user.overrides.deny_actions,
             target_entity.overrides.deny_actions,
         )
-        deny_skills = self._merge_unique(
-            group.deny_skills if group else [],
-            user.overrides.deny_skills,
-            target_entity.overrides.deny_skills,
+        deny_capabilities = self._merge_unique(
+            group.deny_capabilities if group else [],
+            user.overrides.deny_capabilities,
+            target_entity.overrides.deny_capabilities,
         )
         return {
             "group_id": [group_id] if group_id else [],
             "group_allow_actions": group_allow_actions,
-            "group_allow_skills": group_allow_skills,
+            "group_allow_capabilities": group_allow_capabilities,
             "user_allow_actions": user_allow_actions,
-            "user_allow_skills": user_allow_skills,
+            "user_allow_capabilities": user_allow_capabilities,
             "entity_allow_actions": entity_allow_actions,
-            "entity_allow_skills": entity_allow_skills,
+            "entity_allow_capabilities": entity_allow_capabilities,
             "deny_actions": deny_actions,
-            "deny_skills": deny_skills,
+            "deny_capabilities": deny_capabilities,
         }
 
     def _allow_layers_configured(self, rules: Dict[str, List[str]]) -> bool:
         return bool(
             rules.get("group_allow_actions")
-            or rules.get("group_allow_skills")
+            or rules.get("group_allow_capabilities")
             or rules.get("user_allow_actions")
-            or rules.get("user_allow_skills")
+            or rules.get("user_allow_capabilities")
             or rules.get("entity_allow_actions")
-            or rules.get("entity_allow_skills")
+            or rules.get("entity_allow_capabilities")
         )
 
     def _is_allowed_by_layers(self, action_id: str, rules: Dict[str, List[str]]) -> bool:
         layers = [
-            (rules.get("group_allow_actions", []), rules.get("group_allow_skills", [])),
-            (rules.get("user_allow_actions", []), rules.get("user_allow_skills", [])),
-            (rules.get("entity_allow_actions", []), rules.get("entity_allow_skills", [])),
+            (rules.get("group_allow_actions", []), rules.get("group_allow_capabilities", [])),
+            (rules.get("user_allow_actions", []), rules.get("user_allow_capabilities", [])),
+            (rules.get("entity_allow_actions", []), rules.get("entity_allow_capabilities", [])),
         ]
-        for allow_actions, allow_skills in layers:
-            if not allow_actions and not allow_skills:
+        for allow_actions, allow_capabilities in layers:
+            if not allow_actions and not allow_capabilities:
                 continue
-            if not (self._matches_any(action_id, allow_actions) or self._matches_any(action_id, allow_skills)):
+            if not (self._matches_any(action_id, allow_actions) or self._matches_any(action_id, allow_capabilities)):
                 return False
         return True
 
@@ -667,15 +667,15 @@ class AccessController:
 
         return True, ""
 
-    def pre_dispatch_gate(self, context: PrincipalContext, action: str, params: dict, skill_registry: Any = None, config_manager: Any = None) -> tuple[bool, str]:
+    def pre_dispatch_gate(self, context: PrincipalContext, action: str, params: dict, capability_registry: Any = None, config_manager: Any = None) -> tuple[bool, str]:
         logger.debug(f"Pre-dispatch gate check: {action} for {context.sender_id} on {context.interface}")
         user, chat, conf = self._resolve_context_entities(context)
 
         if user.status == AccessStatus.BLOCKED:
             return False, "Seu acesso está bloqueado."
 
-        if skill_registry and config_manager:
-            if not self._is_action_enabled_by_config(action, skill_registry, config_manager):
+        if capability_registry and config_manager:
+            if not self._is_action_enabled_by_config(action, capability_registry, config_manager):
                 return False, f"Ação '{action}' está desativada na configuração atual."
 
         rules = self._collect_effective_rules(context, user, chat)
@@ -687,7 +687,7 @@ class AccessController:
         # Explicit Deny (group + overrides)
         if self._matches_any(action, rules["deny_actions"]):
             return False, f"Ação '{action}' negada explicitamente para você."
-        if self._matches_any(action, rules["deny_skills"]):
+        if self._matches_any(action, rules["deny_capabilities"]):
             return False, f"Habilidade contendo '{action}' negada explicitamente para você."
 
         # Anyone mode restriction: Only low risk actions allowed
@@ -704,28 +704,25 @@ class AccessController:
                 needs_anyone_check = True
 
         if needs_anyone_check:
-            # We need skill registry to check risk level, or a hardcoded list for now
-            # For bootstrap, let's assume we need a reference to the registry or metadata
-            # I'll implement a simple check for now and refine later
-            if self._is_high_risk(action, skill_registry):
+            if not self._allow_anyone(action, capability_registry):
                 return False, "Este comando requer aprovação manual do administrador (High Risk)."
 
         # Unapproved users should not execute high-risk actions even outside "anyone" mode.
-        if user.status != AccessStatus.APPROVED and self._is_high_risk(action, skill_registry):
+        if user.status != AccessStatus.APPROVED and self._is_high_risk(action, capability_registry):
             return False, "Seu perfil ainda não está autorizado para ações de alto risco."
 
         return True, ""
 
-    def get_allowed_actions(self, context: PrincipalContext, skill_registry: Any, config_manager: Any = None) -> List[str]:
+    def get_allowed_actions(self, context: PrincipalContext, capability_registry: Any, config_manager: Any = None) -> List[str]:
         """
         Returns the list of actions the agent should see for this principal.
         This is intended for prompt filtering (least-privilege context),
         while pre_dispatch_gate remains the final execution authority.
         """
-        if not context or not skill_registry:
+        if not context or not capability_registry:
             return []
 
-        actions = skill_registry.list_actions()
+        actions = capability_registry.list_actions()
         user, chat, conf = self._resolve_context_entities(context)
         mode = conf.get("group_mode" if context.is_group else "dm_mode", "approved_only")
         rules = self._collect_effective_rules(context, user, chat)
@@ -735,14 +732,14 @@ class AccessController:
 
         filtered: List[str] = []
         for action_id in actions:
-            # 1. Skill enablement from config (if available)
-            if config_manager and not self._is_action_enabled_by_config(action_id, skill_registry, config_manager):
+            # 1. Capability enablement from config (if available)
+            if config_manager and not self._is_action_enabled_by_config(action_id, capability_registry, config_manager):
                 continue
 
             # 2. Explicit deny rules (group + overrides)
             if self._matches_any(action_id, rules["deny_actions"]):
                 continue
-            if self._matches_any(action_id, rules["deny_skills"]):
+            if self._matches_any(action_id, rules["deny_capabilities"]):
                 continue
 
             # 3. Optional explicit allow mode
@@ -751,7 +748,7 @@ class AccessController:
                     continue
 
             # 4. "anyone" mode receives low-risk subset by default
-            if mode == "anyone" and user.status != AccessStatus.APPROVED and self._is_high_risk(action_id, skill_registry):
+            if mode == "anyone" and user.status != AccessStatus.APPROVED and not self._allow_anyone(action_id, capability_registry):
                 continue
 
             filtered.append(action_id)
@@ -817,24 +814,24 @@ class AccessController:
             return False
         return False
 
-    def _is_action_enabled_by_config(self, action_id: str, skill_registry: Any, config_manager: Any) -> bool:
+    def _is_action_enabled_by_config(self, action_id: str, capability_registry: Any, config_manager: Any) -> bool:
         """
-        Best-effort mapping from action -> skill folder config key.
-        Example module path: skills.system_control.skill -> system_control
+        Best-effort mapping from action -> module folder config key.
+        Example module path: capabilities.system_control.capability -> system_control
         """
         try:
-            skill = skill_registry.get_skill_for_action(action_id)
-            if not skill:
+            capability = capability_registry.get_capability_for_action(action_id)
+            if not capability:
                 return False
 
-            module_name = getattr(skill, "__module__", "")
+            module_name = getattr(capability, "__module__", "")
             parts = module_name.split(".")
-            # skills.<folder>.skill
-            config_key = parts[1] if len(parts) >= 3 and parts[0] == "skills" else skill.name
+            # capabilities.<folder>.capability
+            config_key = parts[1] if len(parts) >= 3 and parts[0] == "capabilities" else capability.name
 
-            skills_cfg = config_manager.get("skills", {}) if config_manager else {}
-            skill_cfg = skills_cfg.get(config_key, {})
-            return skill_cfg.get("enabled", True)
+            capabilities_cfg = config_manager.get("capabilities", {}) if config_manager else {}
+            capability_cfg = capabilities_cfg.get(config_key, {})
+            return capability_cfg.get("enabled", True)
         except Exception:
             # Fail-open for prompt visibility; dispatch gate remains authoritative.
             return True
@@ -850,25 +847,19 @@ class AccessController:
                 return True
         return False
 
-    def _is_high_risk(self, action: str, skill_registry: Any = None) -> bool:
-        # Prefer per-action metadata from contracts when available.
-        if skill_registry and hasattr(skill_registry, "get_action_metadata"):
-            try:
-                metadata = skill_registry.get_action_metadata(action)
-                if str(metadata.get("risk_level", "")).lower() == "high":
-                    return True
-            except Exception:
-                pass
+    def _is_high_risk(self, action: str, capability_registry: Any = None) -> bool:
+        if not (capability_registry and hasattr(capability_registry, "get_action_metadata")):
+            raise RuntimeError("Capability registry with canonical metadata is required for risk checks.")
+        metadata = capability_registry.get_action_metadata(action)
+        if not metadata:
+            raise RuntimeError(f"Action metadata not found for '{action}'.")
+        return str(metadata.get("risk_level", "")).lower() == "high"
 
-        # Fallback to prefix-based classification.
-        high_risk_prefixes = [
-            "shell.",
-            "power.",
-            "process.",
-            "fs.",
-            "system.control.power",
-            "system.control.process.",
-            "system.control.fs.",
-            "system.control.service.manage",
-        ]
-        return any(action.startswith(p) for p in high_risk_prefixes)
+    def _allow_anyone(self, action: str, capability_registry: Any = None) -> bool:
+        if not (capability_registry and hasattr(capability_registry, "get_action_metadata")):
+            raise RuntimeError("Capability registry with canonical metadata is required for permission checks.")
+        metadata = capability_registry.get_action_metadata(action)
+        if not metadata:
+            raise RuntimeError(f"Action metadata not found for '{action}'.")
+        permissions = metadata.get("permissions") if isinstance(metadata.get("permissions"), dict) else {}
+        return bool(permissions.get("allow_anyone", False))

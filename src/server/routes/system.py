@@ -83,7 +83,8 @@ def get_status(request: Request):
             "public_mode": frontend_config.get("public_mode", False),
             "frontend_port": frontend_config.get("port", 5173),
             "drivers": [d.__class__.__name__ for d in kernel.drivers],
-            "loaded_skills": list(kernel.config_manager.get_skills_config().keys())
+            "loaded_capabilities": sorted(list(getattr(kernel.capability_registry, "capabilities", {}).keys())),
+            "failed_capabilities": getattr(getattr(kernel.orchestrator, "capability_loader", None), "failed_contracts", {}),
         }
     except HTTPException:
         return {"status": "starting", "message": "Kernel initializing"}
@@ -196,68 +197,6 @@ def trigger_reload(user: User = Depends(get_current_user), request: Request = No
         return {"success": True, "message": "System hot-reloaded successfully."}
     else:
         raise HTTPException(status_code=500, detail="Hot reload failed. Check server logs.")
-
-@router.get("/env")
-def get_env(user: User = Depends(get_current_user)):
-    """
-    Returns environment variables with server-side masking for sensitive fields.
-    """
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only admins can view environment")
-        
-    env_path = os.path.join(os.getcwd(), ".env")
-    env_example_path = os.path.join(os.getcwd(), ".env.example")
-
-    try:
-        current_env = _read_env_file(env_path)
-        ordered_keys = _read_env_template_keys(env_example_path)
-        for key in current_env.keys():
-            if key not in ordered_keys:
-                ordered_keys.append(key)
-
-        masked_payload = {}
-        for key in ordered_keys:
-            value = current_env.get(key, "")
-            masked_payload[key] = value
-        return masked_payload
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read .env: {str(e)}")
-
-@router.post("/env")
-def update_env(updates: dict, user: User = Depends(get_current_user)):
-    """
-    Updates .env file.
-    """
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only admins can update environment")
-        
-    env_path = os.path.join(os.getcwd(), ".env")
-    
-    try:
-        current_env = _read_env_file(env_path)
-        
-        # Apply updates
-        for key, value in updates.items():
-            if not isinstance(key, str):
-                continue
-            if value is None:
-                continue
-            if not isinstance(value, str):
-                value = str(value)
-
-            # If value is empty skip update for this key to prevent clearing by accident,
-            # unless the user explicitly wants to delete (which should be handled differently, but empty for now skips)
-            if value.strip() == "":
-                continue
-            current_env[key] = value
-
-        with open(env_path, "w", encoding="utf-8") as f:
-            for key, value in current_env.items():
-                f.write(f"{key}={value}\n")
-                
-        return {"success": True, "message": ".env updated. Restart may be required for some changes."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update .env: {str(e)}")
 
 @router.get("/logs/list")
 def list_logs(user: User = Depends(get_current_user)):

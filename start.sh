@@ -15,8 +15,8 @@ echo -e "${BLUE}>>> Starting AOSD Integrated System...${NC}"
 cd "$(dirname "$0")"
 
 PYTHON_BIN="python3"
-NODE_MIN_MAJOR=20
-NODE_MIN_MINOR=19
+NODE_MIN_MAJOR=18
+NODE_MIN_MINOR=0
 
 # Try to load NVM automatically
 if [ -s "$HOME/.nvm/nvm.sh" ]; then

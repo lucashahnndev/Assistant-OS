@@ -88,6 +88,7 @@ def setup_logging():
 
     if separate_files:
         _setup_service_logs(log_dir, formatter, service_levels)
+        _cleanup_legacy_logs(log_dir)
 
     # Silence noise from specific libraries
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -101,17 +102,52 @@ def _setup_service_logs(log_dir, formatter, service_levels):
     
     mapping = {
         "llm": ["LLMManager", "AgentOrchestrator", "LLMResolver", "LLMService"],
-        "telegram": ["TelegramDriver", "drivers.telegram.telegram_bot", "TelegramBot"],
+        "telegram": ["TelegramDriver", "drivers.interfaces.telegram.telegram_bot", "TelegramBot"],
         "web": ["ServerDriver"],
-        "api": ["PortalServer", "SystemRoutes", "AuthRoutes", "SkillRoutes", "MemoryRoutes", "SessionRoutes", "TaskRoutes"],
-        "skills": ["SkillLoader", "SkillRegistry"],
+        "api": ["PortalServer", "SystemRoutes", "AuthRoutes", "CapabilityRoutes", "MemoryRoutes", "SessionRoutes", "TaskRoutes"],
+        "capabilities": ["CapabilityLoader", "CapabilityRegistry"],
         "interface": ["VoiceDriver", "BrowserDriver", "SystemDriver", "Kernel"],
-        "browser_automation": ["WebPlanner", "WebLoop", "AtomicExecutor", "DomEye", "VisionEye", "PlannerStateMachine", "PerceptionRouter", "PerceptionPolicy"]
+        "browser_control": [
+            "aosd.capabilities.browser_control",
+            "aosd.capabilities.browser_control.planner",
+            "aosd.capabilities.browser_control.dom_analyzer",
+            "aosd.capabilities.browser_control.image_analyzer",
+            "aosd.capabilities.browser_control.perception_merger",
+            "aosd.capabilities.browser_control.runtime"
+        ],
+        "browser_cdp": [
+            "aosd.capabilities.browser_control.cdp"
+        ],
+        "browser_extension": [
+            "aosd.capabilities.browser_control.extension",
+            "aosd.capabilities.browser_control.runtime.extension"
+        ],
+        "browser_events": [
+            "aosd.capabilities.browser_control.events",
+            "aosd.capabilities.browser_control.runtime.events"
+        ]
     }
 
-    # Add individual skill loggers to the skills category
-    # We can use a special logic for loggers ending with "Skill" if needed, 
+    # Add individual capability loggers to the capabilities category
+    # We can use a special logic for loggers ending with "Capability" if needed, 
     # but for now we'll stick to the explicit mapping and handle dynamic discovery later.
+
+    def _has_managed_ancestor(name, names):
+        parts = name.split(".")
+        for i in range(1, len(parts)):
+            ancestor = ".".join(parts[:i])
+            if ancestor in names:
+                return True
+        return False
+
+    def _clear_existing_service_handlers(logger_obj):
+        retained = []
+        for h in logger_obj.handlers:
+            base = getattr(h, "baseFilename", "")
+            if isinstance(h, logging.handlers.RotatingFileHandler) and str(base).startswith(log_dir):
+                continue
+            retained.append(h)
+        logger_obj.handlers = retained
 
     for service, logger_names in mapping.items():
         file_path = os.path.join(log_dir, f"{service}.log")
@@ -124,8 +160,12 @@ def _setup_service_logs(log_dir, formatter, service_levels):
         level_str = service_levels.get(service, "INFO").upper()
         level = getattr(logging, level_str, logging.INFO)
 
-        for name in logger_names:
+        names_set = set(logger_names)
+        attach_names = [name for name in logger_names if not _has_managed_ancestor(name, names_set)]
+
+        for name in attach_names:
             logger = logging.getLogger(name)
+            _clear_existing_service_handlers(logger)
             logger.addHandler(handler)
             logger.setLevel(level)
             # Ensure it doesn't propagate the individual handler's logs to root twice 
@@ -133,23 +173,42 @@ def _setup_service_logs(log_dir, formatter, service_levels):
             # If propagate is true it also logs to root's handlers. 
             # This is exactly what we want: specific file + assistant.log.)
 
-    # Special case: All loggers containing "Skill" in their name go to skills.log
+    # Special case: All loggers containing "Capability" in their name go to capabilities.log
     # This is hard to do globally without intercepting logger creation, 
     # but we can pre-configure common ones.
-    common_skills = ["SystemSkill", "SearchSkill", "MemorySkill", "PowerSkill", "ReflexSkill", 
-                     "ShellSkill", "MediaSkill", "ServiceSkill", "SystemAppsSkill", "SystemLogsSkill",
-                     "FSSkill", "TaskSkill", "NetworkSkill", "ProcessSkill"]
+    common_capabilities = ["SystemCapability", "SearchCapability", "MemoryCapability", "PowerCapability", "ReflexCapability", 
+                     "ShellCapability", "MediaCapability", "ServiceCapability", "SystemAppsCapability", "SystemLogsCapability",
+                     "FSCapability", "TaskCapability", "NetworkCapability", "ProcessCapability"]
     
-    skills_handler = logging.handlers.RotatingFileHandler(
-        os.path.join(log_dir, "skills.log"), maxBytes=5*1024*1024, backupCount=3, encoding='utf-8'
+    capabilities_handler = logging.handlers.RotatingFileHandler(
+        os.path.join(log_dir, "capabilities.log"), maxBytes=5*1024*1024, backupCount=3, encoding='utf-8'
     )
-    skills_handler.setFormatter(formatter)
-    skills_level = getattr(logging, service_levels.get("skills", "INFO").upper(), logging.INFO)
+    capabilities_handler.setFormatter(formatter)
+    capabilities_level = getattr(logging, service_levels.get("capabilities", "INFO").upper(), logging.INFO)
 
-    for skill_name in common_skills:
-        logger = logging.getLogger(skill_name)
-        logger.addHandler(skills_handler)
-        logger.setLevel(skills_level)
+    for capability_name in common_capabilities:
+        logger = logging.getLogger(capability_name)
+        logger.addHandler(capabilities_handler)
+        logger.setLevel(capabilities_level)
+
+
+def _cleanup_legacy_logs(log_dir):
+    """
+    Removes deprecated browser_automation log files after migrating to
+    browser_control/browser_cdp/browser_extension/browser_events logs.
+    """
+    legacy_prefixes = ("browser_automation.log",)
+    try:
+        for entry in os.listdir(log_dir):
+            if any(entry.startswith(prefix) for prefix in legacy_prefixes):
+                legacy_path = os.path.join(log_dir, entry)
+                try:
+                    os.remove(legacy_path)
+                except Exception:
+                    # Ignore cleanup failures to avoid blocking startup.
+                    pass
+    except Exception:
+        pass
 
 def get_logger(name):
     """Returns a logger with the specified name."""

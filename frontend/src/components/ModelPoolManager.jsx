@@ -3,9 +3,9 @@ import { api } from '../hooks/api';
 import toast from 'react-hot-toast';
 import { Plus, Trash2, ArrowUp, ArrowDown, Settings2, Shield, AlertCircle } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
+import { createSecret, listSecretRefs } from '../utils/secretsApi';
 
 const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
-    const [pool, setPool] = useState(currentPool || []);
     const [catalog, setCatalog] = useState({});
     const [envKeys, setEnvKeys] = useState([]);
 
@@ -21,48 +21,48 @@ const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
     const [isCreatingKey, setIsCreatingKey] = useState(false);
     const [newKeyName, setNewKeyName] = useState("");
     const [newKeyValue, setNewKeyValue] = useState("");
+    const [secretTargetField, setSecretTargetField] = useState("");
+    const pool = currentPool || [];
 
     useEffect(() => {
-        setPool(currentPool || []);
-    }, [currentPool]);
+        let cancelled = false;
 
-    useEffect(() => {
-        fetchCatalog();
-        fetchEnvKeys();
+        const loadInitialData = async () => {
+            try {
+                const [catalogData, envKeyData] = await Promise.all([
+                    api.get('/models/catalog'),
+                    listSecretRefs(),
+                ]);
+                if (cancelled) return;
+                setCatalog(catalogData);
+                setEnvKeys(envKeyData);
+            } catch (err) {
+                if (cancelled) return;
+                console.error("Failed to load model configuration metadata", err);
+            }
+        };
+
+        loadInitialData();
+        return () => {
+            cancelled = true;
+        };
     }, []);
-
-    const fetchCatalog = async () => {
-        try {
-            const data = await api.get('/models/catalog');
-            setCatalog(data);
-        } catch (err) {
-            console.error("Failed to load catalog", err);
-        }
-    };
-
-    const fetchEnvKeys = async () => {
-        try {
-            const data = await api.get('/models/env-keys');
-            setEnvKeys(data?.keys || []);
-        } catch (err) {
-            console.error("Failed to load env keys", err);
-        }
-    };
 
     const handleCreateKey = async (e) => {
         e.preventDefault();
         try {
-            const response = await api.post('/models/env-keys', {
-                key: newKeyName,
-                value: newKeyValue
-            });
+            const response = await createSecret({ key: newKeyName, value: newKeyValue });
             if (response.success) {
                 toast.success(`Key ${response.key} saved to vault!`);
-                await fetchEnvKeys();
-                setFormData(prev => ({ ...prev, api_key_ref: response.key }));
+                const keys = await listSecretRefs();
+                setEnvKeys(keys);
+                if (secretTargetField) {
+                    setFormData(prev => ({ ...prev, [secretTargetField]: response.key }));
+                }
                 setIsCreatingKey(false);
                 setNewKeyName("");
                 setNewKeyValue("");
+                setSecretTargetField("");
             }
         } catch (err) {
             toast.error(err.message);
@@ -82,7 +82,6 @@ const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
             item.priority = idx + 1;
         });
 
-        setPool(newPool);
         savePool(newPool);
     };
 
@@ -93,7 +92,6 @@ const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
     const confirmDeleteItem = () => {
         if (deletingIndex < 0) return;
         const newPool = pool.filter((_, i) => i !== deletingIndex);
-        setPool(newPool);
         savePool(newPool);
         setDeletingIndex(-1);
     };
@@ -115,20 +113,21 @@ const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
         if (editingIndex >= 0) {
             newPool[editingIndex] = { ...formData };
         } else {
+            const generatedId = formData.id || `${formData.provider}-${newPool.length + 1}`;
             newPool.push({
                 ...formData,
-                id: formData.id || `${formData.provider}-${Date.now()}`,
+                id: generatedId,
                 priority: newPool.length + 1,
                 enabled: true
             });
         }
-        setPool(newPool);
         savePool(newPool);
 
         setEditingIndex(-1);
         setIsAdding(false);
         setFormData({});
         setSelectedProvider("");
+        setSecretTargetField("");
     };
 
     const startEdit = (index) => {
@@ -139,6 +138,8 @@ const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
     };
 
     const providerSchema = catalog[selectedProvider];
+    const authFields = Array.isArray(providerSchema?.auth?.fields) ? providerSchema.auth.fields : [];
+    const settingsFields = Array.isArray(providerSchema?.settings_fields) ? providerSchema.settings_fields : [];
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -216,11 +217,12 @@ const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
                                 onChange={(e) => {
                                     setSelectedProvider(e.target.value);
                                     setFormData({ provider: e.target.value });
+                                    setSecretTargetField("");
                                 }}
                                 disabled={editingIndex >= 0}
                             >
                                 {Object.entries(catalog)
-                                    .filter(([key, c]) => c.supports && c.supports.includes(modality))
+                                    .filter(([, c]) => c.supports && c.supports.includes(modality))
                                     .map(([key, c]) => (
                                         <option key={key} value={key}>{c.display_name || key}</option>
                                     ))}
@@ -250,74 +252,78 @@ const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
                             </div>
                         </div>
 
-                        {providerSchema && providerSchema.fields && providerSchema.fields.map(field => {
-                            if (field.type === 'env_ref' || field.name === 'api_key_ref') {
-                                return (
-                                    <div key={field.name} className="form-group" style={{ background: 'rgba(var(--accent-rgb), 0.05)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(var(--accent-rgb), 0.2)' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                <Shield size={14} color="var(--accent-color)" /> {field.label} {field.required && '*'}
-                                            </label>
-                                            <button onClick={() => setIsCreatingKey(!isCreatingKey)} className="btn-ghost" style={{ fontSize: '11px', padding: '2px 6px', color: 'var(--accent-color)' }}>
-                                                {isCreatingKey ? 'Cancel New Key' : '+ Create New Key'}
-                                            </button>
-                                        </div>
-                                        <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)', marginBottom: '8px' }}>{field.description}</p>
-
-                                        {!isCreatingKey ? (
-                                            <select
-                                                className="input-field"
-                                                value={formData[field.name] || ''}
-                                                onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
-                                            >
-                                                <option value="">-- Select Environment Key --</option>
-                                                {(envKeys || []).map(k => (
-                                                    <option key={k} value={k}>{k}</option>
-                                                ))}
-                                            </select>
-                                        ) : (
-                                            <form onSubmit={handleCreateKey} style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '8px' }}>
-                                                <input
-                                                    type="text"
-                                                    className="input-field"
-                                                    placeholder="ENV_KEY_NAME (e.g. ENV_OPENAI_API_KEY)"
-                                                    value={newKeyName}
-                                                    onChange={e => setNewKeyName(e.target.value)}
-                                                    required
-                                                />
-                                                <input
-                                                    type="password"
-                                                    className="input-field"
-                                                    placeholder="Paste the secret value here..."
-                                                    value={newKeyValue}
-                                                    onChange={e => setNewKeyValue(e.target.value)}
-                                                    required
-                                                />
-                                                <button type="submit" className="btn-primary" style={{ alignSelf: 'flex-start', fontSize: '12px', padding: '6px 12px' }}>Save to Vault</button>
-                                            </form>
-                                        )}
-                                    </div>
-                                );
-                            }
-
-                            return (
-                                <div key={field.name} className="form-group">
-                                    <label>{field.label} {field.required && '*'}</label>
-                                    <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>{field.description}</p>
-                                    <input
-                                        type={field.type === 'int' ? 'number' : 'text'}
-                                        className="input-field"
-                                        placeholder={String(field.default || '')}
-                                        value={formData[field.name] !== undefined ? formData[field.name] : ''}
-                                        onChange={(e) => {
-                                            const val = field.type === 'int' ? parseInt(e.target.value) : e.target.value;
-                                            setFormData({ ...formData, [field.name]: val });
+                        {providerSchema && authFields.map(field => (
+                            <div key={field.key} className="form-group" style={{ background: 'rgba(var(--accent-rgb), 0.05)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(var(--accent-rgb), 0.2)' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        <Shield size={14} color="var(--accent-color)" /> {field.title} {field.required && '*'}
+                                    </label>
+                                    <button
+                                        onClick={() => {
+                                            const nextIsCreating = !(isCreatingKey && secretTargetField === field.key);
+                                            setIsCreatingKey(nextIsCreating);
+                                            setSecretTargetField(nextIsCreating ? field.key : "");
                                         }}
-                                        required={field.required}
-                                    />
+                                        className="btn-ghost"
+                                        style={{ fontSize: '11px', padding: '2px 6px', color: 'var(--accent-color)' }}
+                                    >
+                                        {isCreatingKey && secretTargetField === field.key ? 'Cancel New Key' : '+ Create New Key'}
+                                    </button>
                                 </div>
-                            );
-                        })}
+                                <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)', marginBottom: '8px' }}>{field.description}</p>
+
+                                {!(isCreatingKey && secretTargetField === field.key) ? (
+                                    <select
+                                        className="input-field"
+                                        value={formData[field.key] || ''}
+                                        onChange={(e) => setFormData({ ...formData, [field.key]: e.target.value })}
+                                    >
+                                        <option value="">-- Select Environment Key --</option>
+                                        {(envKeys || []).map(k => (
+                                            <option key={k} value={k}>{k}</option>
+                                        ))}
+                                    </select>
+                                ) : (
+                                    <form onSubmit={handleCreateKey} style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '8px' }}>
+                                        <input
+                                            type="text"
+                                            className="input-field"
+                                            placeholder={field.placeholder || "ENV_MODEL_PROVIDER_SECRET"}
+                                            value={newKeyName}
+                                            onChange={e => setNewKeyName(e.target.value)}
+                                            required
+                                        />
+                                        <input
+                                            type="password"
+                                            className="input-field"
+                                            placeholder="Paste the secret value here..."
+                                            value={newKeyValue}
+                                            onChange={e => setNewKeyValue(e.target.value)}
+                                            required
+                                        />
+                                        <button type="submit" className="btn-primary" style={{ alignSelf: 'flex-start', fontSize: '12px', padding: '6px 12px' }}>Save to Vault</button>
+                                    </form>
+                                )}
+                            </div>
+                        ))}
+
+                        {providerSchema && settingsFields.map(field => (
+                            <div key={field.key} className="form-group">
+                                <label>{field.title} {field.required && '*'}</label>
+                                <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>{field.description}</p>
+                                <input
+                                    type={field.type === 'int' || field.type === 'number' ? 'number' : 'text'}
+                                    className="input-field"
+                                    placeholder={String(field.default || '')}
+                                    value={formData[field.key] !== undefined ? formData[field.key] : ''}
+                                    onChange={(e) => {
+                                        const val = field.type === 'int' || field.type === 'number' ? parseInt(e.target.value || '0', 10) || 0 : e.target.value;
+                                        setFormData({ ...formData, [field.key]: val });
+                                    }}
+                                    required={field.required}
+                                />
+                            </div>
+                        ))}
 
                         <div className="flex-between" style={{ marginTop: '16px' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

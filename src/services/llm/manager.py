@@ -3,6 +3,7 @@ from core.intent import AgentIntent
 from drivers.llm.base import ILLMProvider
 from utils.plugin_loader import PluginLoader
 from config import ConfigManager
+from utils.contract_artifacts import write_contract_violation
 import os
 import sys
 import logging
@@ -18,6 +19,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 class LLMManager:
     def __init__(self):
         self.config_manager = ConfigManager()
+        self._last_router_meta: Dict[str, Any] = {}
         self._load_config()
         self._load_providers()
 
@@ -32,21 +34,24 @@ class LLMManager:
         cfg = self.config_manager.get("cortex", {})
         self.chat_config = cfg.get("chat", [])
         self.vision_config = cfg.get("vision", [])
-        
-        # Failsafe if not migrated properly yet
-        if isinstance(self.chat_config, dict):
-             self.chat_config = [] 
-        if isinstance(self.vision_config, dict):
-             self.vision_config = []
 
     def _load_providers(self):
         self.chat_pool = []
         self.vision_pool = []
         
         root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        drivers_path = os.path.join(root_dir, 'drivers', 'llm')
+        providers_root = os.path.join(root_dir, 'drivers', 'providers')
         
-        loaded_classes = PluginLoader.load_plugins(drivers_path, ILLMProvider)
+        loaded_classes = {}
+        if os.path.exists(providers_root):
+            for entry in os.listdir(providers_root):
+                p_dir = os.path.join(providers_root, entry)
+                if os.path.isdir(p_dir):
+                    # Load from subfolder (e.g. drivers/providers/gemini)
+                    res = PluginLoader.load_plugins(p_dir, ILLMProvider)
+                    # Use directory name (entry) as the key instead of module name (usually 'llm')
+                    for cls in res.values():
+                        loaded_classes[entry] = cls
         
         if not loaded_classes:
             logger.warning("No LLM Providers found!")
@@ -70,9 +75,6 @@ class LLMManager:
                     
                 prov_name = inst_cfg.get('provider', '')
                 norm = normalize_name(prov_name)
-                
-                if 'api_key_ref' in inst_cfg and not inst_cfg.get('api_key'):
-                    inst_cfg['api_key'] = inst_cfg['api_key_ref']
                 
                 # Match driver class. If local compatible OpenAI server, map to standard OpenAI driver.
                 cls = next((c for n, c in loaded_classes.items() if normalize_name(n) == norm), None)
@@ -114,11 +116,13 @@ class LLMManager:
         """
         if not pool:
             return None, "No active providers in the pool"
-            
+        total_providers = len(pool)
+        self._last_router_meta = {}
         last_error = ""
-        for item in pool:
+        for idx, item in enumerate(pool, start=1):
             provider_id = item['id']
             instance = item['instance']
+            provider_name = str(item.get("provider") or provider_id or "")
             
             # Inject limits if the method accepts them (for generate_intent)
             if method_name == 'generate_intent':
@@ -127,14 +131,96 @@ class LLMManager:
             try:
                 method = getattr(instance, method_name)
                 result = method(*args, **kwargs)
+                self._last_router_meta = {
+                    "provider_id": str(provider_id),
+                    "provider": provider_name,
+                    "attempt": idx,
+                    "max_attempts": total_providers,
+                    "model": self._provider_model_hint(instance),
+                }
                 return result, None
             except Exception as e:
                 error_msg = str(e)
                 logger.warning(f"Provider {provider_id} failed ({method_name}): {error_msg}. Falling back to next...")
+                if method_name in {"generate_structured", "analyze_image_structured"}:
+                    self._emit_router_contract_violation(
+                        provider=provider_name,
+                        provider_id=str(provider_id),
+                        instance=instance,
+                        method_name=method_name,
+                        prompt=self._extract_router_prompt(args, kwargs),
+                        raw_response="",
+                        error_text=error_msg,
+                        contract_name=str(kwargs.get("contract", "") or ""),
+                        attempt=idx,
+                        max_attempts=total_providers,
+                        kwargs=kwargs,
+                    )
                 last_error = error_msg
                 continue
-                
+        self._last_router_meta = {}
         return None, f"All providers failed. Last error: {last_error}"
+
+    @staticmethod
+    def _provider_model_hint(instance: Any) -> str:
+        for attr in ("model_name", "model", "model_id", "model_name_or_path"):
+            try:
+                value = getattr(instance, attr, "")
+            except Exception:
+                value = ""
+            if value:
+                return str(value)
+        return "unknown"
+
+    @staticmethod
+    def _extract_router_prompt(args: Any, kwargs: Dict[str, Any]) -> str:
+        prompt = kwargs.get("prompt")
+        if prompt is not None:
+            return str(prompt)
+        if isinstance(args, tuple) and args:
+            first = args[0]
+            if isinstance(first, str):
+                return first
+        return ""
+
+    def _emit_router_contract_violation(
+        self,
+        *,
+        provider: str,
+        provider_id: str,
+        instance: Any,
+        model_hint: str = "",
+        method_name: str,
+        prompt: str,
+        raw_response: Any,
+        error_text: str,
+        contract_name: str,
+        attempt: int,
+        max_attempts: int,
+        kwargs: Dict[str, Any],
+    ) -> None:
+        try:
+            write_contract_violation(
+                provider=str(provider or "provider"),
+                model=str(model_hint or self._provider_model_hint(instance)),
+                contract_name=str(contract_name or method_name),
+                prompt=str(prompt or ""),
+                raw_response=raw_response,
+                error_text=str(error_text or "contract_violation"),
+                attempt=int(attempt),
+                max_attempts=int(max_attempts),
+                session_id=str(kwargs.get("session_id") or ""),
+                work_id=str(kwargs.get("work_id") or ""),
+                trace_id=str(kwargs.get("trace_id") or ""),
+                step_id=str(kwargs.get("step_id") or ""),
+                extra={
+                    "stage": "llm_router",
+                    "method": str(method_name or ""),
+                    "provider_id": str(provider_id or ""),
+                },
+            )
+        except Exception as artifact_err:
+            logger.warning("LLM router contract artifact failed: %s", artifact_err)
 
     def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] = None) -> AgentIntent:
         result, err = self._execute_with_router(
@@ -163,6 +249,41 @@ class LLMManager:
             return result
         return f"Error analyzing image: {err}"
 
+    def analyze_image_structured(self, image_path: str, prompt: str, **kwargs) -> Optional[Dict[str, Any]]:
+        """
+        Structured image analysis routed to vision providers.
+        Provider/driver is responsible for parsing and normalization.
+        """
+        pool = self.vision_pool if self.vision_pool else self.chat_pool
+        result, err = self._execute_with_router(
+            pool,
+            'analyze_image_structured',
+            image_path=image_path,
+            prompt=prompt,
+            **kwargs,
+        )
+        if err:
+            logger.error(f"Structured vision router failed: {err}")
+        if isinstance(result, dict):
+            return result
+        if result is not None:
+            meta = self._last_router_meta if isinstance(self._last_router_meta, dict) else {}
+            self._emit_router_contract_violation(
+                provider=str(meta.get("provider") or "provider"),
+                provider_id=str(meta.get("provider_id") or ""),
+                instance=object(),
+                model_hint=str(meta.get("model") or "unknown"),
+                method_name="analyze_image_structured",
+                prompt=str(prompt or ""),
+                raw_response=result,
+                error_text="Router returned non-dict structured vision payload",
+                contract_name=str(kwargs.get("contract", "") or "analyze_image_structured"),
+                attempt=int(meta.get("attempt") or 1),
+                max_attempts=int(meta.get("max_attempts") or 1),
+                kwargs=kwargs,
+            )
+        return None
+
     def generate_text(self, prompt: str, system_prompt: str = None, **kwargs) -> Optional[str]:
         """
         Generic text generation routing to the primary chat provider.
@@ -173,6 +294,40 @@ class LLMManager:
             prompt=prompt, system_prompt=system_prompt, **kwargs
         )
         return result
+
+    def generate_structured_text(self, prompt: str, system_prompt: str = None, **kwargs) -> Optional[Dict[str, Any]]:
+        """
+        Structured generation routed to providers.
+        Parsing/normalization must happen at driver level, not in core/planner.
+        """
+        result, err = self._execute_with_router(
+            self.chat_pool,
+            'generate_structured',
+            prompt=prompt,
+            system_prompt=system_prompt,
+            **kwargs,
+        )
+        if err:
+            logger.error(f"Structured generation router failed: {err}")
+        if isinstance(result, dict):
+            return result
+        if result is not None:
+            meta = self._last_router_meta if isinstance(self._last_router_meta, dict) else {}
+            self._emit_router_contract_violation(
+                provider=str(meta.get("provider") or "provider"),
+                provider_id=str(meta.get("provider_id") or ""),
+                instance=object(),
+                model_hint=str(meta.get("model") or "unknown"),
+                method_name="generate_structured",
+                prompt=str(prompt or ""),
+                raw_response=result,
+                error_text="Router returned non-dict structured payload",
+                contract_name=str(kwargs.get("contract", "") or "generate_structured"),
+                attempt=int(meta.get("attempt") or 1),
+                max_attempts=int(meta.get("max_attempts") or 1),
+                kwargs=kwargs,
+            )
+        return None
 
     def summarize_output(self, text: str) -> str:
         """

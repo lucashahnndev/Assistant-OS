@@ -37,7 +37,7 @@ def _clean_obj(data: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def encode_skills_list(rows: List[Dict[str, Any]], include_description: bool = True) -> Dict[str, Any]:
+def encode_capabilities_list(rows: List[Dict[str, Any]], include_description: bool = True) -> Dict[str, Any]:
     items: List[Dict[str, Any]] = []
     for row in rows:
         item: Dict[str, Any] = {
@@ -51,13 +51,13 @@ def encode_skills_list(rows: List[Dict[str, Any]], include_description: bool = T
 
     return {
         "v": "toon.v1",
-        "t": "skills.list",
+        "t": "capabilities.list",
         "n": len(items),
         "i": items,
     }
 
 
-def encode_skills_describe(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+def encode_capabilities_describe(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     items: List[Dict[str, Any]] = []
     for row in rows:
         meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
@@ -83,7 +83,7 @@ def encode_skills_describe(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     return {
         "v": "toon.v1",
-        "t": "skills.describe",
+        "t": "capabilities.describe",
         "n": len(items),
         "i": items,
     }

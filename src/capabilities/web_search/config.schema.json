@@ -1,0 +1,217 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Enabled"
+    },
+    "defaults": {
+      "type": "object",
+      "title": "Defaults",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "default": 5
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "links",
+            "knowledge",
+            "auto"
+          ],
+          "default": "links",
+          "x-ui": {
+            "widget": "select"
+          }
+        },
+        "knowledge_limit": {
+          "type": "integer",
+          "default": 2
+        },
+        "max_chars_per_doc": {
+          "type": "integer",
+          "default": 2500
+        },
+        "chunk_size": {
+          "type": "integer",
+          "default": 700
+        },
+        "chunk_overlap": {
+          "type": "integer",
+          "default": 100
+        },
+        "language": {
+          "type": "string",
+          "default": "en"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "default": 5000
+        },
+        "retries": {
+          "type": "integer",
+          "default": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "search_router": {
+      "type": "object",
+      "title": "Search Router",
+      "properties": {
+        "timeout_ms": {
+          "type": "integer",
+          "default": 5000
+        },
+        "retries": {
+          "type": "integer",
+          "default": 1
+        },
+        "strict_location_when_query_mentions_city": {
+          "type": "boolean",
+          "default": true
+        },
+        "provider_order": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "searxng",
+              "brave",
+              "ddg",
+              "openalex",
+              "commoncrawl"
+            ]
+          },
+          "default": [
+            "searxng",
+            "brave",
+            "ddg",
+            "openalex",
+            "commoncrawl"
+          ]
+        },
+        "providers": {
+          "type": "object",
+          "properties": {
+            "searxng": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "endpoints": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "engines": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "timeout_ms": {
+                  "type": "integer"
+                },
+                "retries": {
+                  "type": "integer"
+                }
+              },
+              "additionalProperties": true
+            },
+            "brave": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "api_base": {
+                  "type": "string",
+                  "default": "https://api.search.brave.com/res/v1/web/search"
+                },
+                "api_key": {
+                  "type": "string",
+                  "title": "Brave API Key",
+                  "x-ui": {
+                    "placeholder": "BRAVE_API_KEY"
+                  }
+                },
+                "timeout_ms": {
+                  "type": "integer"
+                },
+                "retries": {
+                  "type": "integer"
+                }
+              },
+              "additionalProperties": true
+            },
+            "ddg": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false
+                }
+              },
+              "additionalProperties": true
+            },
+            "openalex": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "api_base": {
+                  "type": "string",
+                  "default": "https://api.openalex.org"
+                },
+                "timeout_ms": {
+                  "type": "integer"
+                },
+                "retries": {
+                  "type": "integer"
+                }
+              },
+              "additionalProperties": true
+            },
+            "commoncrawl": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "collinfo_url": {
+                  "type": "string",
+                  "default": "https://index.commoncrawl.org/collinfo.json"
+                },
+                "max_indexes": {
+                  "type": "integer",
+                  "default": 2
+                },
+                "timeout_ms": {
+                  "type": "integer"
+                },
+                "retries": {
+                  "type": "integer"
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

@@ -3,6 +3,9 @@ from pydantic import BaseModel
 from typing import List, Optional, Any
 import logging
 import datetime
+import os
+import re
+import json
 from core.identity import PrincipalContext
 from ..auth import get_current_user
 from ..core.models import User
@@ -76,6 +79,159 @@ def _assert_permission_decision_allowed(request: Request, principal: PrincipalCo
             status_code=403,
             detail=f"This principal is not allowed to control sensitive permission approvals ({reason}).",
         )
+
+def _read_execution_log_tail(scheduler, execution_id: Optional[str], max_lines: int = 200, max_chars: int = 50000) -> dict:
+    execution_id = str(execution_id or "").strip()
+    if not execution_id:
+        return {"execution_id": None, "available": False, "tail": "", "error_lines": []}
+
+    log_path = os.path.join(scheduler.logs_dir, f"{execution_id}.log")
+    if not os.path.exists(log_path):
+        return {"execution_id": execution_id, "available": False, "tail": "", "error_lines": []}
+
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        tail_lines = lines[-max(1, int(max_lines)):]
+        tail = "".join(tail_lines)
+        if len(tail) > max_chars:
+            tail = tail[-max_chars:]
+        seen = set()
+        error_lines = []
+        for line in tail_lines:
+            if not re.search(r"\b(error|exception|traceback|failed|fatal)\b", line, flags=re.IGNORECASE):
+                continue
+            clean = line.strip()
+            if not clean or clean in seen:
+                continue
+            seen.add(clean)
+            error_lines.append(clean)
+        return {
+            "execution_id": execution_id,
+            "available": True,
+            "tail": tail,
+            "error_lines": error_lines[-80:],
+        }
+    except Exception as e:
+        return {
+            "execution_id": execution_id,
+            "available": False,
+            "tail": "",
+            "error_lines": [f"Error reading log file: {str(e)}"],
+        }
+
+def _infer_issue_component(*parts: str) -> str:
+    text = " ".join(str(p or "") for p in parts).lower()
+    if any(t in text for t in ("planner", "plan_validation", "schema", "replan", "loop_guardrail", "plan")):
+        return "planner"
+    if any(t in text for t in ("llm", "model", "provider", "prompt", "token", "refusal", "completion")):
+        return "llm"
+    if any(t in text for t in ("tool", "capability", "dispatch", "driver", "browser.control", "action_dispatch")):
+        return "tool"
+    return "worker"
+
+def _extract_worker_errors(events: List[dict], row: Optional[dict] = None, limit: int = 80) -> List[dict]:
+    out = []
+
+    issue_tokens = (
+        "fail",
+        "error",
+        "exception",
+        "recovery_needed",
+        "replanning",
+        "replan",
+        "validation",
+        "schema",
+        "loop_guardrail",
+        "failure_guardrail",
+        "action_dispatch_failure",
+        "planner_output_invalid",
+        "llm_error",
+        "refusal",
+        "timeout",
+    )
+
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        name = str(event.get("event") or "").strip()
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        name_l = name.lower()
+        status_l = str(payload.get("status") or "").lower()
+        error_code = str(
+            payload.get("error_code")
+            or payload.get("code")
+            or payload.get("result_reason")
+            or ""
+        ).strip()
+        category = str(payload.get("category") or payload.get("error_category") or "").strip()
+        reason = str(payload.get("reason") or "").strip()
+        summary = str(payload.get("summary") or payload.get("failure_summary") or "").strip()
+        details = str(payload.get("details") or "").strip()
+
+        raw_text = " ".join((name_l, status_l, error_code.lower(), reason.lower(), summary.lower(), details.lower()))
+        is_error = (
+            any(token in raw_text for token in issue_tokens)
+            or status_l in {"failed", "failure", "error", "recovery", "replanning", "stalled"}
+            or bool(error_code)
+        )
+        if not is_error:
+            continue
+        message = (
+            payload.get("error")
+            or payload.get("message")
+            or payload.get("details")
+            or payload.get("reason")
+            or payload.get("exception")
+            or payload.get("failure_summary")
+            or payload.get("summary")
+            or ""
+        )
+        if not isinstance(message, str):
+            try:
+                message = json.dumps(message, ensure_ascii=False)
+            except Exception:
+                message = str(message)
+        severity = "error"
+        lowered_name = name_l
+        if "fatal" in raw_text:
+            severity = "fatal"
+        elif "warning" in raw_text or "slow" in lowered_name:
+            severity = "warning"
+        component = _infer_issue_component(name, error_code, reason, summary, details, payload.get("source"), payload.get("component"))
+        out.append(
+            {
+                "ts": event.get("ts"),
+                "event": name or "worker_event",
+                "message": str(message or "").strip()[:1200],
+                "payload": payload,
+                "severity": severity,
+                "component": component,
+                "error_code": error_code or None,
+                "category": category or None,
+            }
+        )
+
+    # Add context-level synthetic diagnostics (e.g., last_error in summary/data).
+    row_ctx = row.get("context") if isinstance(row, dict) and isinstance(row.get("context"), dict) else {}
+    row_summary = row_ctx.get("summary") if isinstance(row_ctx.get("summary"), dict) else {}
+    row_data = row_ctx.get("data") if isinstance(row_ctx.get("data"), dict) else {}
+    last_error = str(row_summary.get("last_error") or row_data.get("last_error") or "").strip()
+    if last_error and last_error.lower() not in {"none", "null", "n/a"}:
+        out.append(
+            {
+                "ts": row_ctx.get("updated_at") or row.get("updated_at") if isinstance(row, dict) else None,
+                "event": "context_last_error",
+                "message": last_error[:1200],
+                "payload": {"source": "context.summary.last_error"},
+                "severity": "error",
+                "component": _infer_issue_component(last_error),
+                "error_code": None,
+                "category": None,
+            }
+        )
+
+    return out[-max(1, int(limit)):]
 
 # --- Task Definitions ---
 @router.get("/definitions")
@@ -199,7 +355,6 @@ def get_execution_logs(execution_id: str, request: Request, user: User = Depends
     # Let's try to access the file directly if we know the path pattern?
     # We know it is in `data/execution_logs/{id}.log`
     
-    import os
     log_path = os.path.join(scheduler.logs_dir, f"{execution_id}.log")
     
     if not os.path.exists(log_path):
@@ -442,17 +597,23 @@ def get_work_overwatch(
     executions = scheduler.list_executions(task_id) if task_id else []
     triggers = scheduler.list_triggers(task_id) if task_id else []
     events = scheduler.read_work_events(work_id, limit=max(1, min(2000, int(events_limit))))
+    worker_errors = _extract_worker_errors(events, row=row)
     recent_executions = sorted(
         executions,
         key=lambda row: str(row.get("start_time") or ""),
         reverse=True,
     )[:20]
+    latest_execution_id = (
+        data.get("execution_id")
+        or (recent_executions[0].get("execution_id") if recent_executions else None)
+    )
+    latest_execution_logs = _read_execution_log_tail(scheduler, latest_execution_id)
 
     return {
         "work": row,
         "summary": summary,
         "planner": planner,
-        "skills_used": data.get("skills_used", []),
+        "capabilities_used": data.get("capabilities_used", []),
         "actions_used": data.get("actions_used", []),
         "media_used": data.get("media_used", []),
         "sources_used": data.get("sources_used", []),
@@ -472,6 +633,8 @@ def get_work_overwatch(
         },
         "recent_executions": recent_executions,
         "events": events,
+        "worker_errors": worker_errors,
+        "latest_execution_logs": latest_execution_logs,
     }
 
 @router.get("/sessions/{session_id}")

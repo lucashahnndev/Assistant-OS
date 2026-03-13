@@ -1,0 +1,75 @@
+{
+  "contract_version": "1.0",
+  "capability": {
+    "id": "memory_management",
+    "namespace": "memory",
+    "version": "1.0.0",
+    "title": "Memory",
+    "description": "Memória persistente do agente para armazenar e recuperar fatos relevantes do usuário e do contexto."
+  },
+  "runtime": {
+    "module": "capabilities.memory_management",
+    "factory": "create_capability"
+  },
+  "actions": [
+    {
+      "id": "memory.recall",
+      "title": "Recall",
+      "description": "Busca informações já registradas na memória persistente.",
+      "handler": "recall",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "memory:management:recall"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "properties": {
+            "type": "string"
+          },
+          "required": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "memory.store",
+      "title": "Store",
+      "description": "Armazena um novo fato na memória persistente.",
+      "handler": "store",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "memory:management:store"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "properties": {
+            "type": "string"
+          },
+          "required": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "idempotent"
+    }
+  ],
+  "auth": {
+    "mode": "none",
+    "required": false,
+    "fields": []
+  }
+}

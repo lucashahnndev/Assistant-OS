@@ -13,12 +13,12 @@ def orchestrator():
     # Mocking dependencies for minimal orchestrator instantiation
     with patch("services.llm.manager.LLMManager"), \
          patch("services.memory.episodic_memory.EpisodicMemoryService"), \
-         patch("skills.registry.SkillRegistry"), \
+         patch("capabilities.registry.CapabilityRegistry"), \
          patch("services.safety_service.SafetyService"), \
          patch("core.access_controller.AccessController"):
         orch = AgentOrchestrator()
         orch.initialized = True
-        orch.skill_registry = MagicMock()
+        orch.capability_registry = MagicMock()
         orch.intent_resolver_chain = MagicMock()
         orch.access_controller = MagicMock()
         orch.access_controller.pre_dispatch_gate.return_value = (True, "")
@@ -42,7 +42,7 @@ def test_golden_tool_timeout(orchestrator):
     ).model_dump()
     
     # Mock tool that raises timeout
-    orchestrator.skill_registry.dispatch.side_effect = Exception("Tool execution timed out after 30s")
+    orchestrator.capability_registry.dispatch.side_effect = Exception("Tool execution timed out after 30s")
     
     # Mock planner returning a tool call then a reply
     plan = ActionPlan(action_id="slow_tool", args={}, source="llm")
@@ -60,7 +60,7 @@ def test_golden_tool_timeout(orchestrator):
     
     # Check if any result indicates failure with TOOL_TIMEOUT
     # The orchestrator attaches the result to the session.
-    orchestrator.skill_registry.dispatch.assert_called_once()
+    orchestrator.capability_registry.dispatch.assert_called_once()
     
 def test_golden_tool_schema_mismatch(orchestrator):
     """P0.3: Golden test for tool schema mismatch."""
@@ -76,7 +76,7 @@ def test_golden_tool_schema_mismatch(orchestrator):
 
 
     # Mock tool that raises schema error
-    orchestrator.skill_registry.dispatch.side_effect = Exception("ValidationError: missing required argument 'target'")
+    orchestrator.capability_registry.dispatch.side_effect = Exception("ValidationError: missing required argument 'target'")
     
     plan = ActionPlan(action_id="bad_tool", args={}, source="llm")
     reply_plan = ActionPlan(action_id="reply", args={"text": "Error handled"}, source="llm")
@@ -86,7 +86,7 @@ def test_golden_tool_schema_mismatch(orchestrator):
         with patch.object(orchestrator, "_save_session"):
             orchestrator.process(user_input, session_id)
             
-    orchestrator.skill_registry.dispatch.assert_called_once()
+    orchestrator.capability_registry.dispatch.assert_called_once()
 
 def test_golden_invalid_planner_json(orchestrator):
     """P0.3: Golden test for invalid planner JSON."""
@@ -143,7 +143,7 @@ def test_golden_network_failure(orchestrator):
     ).model_dump()
 
 
-    orchestrator.skill_registry.dispatch.side_effect = Exception("ConnectionError: Max retries exceeded")
+    orchestrator.capability_registry.dispatch.side_effect = Exception("ConnectionError: Max retries exceeded")
     
     plan = ActionPlan(action_id="fetch_tool", args={}, source="llm")
     reply_plan = ActionPlan(action_id="reply", args={"text": "Network issue"}, source="llm")
@@ -152,4 +152,4 @@ def test_golden_network_failure(orchestrator):
     with patch.object(orchestrator, "get_session_robust", return_value=session):
         orchestrator.process(user_input, session_id)
     
-    orchestrator.skill_registry.dispatch.assert_called_once()
+    orchestrator.capability_registry.dispatch.assert_called_once()

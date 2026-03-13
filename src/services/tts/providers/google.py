@@ -2,6 +2,7 @@ import os
 import tempfile
 import pygame
 from services.tts.providers.base import ITTSProvider
+from server.core.secret_manager import resolve_secret_ref
 from utils.logging_config import get_logger
 
 logger = get_logger("GoogleCloudTTS")
@@ -19,18 +20,10 @@ class GoogleCloudProvider(ITTSProvider):
         self.ssml_gender = str(config.get('ssml_gender', 'MALE')).upper()
         self.audio_encoding = str(config.get('audio_encoding', 'MP3')).upper()
         
-        def _resolve_env_ref(value):
-            if not value or not isinstance(value, str):
-                return value
-            if not value.startswith("ENV_"):
-                return value
-            # Try full token first (ENV_FOO), then stripped (FOO).
-            return os.getenv(value) or os.getenv(value.replace("ENV_", "", 1)) or value
-        
         # Credentials handling
         # Assuming credentials are set in environment or passed via config
-        self.credentials_path = _resolve_env_ref(
-            config.get('credentials_path') or config.get('credentials_path_ref')
+        self.credentials_path = resolve_secret_ref(
+            config.get('credentials_path')
         )
         if self.credentials_path:
              os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = self.credentials_path
@@ -38,8 +31,8 @@ class GoogleCloudProvider(ITTSProvider):
         self.client = None
         if texttospeech:
             try:
-                api_key = _resolve_env_ref(
-                    config.get('api_key') or config.get('api_key_ref')
+                api_key = resolve_secret_ref(
+                    config.get('secret_ref')
                 ) or os.getenv("GOOGLE_CLOUD_API_KEY")
                 if api_key:
                     from google.api_core import client_options

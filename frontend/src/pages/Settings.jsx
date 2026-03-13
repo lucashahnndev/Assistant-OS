@@ -18,8 +18,6 @@ import {
     CheckCircle,
     AlertCircle,
     Power,
-    Eye,
-    EyeOff,
     Monitor,
     Building2,
     Zap,
@@ -29,7 +27,6 @@ import {
     ChevronRight,
     ChevronDown,
     ChevronUp,
-    Plus,
     Trash2,
     Link2,
     Settings2
@@ -38,6 +35,7 @@ import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import PageHeader from '../components/PageHeader';
 import ModelPoolManager from '../components/ModelPoolManager';
+import { createSecret, deleteSecret, listSecretEntries, listSecretRefs, auditEnvSecrets, importEnvSecrets } from '../utils/secretsApi';
 
 const Settings = () => {
     const [config, setConfig] = useState(null);
@@ -48,7 +46,10 @@ const Settings = () => {
     const [isTabsCollapsed, setIsTabsCollapsed] = useState(() => {
         return localStorage.getItem('assistant_settings_tabs_collapsed') === 'true';
     });
-    const [envData, setEnvData] = useState({});
+    const [vaultEntries, setVaultEntries] = useState([]);
+    const [vaultDraft, setVaultDraft] = useState({ key: '', value: '' });
+    const [editingVaultKey, setEditingVaultKey] = useState('');
+    const [envAudit, setEnvAudit] = useState(null);
     const [envKeys, setEnvKeys] = useState([]);
     const [externalCatalog, setExternalCatalog] = useState([]);
     const [externalCatalogLoading, setExternalCatalogLoading] = useState(false);
@@ -74,7 +75,6 @@ const Settings = () => {
     const [isStreaming, setIsStreaming] = useState(true);
     const [logSources, setLogSources] = useState(['assistant.log']);
     const [activeLogSource, setActiveLogSource] = useState('assistant.log');
-    const [showSecrets, setShowSecrets] = useState({});
 
     const logScrollRef = useRef(null);
     const lineNumbersRef = useRef(null);
@@ -97,7 +97,7 @@ const Settings = () => {
 
     useEffect(() => {
         fetchConfig();
-        fetchEnv();
+        fetchVaultEntries();
         fetchLogSources();
         return () => stopLogStream();
     }, []);
@@ -107,6 +107,9 @@ const Settings = () => {
             fetchExternalProviders();
             fetchEnvKeys();
             fetchLinkedAccounts();
+        }
+        if (activeTab === 'interfaces' || activeTab === 'security') {
+            fetchEnvKeys();
         }
     }, [activeTab]);
 
@@ -249,17 +252,20 @@ const Settings = () => {
         finally { setLoading(false); }
     };
 
-    const fetchEnv = async () => {
+    const fetchVaultEntries = async () => {
         try {
-            const data = await api.get('/system/env');
-            setEnvData(data);
-        } catch (err) { console.error(err); }
+            const data = await listSecretEntries();
+            setVaultEntries(Array.isArray(data?.entries) ? data.entries : []);
+        } catch (err) {
+            console.error(err);
+            setVaultEntries([]);
+        }
     };
 
     const fetchEnvKeys = async () => {
         try {
-            const data = await api.get('/models/env-keys');
-            setEnvKeys(Array.isArray(data?.keys) ? data.keys : []);
+            const keys = await listSecretRefs();
+            setEnvKeys(keys);
         } catch (err) {
             console.error(err);
             setEnvKeys([]);
@@ -301,21 +307,11 @@ const Settings = () => {
         }
     };
 
-    const handleSaveEnv = async () => {
-        try {
-            await api.post('/system/env', envData);
-            toast.success("Secrets updated. Restart required.");
-        } catch (err) { toast.error(err.message); }
-    };
-
     const handleSave = async () => {
         setSaving(true);
         try {
-            await Promise.all([
-                api.post('/system/config', config),
-                api.post('/system/env', envData)
-            ]);
-            toast.success("Settings & Secrets updated.");
+            await api.post('/system/config', config);
+            toast.success("Settings updated.");
         } catch (err) { toast.error(err.message); }
         finally { setSaving(false); }
     };
@@ -330,8 +326,66 @@ const Settings = () => {
         }
     };
 
-    const toggleSecret = (key) => {
-        setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
+
+
+    const openVaultEditor = (key = '') => {
+        setEditingVaultKey(key);
+        setVaultDraft({ key, value: '' });
+    };
+
+    const resetVaultEditor = () => {
+        setEditingVaultKey('');
+        setVaultDraft({ key: '', value: '' });
+    };
+
+    const saveVaultSecret = async () => {
+        const key = String(vaultDraft.key || '').trim();
+        const value = String(vaultDraft.value || '').trim();
+        if (!key || !value) {
+            toast.error('Key and value are required.');
+            return;
+        }
+        try {
+            await createSecret({ key, value, overwrite: Boolean(editingVaultKey) });
+            toast.success(editingVaultKey ? `Secret ${key} updated.` : `Secret ${key} created.`);
+            resetVaultEditor();
+            await Promise.all([fetchVaultEntries(), fetchEnvKeys()]);
+        } catch (err) {
+            toast.error(err.message || 'Failed to save secret');
+        }
+    };
+
+    const removeVaultSecret = async (key) => {
+        if (!window.confirm(`Delete ${key}?`)) return;
+        try {
+            await deleteSecret(key);
+            toast.success(`Secret ${key} deleted.`);
+            if (editingVaultKey === key) resetVaultEditor();
+            await Promise.all([fetchVaultEntries(), fetchEnvKeys()]);
+        } catch (err) {
+            toast.error(err.message || 'Failed to delete secret');
+        }
+    };
+
+    const runEnvAudit = async () => {
+        try {
+            const data = await auditEnvSecrets();
+            setEnvAudit(data);
+            toast.success('Environment source audited.');
+        } catch (err) {
+            toast.error(err.message || 'Failed to audit .env source');
+        }
+    };
+
+    const runEnvImport = async (overwrite = false) => {
+        try {
+            const data = await importEnvSecrets({ overwrite });
+            setEnvAudit(data);
+            await Promise.all([fetchVaultEntries(), fetchEnvKeys()]);
+            toast.success(overwrite ? 'Vault synchronized from .env source.' : 'Missing secrets imported from .env source.');
+        } catch (err) {
+            toast.error(err.message || 'Failed to import .env source');
+        }
     };
 
     const updateNestedValue = (path, value) => {
@@ -365,7 +419,7 @@ const Settings = () => {
         { id: 'external_accounts', label: 'External Accounts', icon: Link2 },
         { id: 'llm', label: 'Intelligence', icon: Cpu },
         { id: 'stt', label: 'Voice', icon: Mic },
-        { id: 'skills', label: 'Skills', icon: Puzzle },
+        { id: 'capabilities', label: 'Capabilities', icon: Puzzle },
         { id: 'weather', label: 'Environment', icon: CloudSun },
         { id: 'security', label: 'Secrets', icon: Shield },
         { id: 'debug', label: 'Debug/Logs', icon: Terminal },
@@ -583,6 +637,98 @@ const Settings = () => {
         </div>
     );
 
+    const openTelegramSecretEditor = () => {
+        const current = config?.interfaces?.telegram?.secret_ref;
+        setExternalSecretEditor({
+            target: 'interfaces.telegram.secret_ref',
+            key: typeof current === 'string' && current.startsWith('ENV_') ? current : 'ENV_TELEGRAM_KEY',
+            value: ''
+        });
+    };
+
+    const createAndBindExternalSecret = async (targetPath) => {
+        const key = String(externalSecretEditor.key || '').trim();
+        const value = String(externalSecretEditor.value || '').trim();
+        if (!key || !value) {
+            toast.error("Key and value are required.");
+            return;
+        }
+        try {
+            const res = await createSecret({ key, value });
+            if (res?.success) {
+                const boundKey = String(res?.key || key).trim();
+                updateNestedValue(targetPath, boundKey);
+                await fetchEnvKeys();
+                setExternalSecretEditor({ target: '', key: '', value: '' });
+                toast.success(`Secret ${boundKey} created and linked.`);
+            }
+        } catch (err) {
+            toast.error(err.message || 'Failed to create secret');
+        }
+    };
+
+    const renderTelegramSecretField = () => {
+        const currentValue = config?.interfaces?.telegram?.secret_ref || '';
+        const creating = externalSecretEditor.target === 'interfaces.telegram.secret_ref';
+        const options = Array.from(new Set([...(envKeys || []), ...(currentValue ? [currentValue] : [])]));
+
+        return (
+            <div className="form-group" style={{ background: 'rgba(var(--accent-rgb), 0.05)', padding: '14px', borderRadius: '10px', border: '1px solid rgba(var(--accent-rgb), 0.2)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Shield size={14} color="var(--accent-color)" /> Bot Token
+                    </label>
+                    <button
+                        onClick={() => creating ? setExternalSecretEditor({ target: '', key: '', value: '' }) : openTelegramSecretEditor()}
+                        className="btn-ghost"
+                        style={{ fontSize: '11px', padding: '2px 8px', color: 'var(--accent-color)' }}
+                    >
+                        {creating ? 'Cancel' : '+ Create New Key'}
+                    </button>
+                </div>
+
+                {!creating && (
+                    <select
+                        className="input-field"
+                        value={currentValue}
+                        onChange={(e) => updateNestedValue('interfaces.telegram.secret_ref', e.target.value)}
+                    >
+                        <option value="">-- Select Environment Key --</option>
+                        {options.map((key) => (
+                            <option key={key} value={key}>{key}</option>
+                        ))}
+                    </select>
+                )}
+
+                {creating && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '8px' }}>
+                        <input
+                            type="text"
+                            className="input-field"
+                            value={externalSecretEditor.key}
+                            placeholder="ENV_TELEGRAM_KEY"
+                            onChange={(e) => setExternalSecretEditor(prev => ({ ...prev, key: e.target.value }))}
+                        />
+                        <input
+                            type="password"
+                            className="input-field"
+                            value={externalSecretEditor.value}
+                            placeholder="Paste your BotFather token here"
+                            onChange={(e) => setExternalSecretEditor(prev => ({ ...prev, value: e.target.value }))}
+                        />
+                        <button
+                            onClick={() => createAndBindExternalSecret('interfaces.telegram.secret_ref')}
+                            className="btn-primary"
+                            style={{ alignSelf: 'flex-start', fontSize: '12px', padding: '6px 12px' }}
+                        >
+                            Save to Vault
+                        </button>
+                    </div>
+                )}
+            </div>
+        );
+    };
+
     const renderInterfaces = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
@@ -602,28 +748,7 @@ const Settings = () => {
                             />
                         </div>
 
-                        {config.interfaces?.telegram?.enabled && (
-                            <div className="form-group">
-                                <label>Bot Token</label>
-                                <div style={{ position: 'relative' }}>
-                                    <input
-                                        type={showSecrets['telegram_token'] ? 'text' : 'password'}
-                                        className="input-field"
-                                        style={{ paddingRight: '44px' }}
-                                        value={config.interfaces?.telegram?.token || ''}
-                                        onChange={(e) => updateNestedValue('interfaces.telegram.token', e.target.value)}
-                                        placeholder="Paste your BotFather token here"
-                                    />
-                                    <button
-                                        onClick={() => toggleSecret('telegram_token')}
-                                        className="icon-btn"
-                                        style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', opacity: 0.5 }}
-                                    >
-                                        {showSecrets['telegram_token'] ? <EyeOff size={18} /> : <Eye size={18} />}
-                                    </button>
-                                </div>
-                            </div>
-                        )}
+                        {config.interfaces?.telegram?.enabled && renderTelegramSecretField()}
                         <p style={{ marginTop: '16px', fontSize: '12px', color: '#475569' }}>
                             Future integrations: Discord, WhatsApp (Coming Soon)
                         </p>
@@ -633,17 +758,17 @@ const Settings = () => {
         </div>
     );
 
-    const renderSkills = () => (
+    const renderCapabilities = () => (
         <div className="animate-fade-in">
             <section className="glass" style={{ padding: '32px', borderRadius: '8px', textAlign: 'center' }}>
                 <Puzzle size={48} style={{ margin: '0 auto 20px', color: 'var(--accent-color)' }} />
                 <h3 style={{ fontSize: '24px', fontWeight: '800', marginBottom: '16px' }}>Cognitive Capabilities</h3>
                 <p style={{ color: '#94a3b8', marginBottom: '32px' }}>
-                    Skill management has been moved to the dedicated Skills Hub for an improved experience.
+                    Capability management has been moved to the dedicated Capabilities Hub for an improved experience.
                 </p>
                 <div style={{ display: 'flex', justifyContent: 'center' }}>
-                    <Link to="/skills" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 24px' }}>
-                        <ExternalLink size={18} /> Open Skills Hub
+                    <Link to="/capabilities" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 24px' }}>
+                        <ExternalLink size={18} /> Open Capabilities Hub
                     </Link>
                 </div>
             </section>
@@ -817,44 +942,90 @@ const Settings = () => {
     const renderSecurity = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                    <h3 className="section-title" style={{ marginBottom: 0 }}>
-                        <Shield size={20} /> Vault (Environment Secrets)
-                    </h3>
-                    <button onClick={() => {
-                        const newKey = prompt("Enter new ENV variable name (e.g. ENV_MY_API_KEY):");
-                        if (newKey) {
-                            setEnvData(prev => ({ ...prev, [newKey]: "" }));
-                        }
-                    }} className="btn-ghost" style={{ fontSize: '12px', padding: '6px 12px' }}>
-                        <Plus size={14} style={{ marginRight: '6px' }} /> Add Secret
-                    </button>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '24px', flexWrap: 'wrap' }}>
+                    <div>
+                        <h3 className="section-title" style={{ marginBottom: '6px' }}>
+                            <Shield size={20} /> Vault
+                        </h3>
+                        <div style={{ fontSize: '12px', color: '#64748b' }}>Create, rotate, audit, and delete secret references without editing raw .env values.</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        <button onClick={fetchVaultEntries} className="btn-ghost" style={{ fontSize: '12px', padding: '6px 12px' }}>Refresh</button>
+                        <button onClick={runEnvAudit} className="btn-ghost" style={{ fontSize: '12px', padding: '6px 12px' }}>Audit .env</button>
+                        <button onClick={() => runEnvImport(false)} className="btn-ghost" style={{ fontSize: '12px', padding: '6px 12px' }}>Import Missing</button>
+                        <button onClick={() => runEnvImport(true)} className="btn-ghost" style={{ fontSize: '12px', padding: '6px 12px' }}>Sync Divergent</button>
+                    </div>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    {Object.entries(envData || {}).map(([key, value]) => (
-                        <div key={key} className="form-group">
-                            <label style={{ fontSize: '12px', color: '#64748b' }}>{key}</label>
-                            <div style={{ position: 'relative' }}>
+
+                <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : '1.1fr 1.4fr', gap: '20px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                        <div className="form-group" style={{ background: 'rgba(255,255,255,0.03)', padding: '16px', borderRadius: '10px', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
+                            <label style={{ fontSize: '12px', color: '#94a3b8' }}>{editingVaultKey ? 'Edit Secret' : 'Create Secret'}</label>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px' }}>
                                 <input
-                                    type={showSecrets[key] ? 'text' : 'password'}
+                                    type="text"
                                     className="input-field"
-                                    style={{ paddingRight: '44px' }}
-                                    value={value}
-                                    onChange={(e) => {
-                                        const newData = { ...(envData || {}), [key]: e.target.value };
-                                        setEnvData(newData);
-                                    }}
+                                    placeholder="ENV_MY_API_KEY"
+                                    value={vaultDraft.key}
+                                    disabled={Boolean(editingVaultKey)}
+                                    onChange={(e) => setVaultDraft(prev => ({ ...prev, key: e.target.value }))}
                                 />
-                                <button
-                                    onClick={() => toggleSecret(key)}
-                                    className="icon-btn"
-                                    style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', opacity: 0.5 }}
-                                >
-                                    {showSecrets[key] ? <EyeOff size={18} /> : <Eye size={18} />}
-                                </button>
+                                <input
+                                    type="password"
+                                    className="input-field"
+                                    placeholder={editingVaultKey ? 'Enter the new secret value' : 'Enter the secret value'}
+                                    value={vaultDraft.value}
+                                    onChange={(e) => setVaultDraft(prev => ({ ...prev, value: e.target.value }))}
+                                />
+                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                    <button onClick={saveVaultSecret} className="btn-primary">{editingVaultKey ? 'Update Secret' : 'Create Secret'}</button>
+                                    {(editingVaultKey || vaultDraft.key || vaultDraft.value) && (
+                                        <button onClick={resetVaultEditor} className="btn-ghost">Cancel</button>
+                                    )}
+                                </div>
                             </div>
                         </div>
-                    ))}
+
+
+                        {envAudit && (
+                            <div style={{ background: 'rgba(255,255,255,0.03)', padding: '16px', borderRadius: '10px', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                                    <AlertCircle size={16} color="#fbbf24" />
+                                    <strong>Import Audit</strong>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px', fontSize: '12px', color: '#94a3b8' }}>
+                                    <div>Missing: {envAudit?.summary?.missing ?? envAudit?.summary?.imported ?? 0}</div>
+                                    <div>Divergent: {envAudit?.summary?.divergent ?? envAudit?.summary?.updated ?? 0}</div>
+                                    <div>Matched: {envAudit?.summary?.matched ?? 0}</div>
+                                    <div>Ignored: {envAudit?.summary?.ignored ?? 0}</div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        {(vaultEntries || []).length === 0 ? (
+                            <div style={{ padding: '24px', border: '1px dashed rgba(148, 163, 184, 0.2)', borderRadius: '10px', color: '#94a3b8' }}>No secrets stored in the vault.</div>
+                        ) : (
+                            (vaultEntries || []).map((entry) => (
+                                <div key={entry.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '14px 16px', borderRadius: '10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
+                                    <div style={{ minWidth: 0 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 }}>
+                                            <CheckCircle size={14} color={entry.has_value ? '#34d399' : '#f59e0b'} />
+                                            <span style={{ wordBreak: 'break-all' }}>{entry.key}</span>
+                                        </div>
+                                        <div style={{ marginTop: '6px', fontSize: '12px', color: '#94a3b8' }}>
+                                            Updated: {entry.updated_at || 'n/a'}
+                                        </div>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                        <button onClick={() => openVaultEditor(entry.key)} className="btn-ghost" style={{ fontSize: '12px', padding: '6px 12px' }}>Edit</button>
+                                        <button onClick={() => removeVaultSecret(entry.key)} className="btn-ghost" style={{ fontSize: '12px', padding: '6px 12px', color: '#f87171' }}>Delete</button>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
                 </div>
             </section>
         </div>
@@ -864,10 +1035,7 @@ const Settings = () => {
         const providers = config.external_accounts?.providers || {};
         const entries = Object.entries(providers);
         const accounts = Array.isArray(config.external_accounts?.accounts) ? config.external_accounts.accounts : [];
-        const temporarilyHiddenProviders = new Set(['microsoft', 'aws', 'cloudflare']);
-        const visibleExternalCatalog = (externalCatalog || []).filter(
-            (item) => !temporarilyHiddenProviders.has(String(item?.key || '').toLowerCase())
-        );
+        const visibleExternalCatalog = externalCatalog || [];
         const providerCatalogByKey = (externalCatalog || []).reduce((acc, item) => {
             const key = String(item?.key || '').toLowerCase();
             if (key) acc[key] = item;
@@ -878,9 +1046,6 @@ const Settings = () => {
             if (key === 'google') return { color: '#34d399', iconUrl: 'https://www.google.com/s2/favicons?domain=google.com&sz=64' };
             if (key === 'youtube') return { color: '#ef4444', iconUrl: 'https://www.google.com/s2/favicons?domain=youtube.com&sz=64' };
             if (key === 'maps' || key === 'google_maps') return { color: '#22c55e', iconUrl: 'https://www.google.com/s2/favicons?domain=maps.google.com&sz=64' };
-            if (key === 'microsoft') return { color: '#60a5fa', iconUrl: 'https://www.google.com/s2/favicons?domain=microsoft.com&sz=64' };
-            if (key === 'aws') return { color: '#f59e0b', iconUrl: 'https://www.google.com/s2/favicons?domain=aws.amazon.com&sz=64' };
-            if (key === 'cloudflare') return { color: '#f97316', iconUrl: 'https://www.google.com/s2/favicons?domain=cloudflare.com&sz=64' };
             return { color: '#a78bfa', iconUrl: '' };
         };
         const ProviderBrandIcon = ({ providerKey, size = 14 }) => {
@@ -906,56 +1071,32 @@ const Settings = () => {
             .map((key) => ({ key, meta: providerCatalogByKey[String(key).toLowerCase()] || null }))
             .filter((item) => {
                 const key = String(item?.key || '').toLowerCase();
-                const modes = Array.isArray(item?.meta?.auth_modes) ? item.meta.auth_modes.map((m) => String(m).toLowerCase()) : [];
-                if (temporarilyHiddenProviders.has(key)) return false;
+                const authMode = String(item?.meta?.auth?.mode || '').toLowerCase();
+                const connectable = item?.meta?.auth?.connectable === true;
                 if (!item?.meta) return false; // only providers backed by plugins
                 if (key === 'youtube') return false; // YouTube OAuth flows should piggyback Google account
-                return modes.includes('oauth2');
+                return connectable && authMode === 'oauth2';
             });
-        const secretFieldMap = {
-            client_id: { label: 'Client ID Ref', placeholder: 'ENV_PROVIDER_CLIENT_ID' },
-            client_secret: { label: 'Client Secret Ref', placeholder: 'ENV_PROVIDER_CLIENT_SECRET' },
-            api_key_ref: { label: 'API Key Ref', placeholder: 'ENV_PROVIDER_API_KEY' }
+        const getProviderMeta = (providerKey) => providerCatalogByKey[String(providerKey || '').toLowerCase()] || null;
+        const getProviderAuthFields = (providerKey) => {
+            const fields = getProviderMeta(providerKey)?.auth?.fields;
+            return Array.isArray(fields) ? fields : [];
         };
-        const getProviderExtraFields = (providerKey) => {
-            const key = String(providerKey || '').toLowerCase();
-            if (key === 'microsoft') {
-                return [
-                    { name: 'tenant', label: 'Tenant', placeholder: 'common | organizations | <tenant-id>' }
-                ];
-            }
-            if (key === 'aws') {
-                return [
-                    { name: 'region', label: 'Region', placeholder: 'us-east-1' },
-                    { name: 'role_arn', label: 'Role ARN', placeholder: 'arn:aws:iam::123456789012:role/MyRole' }
-                ];
-            }
-            if (key === 'cloudflare') {
-                return [
-                    { name: 'account_id', label: 'Account ID', placeholder: 'Cloudflare account id' }
-                ];
-            }
-            return [];
+        const getProviderConfigFields = (providerKey) => {
+            const fields = getProviderMeta(providerKey)?.config_fields;
+            return Array.isArray(fields) ? fields : [];
         };
-
-        const addProvider = () => {
-            const providerKey = prompt("Provider key (example: google_drive):");
-            if (!providerKey) return;
-            const trimmed = providerKey.trim().toLowerCase();
-            if (!trimmed) return;
-            if (providers[trimmed]) {
-                toast.error("Provider already exists.");
-                return;
+        const buildProviderDefaults = (providerKey, plugin = null) => {
+            const meta = plugin || getProviderMeta(providerKey) || {};
+            const next = { enabled: false };
+            for (const field of Array.isArray(meta?.auth?.fields) ? meta.auth.fields : []) {
+                next[field.key] = '';
             }
-
-            updateNestedValue(`external_accounts.providers.${trimmed}`, {
-                enabled: false,
-                auth_mode: "oauth2",
-                client_id: "",
-                client_secret: "",
-                scopes: [],
-                redirect_uri: ""
-            });
+            for (const field of Array.isArray(meta?.config_fields) ? meta.config_fields : []) {
+                next[field.key] = field.default ?? '';
+            }
+            next.scopes = Array.isArray(meta?.default_scopes) ? meta.default_scopes : [];
+            return next;
         };
 
         const addProviderFromPlugin = (plugin) => {
@@ -964,15 +1105,7 @@ const Settings = () => {
                 toast.error("Provider already exists.");
                 return;
             }
-            updateNestedValue(`external_accounts.providers.${plugin.key}`, {
-                enabled: false,
-                auth_mode: Array.isArray(plugin.auth_modes) && plugin.auth_modes.length > 0 ? plugin.auth_modes[0] : "oauth2",
-                client_id: "",
-                client_secret: "",
-                scopes: Array.isArray(plugin.default_scopes) ? plugin.default_scopes : [],
-                redirect_uri: "",
-                tenant: plugin.key === "microsoft" ? "common" : ""
-            });
+            updateNestedValue(`external_accounts.providers.${plugin.key}`, buildProviderDefaults(plugin.key, plugin));
         };
 
         const removeProvider = (providerKey) => {
@@ -996,42 +1129,22 @@ const Settings = () => {
             });
         };
 
-        const createSecretAndBind = async (targetPath) => {
-            const key = String(externalSecretEditor.key || '').trim();
-            const value = String(externalSecretEditor.value || '').trim();
-            if (!key || !value) {
-                toast.error("Key and value are required.");
-                return;
-            }
-            try {
-                const res = await api.post('/models/env-keys', { key, value });
-                if (res?.success) {
-                    updateNestedValue(targetPath, key);
-                    setEnvData(prev => ({ ...(prev || {}), [key]: value }));
-                    await fetchEnvKeys();
-                    setExternalSecretEditor({ target: '', key: '', value: '' });
-                    toast.success(`Secret ${key} created and linked.`);
-                }
-            } catch (err) {
-                toast.error(err.message || 'Failed to create secret');
-            }
-        };
-
-        const renderSecretRefField = (providerKey, provider, fieldName) => {
-            const targetPath = `external_accounts.providers.${providerKey}.${fieldName}`;
-            const fieldMeta = secretFieldMap[fieldName] || { label: fieldName, placeholder: 'ENV_KEY' };
-            const currentValue = provider?.[fieldName] || '';
+        const renderSecretRefField = (providerKey, provider, fieldMeta) => {
+            const fieldKey = String(fieldMeta?.key || '').trim();
+            if (!fieldKey) return null;
+            const targetPath = `external_accounts.providers.${providerKey}.${fieldKey}`;
+            const currentValue = provider?.[fieldKey] || '';
             const options = Array.from(new Set([...(envKeys || []), ...(currentValue ? [currentValue] : [])]));
             const creating = externalSecretEditor.target === targetPath;
 
             return (
-                <div key={`${providerKey}_${fieldName}`} className="form-group" style={{ background: 'rgba(var(--accent-rgb), 0.05)', padding: '14px', borderRadius: '10px', border: '1px solid rgba(var(--accent-rgb), 0.2)' }}>
+                <div key={`${providerKey}_${fieldKey}`} className="form-group" style={{ background: 'rgba(var(--accent-rgb), 0.05)', padding: '14px', borderRadius: '10px', border: '1px solid rgba(var(--accent-rgb), 0.2)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <Shield size={14} color="var(--accent-color)" /> {fieldMeta.label}
+                            <Shield size={14} color="var(--accent-color)" /> {fieldMeta.title}
                         </label>
                         <button
-                            onClick={() => creating ? setExternalSecretEditor({ target: '', key: '', value: '' }) : openSecretEditor(targetPath, providerKey, fieldName)}
+                            onClick={() => creating ? setExternalSecretEditor({ target: '', key: '', value: '' }) : openSecretEditor(targetPath, providerKey, fieldKey)}
                             className="btn-ghost"
                             style={{ fontSize: '11px', padding: '2px 8px', color: 'var(--accent-color)' }}
                         >
@@ -1058,7 +1171,7 @@ const Settings = () => {
                                 type="text"
                                 className="input-field"
                                 value={externalSecretEditor.key}
-                                placeholder={fieldMeta.placeholder}
+                                placeholder={fieldMeta.placeholder || 'ENV_PROVIDER_SECRET'}
                                 onChange={(e) => setExternalSecretEditor(prev => ({ ...prev, key: e.target.value }))}
                             />
                             <input
@@ -1069,7 +1182,7 @@ const Settings = () => {
                                 onChange={(e) => setExternalSecretEditor(prev => ({ ...prev, value: e.target.value }))}
                             />
                             <button
-                                onClick={() => createSecretAndBind(targetPath)}
+                                onClick={() => createAndBindExternalSecret(targetPath)}
                                 className="btn-primary"
                                 style={{ alignSelf: 'flex-start', fontSize: '12px', padding: '6px 12px' }}
                             >
@@ -1088,11 +1201,11 @@ const Settings = () => {
                 return;
             }
             const providerDraft = providers?.[providerKey] || {};
-            const authMode = String(providerDraft?.auth_mode || '').trim().toLowerCase();
+            const providerMeta = getProviderMeta(providerKey);
             const redirectUri = String(providerDraft?.redirect_uri || '').trim();
             const clientRef = String(providerDraft?.client_id || '').trim();
-            if (authMode && authMode !== 'oauth2') {
-                toast.error(`Provider ${providerKey} is not in oauth2 mode.`);
+            if (String(providerMeta?.auth?.mode || '').toLowerCase() !== 'oauth2') {
+                toast.error(`Provider ${providerKey} is not OAuth2-enabled.`);
                 return;
             }
             if (!redirectUri || !clientRef) {
@@ -1302,11 +1415,6 @@ const Settings = () => {
 
                     {externalTab === 'providers' && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                <button onClick={addProvider} className="btn-ghost" style={{ fontSize: '12px', padding: '6px 12px' }}>
-                                    <Plus size={14} style={{ marginRight: '6px' }} /> Add Provider
-                                </button>
-                            </div>
                             <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px', padding: '14px', marginBottom: '4px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                                     <strong style={{ fontSize: '13px' }}>Provider Plugins</strong>
@@ -1355,7 +1463,7 @@ const Settings = () => {
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                 <span style={{ width: '8px', height: '8px', borderRadius: '999px', background: provider?.enabled ? '#22c55e' : '#ef4444', display: 'inline-block' }} />
                                                 <strong style={{ textTransform: 'capitalize', fontSize: '14px' }}>{providerKey.replace(/_/g, ' ')}</strong>
-                                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{provider?.auth_mode || 'oauth2'}</span>
+                                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{getProviderMeta(providerKey)?.auth?.mode || 'custom'}</span>
                                             </div>
                                             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
                                                 {provider?.redirect_uri || 'No redirect URI configured'}
@@ -1404,33 +1512,11 @@ const Settings = () => {
                                         </div>
                                         <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : '1fr 1fr', gap: '12px' }}>
                                             {(() => {
-                                                const currentAuthMode = String(providers?.[editingProviderKey]?.auth_mode || '').trim().toLowerCase();
-                                                const showsApiKey = currentAuthMode.includes('api') || currentAuthMode === 'custom' || currentAuthMode === '';
+                                                const authFields = getProviderAuthFields(editingProviderKey);
+                                                const configFields = getProviderConfigFields(editingProviderKey);
                                                 return (
                                                     <>
-                                            <div className="form-group">
-                                                <label>Auth Mode</label>
-                                                <input
-                                                    type="text"
-                                                    className="input-field"
-                                                    value={providers?.[editingProviderKey]?.auth_mode || ''}
-                                                    onChange={(e) => updateNestedValue(`external_accounts.providers.${editingProviderKey}.auth_mode`, e.target.value)}
-                                                    placeholder="oauth2 | api_key | custom"
-                                                />
-                                            </div>
-                                            <div className="form-group">
-                                                <label>Redirect URI</label>
-                                                <input
-                                                    type="text"
-                                                    className="input-field"
-                                                    value={providers?.[editingProviderKey]?.redirect_uri || ''}
-                                                    onChange={(e) => updateNestedValue(`external_accounts.providers.${editingProviderKey}.redirect_uri`, e.target.value)}
-                                                    placeholder="http://localhost:8000/api/auth/callback"
-                                                />
-                                            </div>
-                                            {renderSecretRefField(editingProviderKey, providers?.[editingProviderKey], 'client_id')}
-                                            {renderSecretRefField(editingProviderKey, providers?.[editingProviderKey], 'client_secret')}
-                                            {showsApiKey && renderSecretRefField(editingProviderKey, providers?.[editingProviderKey], 'api_key_ref')}
+                                            {authFields.map((field) => renderSecretRefField(editingProviderKey, providers?.[editingProviderKey], field))}
                                             <div className="form-group">
                                                 <label>Scopes (comma separated)</label>
                                                 <input
@@ -1441,15 +1527,15 @@ const Settings = () => {
                                                     placeholder="openid, email, profile"
                                                 />
                                             </div>
-                                            {getProviderExtraFields(editingProviderKey).map((field) => (
-                                                <div className="form-group" key={`${editingProviderKey}_${field.name}`}>
-                                                    <label>{field.label}</label>
+                                            {configFields.map((field) => (
+                                                <div className="form-group" key={`${editingProviderKey}_${field.key}`}>
+                                                    <label>{field.title}</label>
                                                     <input
                                                         type="text"
                                                         className="input-field"
-                                                        value={providers?.[editingProviderKey]?.[field.name] || ''}
-                                                        onChange={(e) => updateNestedValue(`external_accounts.providers.${editingProviderKey}.${field.name}`, e.target.value)}
-                                                        placeholder={field.placeholder}
+                                                        value={providers?.[editingProviderKey]?.[field.key] ?? ''}
+                                                        onChange={(e) => updateNestedValue(`external_accounts.providers.${editingProviderKey}.${field.key}`, e.target.value)}
+                                                        placeholder={field.placeholder || ''}
                                                     />
                                                 </div>
                                             ))}
@@ -1482,7 +1568,7 @@ const Settings = () => {
 
             <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
                 <h3 className="section-title">
-                    <Eye size={20} /> Vision & Perception
+                    <Monitor size={20} /> Vision & Perception
                 </h3>
                 <ModelPoolManager
                     modality="vision"
@@ -1581,7 +1667,7 @@ const Settings = () => {
                     {activeTab === 'network' && renderNetwork()}
                     {activeTab === 'external_accounts' && renderExternalAccounts()}
                     {activeTab === 'llm' && renderLLM()}
-                    {activeTab === 'skills' && renderSkills()}
+                    {activeTab === 'capabilities' && renderCapabilities()}
                     {activeTab === 'stt' && (
                         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                             <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '16px' }}>
@@ -1617,7 +1703,7 @@ const Settings = () => {
                                         try {
                                             JSON.parse(rawJson);
                                             return <span className="status-pill online">Valid JSON</span>;
-                                        } catch (e) {
+                                        } catch {
                                             return <span className="status-pill offline">Invalid JSON</span>;
                                         }
                                     })()}
@@ -1627,7 +1713,7 @@ const Settings = () => {
                                                 const pretty = JSON.stringify(JSON.parse(rawJson), null, 4);
                                                 setRawJson(pretty);
                                                 toast.success("JSON Formatted");
-                                            } catch (e) {
+                                            } catch {
                                                 toast.error("Cannot format: Invalid JSON");
                                             }
                                         }}
@@ -1691,7 +1777,9 @@ const Settings = () => {
                                         try {
                                             const parsed = JSON.parse(e.target.value);
                                             setConfig(parsed);
-                                        } catch { }
+                                        } catch {
+                                            // Keep raw editor permissive while JSON is temporarily invalid.
+                                        }
                                     }}
                                 />
                             </div>
@@ -1792,12 +1880,12 @@ const Settings = () => {
                     background: rgba(255,255,255,0.05);
                     margin: 8px 0;
                 }
-                .skill-card {
+                .capability-card {
                     padding: 16px;
                     border-radius: 14px;
                     transition: all 0.2s;
                 }
-                .skill-card:hover {
+                .capability-card:hover {
                     background: rgba(255,255,255,0.05);
                     transform: translateY(-2px);
                 }

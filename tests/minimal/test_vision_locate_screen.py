@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.skills.vision.skill import VisionSkill
+from src.capabilities.vision.capability import VisionCapability
 
 
 class _FakeSystemDriver:
@@ -40,8 +40,8 @@ def test_locate_screen_parses_json_payload():
 
     try:
         payload = '{"found":true,"label":"volume","confidence":0.9,"x":10,"y":20,"width":30,"height":40,"screen_id":1}'
-        skill = VisionSkill(kernel=_Kernel(payload, path), config={})
-        result = skill.execute("vision.locate_screen", {"label": "volume icon"}, {"session_id": "s1"})
+        capability = VisionCapability(kernel=_Kernel(payload, path), config={})
+        result = capability.execute("vision.locate_screen", {"label": "volume icon"}, {"session_id": "s1"})
 
         assert result["ok"] is True
         assert result["bbox"]["label"] == "volume"
@@ -58,8 +58,8 @@ def test_locate_screen_handles_not_found():
 
     try:
         payload = '{"found":false,"label":"volume","confidence":0.2,"x":0,"y":0,"width":0,"height":0,"screen_id":0}'
-        skill = VisionSkill(kernel=_Kernel(payload, path), config={})
-        result = skill.execute("vision.locate_screen", {"label": "volume icon"}, {"session_id": "s1"})
+        capability = VisionCapability(kernel=_Kernel(payload, path), config={})
+        result = capability.execute("vision.locate_screen", {"label": "volume icon"}, {"session_id": "s1"})
 
         assert result["ok"] is False
         assert result["error"] == "ELEMENT_NOT_FOUND"
@@ -82,8 +82,8 @@ def test_locate_screen_not_found_has_no_hardcoded_secondary_strategies():
 
     kernel = _Kernel('{"found":true}', path)
     kernel.llm_manager = _FakeLLMSeq()
-    skill = VisionSkill(kernel=kernel, config={})
-    result = skill.execute("vision.locate_screen", {"label": "icone do volume"}, {"session_id": "s1"})
+    capability = VisionCapability(kernel=kernel, config={})
+    result = capability.execute("vision.locate_screen", {"label": "icone do volume"}, {"session_id": "s1"})
 
     assert result["ok"] is False
     assert result["error"] == "ELEMENT_NOT_FOUND"
@@ -98,8 +98,8 @@ def test_locate_screen_accepts_target_alias():
 
     try:
         payload = '{"found":true,"label":"clock","confidence":0.92,"x":100,"y":200,"width":120,"height":40,"screen_id":0}'
-        skill = VisionSkill(kernel=_Kernel(payload, path), config={})
-        result = skill.execute("vision.locate_screen", {"target": "system clock date"}, {"session_id": "s1"})
+        capability = VisionCapability(kernel=_Kernel(payload, path), config={})
+        result = capability.execute("vision.locate_screen", {"target": "system clock date"}, {"session_id": "s1"})
 
         assert result["ok"] is True
         assert result["bbox"]["label"] == "clock"
@@ -124,8 +124,8 @@ def test_locate_screen_rejects_bbox_far_out_of_frame():
 
     kernel = _Kernel('{"found":true}', path)
     kernel.llm_manager = _FakeLLMSeq()
-    skill = VisionSkill(kernel=kernel, config={})
-    result = skill.execute("vision.locate_screen", {"label": "send icon"}, {"session_id": "s1"})
+    capability = VisionCapability(kernel=kernel, config={})
+    result = capability.execute("vision.locate_screen", {"label": "send icon"}, {"session_id": "s1"})
 
     assert result["ok"] is False
     assert result["error"] == "ELEMENT_OUT_OF_FRAME"
@@ -141,8 +141,8 @@ def test_locate_screen_recovers_bbox_with_dpi_scale():
     try:
         # Typical scaling mismatch example: coordinates produced in ~1.25x space.
         payload = '{"found":true,"label":"send","confidence":0.9,"x":1000,"y":825,"width":40,"height":40,"screen_id":0}'
-        skill = VisionSkill(kernel=_Kernel(payload, path), config={})
-        result = skill.execute("vision.locate_screen", {"label": "send icon"}, {"session_id": "s1"})
+        capability = VisionCapability(kernel=_Kernel(payload, path), config={})
+        result = capability.execute("vision.locate_screen", {"label": "send icon"}, {"session_id": "s1"})
 
         assert result["ok"] is True
         assert result.get("corrected") is True
@@ -177,8 +177,8 @@ def test_locate_screen_converts_normalized_1000_coordinates():
 
     kernel = _Kernel('{"found":true}', path)
     kernel.llm_manager = _FakeLLMSeq()
-    skill = VisionSkill(kernel=kernel, config={})
-    result = skill.execute(
+    capability = VisionCapability(kernel=kernel, config={})
+    result = capability.execute(
         "vision.locate_screen",
         {"label": "botão de enviar mensagem"},
         {"session_id": "s1"},
@@ -202,8 +202,8 @@ def test_locate_screen_converts_center_anchor_to_top_left():
             '"x":820,"y":760,"width":22,"height":22,'
             '"coordinate_space":"normalized_1000","origin":"center"}'
         )
-        skill = VisionSkill(kernel=_Kernel(payload, path), config={})
-        result = skill.execute("vision.locate_screen", {"label": "volume icon"}, {"session_id": "s1"})
+        capability = VisionCapability(kernel=_Kernel(payload, path), config={})
+        result = capability.execute("vision.locate_screen", {"label": "volume icon"}, {"session_id": "s1"})
 
         assert result["ok"] is True
         # Center->top-left conversion should move x/y left/up by half bbox size.

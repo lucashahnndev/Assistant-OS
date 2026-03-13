@@ -7,8 +7,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.skills.assistive_overlay.skill import AssistiveOverlaySkill
-from src.skills.vision.skill import VisionSkill
+from src.capabilities.assistive_overlay.capability import AssistiveOverlayCapability
+from src.capabilities.vision.capability import VisionCapability
 
 
 class _FakeSystemDriver:
@@ -40,23 +40,23 @@ class _FakeKernel:
 
 
 class _FakeRegistry:
-    def __init__(self, vision_skill: VisionSkill):
-        self._vision_skill = vision_skill
+    def __init__(self, vision_capability: VisionCapability):
+        self._vision_capability = vision_capability
 
-    def get_skill_for_action(self, action_id: str):
+    def get_capability_for_action(self, action_id: str):
         if action_id == "vision.locate_screen":
-            return self._vision_skill
+            return self._vision_capability
         return None
 
     def dispatch(self, action_id: str, params, context):
         if action_id == "vision.locate_screen":
-            return self._vision_skill.execute(action_id, params, context)
+            return self._vision_capability.execute(action_id, params, context)
         return {"ok": False, "status": "error", "error": "UNKNOWN_ACTION", "text": action_id}
 
 
-def _make_skill(tmp_file: str) -> AssistiveOverlaySkill:
+def _make_capability(tmp_file: str) -> AssistiveOverlayCapability:
     kernel = _FakeKernel(tmp_file)
-    return AssistiveOverlaySkill(
+    return AssistiveOverlayCapability(
         kernel=kernel,
         config={
             "backend": "noop",
@@ -73,9 +73,9 @@ def test_draw_and_clear_noop_backend():
         path = tf.name
 
     try:
-        skill = _make_skill(path)
+        capability = _make_capability(path)
 
-        draw = skill.execute(
+        draw = capability.execute(
             "overlay.assist.draw_rect",
             {
                 "id": "target-volume",
@@ -96,7 +96,7 @@ def test_draw_and_clear_noop_backend():
         assert draw["ok"] is True
         assert draw["id"] == "target-volume"
 
-        cleared = skill.execute(
+        cleared = capability.execute(
             "overlay.assist.clear_by_id",
             {"id": "target-volume"},
             context={"session_id": "s1"},
@@ -112,8 +112,8 @@ def test_draw_without_screen_id_does_not_force_zero():
         path = tf.name
 
     try:
-        skill = _make_skill(path)
-        draw = skill.execute(
+        capability = _make_capability(path)
+        draw = capability.execute(
             "overlay.assist.draw_rect",
             {"x": 120.0, "y": 220.0, "width": 30.0, "height": 20.0},
             context={"session_id": "s1"},
@@ -131,8 +131,8 @@ def test_highlight_target_pipeline_with_locator():
         path = tf.name
 
     try:
-        skill = _make_skill(path)
-        result = skill.execute(
+        capability = _make_capability(path)
+        result = capability.execute(
             "overlay.assist.highlight_target",
             {
                 "label": "volume icon",
@@ -158,10 +158,10 @@ def test_highlight_target_prefers_vision_contract_route():
 
     try:
         kernel = _FakeKernel(path)
-        vision_skill = VisionSkill(kernel=kernel, config={})
-        registry = _FakeRegistry(vision_skill)
+        vision_capability = VisionCapability(kernel=kernel, config={})
+        registry = _FakeRegistry(vision_capability)
 
-        skill = AssistiveOverlaySkill(
+        capability = AssistiveOverlayCapability(
             kernel=kernel,
             config={
                 "backend": "noop",
@@ -170,10 +170,10 @@ def test_highlight_target_prefers_vision_contract_route():
                 "overlay": {"backend": "noop", "default_ttl_ms": 1200},
             },
         )
-        result = skill.execute(
+        result = capability.execute(
             "overlay.assist.highlight_target",
             {"label": "volume icon", "mark_type": "focus_corners"},
-            context={"session_id": "s1", "skill_registry": registry},
+            context={"session_id": "s1", "capability_registry": registry},
         )
 
         assert result["ok"] is True
@@ -189,7 +189,7 @@ def test_draw_arrow_missing_coords_recovers_via_locator():
 
     try:
         kernel = _FakeKernel(path)
-        skill = AssistiveOverlaySkill(
+        capability = AssistiveOverlayCapability(
             kernel=kernel,
             config={
                 "backend": "noop",
@@ -198,7 +198,7 @@ def test_draw_arrow_missing_coords_recovers_via_locator():
                 "overlay": {"backend": "noop", "default_ttl_ms": 1200},
             },
         )
-        result = skill.execute(
+        result = capability.execute(
             "overlay.assist.draw_arrow",
             {},
             context={"session_id": "s1", "user_input": "pode desenhar onde fica o botao de envio?"},
@@ -217,8 +217,8 @@ def test_highlight_target_uses_target_description_alias():
         path = tf.name
 
     try:
-        skill = _make_skill(path)
-        result = skill.execute(
+        capability = _make_capability(path)
+        result = capability.execute(
             "overlay.assist.highlight_target",
             {
                 "target_description": "system clock or date on bottom right taskbar",

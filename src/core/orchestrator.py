@@ -29,15 +29,15 @@ from utils.logging_config import get_logger, read_recent_logs
 from utils.event_bus import global_event_bus
 from utils.toon_codec import encode_reasoning_step, encode_state_summary, dumps_toon
 
-# New Resolution and Skill imports
+# New resolution and capability imports
 from core.resolution.chain_resolver import FallbackChainResolver
 from core.resolution.llm_resolver import LLMResolver
 from core.reflex.registry import ReflexRegistry
 from core.reflex.resolver import ReflexResolver
 from core.resolution.action_plan import ActionPlan
 from core.scheduler import WorkStatus
-from skills.registry import SkillRegistry
-from skills.loader import SkillLoader
+from capabilities.registry import CapabilityRegistry
+from capabilities.loader import CapabilityLoader
 from core.sessions_index import SessionIndexManager
 from core.errors import AgentError, ErrorCode, ErrorCategory
 from core.worker_runtime import WorkerRuntime
@@ -49,10 +49,10 @@ from core.plan_validator import PlanValidator
 logger = get_logger("AgentOrchestrator")
 
 
-class _SkillSessionView:
+class _CapabilitySessionView:
     """
-    Restricted session view for skill execution.
-    Skills can read lightweight session metadata/context, but cannot write
+    Restricted session view for capability execution.
+    Capabilities can read lightweight session metadata/context, but cannot write
     directly to chat/event streams (must return results to the worker).
     """
 
@@ -63,10 +63,10 @@ class _SkillSessionView:
         self.context = getattr(session, "context", {}) if session else {}
 
     def add_message(self, *args, **kwargs):
-        raise RuntimeError("Direct session messaging is not allowed from skills.")
+        raise RuntimeError("Direct session messaging is not allowed from capabilities.")
 
     def publish_event(self, *args, **kwargs):
-        raise RuntimeError("Direct event publishing is not allowed from skills.")
+        raise RuntimeError("Direct event publishing is not allowed from capabilities.")
 
 
 class AgentOrchestrator:
@@ -103,8 +103,8 @@ class AgentOrchestrator:
         self.sessions = {} # Dict[str, Session]
         self.session_locks: Dict[str, threading.RLock] = {} # Concurrency guards + persistence serialization (RLock per session)
         self.index_manager: Optional[SessionIndexManager] = None
-        self.skill_registry: Optional[SkillRegistry] = None
-        self.skill_loader: Optional[SkillLoader] = None
+        self.capability_registry: Optional[CapabilityRegistry] = None
+        self.capability_loader: Optional[CapabilityLoader] = None
         self.reflex_registry: Optional[ReflexRegistry] = None
         self.reflex_resolver: Optional[ReflexResolver] = None
         self.llm_resolver: Optional[LLMResolver] = None
@@ -127,18 +127,18 @@ class AgentOrchestrator:
         self.index_manager = SessionIndexManager(self.sessions_dir)
         self.index_manager.reconcile()
         
-        # 1. Skill System
-        self.skill_registry = SkillRegistry()
-        self.skill_loader = SkillLoader(self.skill_registry, config_manager=self.config_manager)
+        # 1. Capability System
+        self.capability_registry = CapabilityRegistry()
+        self.capability_loader = CapabilityLoader(self.capability_registry, config_manager=self.config_manager)
         
-        # Load external skills
-        skills_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'skills')
-        self.skill_loader.load_from_directory(skills_path)
+        # Load external capabilities
+        capability_modules_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'capabilities')
+        self.capability_loader.load_from_directory(capability_modules_path)
 
         # 2. Reflex System (Centralized)
         self.reflex_registry = ReflexRegistry()
-        for skill in self.skill_registry.skills.values():
-            for rule in skill.get_reflex_rules():
+        for capability in self.capability_registry.capabilities.values():
+            for rule in capability.get_reflex_rules():
                 self.reflex_registry.register(
                     pattern=rule['pattern'],
                     action_id=rule['action_id'],
@@ -150,7 +150,7 @@ class AgentOrchestrator:
         self.llm_resolver = LLMResolver(
             self.llm_manager,
             threshold=0.65,
-            skill_registry=self.skill_registry,
+            capability_registry=self.capability_registry,
         )
         self.intent_resolver_chain = FallbackChainResolver([self.llm_resolver])
 
@@ -475,9 +475,9 @@ class AgentOrchestrator:
         self.system_driver = driver
 
     def set_kernel(self, kernel):
-        """Link back to kernel for system skills."""
+        """Link back to kernel for system capabilities."""
         self.kernel = kernel
-        self.skill_loader.kernel = kernel
+        self.capability_loader.kernel = kernel
 
     def _get_planner_config(self) -> Dict[str, Any]:
         cfg = self.config_manager.get("planner", {})
@@ -1373,9 +1373,9 @@ class AgentOrchestrator:
         return self._t(session, "ack.work_started")
 
     @staticmethod
-    def _build_skill_callbacks_view(callbacks: Optional[Dict[str, Callable]]) -> Dict[str, Callable]:
+    def _build_capability_callbacks_view(callbacks: Optional[Dict[str, Callable]]) -> Dict[str, Callable]:
         """
-        Skills receive only non-terminal callback channels.
+        Capabilities receive only non-terminal callback channels.
         Final user replies/completion are orchestrator responsibilities.
         """
         if not isinstance(callbacks, dict):
@@ -1395,10 +1395,7 @@ class AgentOrchestrator:
         cleaned = str(explicit_text or "").strip()
         if cleaned and not self._looks_like_success_claim(cleaned) and not self._looks_like_technical_text(cleaned):
             return self._enforce_response_language(session, cleaned)
-        return self._enforce_response_language(
-            session,
-            self._build_contextual_start_ack(session, action_id, action_args=action_args),
-        )
+        return ""
 
     def _emit_execution_commitment(
         self,
@@ -1414,25 +1411,22 @@ class AgentOrchestrator:
         if not callbacks or "send_response" not in callbacks:
             return
 
-        # 1. Build the commitment message
-        commit_msg = self.build_work_start_ack(
-            session,
-            plan.action_id,
-            explicit_text=(plan.response_text or ""),
-            action_args=(plan.args if isinstance(plan.args, dict) else {}),
-        )
+        # 1. Check if LLM explicitly provided a conversational response along with its action
+        commit_msg = str(plan.response_text or "").strip()
 
-        # 2. Prevent duplication if it's already a reply (unlikely here but safe)
+        # 2. Prevent duplication if it's already a reply action
         if plan.action_id == "reply":
             return
 
-        # 3. Send and persist
-        callbacks["send_response"](commit_msg, is_chunk=False)
-        if "send_complete" in callbacks:
-            callbacks["send_complete"]()
-        if session:
-            session.add_message("assistant", commit_msg, work_id=work_id)
-            self._save_session(session)
+        # 3. Only send and persist if the LLM actually wrote something
+        if commit_msg and not self._looks_like_success_claim(commit_msg) and not self._looks_like_technical_text(commit_msg):
+            commit_msg = self._enforce_response_language(session, commit_msg)
+            callbacks["send_response"](commit_msg, is_chunk=False)
+            if "send_complete" in callbacks:
+                callbacks["send_complete"]()
+            if session:
+                session.add_message("assistant", commit_msg, work_id=work_id)
+                self._save_session(session)
 
         # 4. Technical Status Update
         if "send_status" in callbacks:
@@ -1470,10 +1464,10 @@ class AgentOrchestrator:
         # Get or Create Session
         session = self.get_session_robust(session_id)
         if not session:
-            # Infer interface from session_id
+            # Interface resolution via Kernel IoC
             interface = "web"
-            if session_id.startswith("telegram"): interface = "telegram"
-            elif session_id.startswith("voice"): interface = "voice"
+            if hasattr(self, "kernel") and self.kernel:
+                interface = self.kernel.resolve_interface_for_session(session_id)
             session = self.create_session(session_id, interface=interface, name=name)
 
         if user_data:
@@ -1511,7 +1505,7 @@ class AgentOrchestrator:
             "system_prompt": self._construct_system_prompt(session, user_input=user_input, worker_updates=[], active_alerts=[]),
             "attachments": attachments,
             "allowed_actions": allowed_actions,
-            "skill_registry": self.skill_registry,
+            "capability_registry": self.capability_registry,
         }
         
         start_res_ts = time.time()
@@ -1639,9 +1633,10 @@ class AgentOrchestrator:
                     )
                     return self.i18n.t("reply.worker_session_missing", locale="en")
                 else:
+                    # Interface resolution via Kernel IoC
                     interface = "web"
-                    if session_id.startswith("telegram"): interface = "telegram"
-                    elif session_id.startswith("voice"): interface = "voice"
+                    if hasattr(self, "kernel") and self.kernel:
+                        interface = self.kernel.resolve_interface_for_session(session_id)
                     session = self.create_session(session_id, interface=interface)
 
             session.last_interaction = time.time()
@@ -1656,6 +1651,11 @@ class AgentOrchestrator:
             
             if user_data:
                 session.context.update(user_data)
+            
+            # Save the very first user request to anchor the language context across long background loops
+            if user_input and not session.context.get("initial_user_request"):
+                session.context["initial_user_request"] = user_input.strip()
+                
             session.context["user_language"] = self._detect_user_language(
                 user_input,
                 fallback=str(session.context.get("user_language") or "en"),
@@ -1744,7 +1744,7 @@ class AgentOrchestrator:
             stream_completed = False
             paused = False
             actions_used: List[str] = []
-            skills_used: List[str] = []
+            capabilities_used: List[str] = []
             media_used: List[str] = []
             sources_used: List[Dict[str, Any]] = []
             queued_messages: List[str] = []
@@ -1812,7 +1812,7 @@ class AgentOrchestrator:
                     },
                     "data": {
                         "actions_used": [],
-                        "skills_used": [],
+                        "capabilities_used": [],
                         "media_used": [],
                         "sources_used": [],
                         "queued_messages": [],
@@ -1932,7 +1932,7 @@ class AgentOrchestrator:
                             "attachments": attachments if loops == 1 else None, # Only send attachments on first reasoning step
                             "history": session.get_context_for_llm(limit_msgs=20, limit_tokens=reasoning_history_budget),
                             "allowed_actions": self._get_allowed_actions_for_session(session),
-                            "skill_registry": self.skill_registry,
+                            "capability_registry": self.capability_registry,
                             "last_action_status": last_action_status,
                             "last_action_id": last_action_id,
                             "last_action_reason": last_action_reason,
@@ -2033,9 +2033,18 @@ class AgentOrchestrator:
                             session.plan = self._flatten_plan_lines(planner_tree)
                             session.state_summary["cursor"] = self._progress_cursor(planner_tree, loops, max_steps)
     
-                    # Update state from plan metadata if available
+                    # Update state from plan metadata safely (Sandbox)
                     if plan.metadata and 'state_summary' in plan.metadata:
-                        session.state_summary.update(plan.metadata['state_summary'])
+                        incoming_state = plan.metadata['state_summary']
+                        if isinstance(incoming_state, dict):
+                            # Validate incoming keys aren't hallucinated empty shells
+                            new_goal = str(incoming_state.get("goal") or "").strip()
+                            # We only update if the LLM actually furnished a non-empty goal,
+                            # preventing it from wiping the session memory due to hallucination
+                            if new_goal:
+                                session.state_summary.update(incoming_state)
+                            else:
+                                logger.warning(f"Rejecting incoming state_summary due to empty/hallucinated goal field. Rollback to previous state.")
     
                     if planner_tree:
                         active = next((s for s in planner_tree if s.get("status") == "in_progress"), None)
@@ -2067,7 +2076,7 @@ class AgentOrchestrator:
                             },
                             "data": {
                                 "actions_used": actions_used[-80:],
-                                "skills_used": skills_used[-40:],
+                                "capabilities_used": capabilities_used[-40:],
                                 "media_used": media_used[-80:],
                                 "sources_used": sources_used[-120:],
                                 "queued_messages": queued_messages[-40:],
@@ -2077,17 +2086,17 @@ class AgentOrchestrator:
     
                     # Normalize/repair action IDs to reduce "unknown action" loops.
                     if plan.action_id not in ("reply", "error"):
-                        resolved_action = self.skill_registry.resolve_action_id(plan.action_id)
+                        resolved_action = self.capability_registry.resolve_action_id(plan.action_id)
                         if resolved_action and resolved_action != plan.action_id:
                             logger.info(f"Resolved action alias: {plan.action_id} -> {resolved_action}")
                             plan.action_id = resolved_action
-                        elif not self.skill_registry.get_skill_for_action(plan.action_id):
+                        elif not self.capability_registry.get_capability_for_action(plan.action_id):
                             parts = str(plan.action_id or "").strip().lower().split(".")
                             legacy_removed = len(parts) >= 3 and parts[0] == "browser" and parts[1] in {"automator", "controller"}
                             if legacy_removed:
-                                final_response = "Skill removed."
+                                final_response = "Capability removed."
                                 logger.warning(
-                                    "Removed browser skill requested: %s | returning SKILL_REMOVED_USE_BROWSER_CONTROL",
+                                    "Removed browser capability requested: %s | returning SKILL_REMOVED_USE_BROWSER_CONTROL",
                                     plan.action_id,
                                 )
                                 session.add_message(
@@ -2102,7 +2111,7 @@ class AgentOrchestrator:
                                     source="internal",
                                 )
                                 continue
-                            suggestions = self.skill_registry.suggest_actions(plan.action_id, limit=3)
+                            suggestions = self.capability_registry.suggest_actions(plan.action_id, limit=3)
                             suggestion_text = ", ".join(suggestions) if suggestions else "no suggestions"
                             logger.warning(
                                 f"Unknown action from resolver: {plan.action_id} | suggestions: {suggestion_text}"
@@ -2135,7 +2144,7 @@ class AgentOrchestrator:
                     }
                     v_res = PlanValidator.validate(
                         plan=plan,
-                        skill_registry=self.skill_registry,
+                        capability_registry=self.capability_registry,
                         session=session,
                         context=validation_context
                     )
@@ -2173,8 +2182,8 @@ class AgentOrchestrator:
                     if plan.action_id not in {"reply", "error"}:
                         actions_used.append(plan.action_id)
                         namespace = ".".join(plan.action_id.split(".")[:2]) if "." in plan.action_id else plan.action_id
-                        if namespace not in skills_used:
-                            skills_used.append(namespace)
+                        if namespace not in capabilities_used:
+                            capabilities_used.append(namespace)
 
 
                     # Short-circuit repeated semantic fallback loops:
@@ -2528,7 +2537,7 @@ class AgentOrchestrator:
                         )
     
                     # HITL Check
-                    if self.safety_service.is_sensitive(plan.action_id, plan.args, self.skill_registry):
+                    if self.safety_service.is_sensitive(plan.action_id, plan.args, self.capability_registry):
                         kernel = getattr(self, "kernel", None)
                         has_grant = bool(
                             kernel and kernel.has_permission_grant(
@@ -2571,10 +2580,9 @@ class AgentOrchestrator:
                                     )
                                     continue
                                 interface = "web"
-                                if str(owner_session_id).startswith("telegram"):
-                                    interface = "telegram"
-                                elif str(owner_session_id).startswith("voice"):
-                                    interface = "voice"
+                                kernel = getattr(self, "kernel", None)
+                                if kernel:
+                                    interface = kernel.resolve_interface_for_session(owner_session_id)
                                 target_session = self.create_session(owner_session_id, interface=interface)
 
                             target_session.pending_action = {
@@ -2694,10 +2702,10 @@ class AgentOrchestrator:
                     # --- PhaseCommit: Execution Commitment ---
                     # Only emit conversational commitment if this is the first successful step
                     # of a fresh worker run and the plan has been validated.
-                    if loops == 0 and plan.action_id != "reply" and plan.action_id != "error":
+                    if loops == 1 and plan.action_id != "reply" and plan.action_id != "error":
                         self._emit_execution_commitment(session, plan, work_id, callbacks)
 
-                    # Execute via SkillRegistry
+                    # Execute via CapabilityRegistry
                     if callbacks and 'send_status' in callbacks:
                         callbacks['send_status']('executing', {'action': plan.action_id, 'label': f"Executing {plan.action_id}..."})
     
@@ -2711,8 +2719,8 @@ class AgentOrchestrator:
                     })
     
                     exec_context = {
-                        "session": _SkillSessionView(session),
-                        "callbacks": self._build_skill_callbacks_view(callbacks),
+                        "session": _CapabilitySessionView(session),
+                        "callbacks": self._build_capability_callbacks_view(callbacks),
                         "browser_driver": self.browser_driver,
                         "web_automation_driver": self.browser_driver,
                         "session_id": session_id,
@@ -2720,7 +2728,7 @@ class AgentOrchestrator:
                         "touch_work_context": self._touch_work_context,
                         "user_input": user_input,
                         "allowed_actions": self._get_allowed_actions_for_session(session),
-                        "skill_registry": self.skill_registry,
+                        "capability_registry": self.capability_registry,
                         "playback_service": getattr(self, "playback_service", None),
                     }
                     
@@ -2731,15 +2739,15 @@ class AgentOrchestrator:
                                 context,
                                 plan.action_id,
                                 plan.args,
-                                self.skill_registry,
+                                self.capability_registry,
                                 self.config_manager
                             )
                             if not allowed:
                                 result = f"NEGADO: {reason}"
                             else:
-                                result = self.skill_registry.dispatch(plan.action_id, plan.args, exec_context)
+                                result = self.capability_registry.dispatch(plan.action_id, plan.args, exec_context)
                         else:
-                            result = self.skill_registry.dispatch(plan.action_id, plan.args, exec_context)
+                            result = self.capability_registry.dispatch(plan.action_id, plan.args, exec_context)
                         
                         latency_ms = int((time.time() - start_ts) * 1000)
                         logger.info(
@@ -2777,7 +2785,7 @@ class AgentOrchestrator:
                             "message": str(e)
                         }
                     
-                    # Persistence: Attach playback metadata if returned by skill.
+                    # Persistence: Attach playback metadata if returned by capability.
                     # First try a user-visible assistant message for this work_id (e.g. work ack),
                     # then fallback to the latest reasoning entry.
                     if isinstance(result, dict) and result.get("playback"):
@@ -2977,7 +2985,7 @@ class AgentOrchestrator:
                         "deezer.",
                         "maps.",
                         "wikipedia.",
-                        "system.control.skills.",
+                        "system.control.capabilities.",
                     ]
                     is_exempt = any(plan.action_id.startswith(ext) for ext in exemptions)
                     
@@ -3044,76 +3052,13 @@ class AgentOrchestrator:
                             },
                             "data": {
                                 "actions_used": actions_used[-80:],
-                                "skills_used": skills_used[-40:],
+                                "capabilities_used": capabilities_used[-40:],
                                 "media_used": media_used[-80:],
                                 "sources_used": sources_used[-120:],
                                 "queued_messages": queued_messages[-40:],
                             },
                         },
                     )
-
-                    # Deterministic completion for informational searches.
-                    # If we already have a successful search result, consolidate to user reply
-                    # instead of re-invoking the same action.
-                    autocomplete_after_success = self._should_autocomplete_after_success_action(
-                        user_input,
-                        plan.action_id,
-                        args=plan.args if isinstance(plan.args, dict) else {},
-                        structured_result=last_action_structured,
-                    )
-                    is_overlay_action = str(plan.action_id or "").strip().lower().startswith("overlay.assist.")
-                    if (
-                        result_status == "success"
-                        and autocomplete_after_success
-                        and (not has_unfinished_planner_steps() or is_overlay_action)
-                    ):
-                        if not result and last_action_status == "success":
-                            tool_data = self._summarize_last_success_data(
-                                action_id=last_action_id,
-                                structured_result=last_action_structured,
-                                raw_output=last_action_output,
-                            )
-                            final_response = self._generate_recovery_reply(
-                                session=session,
-                                user_input=user_input,
-                                reason="empty_result_success",
-                                last_tool_data=tool_data,
-                                last_action_id=last_action_id
-                            )
-                            recovered_reply = final_response
-                        else:
-                            recovered_reply = self._generate_recovery_reply(
-                                session=session,
-                                user_input=user_input,
-                                reason="autocomplete_after_success",
-                                last_tool_data=self._summarize_last_success_data(
-                                    action_id=plan.action_id,
-                                    structured_result=last_action_structured,
-                                    raw_output=last_action_output,
-                                ),
-                                last_action_id=plan.action_id,
-                            )
-                        if recovered_reply:
-                            final_response = recovered_reply
-                            final_structured_attachments = self._standardize_attachments(
-                                session,
-                                last_generated_attachment_paths,
-                            ) if last_generated_attachment_paths else None
-                            session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id)
-                            final_response_persisted = True
-                            session.scratchpad = ""
-                            session.plan = []
-                            if callbacks and 'send_response' in callbacks:
-                                callbacks['send_response'](
-                                    final_response,
-                                    is_chunk=True,
-                                    attachments=final_structured_attachments,
-                                )
-                                final_response_streamed = True
-                            if callbacks and 'send_complete' in callbacks:
-                                callbacks['send_complete']()
-                                stream_completed = True
-                            break
 
                     # Fast-path for vision outputs: avoid unnecessary re-reasoning loops.
                     # IMPORTANT: in assistive overlay requests, vision is an intermediate
@@ -3564,9 +3509,9 @@ class AgentOrchestrator:
         # 2. Extract Tool Metadata (Side-effects & Capabilities)
         tool_name = task.get("task_role", "unknown_tool")
         metadata = {}
-        skill_reg = getattr(self, "skill_registry", None)
-        if skill_reg:
-            metadata = skill_reg.get_action_metadata(tool_name)
+        capability_reg = getattr(self, "capability_registry", None)
+        if capability_reg:
+            metadata = capability_reg.get_action_metadata(tool_name)
         
         side_effect = metadata.get("side_effect", "none") if isinstance(metadata, dict) else "none"
         
@@ -3673,8 +3618,8 @@ class AgentOrchestrator:
             
         # 2. Capability-based fallback
         metadata = {}
-        if hasattr(self, "skill_registry"):
-            metadata = self.skill_registry.get_action_metadata(tool_name)
+        if hasattr(self, "capability_registry"):
+            metadata = self.capability_registry.get_action_metadata(tool_name)
             
         capability = metadata.get("capability")
         if not capability:
@@ -4295,27 +4240,6 @@ class AgentOrchestrator:
             logger.error(f"Error in LLM Recovery Loop: {e}")
             return "SYSTEM_ERROR: Conversational recovery failed."
 
-    def _guard_browser_recovery_confirmation(
-        self,
-        *,
-        session: Session,
-        reason: str,
-        last_action_id: Optional[str],
-        candidate_reply: str,
-    ) -> str:
-        """
-        Prevent optimistic claims in browser recovery paths when no explicit user
-        confirmation exists yet. This avoids replies like "deu certo" right after
-        technical completion of browser.control.run.
-        """
-        action = str(last_action_id or "").strip().lower()
-        if action != "browser.control.run":
-            return candidate_reply
-        if str(reason or "").strip().lower() not in {"autocomplete_after_success", "empty_result_success"}:
-            return candidate_reply
-        if not self._looks_like_success_claim(candidate_reply):
-            return candidate_reply
-        return self._t(session, "reply.browser_result_needs_confirmation")
         generic_list_keys = (
             "items",
             "entries",
@@ -4640,85 +4564,6 @@ class AgentOrchestrator:
             return text
 
         return "CONTEXT_RESET_NOT_REQUIRED"
-
-    @classmethod
-    def _should_autocomplete_after_success_action(
-        cls,
-        user_input: str,
-        action_id: str,
-        args: Optional[Dict[str, Any]] = None,
-        structured_result: Optional[Dict[str, Any]] = None,
-    ) -> bool:
-        """
-        Finalize early for informational searches to avoid repeated identical actions.
-        """
-        action = (action_id or "").strip().lower()
-        if not action:
-            return False
-
-        # Wikipedia requests are informational in this orchestrator flow.
-        if action == "wikipedia.search":
-            return True
-
-        # Skills catalog lookups are informational and should conclude after one success.
-        if action in {
-            "system.control.skills.list",
-            "system.control.skills.list.ai",
-            "system.control.skills.list.ui",
-            "system.control.skills.describe",
-            "system.control.skills.describe.ai",
-            "system.control.skills.describe.ui",
-        }:
-            return True
-
-        # Screenshot is a one-shot operational action. After success, we should
-        # immediately consolidate response + attachment and finish the turn.
-        if action == "system.control.screenshot":
-            return True
-
-        # Time/date is also a one-shot query and should not loop.
-        if action == "system.control.time":
-            return True
-
-        # Overlay assist actions are one-shot visual operations.
-        if action.startswith("overlay.assist."):
-            return True
-
-        # Browser executor can be multi-step. Autocomplete only on explicit one-shot cases.
-        if action in {"browser.control.run"}:
-            params = args if isinstance(args, dict) else {}
-            payload = structured_result if isinstance(structured_result, dict) else {}
-            control_action = str(params.get("action") or payload.get("action") or "").strip().lower()
-            has_explicit_url = bool(str(params.get("url") or "").strip())
-            has_task_prompt = bool(str(params.get("task") or "").strip())
-            playback_confirmed = bool(payload.get("playback_confirmed"))
-
-            # Never finalize early for generic task-based browser flows.
-            if has_task_prompt:
-                return False
-
-            # Explicit browser media controls can conclude after success.
-            if control_action in {"pause", "next", "mute", "fullscreen"}:
-                return True
-            if control_action == "play":
-                return playback_confirmed
-
-            # Non-media one-shot opens by URL can conclude after success.
-            if has_explicit_url:
-                return True
-            return False
-
-        # Search actions are informational and can conclude after one successful call.
-        if action in {
-            "youtube.search.find",
-            "deezer.search.search",
-            "spotify.search.search",
-            "research.retrieve.run",
-            "maps.search",
-        }:
-            return True
-
-        return False
 
     @classmethod
     def _ground_reply_against_last_result(
@@ -5157,8 +5002,8 @@ class AgentOrchestrator:
         )
 
         allowed_actions = self._get_allowed_actions_for_session(session)
-        skills_summary = self._build_prompt_actions_block(user_input=user_input, allowed_actions=allowed_actions)
-        skill_scope = "principal-filtered" if allowed_actions is not None else "global"
+        capabilities_summary = self._build_prompt_actions_block(user_input=user_input, allowed_actions=allowed_actions)
+        capability_scope = "principal-filtered" if allowed_actions is not None else "global"
 
         # Apply dynamic budgets based on active model limits
         active_config = self.llm_manager.get_active_config()
@@ -5193,6 +5038,7 @@ class AgentOrchestrator:
             toon_state=toon_state,
             toon_deltas=toon_deltas,
             user_input=user_input,
+            initial_user_request=session.context.get("initial_user_request", ""),
             project_path=os.getcwd(),
             workspace_path=self.workspace_service.base_dir,
             venv_python=os.path.join(os.getcwd(), "env", "bin", "python3"),
@@ -5201,8 +5047,8 @@ class AgentOrchestrator:
             session_summary=session.summary or "",
             scratchpad=self.scratchpad_service.read(session.session_id),
             attachments=session.context.get("last_attachments", []),
-            skills_summary=skills_summary,
-            skill_scope=skill_scope,
+            capabilities_summary=capabilities_summary,
+            capability_scope=capability_scope,
             relevant_memory=relevant_memory,
             cognitive_frame=session.get_cognitive_frame(user_input).to_dict(),
         )
@@ -5296,17 +5142,17 @@ class AgentOrchestrator:
 
         # Legacy compatibility mode
         if mode == "full":
-            return self.skill_registry.get_summary(allowed_actions)
+            return self.capability_registry.get_summary(allowed_actions)
 
         if mode in {"on_demand", "catalog_on_demand"}:
-            allowed_set = set(allowed_actions) if allowed_actions is not None else set(self.skill_registry.list_actions())
+            allowed_set = set(allowed_actions) if allowed_actions is not None else set(self.capability_registry.list_actions())
             bootstrap = [
                 action_id
                 for action_id in (
-                    "system.control.skills.list.ai",
-                    "system.control.skills.describe.ai",
-                    "system.control.skills.list",
-                    "system.control.skills.describe",
+                    "system.control.capabilities.list.ai",
+                    "system.control.capabilities.describe.ai",
+                    "system.control.capabilities.list",
+                    "system.control.capabilities.describe",
                 )
                 if action_id in allowed_set
             ]
@@ -5321,7 +5167,7 @@ class AgentOrchestrator:
                     "rules": [
                         "discover_if_unknown",
                         "prefer_ai_over_ui",
-                        "skills_catalog_only_not_content_search",
+                        "capabilities_catalog_only_not_content_search",
                     ],
                 }
                 if self._is_conversational_turn(user_input):
@@ -5335,9 +5181,9 @@ class AgentOrchestrator:
                     )
                 return _pack(base_payload, "Catalog mode: on_demand")
 
-        manifest = self.skill_registry.get_compact_manifest(allowed_actions)
+        manifest = self.capability_registry.get_compact_manifest(allowed_actions)
         focus_limit = int(prompt_cfg.get("focus_limit", 8))
-        focus = self.skill_registry.get_focus_actions(
+        focus = self.capability_registry.get_focus_actions(
             user_input=user_input or "",
             allowed_actions=allowed_actions,
             limit=focus_limit,
@@ -5531,7 +5377,7 @@ class AgentOrchestrator:
             return None
         return self.access_controller.get_allowed_actions(
             principal,
-            self.skill_registry,
+            self.capability_registry,
             self.config_manager,
         )
 
@@ -5614,7 +5460,7 @@ class AgentOrchestrator:
         if is_assistive_request:
             action = str(plan.action_id or "").strip().lower()
             render_prefs = self._extract_assistive_render_preferences(user_input)
-            overlay_available = bool(self.skill_registry and self.skill_registry.get_skill_for_action("overlay.assist.highlight_target"))
+            overlay_available = bool(self.capability_registry and self.capability_registry.get_capability_for_action("overlay.assist.highlight_target"))
             # Guardrail (non-forcing): only enrich args when the model already chose
             # assistive highlight action. Never rewrite a different action.
             if overlay_available and action == "overlay.assist.highlight_target":
@@ -5652,7 +5498,7 @@ class AgentOrchestrator:
 
         if (
             plan.action_id == "reply"
-            and self.skill_registry.get_skill_for_action("browser.control.run")
+            and self.capability_registry.get_capability_for_action("browser.control.run")
             and self._looks_like_browser_capability_refusal(plan.response_text or "")
         ):
             logger.info(
@@ -5680,7 +5526,7 @@ class AgentOrchestrator:
             "web.retrieve.extract",
             "research.retrieve.run",
         }
-        if plan.action_id in metadata_actions and self.skill_registry.get_skill_for_action("browser.control.run"):
+        if plan.action_id in metadata_actions and self.capability_registry.get_capability_for_action("browser.control.run"):
             logger.info(
                 "Decision policy override: %s -> browser.control.run for YouTube playback request.",
                 plan.action_id,

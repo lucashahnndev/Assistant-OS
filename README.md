@@ -1,15 +1,15 @@
 # Assistant-OS
 
 Modular agent platform focused on:
-- skill-based action orchestration;
+- capability-based action orchestration;
 - granular access control per user/group;
 - multiple drivers (web, telegram, cli, voice);
 - operational memory and loop execution with guardrails.
 
 ## Current State (v2 base)
-- Core architecture in `src/core`, `src/server`, `src/services`, `src/skills`.
+- Core architecture in `src/core`, `src/server`, `src/services`, `src/capabilities`.
 - React frontend in `frontend/`.
-- Knowledge skill stack with:
+- Knowledge capability stack with:
   - `web.search.discover` (`links|knowledge|auto` mode);
   - `wikipedia.search` (structured output for RAG).
 
@@ -20,7 +20,7 @@ src/
   server/      # FastAPI API and routes
   drivers/     # interface/channel integrations
   services/    # support services (LLM, memory, workspace, safety)
-  skills/      # action plugins (contract + runtime)
+  capabilities/      # action plugins (contract + runtime)
 frontend/      # React web panel
 data/          # configuration, sessions, identities, artifacts
 tests/         # lean automated test suite
@@ -65,7 +65,7 @@ Main coverage:
 - intent resolution;
 - loop guardrails and action normalization;
 - permissions and user scope;
-- skill quality/contract;
+- capability quality/contract;
 - orchestrator flow integration.
 
 ## Scripts

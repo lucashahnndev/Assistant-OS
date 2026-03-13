@@ -22,8 +22,6 @@ class TTSManager:
 
     def _load_config(self):
         self.tts_config = self.config_manager.get_tts_config()
-        if isinstance(self.tts_config, dict):
-            self.tts_config = [] # Failsafe
 
     def _load_providers(self):
         self.tts_pool = []
@@ -91,4 +89,3 @@ class TTSManager:
                 
         logger.error("All TTS providers failed to generate audio.")
         return b""
-

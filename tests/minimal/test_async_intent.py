@@ -9,7 +9,7 @@ def kernel():
     with patch("src.main.check_single_instance"), \
          patch("src.services.llm.manager.LLMManager"), \
          patch("src.services.memory.episodic_memory.EpisodicMemoryService"), \
-         patch("src.skills.registry.SkillRegistry"), \
+         patch("src.capabilities.registry.CapabilityRegistry"), \
          patch("src.services.safety_service.SafetyService"), \
          patch("src.core.access_controller.AccessController"), \
          patch("src.core.scheduler.Scheduler"), \
@@ -71,7 +71,7 @@ def test_orchestrator_adds_user_message_when_async(mock_session_cls, mock_plan_c
     orch_instance.llm_manager = MagicMock()
     orch_instance.intent_resolver_chain = MagicMock()
     orch_instance.access_controller = MagicMock()
-    orch_instance.skill_registry = MagicMock()
+    orch_instance.capability_registry = MagicMock()
     
     # Mock session
     session = MagicMock()

@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import TaskDetails from '../components/tasks/TaskDetails';
 import PageHeader from '../components/PageHeader';
-import SkillIcon from '../components/SkillIcon';
+import CapabilityIcon from '../components/CapabilityIcon';
 
 const TASKS_LAYOUT_MODE_KEY = 'tasks_layout_mode';
 
@@ -169,6 +169,40 @@ const Tasks = () => {
             if (!preserveTab) setOverwatchTab('overview');
         } catch (error) {
             if (!silent) toast.error("Failed to load worker overwatch");
+        }
+    };
+
+    const isFlowErrorEvent = (event) => {
+        const name = String(event?.event || '').toLowerCase();
+        const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
+        const status = String(payload?.status || '').toLowerCase();
+        const errorCode = String(payload?.error_code || payload?.code || payload?.result_reason || '').toLowerCase();
+        const reason = String(payload?.reason || '').toLowerCase();
+        const summary = String(payload?.summary || payload?.failure_summary || '').toLowerCase();
+        const blob = `${name} ${status} ${errorCode} ${reason} ${summary}`;
+        return [
+            'fail',
+            'error',
+            'exception',
+            'recovery_needed',
+            'replan',
+            'replanning',
+            'validation',
+            'schema',
+            'llm_error',
+            'planner',
+            'refusal',
+            'timeout',
+        ].some((token) => blob.includes(token));
+    };
+
+    const extractFlowErrorMessage = (payload = {}) => {
+        const raw = payload?.error || payload?.message || payload?.details || payload?.reason || payload?.exception || '';
+        if (typeof raw === 'string') return raw.trim();
+        try {
+            return JSON.stringify(raw || {});
+        } catch {
+            return String(raw || '').trim();
         }
     };
 
@@ -598,11 +632,29 @@ const Tasks = () => {
         const events = workOverwatch.events || [];
         const task = workOverwatch.task || {};
         const origin = workOverwatch.origin || {};
-        const skills = workOverwatch.skills_used || [];
+        const capabilities = workOverwatch.capabilities_used || [];
         const media = workOverwatch.media_used || [];
         const queued = workOverwatch.queued_messages || [];
         const notes = (work?.context?.notes || []);
         const recentExecutions = workOverwatch.recent_executions || [];
+        const workerErrors = (() => {
+            const fromApi = Array.isArray(workOverwatch.worker_errors) ? workOverwatch.worker_errors : [];
+            if (fromApi.length > 0) return fromApi;
+            return events
+                .filter((event) => isFlowErrorEvent(event))
+                .map((event) => ({
+                    ts: event?.ts || null,
+                    event: String(event?.event || 'worker_event'),
+                    message: extractFlowErrorMessage(event?.payload || {}),
+                    payload: event?.payload || {},
+                    component: null,
+                    severity: 'error',
+                    error_code: String(event?.payload?.error_code || event?.payload?.code || event?.payload?.result_reason || '') || null,
+                }));
+        })();
+        const executionLogs = workOverwatch?.latest_execution_logs && typeof workOverwatch.latest_execution_logs === 'object'
+            ? workOverwatch.latest_execution_logs
+            : { available: false, execution_id: null, tail: '', error_lines: [] };
 
         const queueMsg = async (direct = false) => {
             if (!queuedMessage.trim()) return;
@@ -656,7 +708,7 @@ const Tasks = () => {
             if (name.includes('error') || name.includes('fail') || status.includes('fail') || status.includes('error')) return AlertTriangle;
             if (name.includes('complete') || status.includes('success') || status.includes('done')) return CheckCircle2;
             if (name.includes('thought') || name.includes('plan')) return Brain;
-            if (name.includes('skill') || name.includes('tool') || name.includes('action') || payload?.key) return Wrench;
+            if (name.includes('capability') || name.includes('tool') || name.includes('action') || payload?.key) return Wrench;
             if (name.includes('status') || name.includes('state') || name.includes('created')) return Clock3;
             return CircleDot;
         };
@@ -697,7 +749,7 @@ const Tasks = () => {
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'nowrap', overflowX: 'auto', padding: isMobile ? '6px 8px' : '8px 10px', borderBottom: '1px solid var(--card-border)' }} className="custom-scrollbar">
-                        {['overview', 'planner', 'flow', 'skills', 'media', 'triggers', 'executions', 'notes', 'queue'].map(tab => (
+                        {['overview', 'planner', 'flow', 'errors', 'capabilities', 'media', 'triggers', 'executions', 'notes', 'queue'].map(tab => (
                             <button
                                 key={tab}
                                 style={{
@@ -888,19 +940,25 @@ const Tasks = () => {
                                     {events.map((ev, idx) => {
                                         const payload = ev?.payload || {};
                                         const Icon = pickFlowIcon(ev?.event, payload);
+                                        const isErrorEvent = isFlowErrorEvent(ev);
                                         const currentMs = toMs(ev?.ts);
                                         const prevMs = idx > 0 ? toMs(events[idx - 1]?.ts) : null;
                                         const deltaLabel = formatDelta(currentMs != null && prevMs != null ? Math.abs(currentMs - prevMs) : null);
                                         const payloadDuration = Number(payload?.duration_ms ?? payload?.elapsed_ms);
                                         const durationLabel = Number.isFinite(payloadDuration) ? formatDelta(payloadDuration) : null;
-                                        const skillLabel = payload?.skill || payload?.tool || (String(payload?.key || '').includes('.') ? payload.key : null);
+                                        const capabilityLabel = payload?.capability || payload?.tool || (String(payload?.key || '').includes('.') ? payload.key : null);
                                         const actionLabel = payload?.action || payload?.event || null;
                                         return (
                                             <div key={`${ev.ts}-${idx}`} style={{ position: 'relative' }}>
                                                 <div style={{ position: 'absolute', left: '-22px', top: '10px', width: '14px', height: '14px', borderRadius: '50%', background: 'var(--card-bg)', border: '1px solid var(--card-border)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
                                                     <Icon size={10} />
                                                 </div>
-                                                <div style={{ border: '1px solid var(--card-border)', borderRadius: '8px', padding: '8px 10px', background: 'rgba(255,255,255,0.01)' }}>
+                                                <div style={{
+                                                    border: isErrorEvent ? '1px solid rgba(239,68,68,0.35)' : '1px solid var(--card-border)',
+                                                    borderRadius: '8px',
+                                                    padding: '8px 10px',
+                                                    background: isErrorEvent ? 'rgba(239,68,68,0.06)' : 'rgba(255,255,255,0.01)'
+                                                }}>
                                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '4px' }}>
                                                         <div style={{ fontSize: '12px', fontWeight: 800 }}>{String(ev?.event || 'event')}</div>
                                                         <div style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{formatFlowDateTime(ev?.ts)}</div>
@@ -908,7 +966,7 @@ const Tasks = () => {
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '6px' }}>
                                                         {deltaLabel && <span style={{ fontSize: '10px', color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '2px 6px' }}>+{deltaLabel}</span>}
                                                         {durationLabel && <span style={{ fontSize: '10px', color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '2px 6px' }}>exec {durationLabel}</span>}
-                                                        {skillLabel && <span style={{ fontSize: '10px', color: 'var(--accent-color)', background: 'var(--accent-glow)', borderRadius: '999px', padding: '2px 6px' }}>skill: {String(skillLabel)}</span>}
+                                                        {capabilityLabel && <span style={{ fontSize: '10px', color: 'var(--accent-color)', background: 'var(--accent-glow)', borderRadius: '999px', padding: '2px 6px' }}>capability: {String(capabilityLabel)}</span>}
                                                         {actionLabel && <span style={{ fontSize: '10px', color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '2px 6px' }}>action: {String(actionLabel)}</span>}
                                                     </div>
                                                     <details style={{ fontSize: '11px' }}>
@@ -929,13 +987,63 @@ const Tasks = () => {
                             )}
                         </div>
                     )}
-                    {overwatchTab === 'skills' && (
+                    {overwatchTab === 'errors' && (
+                        <div className="glass" style={{ padding: '12px', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
+                                <div style={{ border: '1px solid var(--card-border)', borderRadius: '8px', padding: '8px' }}>
+                                    <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700 }}>Worker Errors</div>
+                                    <div style={{ fontSize: '14px', fontWeight: 800, marginTop: '2px', color: workerErrors.length > 0 ? 'var(--error)' : 'var(--success)' }}>
+                                        {workerErrors.length}
+                                    </div>
+                                </div>
+                                <div style={{ border: '1px solid var(--card-border)', borderRadius: '8px', padding: '8px' }}>
+                                    <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700 }}>Execution Log</div>
+                                    <div style={{ fontSize: '11px', marginTop: '2px', color: executionLogs.available ? 'var(--text-primary)' : 'var(--text-muted)', fontFamily: 'monospace' }}>
+                                        {executionLogs.execution_id || 'not available'}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {workerErrors.length > 0 ? (
+                                <div style={{ display: 'grid', gap: '8px' }}>
+                                    {workerErrors.slice(-12).reverse().map((entry, idx) => (
+                                        <div key={`worker-error-${idx}`} style={{ border: '1px solid rgba(239,68,68,0.35)', borderRadius: '8px', background: 'rgba(239,68,68,0.06)', padding: '8px' }}>
+                                            <div style={{ fontSize: '12px', fontWeight: '800' }}>{entry.event || 'worker_error'}</div>
+                                            <div style={{ marginTop: '2px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                                {entry.component && <span style={{ fontSize: '10px', color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '1px 6px' }}>{String(entry.component)}</span>}
+                                                {entry.error_code && <span style={{ fontSize: '10px', color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '1px 6px', fontFamily: 'monospace' }}>{String(entry.error_code)}</span>}
+                                                {entry.severity && <span style={{ fontSize: '10px', color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '1px 6px' }}>{String(entry.severity)}</span>}
+                                            </div>
+                                            {entry.ts && <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{formatFlowDateTime(entry.ts)}</div>}
+                                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px', whiteSpace: 'pre-wrap' }}>{entry.message || 'No message'}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div style={{ color: 'var(--text-muted)' }}>No worker errors detected.</div>
+                            )}
+
+                            {executionLogs.available && executionLogs.tail ? (
+                                <details style={{ fontSize: '11px' }}>
+                                    <summary style={{ cursor: 'pointer', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                        <Code2 size={12} /> execution log tail
+                                    </summary>
+                                    <pre className="custom-scrollbar" style={{ whiteSpace: 'pre-wrap', fontSize: '11px', marginTop: '6px', maxHeight: '240px', overflow: 'auto', border: '1px solid var(--card-border)', borderRadius: '6px', padding: '8px' }}>
+                                        {executionLogs.tail}
+                                    </pre>
+                                </details>
+                            ) : (
+                                <div style={{ color: 'var(--text-muted)' }}>No execution logs available for this worker yet.</div>
+                            )}
+                        </div>
+                    )}
+                    {overwatchTab === 'capabilities' && (
                         <div className="glass" style={{ padding: '12px', borderRadius: '8px' }}>
-                            <div><b>Skills Used:</b></div>
+                            <div><b>Capabilities Used:</b></div>
                             <ul>
-                                {skills.map(s => (
+                                {capabilities.map(s => (
                                     <li key={s} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <SkillIcon variant="inline" skillId={s} skillName={s} />
+                                        <CapabilityIcon variant="inline" capabilityId={s} capabilityName={s} />
                                         <span>{s}</span>
                                     </li>
                                 ))}

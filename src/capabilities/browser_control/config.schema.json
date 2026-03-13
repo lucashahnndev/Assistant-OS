@@ -1,0 +1,132 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "headless": {
+      "type": "boolean",
+      "default": true
+    },
+    "registry_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "policy_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "media_singleton_enforced": {
+      "type": "boolean",
+      "default": true
+    },
+    "app_mode_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "registry_gc_enabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "registry_gc_idle_seconds": {
+      "type": "integer",
+      "default": 1800,
+      "minimum": 60
+    },
+    "humanize_input_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "visual_cursor_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "tab_user_lock_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "tab_control_bar_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "browser_engine_preference": {
+      "type": "string",
+      "default": "managed_chromium",
+      "enum": [
+        "managed_chromium",
+        "google_chrome"
+      ]
+    },
+    "chrome_path": {
+      "type": "string",
+      "default": ""
+    },
+    "managed_chromium_path": {
+      "type": "string",
+      "default": "data/browser_bin/chromium/current/chrome"
+    },
+    "extension_install_mode": {
+      "type": "string",
+      "default": "auto",
+      "enum": [
+        "auto",
+        "sideload_only",
+        "fallback_only"
+      ]
+    },
+    "extension_fallback_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "profile_split_by_engine": {
+      "type": "boolean",
+      "default": true
+    },
+    "perception_dom_weight": {
+      "type": "number",
+      "default": 0.35,
+      "minimum": 0
+    },
+    "perception_vision_weight": {
+      "type": "number",
+      "default": 0.65,
+      "minimum": 0
+    },
+    "perception_dom_timeout_s": {
+      "type": "number",
+      "default": 4,
+      "minimum": 0.5
+    },
+    "perception_vision_timeout_s": {
+      "type": "number",
+      "default": 7.5,
+      "minimum": 0.5
+    },
+    "perception_dom_max_nodes": {
+      "type": "integer",
+      "default": 90,
+      "minimum": 20
+    },
+    "perception_cache_ttl_s": {
+      "type": "number",
+      "default": 3.5,
+      "minimum": 0.1
+    },
+    "perception_fast_screenshot_format": {
+      "type": "string",
+      "default": "jpeg",
+      "enum": [
+        "jpeg",
+        "png"
+      ]
+    },
+    "perception_fast_screenshot_quality": {
+      "type": "integer",
+      "default": 60,
+      "minimum": 25,
+      "maximum": 95
+    }
+  }
+}

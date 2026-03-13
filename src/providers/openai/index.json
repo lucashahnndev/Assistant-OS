@@ -1,39 +1,50 @@
 {
-    "provider": "openai",
-    "display_name": "OpenAI",
-    "supports": [
-        "chat",
-        "stt"
-    ],
-    "defaults": {
-        "model": "gpt-4o-mini",
-        "timeout": 90,
-        "max_tokens": 1024
-    },
+  "provider": "openai",
+  "display_name": "OpenAI",
+  "supports": [
+    "chat",
+    "stt"
+  ],
+  "defaults": {
+    "model": "gpt-4o-mini",
+    "timeout": 90,
+    "max_tokens": 1024
+  },
+  "models": [
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-3.5-turbo",
+    "whisper-1"
+  ],
+  "auth": {
+    "mode": "api_key",
     "fields": [
-        {
-            "name": "api_key_ref",
-            "type": "env_ref",
-            "label": "API Key",
-            "required": true
-        },
-        {
-            "name": "organization_id",
-            "type": "string",
-            "label": "Organization ID",
-            "required": false
-        },
-        {
-            "name": "model",
-            "type": "string",
-            "label": "Model Name",
-            "required": true
-        }
-    ],
-    "models": [
-        "gpt-4o",
-        "gpt-4o-mini",
-        "gpt-3.5-turbo",
-        "whisper-1"
+      {
+        "key": "secret_ref",
+        "type": "secret_ref",
+        "title": "API Key",
+        "required": true,
+        "description": "",
+        "placeholder": ""
+      }
     ]
+  },
+  "settings_fields": [
+    {
+      "key": "organization_id",
+      "type": "string",
+      "title": "Organization ID",
+      "required": false,
+      "description": "",
+      "placeholder": ""
+    },
+    {
+      "key": "model",
+      "type": "string",
+      "title": "Model Name",
+      "required": true,
+      "description": "",
+      "placeholder": ""
+    }
+  ]
 }

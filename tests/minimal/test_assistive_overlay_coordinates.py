@@ -1,7 +1,7 @@
-from src.skills.assistive_overlay.intent import build_draw_payload_from_box
-from src.skills.assistive_overlay.locator import VisionLocator
-from src.skills.vision.skill import VisionSkill
-from src.skills.assistive_overlay.backends.qt_process import _map_point_to_window_local
+from src.capabilities.assistive_overlay.intent import build_draw_payload_from_box
+from src.capabilities.assistive_overlay.locator import VisionLocator
+from src.capabilities.vision.capability import VisionCapability
+from src.capabilities.assistive_overlay.backends.qt_process import _map_point_to_window_local
 
 
 def test_build_draw_payload_prefers_screen_space_with_screen_id():
@@ -93,7 +93,7 @@ def test_locator_normalize_bbox_does_not_force_screen_id():
 
 
 def test_vision_normalize_bbox_does_not_force_screen_id():
-    bbox = VisionSkill._normalize_bbox(
+    bbox = VisionCapability._normalize_bbox(
         {"label": "target", "x": 10, "y": 20, "width": 30, "height": 40},
         fallback_label="target",
     )

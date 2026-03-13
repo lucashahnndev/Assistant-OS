@@ -11,7 +11,7 @@ import Login from './pages/Login';
 import Setup from './pages/Setup';
 import Dashboard from './pages/Dashboard';
 import Chat from './pages/Chat';
-import Skills from './pages/Skills';
+import Capabilities from './pages/Capabilities';
 import Memory from './pages/Memory';
 import Settings from './pages/Settings';
 import Tasks from './pages/Tasks';
@@ -52,7 +52,7 @@ const AppRoutes = () => {
             }>
                 <Route index element={<Dashboard />} />
                 <Route path="chat" element={<Chat />} />
-                <Route path="skills" element={<Skills />} />
+                <Route path="capabilities" element={<Capabilities />} />
                 <Route path="memory" element={<Memory />} />
                 <Route path="tasks" element={<Tasks />} />
                 <Route path="settings" element={<Settings />} />

@@ -14,7 +14,7 @@ import { api } from '../hooks/api';
 import PlaybackCard from '../components/PlaybackCard';
 import LinkPreviewCard from '../components/LinkPreviewCard';
 import ConfirmDialog from '../components/ConfirmDialog';
-import SkillIcon from '../components/SkillIcon';
+import CapabilityIcon from '../components/CapabilityIcon';
 import toast from 'react-hot-toast';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -66,7 +66,8 @@ import {
     Brain,
     Wrench,
     Link2,
-    Zap
+    Zap,
+    AlertTriangle
 } from 'lucide-react';
 
 const SessionIcon = ({ source, size = 16 }) => {
@@ -532,7 +533,7 @@ const groupHistoryWithReasoning = (rawHistory = []) => {
                 if (msg.approvalRequest) unit.approvalRequest = msg.approvalRequest;
                 if (msg.playback && !unit.playback) unit.playback = msg.playback;
                 if (msg.isStreaming !== undefined) unit.isStreaming = msg.isStreaming;
-                unit.skills_used = mergeUniqueStrings(unit.skills_used, msg.skills_used);
+                unit.capabilities_used = mergeUniqueStrings(unit.capabilities_used, msg.capabilities_used);
                 unit.actions_used = mergeUniqueStrings(unit.actions_used, msg.actions_used);
             }
             return;
@@ -624,8 +625,9 @@ const TypewriterMarkdown = ({ text, isStreaming, isComplete, isUser }) => {
 const INSPECTOR_TABS = [
     { id: 'plan', label: 'Plan', icon: FileText },
     { id: 'thought', label: 'Thought', icon: Brain },
+    { id: 'logs', label: 'Logs', icon: AlertTriangle },
     { id: 'terminal', label: 'Terminal', icon: Terminal },
-    { id: 'skills', label: 'Skills', icon: Wrench },
+    { id: 'capabilities', label: 'Capabilities', icon: Wrench },
     { id: 'media', label: 'Media', icon: Archive },
     { id: 'sources', label: 'Sources', icon: Link2 },
 ];
@@ -658,6 +660,40 @@ const URL_EXTRACT_RE = /https?:\/\/[^\s<>)"'\]]+/gi;
 const extractUrlsFromAny = (value) => {
     const text = typeof value === 'string' ? value : JSON.stringify(value || {});
     return [...new Set((String(text).match(URL_EXTRACT_RE) || []).map((u) => u.replace(/[.,;!?]+$/, '')))];
+};
+
+const isInspectorErrorEvent = (event) => {
+    const name = String(event?.event || '').toLowerCase();
+    const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
+    const status = String(payload?.status || '').toLowerCase();
+    const errorCode = String(payload?.error_code || payload?.code || payload?.result_reason || '').toLowerCase();
+    const reason = String(payload?.reason || '').toLowerCase();
+    const summary = String(payload?.summary || payload?.failure_summary || '').toLowerCase();
+    const blob = `${name} ${status} ${errorCode} ${reason} ${summary}`;
+    return [
+        'fail',
+        'error',
+        'exception',
+        'recovery_needed',
+        'replan',
+        'replanning',
+        'validation',
+        'schema',
+        'llm_error',
+        'planner',
+        'refusal',
+        'timeout',
+    ].some((token) => blob.includes(token));
+};
+
+const extractInspectorErrorMessage = (payload = {}) => {
+    const raw = payload?.error || payload?.message || payload?.details || payload?.reason || payload?.exception || '';
+    if (typeof raw === 'string') return raw.trim();
+    try {
+        return JSON.stringify(raw || {});
+    } catch {
+        return String(raw || '').trim();
+    }
 };
 
 const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: controlledOpen, onToggle, hideButton = false, hidePanel = false }) => {
@@ -729,9 +765,9 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
                 ...(Array.isArray(prevData.actions_used) ? prevData.actions_used : []),
                 ...(Array.isArray(nextData.actions_used) ? nextData.actions_used : []),
             ]),
-            skills_used: uniqueStrings([
-                ...(Array.isArray(prevData.skills_used) ? prevData.skills_used : []),
-                ...(Array.isArray(nextData.skills_used) ? nextData.skills_used : []),
+            capabilities_used: uniqueStrings([
+                ...(Array.isArray(prevData.capabilities_used) ? prevData.capabilities_used : []),
+                ...(Array.isArray(nextData.capabilities_used) ? nextData.capabilities_used : []),
             ]),
             media_used: uniqueStrings([
                 ...(Array.isArray(prevData.media_used) ? prevData.media_used : []),
@@ -861,11 +897,12 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
 
     const planner = context?.planner || {};
     const data = context?.data || {};
+    const browserPlanner = data?.browser_planner && typeof data.browser_planner === 'object' ? data.browser_planner : {};
     const summary = context?.summary || {};
     const events = Array.isArray(overwatch?.events) ? overwatch.events : [];
     const steps = Array.isArray(planner.steps) ? planner.steps : [];
     const plan = Array.isArray(planner.plan) ? planner.plan : [];
-    const skills = normalizeInspectorList(data.skills_used);
+    const capabilities = normalizeInspectorList(data.capabilities_used);
     const actions = normalizeInspectorList(data.actions_used);
     const media = normalizeInspectorList(data.media_used);
     const playbackRunIds = (() => {
@@ -897,6 +934,9 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
         if (entries.length === 0 && typeof summary?.last_thought === 'string' && summary.last_thought.trim()) {
             entries.push({ text: summary.last_thought.trim(), ts: context?.updated_at || null });
         }
+        if (typeof browserPlanner?.thought === 'string' && browserPlanner.thought.trim()) {
+            entries.push({ text: browserPlanner.thought.trim(), ts: browserPlanner?.ts || context?.updated_at || null });
+        }
         const dedup = [];
         entries.forEach((entry) => {
             if (!dedup.some((d) => d.text === entry.text)) dedup.push(entry);
@@ -921,6 +961,24 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
                 return tb - ta;
             });
     })();
+    const workerErrors = (() => {
+        const fromApi = Array.isArray(overwatch?.worker_errors) ? overwatch.worker_errors : [];
+        if (fromApi.length > 0) return fromApi;
+        return events
+            .filter((event) => isInspectorErrorEvent(event))
+            .map((event) => ({
+                ts: event?.ts || null,
+                event: String(event?.event || 'worker_event'),
+                message: extractInspectorErrorMessage(event?.payload || {}),
+                payload: event?.payload || {},
+                component: null,
+                severity: 'error',
+                error_code: String(event?.payload?.error_code || event?.payload?.code || event?.payload?.result_reason || '') || null,
+            }));
+    })();
+    const executionLogs = overwatch?.latest_execution_logs && typeof overwatch.latest_execution_logs === 'object'
+        ? overwatch.latest_execution_logs
+        : { available: false, execution_id: null, tail: '', error_lines: [] };
     const fullscreenTerminal = shellTerminals.find((term) => String(term?.id || '') === String(fullscreenTerminalId || '')) || null;
 
     useEffect(() => {
@@ -949,15 +1007,15 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
         </div>
     );
 
-    const renderSkills = () => (
+    const renderCapabilities = () => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {skills.length > 0 && (
+            {capabilities.length > 0 && (
                 <div>
-                    <p style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '6px' }}>Skills</p>
+                    <p style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '6px' }}>Capabilities</p>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                        {skills.map((s, i) => (
+                        {capabilities.map((s, i) => (
                             <span key={i} style={{ padding: '3px 8px', background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.35)', borderRadius: '8px', fontSize: '11px', color: 'var(--text-primary)', fontWeight: '700', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                                <SkillIcon variant="inline" skillId={s} skillName={s} />
+                                <CapabilityIcon variant="inline" capabilityId={s} capabilityName={s} />
                                 {s}
                             </span>
                         ))}
@@ -977,14 +1035,45 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
                     </div>
                 </div>
             )}
-            {skills.length === 0 && actions.length === 0 && (
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No skills recorded.</span>
+            {capabilities.length === 0 && actions.length === 0 && (
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No capabilities recorded.</span>
             )}
         </div>
     );
 
     const renderThought = () => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {browserPlanner?.phase && (
+                <div style={{ border: '1px solid var(--card-border)', borderRadius: '7px', background: 'rgba(2,6,23,0.02)', padding: '8px 9px' }}>
+                    <p style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '800', marginBottom: '4px' }}>
+                        Browser Planner
+                    </p>
+                    <p style={{ fontSize: '11px', color: 'var(--text-primary)', fontFamily: 'monospace' }}>
+                        {String(browserPlanner.phase || 'unknown')}
+                        {browserPlanner.step_id ? ` · ${String(browserPlanner.step_id)}` : ''}
+                    </p>
+                    {browserPlanner.action && (
+                        <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px', fontFamily: 'monospace' }}>
+                            action: {String(browserPlanner.action)}
+                        </p>
+                    )}
+                    {typeof browserPlanner.parse_failures !== 'undefined' && (
+                        <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px', fontFamily: 'monospace' }}>
+                            parse_failures: {String(browserPlanner.parse_failures)}
+                        </p>
+                    )}
+                    {browserPlanner.reason && (
+                        <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                            reason: {String(browserPlanner.reason)}
+                        </p>
+                    )}
+                    {browserPlanner.error && (
+                        <p style={{ fontSize: '11px', color: 'var(--error)', marginTop: '4px', whiteSpace: 'pre-wrap' }}>
+                            {String(browserPlanner.error)}
+                        </p>
+                    )}
+                </div>
+            )}
             {thoughtTimeline.length > 0 ? thoughtTimeline.map((entry, i) => (
                 <div key={i} style={{ display: 'flex', gap: '9px', alignItems: 'flex-start', padding: '8px 9px', border: '1px solid var(--card-border)', borderRadius: '7px', background: 'rgba(2,6,23,0.02)' }}>
                     <Brain size={14} color="var(--text-muted)" style={{ flexShrink: 0, marginTop: '1px' }} />
@@ -1035,6 +1124,51 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
                     </div>
                 );
             }) : <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No terminal activity recorded.</span>}
+        </div>
+    );
+
+    const renderLogs = () => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
+                <div style={{ border: '1px solid var(--card-border)', borderRadius: '7px', padding: '8px' }}>
+                    <p style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '800' }}>Worker errors</p>
+                    <p style={{ fontSize: '14px', fontWeight: '800', color: workerErrors.length > 0 ? 'var(--error)' : 'var(--success)' }}>{workerErrors.length}</p>
+                </div>
+                <div style={{ border: '1px solid var(--card-border)', borderRadius: '7px', padding: '8px' }}>
+                    <p style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '800' }}>Execution log</p>
+                    <p style={{ fontSize: '11px', color: executionLogs.available ? 'var(--text-primary)' : 'var(--text-muted)', fontFamily: 'monospace' }}>
+                        {executionLogs.execution_id || 'not available'}
+                    </p>
+                </div>
+            </div>
+            {workerErrors.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
+                    {workerErrors.slice(-10).reverse().map((entry, idx) => (
+                        <div key={`worker-error-${idx}`} style={{ border: '1px solid rgba(239,68,68,0.35)', borderRadius: '7px', background: 'rgba(239,68,68,0.06)', padding: '8px' }}>
+                            <p style={{ fontSize: '11px', fontWeight: '700', color: 'var(--text-primary)' }}>{entry.event || 'worker_error'}</p>
+                            <div style={{ marginTop: '2px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                {entry.component && <span style={{ fontSize: '10px', color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '1px 6px' }}>{String(entry.component)}</span>}
+                                {entry.error_code && <span style={{ fontSize: '10px', color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '1px 6px', fontFamily: 'monospace' }}>{String(entry.error_code)}</span>}
+                                {entry.severity && <span style={{ fontSize: '10px', color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '1px 6px' }}>{String(entry.severity)}</span>}
+                            </div>
+                            {entry.ts && <p style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{formatTime(entry.ts)}</p>}
+                            <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px', whiteSpace: 'pre-wrap' }}>{entry.message || 'No message'}</p>
+                        </div>
+                    ))}
+                </div>
+            ) : (
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No worker errors detected.</span>
+            )}
+            {executionLogs.available && executionLogs.tail ? (
+                <details style={{ border: '1px solid var(--card-border)', borderRadius: '7px', padding: '8px', background: 'rgba(2,6,23,0.02)' }}>
+                    <summary style={{ cursor: 'pointer', fontSize: '11px', fontWeight: '700' }}>Execution log tail</summary>
+                    <pre className="custom-scrollbar" style={{ marginTop: '8px', maxHeight: '180px', overflow: 'auto', fontSize: '10px', border: '1px solid var(--card-border)', borderRadius: '6px', padding: '8px', whiteSpace: 'pre-wrap' }}>
+                        {executionLogs.tail}
+                    </pre>
+                </details>
+            ) : (
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No execution logs available for this worker yet.</span>
+            )}
         </div>
     );
 
@@ -1228,7 +1362,7 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
         </div>
     );
 
-    const tabRenderers = { plan: renderPlan, thought: renderThought, terminal: renderTerminal, skills: renderSkills, media: renderMedia, sources: renderSources };
+    const tabRenderers = { plan: renderPlan, thought: renderThought, logs: renderLogs, terminal: renderTerminal, capabilities: renderCapabilities, media: renderMedia, sources: renderSources };
 
     return (
         <>
@@ -1298,7 +1432,7 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
                     <div style={{ padding: '14px', maxHeight: '260px', minHeight: '130px', overflowY: 'auto' }}>
                         {loading && !context && <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px', padding: '12px' }}>Loading…</div>}
                         {error && <div style={{ color: '#ef4444', fontSize: '12px' }}>{error}</div>}
-                        {!loading && !error && context && tabRenderers[activeTab]?.()}
+                        {!loading && !error && (context || overwatch) && tabRenderers[activeTab]?.()}
                     </div>
                 </div>
             )}
@@ -1649,13 +1783,13 @@ const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agent
         }
         return String(msg?.content || '').trim();
     }, [msg?.contentSegments, msg?.content]);
-    const skillHints = useMemo(() => {
-        const contextSkills = msg?.context?.data?.skills_used;
+    const capabilityHints = useMemo(() => {
+        const contextCapabilities = msg?.context?.data?.capabilities_used;
         return [
-            ...(Array.isArray(msg?.skills_used) ? msg.skills_used : []),
-            ...(Array.isArray(contextSkills) ? contextSkills : []),
+            ...(Array.isArray(msg?.capabilities_used) ? msg.capabilities_used : []),
+            ...(Array.isArray(contextCapabilities) ? contextCapabilities : []),
         ];
-    }, [msg?.skills_used, msg?.context?.data?.skills_used]);
+    }, [msg?.capabilities_used, msg?.context?.data?.capabilities_used]);
     const actionHints = useMemo(() => {
         const contextActions = msg?.context?.data?.actions_used;
         return [
@@ -1689,7 +1823,7 @@ const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agent
         text: cardDetectionText,
         isUser,
         isStreaming: isActivelyStreaming,
-        skillsUsed: skillHints,
+        capabilitiesUsed: capabilityHints,
         actionsUsed: actionHints,
         sourcesUsed: sourceHints,
     });

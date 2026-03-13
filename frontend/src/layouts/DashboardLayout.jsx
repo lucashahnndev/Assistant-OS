@@ -31,7 +31,7 @@ const DashboardLayout = () => {
     const isChat = location.pathname === '/chat' || location.pathname === '/chat/';
     const isFullBleedPage =
         isChat ||
-        location.pathname === '/skills' ||
+        location.pathname === '/capabilities' ||
         location.pathname === '/memory' ||
         location.pathname === '/security' ||
         location.pathname === '/messaging-access';
@@ -78,7 +78,7 @@ const DashboardLayout = () => {
         { to: '/', icon: LayoutDashboard, label: t('nav.dashboard') },
         { to: '/chat', icon: MessageSquare, label: t('nav.console') },
         { to: '/tasks', icon: ClipboardCheck, label: t('nav.tasks') },
-        { to: '/skills', icon: Cpu, label: t('nav.skills') },
+        { to: '/capabilities', icon: Cpu, label: t('nav.capabilities') },
         { to: '/memory', icon: Database, label: t('nav.memory') },
         { to: '/security', icon: Shield, label: t('nav.security') },
         { to: '/settings', icon: Settings, label: t('nav.settings') },

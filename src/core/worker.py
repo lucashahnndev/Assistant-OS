@@ -104,6 +104,7 @@ class WorkerManager:
         self.scheduler = scheduler
         self.active_workers: Dict[str, Worker] = {}
         self._lock = threading.Lock()
+        self._hung_warned_at: Dict[str, float] = {}
 
     def spawn_worker(self, work_id: str, task_fn: Callable, *args, **kwargs):
         worker = Worker(work_id, self.scheduler, task_fn, *args, **kwargs)
@@ -114,7 +115,9 @@ class WorkerManager:
 
     def watchdog_check(self):
         """
-        Detects dead or hung workers and cleans up the active list.
+        Detects dead workers and warns about long-running workers.
+        Long-running work is no longer force-failed by watchdog because many
+        browser tasks are legitimately slow (vision/DOM cycles).
         """
         with self._lock:
             dead_works = []
@@ -122,16 +125,18 @@ class WorkerManager:
                 if not worker.is_alive():
                     dead_works.append(work_id)
                 else:
-                    # Check for hung worker (e.g., status RUNNING but updated_at is > 5 min ago)
+                    # Check for potentially hung worker (status RUNNING and stale update timestamp).
+                    # Warning-only: do not kill/mark failed from watchdog.
                     work = self.scheduler.get_work(work_id)
                     if work and work.status == WorkStatus.RUNNING:
                         age = (datetime.datetime.now() - work.updated_at).total_seconds()
-                        if age > 300: # 5 minutes
-                            logger.warning(f"Worker {work_id} appears to be hung (Age: {age}s).")
-                            # We can't easily kill a python thread from outside, 
-                            # but we can mark it as failed in the registry.
-                            self.scheduler.update_work_status(work_id, WorkStatus.FAILED, error="Timeout: Tarefa travada.")
-                            dead_works.append(work_id)
+                        if age > 360:  # 6 minutes without scheduler update
+                            now = time.time()
+                            last_warn = float(self._hung_warned_at.get(work_id, 0.0))
+                            if (now - last_warn) >= 60.0:
+                                logger.warning(f"Worker {work_id} appears to be hung (Age: {age}s).")
+                                self._hung_warned_at[work_id] = now
 
             for work_id in dead_works:
                 del self.active_workers[work_id]
+                self._hung_warned_at.pop(work_id, None)

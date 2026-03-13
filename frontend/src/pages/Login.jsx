@@ -316,8 +316,8 @@ const Login = () => {
             width: '100vw',
             height: '100vh',
             background: theme === 'light'
-                ? 'linear-gradient(160deg, #e8ecf4 0%, #d8deea 100%)'
-                : 'linear-gradient(160deg, #070b14 0%, #0b1020 100%)',
+                ? 'radial-gradient(120% 90% at 16% 18%, #eef3fb 0%, #dce5f2 54%, #cfd9ea 100%)'
+                : 'radial-gradient(120% 100% at 18% 18%, rgba(46, 92, 198, 0.30) 0%, rgba(13, 31, 78, 0.12) 46%, rgba(0,0,0,0) 70%), radial-gradient(96% 86% at 86% 84%, rgba(58, 132, 224, 0.22) 0%, rgba(11, 34, 86, 0.10) 44%, rgba(0,0,0,0) 72%), linear-gradient(138deg, #020817 0%, #07142e 46%, #0d2b5b 100%)',
             position: 'relative',
             overflow: 'hidden'
         }}
@@ -374,7 +374,7 @@ const Login = () => {
                     left: '-5vw',
                     width: '110vw',
                     height: '110vh',
-                    zIndex: 0,
+                    zIndex: 1,
                     pointerEvents: 'none',
                     opacity: 1
                 }}
@@ -390,7 +390,7 @@ const Login = () => {
                 borderRadius: '50%',
                 background: theme === 'light'
                     ? 'radial-gradient(circle, rgba(90, 122, 188, 0.12) 0%, rgba(90,122,188,0.03) 42%, rgba(0,0,0,0) 75%)'
-                    : 'radial-gradient(circle, rgba(82, 118, 196, 0.16) 0%, rgba(82,118,196,0.05) 44%, rgba(0,0,0,0) 76%)',
+                    : 'radial-gradient(circle, rgba(90, 132, 216, 0.16) 0%, rgba(90,132,216,0.05) 44%, rgba(0,0,0,0) 76%)',
                 filter: 'blur(78px)',
                 zIndex: 1,
             }} />
@@ -403,7 +403,7 @@ const Login = () => {
                 borderRadius: '50%',
                 background: theme === 'light'
                     ? 'radial-gradient(circle, rgba(108, 146, 205, 0.10) 0%, rgba(108,146,205,0.02) 40%, rgba(0,0,0,0) 74%)'
-                    : 'radial-gradient(circle, rgba(104, 142, 208, 0.14) 0%, rgba(104,142,208,0.04) 40%, rgba(0,0,0,0) 74%)',
+                    : 'radial-gradient(circle, rgba(78, 196, 220, 0.12) 0%, rgba(78,196,220,0.04) 40%, rgba(0,0,0,0) 74%)',
                 filter: 'blur(90px)',
                 zIndex: 1,
                 pointerEvents: 'none'
@@ -415,7 +415,7 @@ const Login = () => {
                 inset: 0,
                 background: theme === 'light'
                     ? 'radial-gradient(circle at center, rgba(255,255,255,0) 10%, rgba(226,233,245,0.52) 66%, rgba(214,222,238,0.86) 100%)'
-                    : 'radial-gradient(circle at center, rgba(0,0,0,0.0) 8%, rgba(8,12,20,0.42) 62%, rgba(7,10,18,0.86) 100%)',
+                    : 'radial-gradient(circle at center, rgba(0,0,0,0.0) 10%, rgba(7,12,24,0.12) 62%, rgba(3,7,14,0.30) 100%)',
                 pointerEvents: 'none',
                 zIndex: 2
             }} />
@@ -426,7 +426,7 @@ const Login = () => {
                 inset: 0,
                 background: theme === 'light'
                     ? 'radial-gradient(circle at center, transparent 44%, rgba(168,178,197,0.22) 100%)'
-                    : 'radial-gradient(circle at center, transparent 42%, rgba(0,0,0,0.58) 100%)',
+                    : 'radial-gradient(circle at center, transparent 48%, rgba(0,0,0,0.42) 100%)',
                 pointerEvents: 'none',
                 zIndex: 3
             }} />

@@ -11,32 +11,16 @@ def get_kernel(request: Request):
         raise HTTPException(status_code=503, detail="Kernel not initialized")
     return request.app.state.kernel
 
-def _read_env_file(path: str) -> dict:
-    data = {}
-    if not os.path.exists(path):
-        return data
-    with open(path, "r", encoding="utf-8") as f:
-        for raw_line in f:
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            data[key.strip()] = value.strip()
-    return data
 
-def _to_config_ref(key: str) -> str:
-    """Normalizes key for config.json references."""
-    token = str(key or "").strip()
-    if not token:
-        return ""
-    return token if token.startswith("ENV_") else f"ENV_{token}"
-
-def _to_env_key(key: str) -> str:
-    """Normalizes key for .env storage (without ENV_ prefix)."""
-    token = str(key or "").strip()
-    if token.startswith("ENV_"):
-        token = token[4:]
-    return token
+def _load_provider_catalog(provider: str) -> dict:
+    index_path = os.path.join(os.getcwd(), "src", "providers", provider, "index.json")
+    if not os.path.exists(index_path):
+        return {}
+    try:
+        with open(index_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 @router.get("/catalog")
 def get_catalog(user: User = Depends(get_current_user)):
@@ -75,65 +59,6 @@ def get_provider_catalog(provider: str, user: User = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=500, detail="Failed to parse catalog JSON")
 
-@router.get("/env-keys")
-def get_env_keys(user: User = Depends(get_current_user)):
-    """
-    Returns a list of keys currently stored in the .env file that might be used as references.
-    Does not expose values.
-    """
-    env_path = os.path.join(os.getcwd(), ".env")
-    env_data = _read_env_file(env_path)
-    refs = []
-    for key in env_data.keys():
-        token = str(key or "").strip()
-        if not token:
-            continue
-        if token.startswith("ENV_") or token.endswith("_KEY") or token.endswith("_TOKEN") or token.endswith("_SECRET") or token.endswith("_ID"):
-            refs.append(_to_config_ref(token))
-    refs = sorted(set(refs))
-    return {"keys": refs}
-
-@router.post("/env-keys")
-def create_env_key(payload: dict, user: User = Depends(get_current_user), request: Request = None):
-    """
-    Creates a new key in the .env file securely.
-    """
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only admins can modify environment")
-        
-    key = payload.get("key")
-    value = payload.get("value")
-    
-    if not key or not value:
-        raise HTTPException(status_code=400, detail="Key and value are required")
-
-    config_ref = _to_config_ref(key)
-    env_key = _to_env_key(key)
-    if not env_key:
-        raise HTTPException(status_code=400, detail="Invalid key")
-
-    env_path = os.path.join(os.getcwd(), ".env")
-    env_data = _read_env_file(env_path)
-
-    # .env stores the canonical key without ENV_ prefix
-    if env_key in env_data:
-        raise HTTPException(status_code=409, detail="Key already exists in .env")
-
-    mode = 'a' if os.path.exists(env_path) else 'w'
-    with open(env_path, mode, encoding='utf-8') as f:
-        f.write(f"\n{env_key}={value}\n")
-
-    # Trigger hot-reload of config so env vars get picked up natively in process
-    kernel = get_kernel(request)
-    if kernel:
-        import os as builtin_os
-        builtin_os.environ[env_key] = value # Inject canonical env key immediately
-        # Backward compatibility for keys that were previously referenced as ENV_* directly
-        builtin_os.environ[config_ref] = value
-        kernel.reload_config()
-
-    return {"success": True, "key": config_ref, "stored_key": env_key}
-
 @router.post("/pool/{modality}")
 def update_modality_pool(modality: str, pool: list = Body(...), user: User = Depends(get_current_user), request: Request = None):
     """
@@ -154,11 +79,18 @@ def update_modality_pool(modality: str, pool: list = Body(...), user: User = Dep
         if "cortex" not in config:
             config["cortex"] = {}
             
-        # Ensure api_key_ref starts with ENV_
         for item in pool:
-            if "api_key_ref" in item and item["api_key_ref"]:
-                if not item["api_key_ref"].startswith("ENV_"):
-                    item["api_key_ref"] = f"ENV_{item['api_key_ref']}"
+            provider_name = str(item.get("provider") or "").strip()
+            provider_catalog = _load_provider_catalog(provider_name) if provider_name else {}
+            auth_fields = provider_catalog.get("auth", {}).get("fields", [])
+            for field in auth_fields:
+                if not isinstance(field, dict) or field.get("type") != "secret_ref":
+                    continue
+                field_key = str(field.get("key") or "").strip()
+                if not field_key or not item.get(field_key):
+                    continue
+                if not str(item[field_key]).startswith("ENV_"):
+                    item[field_key] = f"ENV_{item[field_key]}"
             
         if modality in ["chat", "vision"]:
             config["cortex"][modality] = pool

@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 from PIL import Image
 
-from src.skills.assistive_overlay.debug_render import render_overlay_debug_image
-from src.skills.assistive_overlay.skill import AssistiveOverlaySkill
+from src.capabilities.assistive_overlay.debug_render import render_overlay_debug_image
+from src.capabilities.assistive_overlay.capability import AssistiveOverlayCapability
 
 
 def test_render_overlay_debug_image_draws_and_saves(tmp_path: Path):
@@ -66,11 +66,11 @@ def test_highlight_target_returns_debug_image_path_when_debug_enabled(tmp_path: 
                 "screenshot_path": str(ref_path),
             }
 
-    skill = AssistiveOverlaySkill(kernel=SimpleNamespace(), config={"overlay": {"backend": "noop", "debug": {"enabled": True}}})
-    skill.renderer = _FakeRenderer()
-    skill.locator = _FakeLocator()
+    capability = AssistiveOverlayCapability(kernel=SimpleNamespace(), config={"overlay": {"backend": "noop", "debug": {"enabled": True}}})
+    capability.renderer = _FakeRenderer()
+    capability.locator = _FakeLocator()
 
-    result = skill.execute(
+    result = capability.execute(
         "overlay.assist.highlight_target",
         {"label": "botao enviar", "mark_type": "rect"},
         {"session_id": "s1"},

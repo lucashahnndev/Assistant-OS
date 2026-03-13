@@ -67,7 +67,7 @@ class Kernel:
         self.config_manager = ConfigManager()
         self.base_data_dir = self.config_manager.base_data_dir
 
-        from skills.browser_control.session_registry import BrowserSessionRegistry
+        from capabilities.browser_control.session_registry import BrowserSessionRegistry
         self.browser_session_registry = BrowserSessionRegistry(base_data_dir=self.base_data_dir)
         reset_stats = self.browser_session_registry.reset_active_indexes_on_boot()
         logger.info(
@@ -89,8 +89,8 @@ class Kernel:
         # 3. Initialize Orchestrator and Kernel Logic
         self.orchestrator = AgentOrchestrator(self.config_manager)
         self.orchestrator.set_kernel(self)
-        self.llm_manager = self.orchestrator.llm_manager # Expose for easier skill access
-        self.skill_registry = self.orchestrator.skill_registry
+        self.llm_manager = self.orchestrator.llm_manager # Expose for easier capability access
+        self.capability_registry = self.orchestrator.capability_registry
         self.principal_context = None # To be set by drivers/commands
         
         # 4. Storage paths used during runtime
@@ -104,25 +104,25 @@ class Kernel:
 
         # Initialize Drivers Dynamically
         if interfaces_config.get('voice', {}).get('enabled', True):
-            from drivers.voice_driver import VoiceDriver
+            from drivers.interfaces.voice.voice_driver import VoiceDriver
             logger.info("Initializing Voice Driver...")
             self.voice_driver = VoiceDriver(self, parent_dir)
             self.drivers.append(self.voice_driver)
         
         if interfaces_config.get('telegram', {}).get('enabled', True):
-             from drivers.telegram_driver import TelegramDriver
+             from drivers.interfaces.telegram.telegram_driver import TelegramDriver
              logger.info("Initializing Telegram Driver...")
              self.telegram_driver = TelegramDriver(self, parent_dir)
              self.drivers.append(self.telegram_driver)
 
         if interfaces_config.get('server', {}).get('enabled', True):
-             from drivers.server_driver import ServerDriver
+             from drivers.interfaces.server_driver import ServerDriver
              logger.info("Initializing Server Driver (IPC/Web)...")
              self.server_driver = ServerDriver(self, parent_dir)
              self.drivers.append(self.server_driver)
              
         # Initialize System Driver (Host control)
-        from drivers.system_driver import SystemDriver
+        from drivers.interfaces.system_driver import SystemDriver
         logger.info("Initializing System Driver (Host Control)...")
         self.system_driver = SystemDriver(self)
         self.drivers.append(self.system_driver)
@@ -425,6 +425,22 @@ class Kernel:
         if hasattr(self, "server_driver"):
             return self.server_driver
         return None
+
+    def resolve_interface_for_session(self, session_id: str) -> str:
+        """
+        Resolves the interface ID (e.g., 'telegram', 'voice', 'web') for a given session.
+        Uses the active driver registry or session ID prefixes.
+        """
+        driver = self._resolve_driver_for_session(session_id)
+        if driver:
+            return driver.get_interface_id()
+        
+        # Fallback to known prefixes if driver is not currently matched in driver_instances
+        if session_id.startswith("telegram"):
+            return "telegram"
+        if session_id.startswith("voice"):
+            return "voice"
+        return "web"
 
     def _send_to_session(self, session_id: str, text: str, phase: str = "thinking"):
         driver = self._resolve_driver_for_session(session_id)

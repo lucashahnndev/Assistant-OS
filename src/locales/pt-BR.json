@@ -25,5 +25,6 @@
   "reply.media_takeover_cancelled": "MEDIA_TAKEOVER_CANCELLED",
   "reply.media_takeover_started": "MEDIA_TAKEOVER_STARTED",
   "reply.worker_session_missing": "Não consegui continuar porque este worker não tem uma sessão pai válida. Inicie a tarefa a partir de uma sessão existente.",
-  "reply.approval_target_missing": "Não consegui solicitar aprovação porque a sessão de origem está ausente. Reinicie esta tarefa pela sua sessão ativa."
+  "reply.approval_target_missing": "Não consegui solicitar aprovação porque a sessão de origem está ausente. Reinicie esta tarefa pela sua sessão ativa.",
+  "ack.work_started": "Vou fazer isso para você."
 }

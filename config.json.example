@@ -8,7 +8,7 @@
             "telegram": "INFO",
             "web": "INFO",
             "api": "INFO",
-            "skills": "INFO",
+            "capabilities": "INFO",
             "interface": "INFO"
         }
     },
@@ -39,7 +39,7 @@
         },
         "telegram": {
             "enabled": true,
-            "token": "ENV_TELEGRAM_KEY",
+            "secret_ref": "ENV_TELEGRAM_KEY",
             "allowed_users": []
         },
         "server": {
@@ -157,21 +157,21 @@
             "provider": "openrouter",
             "providers": {
                 "google": {
-                    "api_key": "ENV_GEMINI_API_KEY",
+                    "secret_ref": "ENV_GEMINI_API_KEY",
                     "model": "gemini-2.0-flash"
                 },
                 "openrouter": {
-                    "api_key": "ENV_OPENROUTER_API_KEY",
+                    "secret_ref": "ENV_OPENROUTER_API_KEY",
                     "model": "arcee-ai/trinity-large-preview:free",
                     "timeout": 30
                 },
                 "openai": {
-                    "api_key": "ENV_OPENAI_API_KEY",
+                    "secret_ref": "ENV_OPENAI_API_KEY",
                     "organization_id": "ENV_OPENAI_ORG_ID",
                     "model": "gpt-4o-mini"
                 },
                 "huggingface": {
-                    "api_key": "ENV_HUGGINGFACE_API_KEY",
+                    "secret_ref": "ENV_HUGGINGFACE_API_KEY",
                     "model": "HuggingFaceTB/SmolLM3-3B",
                     "base_url": "https://router.huggingface.co/v1",
                     "timeout": 90,
@@ -187,15 +187,15 @@
             "provider": "openrouter",
             "providers": {
                 "google": {
-                    "api_key": "ENV_GEMINI_API_KEY",
+                    "secret_ref": "ENV_GEMINI_API_KEY",
                     "model": "gemini-2.0-flash-lite"
                 },
                 "openrouter": {
-                    "api_key": "ENV_OPENROUTER_API_KEY",
+                    "secret_ref": "ENV_OPENROUTER_API_KEY",
                     "model": "qwen/qwen3-vl-235b-a22b-thinking"
                 },
                 "huggingface": {
-                    "api_key": "ENV_HUGGINGFACE_API_KEY",
+                    "secret_ref": "ENV_HUGGINGFACE_API_KEY",
                     "model": "Qwen/Qwen2.5-VL-7B-Instruct",
                     "base_url": "https://router.huggingface.co/v1",
                     "timeout": 90,
@@ -214,7 +214,7 @@
                         "model_path": "model/vosk-model-small-pt-0.3"
                     },
                     "openai": {
-                        "api_key": "ENV_OPENAI_API_KEY",
+                        "secret_ref": "ENV_OPENAI_API_KEY",
                         "organization_id": "ENV_OPENAI_ORG_ID"
                     }
                 }
@@ -228,7 +228,7 @@
                         "volume": 1
                     },
                     "google_cloud": {
-                        "api_key": "ENV_GOOGLE_CLOUD_API_KEY"
+                        "secret_ref": "ENV_GOOGLE_CLOUD_API_KEY"
                     },
                     "edge_tts": {
                         "voice": "pt-BR-FranciscaNeural"
@@ -265,7 +265,7 @@
         "observation_result_max_chars": 900,
         "observation_summarize_threshold_chars": 1800
     },
-    "skills": {
+    "capabilities": {
         "system_logs": {
             "enabled": true
         },
@@ -281,6 +281,12 @@
         "browser_control": {
             "enabled": true,
             "headless": false,
+            "browser_engine_preference": "managed_chromium",
+            "chrome_path": "",
+            "managed_chromium_path": "data/browser_bin/chromium/current/chrome",
+            "profile_split_by_engine": true,
+            "extension_install_mode": "auto",
+            "extension_fallback_enabled": true,
             "registry_enabled": true,
             "policy_enabled": true,
             "media_singleton_enforced": true,
@@ -291,7 +297,7 @@
         "spotify_search": {
             "enabled": false,
             "auth": {
-                "clientId": "ENV_SPOTIFY_CLIENT_ID",
+                "client_id": "ENV_SPOTIFY_CLIENT_ID",
                 "client_secret": "ENV_SPOTIFY_CLIENT_SECRET"
             },
             "defaults": {
@@ -310,7 +316,7 @@
         },
         "youtube_search": {
             "enabled": true,
-            "apiKey": "ENV_GOOGLE_CLOUD_API_KEY",
+            "secret_ref": "ENV_GOOGLE_CLOUD_API_KEY",
             "defaults": {
                 "surfaceMode": "auto",
                 "limit": 5
@@ -356,7 +362,7 @@
             "max_timeout_sec": 10800,
             "max_output_chars": 120000
         },
-        "reflex_skill": {
+        "reflex_capability": {
             "enabled": true
         }
     },

@@ -1,0 +1,113 @@
+#agent-cursor {
+  position: fixed;
+  left: 32px;
+  top: 32px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid #61d4ff;
+  background: rgba(10, 132, 255, 0.55);
+  box-shadow: 0 0 0 6px rgba(10, 132, 255, 0.2);
+  pointer-events: none;
+  z-index: 2147483646;
+  display: none;
+  transform: translate(-50%, -50%);
+  transition: left 0.02s linear, top 0.02s linear;
+}
+
+#agent-lock-layer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 2147483640;
+  background: transparent;
+  cursor: wait;
+  display: none;
+}
+
+#agent-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  z-index: 2147483647;
+  display: none;
+  min-width: 400px;
+  max-width: min(92vw, 800px);
+  background: rgba(9, 18, 36, 0.95);
+  border: 1px solid rgba(99, 174, 255, 0.4);
+  border-radius: 14px;
+  padding: 12px 16px;
+  color: #dbe9ff;
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(8px);
+}
+
+#agent-bar .agent-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+#agent-bar .agent-title {
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #61d4ff;
+}
+
+#agent-bar .agent-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+#agent-bar button {
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  color: #fff;
+  background: #0f5cc8;
+  font-weight: 600;
+  font-size: 13px;
+  transition: filter 0.2s;
+}
+
+#agent-bar button:hover {
+  filter: brightness(1.2);
+}
+
+#agent-bar button#agent-pause {
+  background: #c53f3f;
+}
+
+#agent-bar button#agent-resume {
+  background: #2d8a4e;
+}
+
+#agent-bar input {
+  flex: 1;
+  border: 1px solid rgba(99, 174, 255, 0.3);
+  background: rgba(0, 0, 0, 0.3);
+  color: #fff;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  outline: none;
+}
+
+#agent-bar input:focus {
+  border-color: #61d4ff;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+#agent-bar .agent-status {
+  font-size: 11px;
+  opacity: 0.7;
+}

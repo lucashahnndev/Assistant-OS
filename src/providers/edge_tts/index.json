@@ -1,24 +1,30 @@
 {
-    "provider": "edge_tts",
-    "display_name": "Microsoft Edge TTS",
-    "supports": [
-        "tts"
-    ],
-    "defaults": {
-        "voice": "pt-BR-FranciscaNeural"
-    },
-    "fields": [
-        {
-            "name": "voice",
-            "type": "string",
-            "label": "Voice Name",
-            "required": true
-        }
-    ],
-    "models": [
-        "pt-BR-FranciscaNeural",
-        "pt-BR-AntonioNeural",
-        "en-US-AriaNeural",
-        "en-US-GuyNeural"
-    ]
+  "provider": "edge_tts",
+  "display_name": "Microsoft Edge TTS",
+  "supports": [
+    "tts"
+  ],
+  "defaults": {
+    "voice": "pt-BR-FranciscaNeural"
+  },
+  "models": [
+    "pt-BR-FranciscaNeural",
+    "pt-BR-AntonioNeural",
+    "en-US-AriaNeural",
+    "en-US-GuyNeural"
+  ],
+  "auth": {
+    "mode": "none",
+    "fields": []
+  },
+  "settings_fields": [
+    {
+      "key": "voice",
+      "type": "string",
+      "title": "Voice Name",
+      "required": true,
+      "description": "",
+      "placeholder": ""
+    }
+  ]
 }

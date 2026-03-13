@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Assistant-OS Browser Control",
+  "version": "1.0.0",
+  "description": "Visual overlay and input blocking for Assistant-OS agent control.",
+  "permissions": [
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://*/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["*://*/*"],
+      "js": ["content.js"],
+      "css": ["inject.css"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

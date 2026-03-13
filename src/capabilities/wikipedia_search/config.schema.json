@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Enabled"
+    },
+    "language": {
+      "type": "string",
+      "title": "Default Language",
+      "default": "pt"
+    },
+    "defaults": {
+      "type": "object",
+      "title": "Defaults",
+      "properties": {
+        "language": {
+          "type": "string",
+          "default": "pt"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 3
+        },
+        "max_chars_per_page": {
+          "type": "integer",
+          "default": 4500
+        },
+        "chunk_size": {
+          "type": "integer",
+          "default": 700
+        },
+        "chunk_overlap": {
+          "type": "integer",
+          "default": 100
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

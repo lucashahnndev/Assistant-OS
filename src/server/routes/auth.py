@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from ..core.database import get_db
-from ..core.models import User, AuditLog, ExternalAccountConnection
+from ..core.models import User, AuditLog, ExternalAccountConnection, OAuthSessionState
 from ..auth import (
     get_password_hash, 
     verify_password, 
@@ -12,8 +12,9 @@ from ..auth import (
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
 from ..core.token_vault import get_token_vault, TokenVaultError
+from ..core.secret_manager import resolve_secret_ref
 from pydantic import BaseModel
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 import json
@@ -128,15 +129,31 @@ def oauth_provider_callback(
     if not provider_key:
         raise HTTPException(status_code=400, detail="Invalid provider")
 
-    def _resolve_env_ref(value: str) -> str:
-        token = str(value or "").strip()
-        if not token:
-            return ""
-        if token.startswith("ENV_"):
-            return os.getenv(token) or os.getenv(token[4:]) or ""
-        return token
+    now = datetime.now(timezone.utc)
+    oauth_session = (
+        db.query(OAuthSessionState)
+        .filter(
+            OAuthSessionState.user_id == current_user.id,
+            OAuthSessionState.provider == provider_key,
+            OAuthSessionState.state == str(state or "").strip(),
+            OAuthSessionState.status == "pending",
+        )
+        .first()
+    )
 
-    def _exchange_google_code_for_profile(auth_code: str) -> dict:
+    if not oauth_session:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+
+    if oauth_session.expires_at and oauth_session.expires_at < now:
+        oauth_session.status = "expired"
+        oauth_session.error_message = "OAuth state expired"
+        oauth_session.consumed_at = now
+        db.commit()
+        raise HTTPException(status_code=400, detail="OAuth state expired")
+
+    target_origin = str(oauth_session.frontend_origin or "").strip()
+
+    def _exchange_google_code_for_profile(auth_code: str, code_verifier: str) -> dict:
         kernel = getattr(request.app.state, "kernel", None)
         if not kernel or not hasattr(kernel, "config_manager"):
             raise RuntimeError("Kernel config unavailable")
@@ -147,8 +164,8 @@ def oauth_provider_callback(
         if not isinstance(google_cfg, dict):
             raise RuntimeError("Google provider config not found")
 
-        client_id = _resolve_env_ref(google_cfg.get("client_id") or google_cfg.get("client_id_ref"))
-        client_secret = _resolve_env_ref(google_cfg.get("client_secret") or google_cfg.get("client_secret_ref"))
+        client_id = resolve_secret_ref(google_cfg.get("client_id"))
+        client_secret = resolve_secret_ref(google_cfg.get("client_secret"))
         redirect_uri = str(google_cfg.get("redirect_uri") or "").strip()
         if not client_id or not client_secret or not redirect_uri:
             raise RuntimeError("Google OAuth config incomplete (client_id/client_secret/redirect_uri)")
@@ -159,6 +176,7 @@ def oauth_provider_callback(
             "client_secret": client_secret,
             "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
+            "code_verifier": str(code_verifier or ""),
         }).encode("utf-8")
         token_req = urllib_request.Request(
             "https://oauth2.googleapis.com/token",
@@ -208,7 +226,7 @@ def oauth_provider_callback(
 
     if ok and provider_key == "google":
         try:
-            exchange = _exchange_google_code_for_profile(code)
+            exchange = _exchange_google_code_for_profile(code, oauth_session.code_verifier or "")
             profile = exchange.get("profile")
             tokens = exchange.get("tokens")
         except Exception as exc:
@@ -280,6 +298,11 @@ def oauth_provider_callback(
             status_label = "error"
             message = f"OAuth token persistence failed: {exc}"
 
+    oauth_session.status = "consumed" if ok else "failed"
+    oauth_session.error_message = "" if ok else str(message or "OAuth callback failed")
+    oauth_session.consumed_at = datetime.now(timezone.utc)
+    db.commit()
+
     payload = {
         "type": "external-oauth-callback",
         "provider": provider_key,
@@ -315,9 +338,13 @@ def oauth_provider_callback(
       (function() {{
         try {{
           var payload = {payload_json};
-          if (window.opener && !window.opener.closed) {{
-            window.opener.postMessage(payload, "*");
+          var targetOrigin = {json.dumps(target_origin)};
+          if (window.opener && !window.opener.closed && targetOrigin) {{
+            window.opener.postMessage(payload, targetOrigin);
             setTimeout(function() {{ window.close(); }}, 250);
+          }} else if (window.opener && !window.opener.closed) {{
+            // Refuse wildcard postMessage for OAuth callback hardening.
+            console.warn("OAuth callback origin not available; refusing wildcard postMessage.");
           }}
         }} catch (e) {{}}
       }})();

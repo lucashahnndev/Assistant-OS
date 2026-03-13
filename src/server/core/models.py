@@ -23,7 +23,7 @@ class AuditLog(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True) # Nullable for system actions or before auth
     username = Column(String, nullable=True) # Snapshot in case user is deleted
     action = Column(String, nullable=False) # e.g., "login", "update_config", "cancel_task"
-    target = Column(String, nullable=True) # e.g., "skill:web_search", "session:123"
+    target = Column(String, nullable=True) # e.g., "capability:web_search", "session:123"
     payload_hash = Column(String, nullable=True) # SHA256 of the change payload
     details = Column(Text, nullable=True) # Small JSON summary
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
@@ -54,6 +54,22 @@ class ExternalAccountConnection(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class OAuthSessionState(Base):
+    __tablename__ = "oauth_session_states"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    provider = Column(String, nullable=False, index=True)
+    state = Column(String, nullable=False, unique=True, index=True)
+    code_verifier = Column(String, nullable=True)
+    frontend_origin = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="pending")  # pending, consumed, expired, failed
+    error_message = Column(String, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    consumed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 # Database Setup
 import os

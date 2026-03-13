@@ -8,10 +8,10 @@ import logging
 logger = logging.getLogger("LLMResolver")
 
 class LLMResolver(IntentResolver):
-    def __init__(self, llm_manager: LLMManager, threshold: float = 0.65, skill_registry: Any = None):
+    def __init__(self, llm_manager: LLMManager, threshold: float = 0.65, capability_registry: Any = None):
         self.llm_manager = llm_manager
         self.threshold = threshold
-        self.skill_registry = skill_registry
+        self.capability_registry = capability_registry
 
     def resolve(self, user_input: str, context: Dict[str, Any], attempt: int = 1) -> Optional[ActionPlan]:
         session = context.get("session")
@@ -37,13 +37,18 @@ class LLMResolver(IntentResolver):
             intent = self.llm_manager.generate_intent(user_input, history, system_prompt, attachments=attachments)
             if not intent:
                 return None
+            
+            # Semantic Validation
+            if not intent.action or not str(intent.action).strip():
+                raise ValueError("Provider returned an invalid action_id.")
+            
+            # Prevent pure hallucination loops where intent is just an empty dict parsed as reply
+            if intent.action == "reply" and not intent.response_text and not intent.thought:
+                 raise ValueError("VALIDATION_ERROR: Empty 'reply' action. Provider must provide either 'response_text' or 'thought'.")
 
             confidence, notes = self._estimate_confidence(intent, local_context)
             
             if confidence < self.threshold:
-                # Conversational recovery is now handled by the Orchestrator's bounded recovery loop.
-                # If the model selected reply but omitted text, or if confidence is low, we return None
-                # to trigger the supervisor-led recovery path.
                 logger.warning(
                     f"LLM confidence {confidence:.2f} below threshold {self.threshold:.2f} "
                     f"for action '{intent.action}' | notes={notes}"
@@ -66,38 +71,15 @@ class LLMResolver(IntentResolver):
                 }
             )
         except Exception as e:
-            err_str = str(e).lower()
-            is_parse_error = "json" in err_str or "parse" in err_str or "validation" in err_str
-            
-            # Telemetry
-            if session:
-                metrics = session.context.get("metrics", {})
-                metrics["planner_parse_error_count"] = metrics.get("planner_parse_error_count", 0) + 1
-                session.context["metrics"] = metrics
-            
-            if is_parse_error and attempt == 1:
-                logger.warning(f"Planner JSON validation failed: {str(e)}. Attempting repair (1/1)...")
-                
-                if session:
-                    metrics["planner_repair_attempts"] = metrics.get("planner_repair_attempts", 0) + 1
-                    session.context["metrics"] = metrics
-                    
-                # Append repair prompt and retry
-                repair_prompt = f"{system_prompt}\n\nERROR: The previous response was invalid JSON or failed schema validation: {str(e)}\nPlease return ONLY valid JSON matching the exact schema."
-                
-                # Recursive call with attempt=2
-                logger.info("Retrying resolution for repair attempt.")
-                new_context = dict(context)
-                new_context["system_prompt"] = repair_prompt
-                return self.resolve(user_input, new_context, attempt=2)
-
-            logger.error(f"LLM resolution failed (attempt={attempt}): {e}")
-            error_code = ErrorCode.PLANNER_SCHEMA_MISMATCH if is_parse_error else ErrorCode.UNKNOWN_ERROR
+            logger.error(f"LLM resolution failed: {e}")
+            # The Orchestrator handles high-level recovery/fallback.
+            # We return an ActionPlan(action_id="error") to signal failure to the kernel.
+            error_code = ErrorCode.PLANNER_SCHEMA_MISMATCH if "json" in str(e).lower() else ErrorCode.UNKNOWN_ERROR
             return ActionPlan(
                 action_id="error",
                 args={},
                 source="llm_error",
-                thought=f"Planning failed after {attempt} attempts: {str(e)}",
+                thought=f"Planning failed: {str(e)}",
                 metadata={"error_code": error_code.value}
             )
 
@@ -131,12 +113,18 @@ class LLMResolver(IntentResolver):
                 if has_attachments:
                     score += 0.28
                     notes.append("reply_with_attachments_no_text")
+                if has_attachments:
+                    score += 0.28
+                    notes.append("reply_with_attachments_no_text")
+                elif intent.thought:
+                    score += 0.15
+                    notes.append("reply_with_thought_only")
                 else:
                     score -= 0.20
-                    notes.append("reply_without_text")
+                    notes.append("reply_without_text_or_thought")
         else:
             allowed_actions = context.get("allowed_actions")
-            registry = context.get("skill_registry") or self.skill_registry
+            registry = context.get("capability_registry") or self.capability_registry
 
             if allowed_actions is not None:
                 if action in allowed_actions:
@@ -145,8 +133,8 @@ class LLMResolver(IntentResolver):
                 else:
                     score -= 0.35
                     notes.append("action_outside_allowed_scope")
-            elif registry and hasattr(registry, "get_skill_for_action"):
-                if registry.get_skill_for_action(action):
+            elif registry and hasattr(registry, "get_capability_for_action"):
+                if registry.get_capability_for_action(action):
                     score += 0.25
                     notes.append("action_registered")
                 else:

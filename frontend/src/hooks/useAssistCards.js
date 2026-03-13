@@ -13,19 +13,19 @@ import {
     tryParseMarkdownTable,
 } from '../components/AssistCards';
 
-const WORK_SKILL_SIGNALS_CACHE = new Map();
-const WORK_SKILL_SIGNALS_PENDING = new Map();
-const WORK_SKILL_CACHE_TTL_IDLE_MS = 15000;
-const WORK_SKILL_CACHE_TTL_STREAM_MS = 2200;
+const WORK_CAPABILITY_SIGNALS_CACHE = new Map();
+const WORK_CAPABILITY_SIGNALS_PENDING = new Map();
+const WORK_CAPABILITY_CACHE_TTL_IDLE_MS = 15000;
+const WORK_CAPABILITY_CACHE_TTL_STREAM_MS = 2200;
 
-const WEATHER_SKILL_PATTERNS = [
+const WEATHER_CAPABILITY_PATTERNS = [
     /\bweather\b/i,
     /\bweather[\._-]?control\b/i,
     /\bforecast\b/i,
     /\bmeteo\b/i,
 ];
 
-const SYSTEM_HEALTH_SKILL_PATTERNS = [
+const SYSTEM_HEALTH_CAPABILITY_PATTERNS = [
     /\bsystem[\._-]?health\b/i,
     /\bhost[\._-]?health\b/i,
     /\bmachine[\._-]?status\b/i,
@@ -35,20 +35,20 @@ const SYSTEM_HEALTH_SKILL_PATTERNS = [
     /\bsystem[\._-]?status\b/i,
 ];
 
-const WIKIPEDIA_SKILL_PATTERNS = [
+const WIKIPEDIA_CAPABILITY_PATTERNS = [
     /\bwikipedia\b/i,
     /\bwikipedia[\._-]?search\b/i,
     /\bwiki\b/i,
 ];
 
-const MAP_SKILL_PATTERNS = [
+const MAP_CAPABILITY_PATTERNS = [
     /\bmaps?\b/i,
     /\bmaps?[\._-]?search\b/i,
     /\bgoogle[\._-]?maps\b/i,
     /\bopenstreetmap\b/i,
 ];
 
-const YOUTUBE_SKILL_PATTERNS = [
+const YOUTUBE_CAPABILITY_PATTERNS = [
     /\byoutube\b/i,
     /\byoutube[\._-]?(search|retrieve)\b/i,
     /\bvideo\b/i,
@@ -97,13 +97,13 @@ const hasSystemHealthActionCue = (text) => {
 const extractSignalsFromWorkPayload = (payload) => {
     const context = payload?.context && typeof payload.context === 'object' ? payload.context : {};
     const data = context?.data && typeof context.data === 'object' ? context.data : {};
-    const topSkills = Array.isArray(payload?.skills_used) ? payload.skills_used : [];
+    const topCapabilities = Array.isArray(payload?.capabilities_used) ? payload.capabilities_used : [];
     const topActions = Array.isArray(payload?.actions_used) ? payload.actions_used : [];
-    const dataSkills = Array.isArray(data?.skills_used) ? data.skills_used : [];
+    const dataCapabilities = Array.isArray(data?.capabilities_used) ? data.capabilities_used : [];
     const dataActions = Array.isArray(data?.actions_used) ? data.actions_used : [];
     const sources = Array.isArray(data?.sources_used) ? data.sources_used : [];
     return {
-        skills: mergeSignalLists(topSkills, dataSkills),
+        capabilities: mergeSignalLists(topCapabilities, dataCapabilities),
         actions: mergeSignalLists(topActions, dataActions),
         sources,
     };
@@ -281,7 +281,7 @@ export function useAssistCards({
     text,
     isUser,
     isStreaming,
-    skillsUsed = [],
+    capabilitiesUsed = [],
     actionsUsed = [],
     sourcesUsed = [],
 }) {
@@ -289,15 +289,15 @@ export function useAssistCards({
     const [weatherCardData, setWeatherCardData] = useState(null);
     const [systemHealthLoading, setSystemHealthLoading] = useState(false);
     const [systemHealthData, setSystemHealthData] = useState(null);
-    const [workSignals, setWorkSignals] = useState({ skills: [], actions: [], sources: [] });
+    const [workSignals, setWorkSignals] = useState({ capabilities: [], actions: [], sources: [] });
 
     const content = String(text || '').trim();
     const anchorId = String(content.slice(0, 24) || 'msg');
-    const hintSkills = useMemo(() => normalizeSignalList(skillsUsed), [skillsUsed]);
+    const hintCapabilities = useMemo(() => normalizeSignalList(capabilitiesUsed), [capabilitiesUsed]);
     const hintActions = useMemo(() => normalizeSignalList(actionsUsed), [actionsUsed]);
-    const mergedSkills = useMemo(
-        () => mergeSignalLists(hintSkills, workSignals.skills),
-        [hintSkills, workSignals.skills],
+    const mergedCapabilities = useMemo(
+        () => mergeSignalLists(hintCapabilities, workSignals.capabilities),
+        [hintCapabilities, workSignals.capabilities],
     );
     const mergedActions = useMemo(
         () => mergeSignalLists(hintActions, workSignals.actions),
@@ -307,26 +307,26 @@ export function useAssistCards({
         () => normalizeSourceList([...(Array.isArray(sourcesUsed) ? sourcesUsed : []), ...(Array.isArray(workSignals.sources) ? workSignals.sources : [])]),
         [sourcesUsed, workSignals.sources],
     );
-    const weatherBySkill = hasPatternMatch(mergedSkills, WEATHER_SKILL_PATTERNS) || hasPatternMatch(mergedActions, WEATHER_SKILL_PATTERNS);
-    const systemBySkill = hasPatternMatch(mergedSkills, SYSTEM_HEALTH_SKILL_PATTERNS) || hasPatternMatch(mergedActions, SYSTEM_HEALTH_SKILL_PATTERNS);
-    const wikiBySkill = hasPatternMatch(mergedSkills, WIKIPEDIA_SKILL_PATTERNS) || hasPatternMatch(mergedActions, WIKIPEDIA_SKILL_PATTERNS);
-    const mapBySkill = hasPatternMatch(mergedSkills, MAP_SKILL_PATTERNS) || hasPatternMatch(mergedActions, MAP_SKILL_PATTERNS);
-    const youtubeBySkill = hasPatternMatch(mergedSkills, YOUTUBE_SKILL_PATTERNS) || hasPatternMatch(mergedActions, YOUTUBE_SKILL_PATTERNS);
+    const weatherByCapability = hasPatternMatch(mergedCapabilities, WEATHER_CAPABILITY_PATTERNS) || hasPatternMatch(mergedActions, WEATHER_CAPABILITY_PATTERNS);
+    const systemByCapability = hasPatternMatch(mergedCapabilities, SYSTEM_HEALTH_CAPABILITY_PATTERNS) || hasPatternMatch(mergedActions, SYSTEM_HEALTH_CAPABILITY_PATTERNS);
+    const wikiByCapability = hasPatternMatch(mergedCapabilities, WIKIPEDIA_CAPABILITY_PATTERNS) || hasPatternMatch(mergedActions, WIKIPEDIA_CAPABILITY_PATTERNS);
+    const mapByCapability = hasPatternMatch(mergedCapabilities, MAP_CAPABILITY_PATTERNS) || hasPatternMatch(mergedActions, MAP_CAPABILITY_PATTERNS);
+    const youtubeByCapability = hasPatternMatch(mergedCapabilities, YOUTUBE_CAPABILITY_PATTERNS) || hasPatternMatch(mergedActions, YOUTUBE_CAPABILITY_PATTERNS);
     const wikiSource = getFirstWikipediaSource(mergedSources);
     const mapSource = getFirstMapSource(mergedSources);
     const youtubeSource = getFirstYouTubeSource(mergedSources);
     const wikiBySource = !!wikiSource;
     const mapBySource = !!mapSource;
     const youtubeBySource = !!youtubeSource;
-    const weatherIntent = weatherBySkill || hasWeatherCue(content);
-    const captureIntent = hasPatternMatch(mergedSkills, VISUAL_CAPTURE_PATTERNS)
+    const weatherIntent = weatherByCapability || hasWeatherCue(content);
+    const captureIntent = hasPatternMatch(mergedCapabilities, VISUAL_CAPTURE_PATTERNS)
         || hasPatternMatch(mergedActions, VISUAL_CAPTURE_PATTERNS)
         || VISUAL_CAPTURE_PATTERNS.some((pattern) => pattern.test(content));
     const explicitSystemIntent = hasSystemHealthCue(content) || hasSystemHealthActionCue(content);
-    const systemIntent = explicitSystemIntent || (systemBySkill && !captureIntent);
-    const wikiIntent = wikiBySkill || wikiBySource || hasWikipediaCue(content);
-    const mapIntent = mapBySkill || mapBySource;
-    const youtubeIntent = youtubeBySkill || youtubeBySource;
+    const systemIntent = explicitSystemIntent || (systemByCapability && !captureIntent);
+    const wikiIntent = wikiByCapability || wikiBySource || hasWikipediaCue(content);
+    const mapIntent = mapByCapability || mapBySource;
+    const youtubeIntent = youtubeByCapability || youtubeBySource;
 
     // Global card priority to avoid visual conflicts:
     // weather > system > knowledge (map/wiki/youtube) > data chart
@@ -404,28 +404,28 @@ export function useAssistCards({
 
         const refreshSignals = async () => {
             const now = Date.now();
-            const ttl = isStreaming ? WORK_SKILL_CACHE_TTL_STREAM_MS : WORK_SKILL_CACHE_TTL_IDLE_MS;
-            const cached = WORK_SKILL_SIGNALS_CACHE.get(cacheKey);
+            const ttl = isStreaming ? WORK_CAPABILITY_CACHE_TTL_STREAM_MS : WORK_CAPABILITY_CACHE_TTL_IDLE_MS;
+            const cached = WORK_CAPABILITY_SIGNALS_CACHE.get(cacheKey);
             if (cached && (now - cached.ts) < ttl) {
                 if (!cancelled) setWorkSignals(cached.signals);
                 return;
             }
 
-            const pending = WORK_SKILL_SIGNALS_PENDING.get(cacheKey);
+            const pending = WORK_CAPABILITY_SIGNALS_PENDING.get(cacheKey);
             const url = `/tasks/works/${workId}?requester_session_id=${encodeURIComponent(sessionId || '')}`;
             const fetchPromise = pending || api.get(url);
-            if (!pending) WORK_SKILL_SIGNALS_PENDING.set(cacheKey, fetchPromise);
+            if (!pending) WORK_CAPABILITY_SIGNALS_PENDING.set(cacheKey, fetchPromise);
 
             try {
                 const payload = await fetchPromise;
                 if (cancelled) return;
                 const signals = extractSignalsFromWorkPayload(payload || {});
-                WORK_SKILL_SIGNALS_CACHE.set(cacheKey, { ts: Date.now(), signals });
+                WORK_CAPABILITY_SIGNALS_CACHE.set(cacheKey, { ts: Date.now(), signals });
                 setWorkSignals(signals);
             } catch {
-                if (!cancelled) setWorkSignals((prev) => prev || { skills: [], actions: [], sources: [] });
+                if (!cancelled) setWorkSignals((prev) => prev || { capabilities: [], actions: [], sources: [] });
             } finally {
-                if (!pending) WORK_SKILL_SIGNALS_PENDING.delete(cacheKey);
+                if (!pending) WORK_CAPABILITY_SIGNALS_PENDING.delete(cacheKey);
             }
         };
 

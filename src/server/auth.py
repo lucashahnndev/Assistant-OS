@@ -66,6 +66,13 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
 
+
+def get_optional_user(request: Request, db: Session = Depends(get_db)):
+    try:
+        return get_current_user(request, db)
+    except HTTPException:
+        return None
+
 def require_admin_user(current_user: User = Depends(get_current_user)):
     if current_user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")

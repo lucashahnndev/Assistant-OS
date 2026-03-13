@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.skills.vision.skill import VisionSkill
+from src.capabilities.vision.capability import VisionCapability
 
 
 class _FakeSystemDriver:
@@ -38,8 +38,8 @@ def test_analyze_without_image_path_falls_back_to_search_screen_for_screen_reque
 
     try:
         kernel = _Kernel(path)
-        skill = VisionSkill(kernel=kernel, config={})
-        result = skill.execute(
+        capability = VisionCapability(kernel=kernel, config={})
+        result = capability.execute(
             "vision.analyze",
             {"prompt": "descreva resumidamente a minha tela"},
             {"session_id": "s1", "user_input": "atlas, descreva a minha tela"},
@@ -54,7 +54,7 @@ def test_analyze_without_image_path_falls_back_to_search_screen_for_screen_reque
 
 def test_analyze_without_image_path_keeps_error_for_non_screen_request():
     kernel = _Kernel("/tmp/not-used.png")
-    skill = VisionSkill(kernel=kernel, config={})
-    result = skill.execute("vision.analyze", {"prompt": "analise este arquivo"}, {"session_id": "s1"})
+    capability = VisionCapability(kernel=kernel, config={})
+    result = capability.execute("vision.analyze", {"prompt": "analise este arquivo"}, {"session_id": "s1"})
     assert result["ok"] is False
     assert result["error"] == "MISSING_IMAGE_PATH"

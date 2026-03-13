@@ -1,31 +1,39 @@
 {
-    "provider": "ollama",
-    "display_name": "Ollama (Local)",
-    "supports": [
-        "chat"
-    ],
-    "defaults": {
-        "model": "llama3",
-        "base_url": "http://localhost:11434/api/chat"
+  "provider": "ollama",
+  "display_name": "Ollama (Local)",
+  "supports": [
+    "chat"
+  ],
+  "defaults": {
+    "model": "llama3",
+    "base_url": "http://localhost:11434/api/chat"
+  },
+  "models": [
+    "llama3",
+    "phi3",
+    "mistral",
+    "qwen"
+  ],
+  "auth": {
+    "mode": "none",
+    "fields": []
+  },
+  "settings_fields": [
+    {
+      "key": "model",
+      "type": "string",
+      "title": "Model Name",
+      "required": true,
+      "description": "",
+      "placeholder": ""
     },
-    "fields": [
-        {
-            "name": "model",
-            "type": "string",
-            "label": "Model Name",
-            "required": true
-        },
-        {
-            "name": "base_url",
-            "type": "string",
-            "label": "Ollama Endpoint / URL",
-            "required": true
-        }
-    ],
-    "models": [
-        "llama3",
-        "phi3",
-        "mistral",
-        "qwen"
-    ]
+    {
+      "key": "base_url",
+      "type": "string",
+      "title": "Ollama Endpoint / URL",
+      "required": true,
+      "description": "",
+      "placeholder": ""
+    }
+  ]
 }

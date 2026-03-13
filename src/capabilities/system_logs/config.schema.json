@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Enabled"
+    },
+    "context_map": {
+      "type": "object",
+      "title": "Log Context Map",
+      "description": "Optional descriptions per log file name.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": true
+}

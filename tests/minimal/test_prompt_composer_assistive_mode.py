@@ -35,8 +35,8 @@ def _compose(user_input: str) -> str:
         session_summary="",
         scratchpad="",
         attachments=[],
-        skills_summary="- `overlay.assist.highlight_target`: ...\n- `vision.search_screen`: ...",
-        skill_scope="principal-filtered",
+        capabilities_summary="- `overlay.assist.highlight_target`: ...\n- `vision.search_screen`: ...",
+        capability_scope="principal-filtered",
     )
 
 

@@ -1,4 +1,4 @@
-from src.skills.browser_control.vision_contract import normalize_vision_observation
+from src.capabilities.browser_control.vision_contract import normalize_vision_observation
 
 
 def test_vision_contract_extracts_xy_pairs():

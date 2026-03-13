@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": false,
+      "title": "Enabled"
+    },
+    "apiKey": {
+      "type": "string",
+      "title": "Google Maps API Key",
+      "x-ui": {
+        "placeholder": "Google Maps API Key"
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "title": "Defaults",
+      "properties": {
+        "language": {
+          "type": "string",
+          "title": "Default Language",
+          "default": "pt-BR"
+        },
+        "region": {
+          "type": "string",
+          "title": "Default Region",
+          "default": "BR"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

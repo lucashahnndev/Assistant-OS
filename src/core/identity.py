@@ -30,8 +30,8 @@ class PrincipalContext(BaseModel):
     message_id: Optional[str] = None
 
 class EntityOverrides(BaseModel):
-    allow_skills: List[str] = Field(default_factory=list)
-    deny_skills: List[str] = Field(default_factory=list)
+    allow_capabilities: List[str] = Field(default_factory=list)
+    deny_capabilities: List[str] = Field(default_factory=list)
     allow_actions: List[str] = Field(default_factory=list)
     deny_actions: List[str] = Field(default_factory=list)
 
@@ -39,8 +39,8 @@ class PermissionGroup(BaseModel):
     id: str
     name: str
     description: str = ""
-    allow_skills: List[str] = Field(default_factory=list)
-    deny_skills: List[str] = Field(default_factory=list)
+    allow_capabilities: List[str] = Field(default_factory=list)
+    deny_capabilities: List[str] = Field(default_factory=list)
     allow_actions: List[str] = Field(default_factory=list)
     deny_actions: List[str] = Field(default_factory=list)
     worker_view_scope: str = "owner_identity"   # self_session | owner_session | owner_identity | global

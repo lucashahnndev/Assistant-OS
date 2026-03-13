@@ -9,10 +9,10 @@ def orchestrator():
     orch.sessions = {}
     orch._save_session = MagicMock()
     orch.intent_resolver_chain = MagicMock()
-    orch.skill_registry = MagicMock()
-    # Mock skill registry to accept any action for testing
-    orch.skill_registry.get_skill_for_action.return_value = MagicMock()
-    orch.skill_registry.resolve_action_id.side_effect = lambda x: x
+    orch.capability_registry = MagicMock()
+    # Mock capability registry to accept any action for testing
+    orch.capability_registry.get_capability_for_action.return_value = MagicMock()
+    orch.capability_registry.resolve_action_id.side_effect = lambda x: x
     # Mock i18n and other services if needed
     orch.i18n = MagicMock()
     orch.i18n.t.return_value = "Thinking..."

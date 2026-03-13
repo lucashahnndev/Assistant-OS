@@ -1,21 +1,27 @@
 {
-    "provider": "vosk",
-    "display_name": "Vosk (Local STT)",
-    "supports": [
-        "stt"
-    ],
-    "defaults": {
-        "model_path": "model/vosk-model-small-pt-0.3"
-    },
-    "fields": [
-        {
-            "name": "model_path",
-            "type": "string",
-            "label": "Path to Model",
-            "required": true
-        }
-    ],
-    "models": [
-        "model/vosk-model-small-pt-0.3"
-    ]
+  "provider": "vosk",
+  "display_name": "Vosk (Local STT)",
+  "supports": [
+    "stt"
+  ],
+  "defaults": {
+    "model_path": "model/vosk-model-small-pt-0.3"
+  },
+  "models": [
+    "model/vosk-model-small-pt-0.3"
+  ],
+  "auth": {
+    "mode": "none",
+    "fields": []
+  },
+  "settings_fields": [
+    {
+      "key": "model_path",
+      "type": "string",
+      "title": "Path to Model",
+      "required": true,
+      "description": "",
+      "placeholder": ""
+    }
+  ]
 }

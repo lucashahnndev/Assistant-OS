@@ -1,0 +1,72 @@
+{
+  "contract_version": "1.0",
+  "capability": {
+    "id": "reflex",
+    "namespace": "reflex",
+    "version": "1.0.0",
+    "title": "Reflex",
+    "description": "Reflex control commands for status and cancellation operations."
+  },
+  "runtime": {
+    "module": "capabilities.reflex",
+    "factory": "create_capability"
+  },
+  "actions": [
+    {
+      "id": "reflex.status",
+      "title": "Status",
+      "description": "Return current execution status for active work context.",
+      "handler": "handle_status",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "reflex:action:status"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "properties": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "reflex.cancel",
+      "title": "Cancel",
+      "description": "Cancel active execution context.",
+      "handler": "handle_cancel",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "reflex:action:cancel"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "properties": {
+            "type": "string"
+          },
+          "required": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "idempotent"
+    }
+  ],
+  "auth": {
+    "mode": "none",
+    "required": false,
+    "fields": []
+  }
+}

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import base64
+import hashlib
+import secrets
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -8,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..core.database import get_db
-from ..core.models import ExternalAccountConnection, User
+from ..core.models import ExternalAccountConnection, OAuthSessionState, User
 from integrations.external_accounts import get_provider_registry
 
 
@@ -49,11 +53,7 @@ def list_providers(user: User = Depends(get_current_user), request: Request = No
         provider_cfg = configured.get(key, {}) if isinstance(configured.get(key, {}), dict) else {}
         validation = provider.validate_config(provider_cfg)
         items.append({
-            "key": meta.key,
-            "display_name": meta.display_name,
-            "description": meta.description,
-            "auth_modes": meta.auth_modes,
-            "default_scopes": meta.default_scopes,
+            **meta.to_public_dict(),
             "configured": key in configured,
             "enabled": bool(provider_cfg.get("enabled", False)),
             "config_validation": validation,
@@ -136,7 +136,12 @@ def remove_connection(
 
 
 @router.post("/auth/start")
-def start_auth(payload: AuthStartRequest, user: User = Depends(get_current_user), request: Request = None):
+def start_auth(
+    payload: AuthStartRequest,
+    user: User = Depends(get_current_user),
+    request: Request = None,
+    db: Session = Depends(get_db),
+):
     provider_key = (payload.provider_key or "").strip().lower()
     if not provider_key:
         raise HTTPException(status_code=400, detail="provider_key is required")
@@ -160,14 +165,54 @@ def start_auth(payload: AuthStartRequest, user: User = Depends(get_current_user)
             detail = f"{detail}: " + "; ".join(str(i) for i in issues)
         raise HTTPException(status_code=400, detail=detail)
 
-    authorize_url = provider.build_authorize_url(provider_cfg, state=payload.state)
+    # Generate robust OAuth session state + PKCE verifier/challenge.
+    state = secrets.token_urlsafe(32)
+    code_verifier = secrets.token_urlsafe(64)
+    challenge_digest = hashlib.sha256(code_verifier.encode("utf-8")).digest()
+    code_challenge = base64.urlsafe_b64encode(challenge_digest).decode("utf-8").rstrip("=")
+    origin = str(request.headers.get("origin") or "").strip() if request else ""
+
+    # Expire previous pending entries for same user/provider.
+    now = datetime.now(timezone.utc)
+    (
+        db.query(OAuthSessionState)
+        .filter(
+            OAuthSessionState.user_id == user.id,
+            OAuthSessionState.provider == provider_key,
+            OAuthSessionState.status == "pending",
+        )
+        .update({"status": "expired", "error_message": "Superseded by newer OAuth start"})
+    )
+
+    db.add(
+        OAuthSessionState(
+            user_id=user.id,
+            provider=provider_key,
+            state=state,
+            code_verifier=code_verifier,
+            frontend_origin=origin or None,
+            status="pending",
+            expires_at=now + timedelta(minutes=10),
+        )
+    )
+    db.commit()
+
+    authorize_url = provider.build_authorize_url(
+        provider_cfg,
+        state=state,
+        extra_params={
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+        },
+    )
     if not authorize_url:
         raise HTTPException(
             status_code=400,
-            detail=f"Provider '{provider_key}' cannot build authorize URL with current config. Check auth_mode/client_id/redirect_uri."
+            detail=f"Provider '{provider_key}' cannot build authorize URL with current config."
         )
 
     return {
         "provider": provider_key,
         "authorize_url": authorize_url,
+        "state": state,
     }

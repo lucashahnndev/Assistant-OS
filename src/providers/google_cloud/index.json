@@ -1,17 +1,23 @@
 {
-    "provider": "google_cloud",
-    "display_name": "Google Cloud TTS",
-    "supports": [
-        "tts"
-    ],
-    "defaults": {},
+  "provider": "google_cloud",
+  "display_name": "Google Cloud TTS",
+  "supports": [
+    "tts"
+  ],
+  "defaults": {},
+  "models": [],
+  "auth": {
+    "mode": "api_key",
     "fields": [
-        {
-            "name": "api_key_ref",
-            "type": "env_ref",
-            "label": "Google Cloud API Key",
-            "required": true
-        }
-    ],
-    "models": []
+      {
+        "key": "secret_ref",
+        "type": "secret_ref",
+        "title": "Google Cloud API Key",
+        "required": true,
+        "description": "",
+        "placeholder": ""
+      }
+    ]
+  },
+  "settings_fields": []
 }

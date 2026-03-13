@@ -153,7 +153,6 @@ cython_debug/
 
 
 data/
-data/*
 node_modules/
 *.log
 frontend/dist/
@@ -166,5 +165,5 @@ tests/*
 *.pid
 # Explicit local runtime config
 data/config.json
-src/skills/browser_control/profiles/session_overlay/
-src/skills/browser_control/profiles/fixed_base/
+# Legacy browser runtime profiles must never live in source tree
+src/capabilities/browser_control/profiles/

@@ -1,0 +1,72 @@
+{
+  "contract_version": "1.0",
+  "capability": {
+    "id": "wikipedia_search",
+    "namespace": "wikipedia",
+    "version": "1.0.0",
+    "title": "wikipedia",
+    "description": "Consulta a Wikipedia e retorna conteúdo estruturado para RAG."
+  },
+  "runtime": {
+    "module": "capabilities.wikipedia_search",
+    "factory": "create_capability",
+    "config_schema": "./config.schema.json"
+  },
+  "actions": [
+    {
+      "id": "wikipedia.search",
+      "title": "Search",
+      "description": "Busca artigos na Wikipedia por tema e devolve conteúdo textual em chunks para IA.",
+      "handler": "search",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "wikipedia:search:search"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Tema a pesquisar na Wikipedia."
+          },
+          "language": {
+            "type": "string",
+            "default": "pt",
+            "description": "Idioma da Wikipedia (ex.: pt, en, es)."
+          },
+          "limit": {
+            "type": "integer",
+            "default": 3,
+            "description": "Quantidade máxima de artigos retornados (1-5)."
+          },
+          "max_chars_per_page": {
+            "type": "integer",
+            "default": 4500,
+            "description": "Limite de caracteres de conteúdo por artigo."
+          },
+          "chunk_size": {
+            "type": "integer",
+            "default": 700,
+            "description": "Tamanho de cada chunk textual."
+          },
+          "chunk_overlap": {
+            "type": "integer",
+            "default": 100,
+            "description": "Sobreposição entre chunks."
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    }
+  ],
+  "auth": {
+    "mode": "none",
+    "required": false,
+    "fields": []
+  }
+}

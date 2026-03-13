@@ -1153,13 +1153,13 @@ select option {
 }
 
 @media (max-width: 640px) {
-    .skills-grid {
+    .capabilities-grid {
         grid-template-columns: 1fr !important;
     }
 }
 
 @media (min-width: 641px) and (max-width: 1024px) {
-    .skills-grid {
+    .capabilities-grid {
         grid-template-columns: repeat(2, 1fr) !important;
     }
 }
