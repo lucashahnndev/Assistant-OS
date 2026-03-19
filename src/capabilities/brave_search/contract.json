@@ -1,0 +1,93 @@
+{
+  "contract_version": "1.0",
+  "capability": {
+    "id": "brave_search",
+    "namespace": "brave.search",
+    "version": "1.0.0",
+    "title": "brave.search",
+    "description": "Busca web via Brave Search API e retorna resultados estruturados para RAG externo.",
+    "assets": {
+      "icon_svg": "assets/icon.svg"
+    }
+  },
+  "runtime": {
+    "module": "capabilities.brave_search",
+    "factory": "create_capability",
+    "config_schema": "./config.schema.json"
+  },
+  "actions": [
+    {
+      "id": "brave.search.query",
+      "title": "Query",
+      "description": "Executa busca web no provider Brave.",
+      "handler": "query",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "brave:search:query"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "limit": { "type": "integer", "default": 6 },
+          "recency_days": { "type": "integer", "default": 0 },
+          "language": { "type": "string", "default": "en" },
+          "domains_allow": { "type": "array" },
+          "domains_deny": { "type": "array" },
+          "location": { "type": "object" }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    }
+  ],
+  "retrieval_profile": {
+    "enabled": true,
+    "roles": ["search"],
+    "domains": ["web", "news"],
+    "entity_types": ["article", "snippet"],
+    "freshness": { "type": "live", "sla_hours": 24 },
+    "quality": {
+      "default_confidence": 0.74,
+      "trust_tier": "public_api",
+      "citation_mode": "url_required"
+    },
+    "cost": {
+      "latency_class": "low",
+      "quota_class": "metered"
+    },
+    "setup": {
+      "requires_auth": true,
+      "required_fields": ["provider.api_key"],
+      "healthcheck_action": "brave.search.query"
+    },
+    "output_contract": {
+      "evidence_schema": "external.evidence.v1"
+    },
+    "routing_hints": {
+      "preferred_intents": ["general_knowledge", "latest_update", "structured_fact"],
+      "avoid_when": []
+    }
+  },
+  "auth": {
+    "mode": "custom",
+    "required": false,
+    "fields": [
+      {
+        "id": "provider_api_key",
+        "type": "secret_ref",
+        "config_path": "provider.api_key",
+        "required": false,
+        "title": "Brave API Key",
+        "secret_policy": {
+          "allow_create": true,
+          "allow_select": true
+        }
+      }
+    ]
+  }
+}

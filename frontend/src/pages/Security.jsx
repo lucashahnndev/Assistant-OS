@@ -447,10 +447,8 @@ const Security = () => {
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
                                         <CapabilityIcon
                                             variant="inline"
-                                            actionId={action.id}
-                                            capabilityName={action.capability_name}
-                                            iconKey={action.icon_key}
-                                            iconUrl={action.icon_url}
+                                            capabilityId={action.capability_id}
+                                            assets={action.assets}
                                         />
                                         <span style={{ fontSize: '13px', fontWeight: '800' }}>{action.id}</span>
                                         <span style={{

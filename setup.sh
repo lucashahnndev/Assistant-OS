@@ -266,47 +266,7 @@ else
     echo "✅ $DATA_DIR/.env already exists."
 fi
 
-# 7. Ensure encryption key for external OAuth token vault
-ensure_external_accounts_key() {
-    local env_file="$1"
-    [ -f "$env_file" ] || return 0
-
-    local existing_line existing_value generated_key
-    existing_line="$(grep -E '^EXTERNAL_ACCOUNTS_ENCRYPTION_KEY=' "$env_file" 2>/dev/null || true)"
-    existing_value="${existing_line#EXTERNAL_ACCOUNTS_ENCRYPTION_KEY=}"
-
-    if [ -n "$existing_line" ] && [ -n "$existing_value" ]; then
-        echo "✅ EXTERNAL_ACCOUNTS_ENCRYPTION_KEY already set in $env_file"
-        return 0
-    fi
-
-    generated_key="$(python3 - <<'PY'
-import os, base64
-print(base64.urlsafe_b64encode(os.urandom(32)).decode())
-PY
-)"
-
-    if [ -z "$generated_key" ]; then
-        echo "⚠️  Could not generate EXTERNAL_ACCOUNTS_ENCRYPTION_KEY for $env_file"
-        return 0
-    fi
-
-    if [ -n "$existing_line" ]; then
-        # Replace empty/invalid existing line
-        sed -i "s|^EXTERNAL_ACCOUNTS_ENCRYPTION_KEY=.*$|EXTERNAL_ACCOUNTS_ENCRYPTION_KEY=$generated_key|g" "$env_file"
-    else
-        printf "\nEXTERNAL_ACCOUNTS_ENCRYPTION_KEY=%s\n" "$generated_key" >> "$env_file"
-    fi
-
-    echo "🔐 Generated EXTERNAL_ACCOUNTS_ENCRYPTION_KEY in $env_file"
-}
-
-ensure_external_accounts_key "$DATA_DIR/.env"
-if [ -f ".env" ]; then
-    ensure_external_accounts_key ".env"
-fi
-
-# 7.1 Ensure unified secret-management keys
+# 7. Ensure unified secret-management keys
 generate_urlsafe_secret() {
     python3 - <<'PY'
 import os, base64

@@ -3,29 +3,20 @@ from __future__ import annotations
 import datetime
 import json
 import logging
-import os
 from typing import Any, Dict, Optional
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 from server.core.database import SessionLocal
 from server.core.models import ExternalAccountConnection
+from server.core.secret_manager import resolve_secret_ref
 from server.core.token_vault import TokenVaultError, get_token_vault
 
 logger = logging.getLogger("GoogleAuthShared")
 
 
-AUTH_SOURCE_ENV = "AOSD_GOOGLE_AUTH_SOURCE"
-# Allowed values: linked_account | api_key | auto
-
-
-def _resolve_env_ref(value: Any) -> str:
-    token = str(value or "").strip()
-    if not token:
-        return ""
-    if token.startswith("ENV_"):
-        return os.getenv(token) or os.getenv(token[4:]) or ""
-    return token
+def _resolve_secret_value(value: Any) -> str:
+    return str(resolve_secret_ref(str(value or "").strip()) or "").strip()
 
 
 def _extract_portal_user_id(context: Dict[str, Any]) -> Optional[int]:
@@ -59,6 +50,30 @@ def _get_google_provider_config(kernel: Any) -> Dict[str, Any]:
     return google_cfg if isinstance(google_cfg, dict) else {}
 
 
+def _get_google_accounts_from_config(kernel: Any):
+    """Returns the list of google accounts from config.json external_accounts.accounts[]"""
+    if not kernel or not hasattr(kernel, "config_manager"):
+        return []
+    ext_cfg = kernel.config_manager.get("external_accounts", {}) or {}
+    if not isinstance(ext_cfg, dict):
+        return []
+    accounts = ext_cfg.get("accounts", [])
+    if not isinstance(accounts, list):
+        return []
+    return [a for a in accounts if isinstance(a, dict) and str(a.get("provider", "")).lower() == "google"]
+
+
+def _resolve_google_auth_from_config(kernel: Any) -> Optional[Dict[str, Any]]:
+    """
+    NOTE: Tokens are stored encrypted in the ExternalAccountConnection DB table,
+    not in config.json. This function is intentionally a no-op — the DB path
+    in resolve_google_request_auth handles all OAuth auth resolution.
+    config.json only holds provider settings (client_id, client_secret, etc.),
+    not user OAuth tokens.
+    """
+    return None
+
+
 def _refresh_google_token_if_needed(
     *,
     kernel: Any,
@@ -82,8 +97,8 @@ def _refresh_google_token_if_needed(
         return token_payload
 
     cfg = _get_google_provider_config(kernel)
-    client_id = _resolve_env_ref(cfg.get("client_id"))
-    client_secret = _resolve_env_ref(cfg.get("client_secret"))
+    client_id = _resolve_secret_value(cfg.get("client_id"))
+    client_secret = _resolve_secret_value(cfg.get("client_secret"))
     if not client_id or not client_secret:
         logger.warning("Google token refresh skipped: missing client_id/client_secret")
         return token_payload
@@ -142,7 +157,7 @@ def resolve_google_request_auth(
         reason: str|None,
       }
     """
-    source = str(requested_source or os.getenv(AUTH_SOURCE_ENV, "auto") or "auto").strip().lower()
+    source = str(requested_source or "auto").strip().lower()
     if source not in {"auto", "linked_account", "api_key"}:
         source = "auto"
 
@@ -151,44 +166,26 @@ def resolve_google_request_auth(
     if source in {"auto", "linked_account"}:
         db = SessionLocal()
         try:
-            conn = None
-            if user_id is not None:
-                conn = (
-                    db.query(ExternalAccountConnection)
-                    .filter(
-                        ExternalAccountConnection.user_id == int(user_id),
-                        ExternalAccountConnection.provider == "google",
-                        ExternalAccountConnection.is_active == True,
-                    )
-                    .order_by(ExternalAccountConnection.updated_at.desc())
-                    .first()
+            # Unified User Approach: Use the first active Google connection found in the system.
+            # This ignores specific portal_user_id mappings to simplify sync across multiple interfaces.
+            conn = (
+                db.query(ExternalAccountConnection)
+                .filter(
+                    ExternalAccountConnection.provider == "google",
+                    ExternalAccountConnection.is_active == True,
                 )
-            else:
-                # Web sessions may miss portal_user_id in edge flows.
-                # When there is exactly one active Google connection, use it.
-                active_google = (
-                    db.query(ExternalAccountConnection)
-                    .filter(
-                        ExternalAccountConnection.provider == "google",
-                        ExternalAccountConnection.is_active == True,
-                    )
-                    .order_by(ExternalAccountConnection.updated_at.desc())
-                    .all()
-                )
-                if len(active_google) == 1:
-                    conn = active_google[0]
-                elif len(active_google) > 1:
-                    logger.warning(
-                        "Google linked auth resolve skipped: missing portal_user_id and multiple active Google accounts."
-                    )
-                    if source == "linked_account":
-                        return {
-                            "mode": "none",
-                            "headers": {},
-                            "params": {},
-                            "token_payload": None,
-                            "reason": "Missing portal_user_id with multiple active Google accounts.",
-                        }
+                .order_by(ExternalAccountConnection.updated_at.desc())
+                .first()
+            )
+            
+            if not conn and source == "linked_account":
+                return {
+                    "mode": "none",
+                    "headers": {},
+                    "params": {},
+                    "token_payload": None,
+                    "reason": "No active Google connection found in the system.",
+                }
             if conn:
                 vault = get_token_vault()
                 tokens = vault.decrypt_json(conn.encrypted_tokens)

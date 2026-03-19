@@ -1,0 +1,59 @@
+{
+    "contract_version": "1.0",
+    "capability": {
+        "id": "google_calendar",
+        "namespace": "google.calendar",
+        "version": "1.0.0",
+        "title": "Google Calendar",
+        "description": "Native Google Calendar integration for advanced event management and account-wide synchronization.",
+        "icon": "google_calendar",
+        "assets": {
+            "icon_svg": "assets/icon.svg"
+        }
+    },
+    "runtime": {
+        "module": "capabilities.google_calendar.runtime",
+        "factory": "create_capability"
+    },
+    "actions": [
+        {
+            "id": "google.calendar.sync",
+            "title": "Sync with Google",
+            "description": "Triggers a full pull/push sync with your Google Calendar account.",
+            "handler": "handle_sync",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "google_calendar:sync"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "id": "google.calendar.list_calendars",
+            "title": "List Google Calendars",
+            "description": "Lists all calendars available in your Google account.",
+            "handler": "handle_list_calendars",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "google_calendar:read"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    ],
+    "auth": {
+        "mode": "none"
+    }
+}

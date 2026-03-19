@@ -1,0 +1,99 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Enabled"
+    },
+    "use_external_rag_runtime": {
+      "type": "boolean",
+      "default": true,
+      "title": "Use External RAG Runtime",
+      "description": "Enable planner/runtime/traces path. When false, fallback to legacy pipeline."
+    },
+    "allow_legacy_fallback": {
+      "type": "boolean",
+      "default": false,
+      "title": "Allow Legacy Fallback",
+      "description": "When true, fallback to legacy hardcoded pipeline only if external runtime fails."
+    },
+    "defaults": {
+      "type": "object",
+      "title": "External RAG Defaults",
+      "description": "Default constraints applied when request does not specify explicit values.",
+      "properties": {
+        "execution": {
+          "type": "object",
+          "title": "Execution",
+          "description": "Primary retrieval budgets and content boundaries.",
+          "properties": {
+            "lang": { "type": "string", "default": "auto", "title": "Language", "description": "Response language hint (auto, en, pt-BR, etc.)." },
+            "recency_days": { "type": "integer", "minimum": 0, "maximum": 3650, "default": 0, "title": "Recency Days", "description": "Prefer recent sources within this window. 0 disables recency filter." },
+            "max_links_to_open": { "type": "integer", "minimum": 1, "maximum": 8, "default": 3, "title": "Max Links To Open", "description": "Max candidate links opened for reading." },
+            "max_docs": { "type": "integer", "minimum": 1, "maximum": 8, "default": 3, "title": "Max Docs", "description": "Max documents retained as evidence for synthesis." },
+            "max_total_chars": { "type": "integer", "minimum": 1000, "maximum": 90000, "default": 14000, "title": "Max Total Chars", "description": "Global text budget across all read documents." },
+            "max_steps": { "type": "integer", "minimum": 3, "maximum": 20, "default": 7, "title": "Max Steps", "description": "Overall step limit for legacy-compatible execution safeguards." },
+            "latency_budget_ms": { "type": "integer", "minimum": 500, "maximum": 120000, "default": 12000, "title": "Latency Budget (ms)", "description": "Hard latency budget before planner/runtime stops trying providers." }
+          },
+          "additionalProperties": true
+        },
+        "retry": {
+          "type": "object",
+          "title": "Retry",
+          "description": "Retry and backoff policy for transient provider failures.",
+          "properties": {
+            "max_retries": { "type": "integer", "minimum": 0, "maximum": 2, "default": 1, "title": "Max Retries", "description": "Retry count for retryable provider errors." },
+            "retry_backoff_base_ms": { "type": "integer", "minimum": 0, "maximum": 2000, "default": 0, "title": "Backoff Base (ms)", "description": "Initial backoff delay in milliseconds (0 disables wait)." },
+            "retry_backoff_max_ms": { "type": "integer", "minimum": 0, "maximum": 10000, "default": 1200, "title": "Backoff Max (ms)", "description": "Cap for exponential backoff delay." },
+            "retry_backoff_jitter_ms": { "type": "integer", "minimum": 0, "maximum": 500, "default": 0, "title": "Backoff Jitter (ms)", "description": "Random jitter added to each retry delay." }
+          },
+          "additionalProperties": true
+        },
+        "provider_limits": {
+          "type": "object",
+          "title": "Provider Limits",
+          "description": "Upper bounds for provider fan-out and attempt pressure.",
+          "properties": {
+            "max_providers": { "type": "integer", "minimum": 1, "maximum": 3, "default": 2, "title": "Max Providers", "description": "Primary providers selected by planner." },
+            "max_fallback_depth": { "type": "integer", "minimum": 1, "maximum": 4, "default": 2, "title": "Max Fallback Depth", "description": "Fallback providers considered after primary attempts." },
+            "max_provider_attempts_per_step": { "type": "integer", "minimum": 1, "maximum": 3, "default": 1, "title": "Attempts Per Step", "description": "Per-step attempt cap for each provider." },
+            "max_provider_attempts_global": { "type": "integer", "minimum": 1, "maximum": 8, "default": 2, "title": "Attempts Global", "description": "Global attempt cap for each provider across the run." },
+            "prefer_modular_providers": { "type": "boolean", "default": true, "title": "Prefer Modular Providers", "description": "When true, prefer external provider capabilities over the unified web domain provider when available." }
+          },
+          "additionalProperties": true
+        },
+        "replan": {
+          "type": "object",
+          "title": "Replan",
+          "description": "Cross-domain recovery behavior when initial routing yields no evidence.",
+          "properties": {
+            "allow_replan": { "type": "boolean", "default": true, "title": "Allow Replan", "description": "Permit explicit broad-recovery replan when initial plan returns no evidence." }
+          },
+          "additionalProperties": true
+        },
+        "control_plane": {
+          "type": "object",
+          "title": "Provider Control Plane",
+          "description": "Operational runtime overrides and scorecards applied by planner without contract changes.",
+          "properties": {
+            "overrides": {
+              "type": "object",
+              "description": "ProviderRuntimeOverride map by provider id.",
+              "additionalProperties": true
+            },
+            "scorecard": {
+              "type": "object",
+              "description": "Provider runtime scorecard map by provider id.",
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

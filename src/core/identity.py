@@ -1,7 +1,7 @@
-from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from enum import Enum
 import time
+from pydantic import BaseModel, Field, ConfigDict
 
 class AccessStatus(str, Enum):
     APPROVED = "approved"
@@ -19,23 +19,29 @@ class RiskLevel(str, Enum):
     HIGH = "high"
 
 class PrincipalContext(BaseModel):
-    interface: str  # "telegram", "whatsapp", "discord", "web", etc.
+    model_config = ConfigDict(extra='allow')
+    
+    interface: str
     sender_id: str
+    session_id: str
     sender_name: Optional[str] = None
     chat_id: Optional[str] = None
     chat_name: Optional[str] = None
     is_group: bool = False
     roles: List[str] = Field(default_factory=list)
-    session_id: str
     message_id: Optional[str] = None
 
 class EntityOverrides(BaseModel):
+    model_config = ConfigDict(extra='allow')
+    
     allow_capabilities: List[str] = Field(default_factory=list)
     deny_capabilities: List[str] = Field(default_factory=list)
     allow_actions: List[str] = Field(default_factory=list)
     deny_actions: List[str] = Field(default_factory=list)
 
 class PermissionGroup(BaseModel):
+    model_config = ConfigDict(extra='allow')
+    
     id: str
     name: str
     description: str = ""
@@ -43,11 +49,13 @@ class PermissionGroup(BaseModel):
     deny_capabilities: List[str] = Field(default_factory=list)
     allow_actions: List[str] = Field(default_factory=list)
     deny_actions: List[str] = Field(default_factory=list)
-    worker_view_scope: str = "owner_identity"   # self_session | owner_session | owner_identity | global
-    worker_control_scope: str = "owner_identity" # self_session | owner_session | owner_identity | global
+    worker_view_scope: str = "owner_identity"
+    worker_control_scope: str = "owner_identity"
     is_system: bool = False
 
 class UserEntity(BaseModel):
+    model_config = ConfigDict(extra='allow')
+    
     id: str
     interface: str
     status: AccessStatus = AccessStatus.PENDING
@@ -61,6 +69,8 @@ class UserEntity(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class ChatEntity(BaseModel):
+    model_config = ConfigDict(extra='allow')
+    
     id: str
     interface: str
     status: AccessStatus = AccessStatus.PENDING

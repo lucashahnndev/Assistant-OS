@@ -159,6 +159,12 @@ class DeezerSearchCapability(CapabilityBase):
                     "artist": artist_name,
                     "album": item.get("album", {}).get("title") if "album" in item else None,
                     "durationSec": item.get("duration"),
+                    "excerpt": f"{display_name} - {artist_name or 'Unknown artist'}",
+                    "content": (
+                        f"Deezer {search_type}: {display_name}. "
+                        f"Artist: {artist_name or 'unknown'}. "
+                        f"Album: {item.get('album', {}).get('title') if 'album' in item else 'unknown'}."
+                    ),
                     "confidenceScore": score,
                     "matchReason": "Exact match" if score == 1.0 else "Partial match",
                     "source": "deezer_api",

@@ -555,7 +555,15 @@ def append_work_note(work_id: str, body: WorkNote, request: Request, user: User 
     notes = []
     if isinstance(ctx.get("notes"), list):
         notes = list(ctx.get("notes"))
-    notes.append({"ts": datetime.datetime.now().isoformat(), "author": f"user_{user.id}", "text": body.note})
+    from config.manager import ConfigManager
+    from zoneinfo import ZoneInfo
+    tz_name = ConfigManager().get_timezone()
+    try:
+        now_dt = datetime.datetime.now(ZoneInfo(tz_name))
+    except Exception:
+        now_dt = datetime.datetime.now(datetime.timezone.utc)
+        
+    notes.append({"ts": now_dt.isoformat(), "author": f"user_{user.id}", "text": body.note})
     scheduler.update_work_context(work_id, {"notes": notes[-300:]})
     return {"status": "saved", "work_id": work_id, "notes_count": len(notes)}
 
@@ -609,11 +617,20 @@ def get_work_overwatch(
     )
     latest_execution_logs = _read_execution_log_tail(scheduler, latest_execution_id)
 
+    capabilities_used = data.get("capabilities_used", [])
+    registry = request.app.state.kernel.capability_registry
+    capabilities_assets = {}
+    for cid in capabilities_used:
+        contract = registry.capability_contracts.get(cid)
+        if contract:
+            capabilities_assets[cid] = contract.capability.assets.model_dump()
+
     return {
         "work": row,
         "summary": summary,
         "planner": planner,
-        "capabilities_used": data.get("capabilities_used", []),
+        "capabilities_used": capabilities_used,
+        "capabilities_assets": capabilities_assets,
         "actions_used": data.get("actions_used", []),
         "media_used": data.get("media_used", []),
         "sources_used": data.get("sources_used", []),

@@ -3,7 +3,7 @@ import json
 import logging
 import datetime
 from typing import List, Dict, Optional
-from .session import Session
+from .session import Session, SESSION_TYPE_USER
 
 logger = logging.getLogger("SessionIndex")
 
@@ -50,6 +50,8 @@ class SessionIndexManager:
         self.index[session_id] = {
             "session_id": session_id,
             "interface": getattr(session, 'source', 'web'),
+            "session_type": getattr(session, 'session_type', SESSION_TYPE_USER),
+            "domain": getattr(session, 'domain', None),
             "name": getattr(session, 'name', ""),
             "name_generated": getattr(session, 'name_generated', False),
             "profile_picture": getattr(session, 'profile_picture', ""),
@@ -67,12 +69,15 @@ class SessionIndexManager:
             self.save()
             logger.info(f"Session {session_id} removed from index.")
 
-    def list_sessions(self, interface: str = "all") -> List[Dict]:
+    def list_sessions(self, interface: str = "all", session_type: str = SESSION_TYPE_USER) -> List[Dict]:
         if interface == "all" or interface == "web": 
             # Include Telegram in Web view so they appear in Dashboard
             sessions = [s for s in self.index.values() if s.get("interface") in ["web", "telegram"]]
         else:
             sessions = [s for s in self.index.values() if s.get("interface") == interface]
+        
+        # Filter by session_type
+        sessions = [s for s in sessions if s.get("session_type", SESSION_TYPE_USER) == session_type]
         
         # Sort by updated_at (last interaction) for better relevance
         sessions.sort(key=lambda x: x.get("updated_at", ""), reverse=True)

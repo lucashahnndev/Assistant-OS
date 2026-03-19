@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Enabled"
+    },
+    "authSource": {
+      "type": "string",
+      "title": "YouTube authentication source",
+      "enum": [
+        "auto",
+        "linked_account",
+        "api_key"
+      ],
+      "default": "auto",
+      "x-ui": {
+        "widget": "select"
+      }
+    },
+    "apiKey": {
+      "type": "string",
+      "title": "YouTube Data API Key",
+      "x-ui": {
+        "placeholder": "GOOGLE_YOUTUBE_API_KEY"
+      }
+    },
+    "search": {
+      "type": "object",
+      "title": "Search",
+      "properties": {
+        "defaults": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "integer",
+              "default": 5
+            },
+            "surfaceMode": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "youtube",
+                "music"
+              ],
+              "default": "auto",
+              "x-ui": {
+                "widget": "select"
+              }
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "retrieve": {
+      "type": "object",
+      "title": "Retrieve",
+      "properties": {
+        "defaults": {
+          "type": "object",
+          "properties": {
+            "include_transcript": {
+              "type": "boolean",
+              "default": false
+            },
+            "max_chars": {
+              "type": "integer",
+              "default": 12000
+            },
+            "transcript_timeout_ms": {
+              "type": "integer",
+              "default": 8000
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

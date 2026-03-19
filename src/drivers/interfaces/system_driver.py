@@ -148,7 +148,7 @@ class SystemDriver(BaseDriver):
             "node": platform.node(),
             "machine": platform.machine(),
             "user": os.getlogin() if hasattr(os, 'getlogin') else "N/A",
-            "timezone": str(datetime.datetime.now().astimezone().tzinfo)
+            "timezone": ConfigManager().get_timezone()
         }
 
     # --- Process Control ---

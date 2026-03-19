@@ -16,7 +16,7 @@ class OpenAIChatProvider(ILLMProvider):
         if not config:
             raise ValueError("OpenAIChatProvider requires explicit pool configuration.")
         self.api_key = resolve_secret_ref(config.get("secret_ref"))
-        self.org_id = config.get("organization_id")
+        self.org_id = resolve_secret_ref(config.get("organization_id"))
         self.base_url = config.get("base_url")
         self.timeout_s = float(config.get("timeout", 30))
         self.max_retries = int(config.get("max_retries", 0))

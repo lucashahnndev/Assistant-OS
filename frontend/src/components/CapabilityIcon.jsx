@@ -1,31 +1,32 @@
-import { useMemo, useState } from 'react';
-import { getCapabilityVisual } from '../utils/capabilityVisuals';
+import { useState } from 'react';
+import { Puzzle } from 'lucide-react';
 
 const CapabilityIcon = ({
     capabilityId = '',
-    capabilityName = '',
-    actionId = '',
-    iconKey = '',
-    iconUrl = '',
+    assets = null,
     variant = 'inline',
     size,
 }) => {
-    const visual = useMemo(
-        () => getCapabilityVisual({ capabilityId, capabilityName, actionId, iconKey, iconUrl }),
-        [capabilityId, capabilityName, actionId, iconKey, iconUrl],
-    );
-    const [logoError, setLogoError] = useState(false);
-
+    const [imgError, setImgError] = useState(false);
     const iconSize = Number(size || (variant === 'display' ? 26 : 12));
     const shellSize = Number(size || (variant === 'display' ? 40 : 18));
-    const Icon = visual.Icon;
-    const shouldUseLogo = Boolean(visual.logoUrl) && !logoError;
-    const logoSrc = shouldUseLogo ? `/api/favicon?url=${encodeURIComponent(visual.logoUrl)}` : '';
+
+    let iconUrl = null;
+    if (assets && !imgError) {
+        // Resolve best available asset
+        if (iconSize <= 16 && assets.icon_16) {
+            iconUrl = `/api/capabilities/${capabilityId}/icon/16x16`;
+        } else if (iconSize <= 32 && assets.icon_32) {
+            iconUrl = `/api/capabilities/${capabilityId}/icon/32x32`;
+        } else if (iconSize <= 64 && assets.icon_64) {
+            iconUrl = `/api/capabilities/${capabilityId}/icon/64x64`;
+        } else if (assets.icon_svg) {
+            iconUrl = `/api/capabilities/${capabilityId}/icon/svg`;
+        }
+    }
 
     return (
         <span
-            title={visual.label}
-            aria-label={visual.label}
             style={{
                 width: `${shellSize}px`,
                 height: `${shellSize}px`,
@@ -39,17 +40,22 @@ const CapabilityIcon = ({
                 overflow: 'hidden',
             }}
         >
-            {shouldUseLogo ? (
+            {iconUrl ? (
                 <img
-                    src={logoSrc}
-                    alt={visual.label}
+                    src={iconUrl}
+                    alt=""
                     width={iconSize}
                     height={iconSize}
-                    style={{ borderRadius: variant === 'display' ? '8px' : '4px', objectFit: 'contain' }}
-                    onError={() => setLogoError(true)}
+                    style={{ 
+                        borderRadius: variant === 'display' ? '8px' : '4px', 
+                        objectFit: 'contain',
+                        width: `${iconSize}px`,
+                        height: `${iconSize}px`
+                    }}
+                    onError={() => setImgError(true)}
                 />
             ) : (
-                <Icon size={iconSize} color={visual.color} />
+                <Puzzle size={iconSize} color="#a78bfa" />
             )}
         </span>
     );

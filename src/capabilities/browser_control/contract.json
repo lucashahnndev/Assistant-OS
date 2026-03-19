@@ -1,305 +1,308 @@
 {
-  "contract_version": "1.0",
-  "capability": {
-    "id": "browser_control",
-    "namespace": "browser.control",
-    "version": "1.0.0",
-    "title": "browser.control",
-    "description": "Abre e controla um navegador real (Chrome) via CDP. USE ESTA SKILL quando o usuário pedir para ABRIR o navegador, NAVEGAR em sites, CLICAR em elementos, PREENCHER formulários, ou realizar qualquer INTERAÇÃO VISUAL com páginas web. NÃO use web.search ou web.retrieve para esses casos."
-  },
-  "runtime": {
-    "module": "capabilities.browser_control",
-    "factory": "create_capability",
-    "config_schema": "./config.schema.json"
-  },
-  "actions": [
-    {
-      "id": "browser.control.run",
-      "title": "Run",
-      "description": "Abre o Chrome e executa uma tarefa completa no navegador: navegar, pesquisar, clicar, interagir com páginas. O campo 'goal' pode ficar vazio; nesse caso, o texto original do usuário será usado como objetivo.",
-      "handler": "run",
-      "risk_level": "medium",
-      "permissions": {
-        "scopes": [
-          "browser:control:run"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "goal": {
-            "type": "string",
-            "description": "Objetivo a ser atingido no navegador (ex: 'abra o google e pesquise sobre foguetes'). Se vazio, usa o input do usuário."
-          },
-          "headless": {
-            "type": "boolean",
-            "description": "Se true, abre o navegador em modo invisível (sem janela). Padrão: false (com janela visível)."
-          },
-          "muted": {
-            "type": "boolean",
-            "description": "Se true, abre o navegador sem som. Use quando o usuário pedir silêncio ou quando o som não for relevante. Padrão: false (com som)."
-          },
-          "intent_class": {
-            "type": "string",
-            "description": "Classe de intenção de navegação para política interna de sessão/abas. Valores suportados: controlar_midia, realizar_pesquisa, automacao_ui, validacao_visual, manutencao.",
-            "enum": [
-              "controlar_midia",
-              "realizar_pesquisa",
-              "automacao_ui",
-              "validacao_visual",
-              "manutencao"
-            ]
-          }
+    "contract_version": "1.0",
+    "capability": {
+        "id": "browser_control",
+        "namespace": "browser.control",
+        "version": "1.0.0",
+        "title": "browser.control",
+        "description": "Abre e controla um navegador real (Chrome) via CDP. USE ESTA SKILL quando o usu\u00e1rio pedir para ABRIR o navegador, NAVEGAR em sites, CLICAR em elementos, PREENCHER formul\u00e1rios, ou realizar qualquer INTERA\u00c7\u00c3O VISUAL com p\u00e1ginas web. N\u00c3O use web.search ou web.retrieve para esses casos.",
+        "assets": {
+            "icon_svg": "assets/icon.svg"
+        }
+    },
+    "runtime": {
+        "module": "capabilities.browser_control",
+        "factory": "create_capability",
+        "config_schema": "./config.schema.json"
+    },
+    "actions": [
+        {
+            "id": "browser.control.run",
+            "title": "Run",
+            "description": "Abre o Chrome e executa uma tarefa completa no navegador: navegar, pesquisar, clicar, interagir com p\u00e1ginas. O campo 'goal' pode ficar vazio; nesse caso, o texto original do usu\u00e1rio ser\u00e1 usado como objetivo.",
+            "handler": "run",
+            "risk_level": "medium",
+            "permissions": {
+                "scopes": [
+                    "browser:control:run"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": "Objetivo a ser atingido no navegador (ex: 'abra o google e pesquise sobre foguetes'). Se vazio, usa o input do usu\u00e1rio."
+                    },
+                    "headless": {
+                        "type": "boolean",
+                        "description": "Se true, abre o navegador em modo invis\u00edvel (sem janela). Padr\u00e3o: false (com janela vis\u00edvel)."
+                    },
+                    "muted": {
+                        "type": "boolean",
+                        "description": "Se true, abre o navegador sem som. Use quando o usu\u00e1rio pedir sil\u00eancio ou quando o som n\u00e3o for relevante. Padr\u00e3o: false (com som)."
+                    },
+                    "intent_class": {
+                        "type": "string",
+                        "description": "Classe de inten\u00e7\u00e3o de navega\u00e7\u00e3o para pol\u00edtica interna de sess\u00e3o/abas. Valores suportados: controlar_midia, realizar_pesquisa, automacao_ui, validacao_visual, manutencao.",
+                        "enum": [
+                            "controlar_midia",
+                            "realizar_pesquisa",
+                            "automacao_ui",
+                            "validacao_visual",
+                            "manutencao"
+                        ]
+                    }
+                },
+                "additionalProperties": true,
+                "required": [
+                    "intent_class"
+                ]
+            },
+            "side_effect": "idempotent"
         },
-        "additionalProperties": true,
-        "required": [
-          "intent_class"
-        ]
-      },
-      "side_effect": "idempotent"
-    },
-    {
-      "id": "browser.control.step",
-      "title": "Step",
-      "description": "Executa uma única instrução no navegador já aberto (ex: 'clique no botão login').",
-      "handler": "step",
-      "risk_level": "medium",
-      "permissions": {
-        "scopes": [
-          "browser:control:step"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "instruction": {
-            "type": "string",
-            "description": "Instrução específica (ex: 'clique no botão login')."
-          }
+        {
+            "id": "browser.control.step",
+            "title": "Step",
+            "description": "Executa uma \u00fanica instru\u00e7\u00e3o no navegador j\u00e1 aberto (ex: 'clique no bot\u00e3o login').",
+            "handler": "step",
+            "risk_level": "medium",
+            "permissions": {
+                "scopes": [
+                    "browser:control:step"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "instruction": {
+                        "type": "string",
+                        "description": "Instru\u00e7\u00e3o espec\u00edfica (ex: 'clique no bot\u00e3o login')."
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "idempotent"
         },
-        "additionalProperties": true
-      },
-      "side_effect": "idempotent"
-    },
-    {
-      "id": "browser.control.close",
-      "title": "Close",
-      "description": "Fecha a instância do navegador.",
-      "handler": "close",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "browser:control:close"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": true
-      },
-      "side_effect": "idempotent"
-    },
-    {
-      "id": "browser.control.inspect",
-      "title": "Inspect",
-      "description": "Lista inventário de instâncias/abas de browser registradas globalmente (com opção de filtrar por sessão).",
-      "handler": "inspect",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "browser:control:inspect"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "session_id": {
-            "type": "string",
-            "description": "Filtra por sessão dona da instância."
-          },
-          "only_current_session": {
-            "type": "boolean",
-            "description": "Quando true, usa a sessão atual do contexto para filtrar automaticamente."
-          },
-          "include_tabs": {
-            "type": "boolean",
-            "description": "Inclui abas no retorno."
-          },
-          "include_last_vision": {
-            "type": "boolean",
-            "description": "Inclui a última observação visual normalizada da execução corrente."
-          }
+        {
+            "id": "browser.control.close",
+            "title": "Close",
+            "description": "Fecha a inst\u00e2ncia do navegador.",
+            "handler": "close",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "browser:control:close"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": true
+            },
+            "side_effect": "idempotent"
         },
-        "additionalProperties": true
-      },
-      "side_effect": "none"
-    },
-    {
-      "id": "browser.control.close_tab",
-      "title": "Close Tab",
-      "description": "Fecha uma aba registrada por tab_id. Se for a aba ativa da instância corrente, encerra o runtime associado.",
-      "handler": "close_tab",
-      "risk_level": "medium",
-      "permissions": {
-        "scopes": [
-          "browser:control:close_tab"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "tab_id": {
-            "type": "string",
-            "description": "ID da aba no registry."
-          },
-          "force": {
-            "type": "boolean",
-            "description": "Quando true, ignora bloqueios de ownership/in_use para fechamento administrativo."
-          }
+        {
+            "id": "browser.control.inspect",
+            "title": "Inspect",
+            "description": "Lista invent\u00e1rio de inst\u00e2ncias/abas de browser registradas globalmente (com op\u00e7\u00e3o de filtrar por sess\u00e3o).",
+            "handler": "inspect",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "browser:control:inspect"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Filtra por sess\u00e3o dona da inst\u00e2ncia."
+                    },
+                    "only_current_session": {
+                        "type": "boolean",
+                        "description": "Quando true, usa a sess\u00e3o atual do contexto para filtrar automaticamente."
+                    },
+                    "include_tabs": {
+                        "type": "boolean",
+                        "description": "Inclui abas no retorno."
+                    },
+                    "include_last_vision": {
+                        "type": "boolean",
+                        "description": "Inclui a \u00faltima observa\u00e7\u00e3o visual normalizada da execu\u00e7\u00e3o corrente."
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "none"
         },
-        "additionalProperties": true,
-        "required": [
-          "tab_id"
-        ]
-      },
-      "side_effect": "idempotent"
-    },
-    {
-      "id": "browser.control.close_instance",
-      "title": "Close Instance",
-      "description": "Fecha uma instância de navegador por instance_id.",
-      "handler": "close_instance",
-      "risk_level": "medium",
-      "permissions": {
-        "scopes": [
-          "browser:control:close_instance"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "instance_id": {
-            "type": "string",
-            "description": "ID da instância no registry."
-          },
-          "force": {
-            "type": "boolean",
-            "description": "Quando true, ignora bloqueios de ownership/in_use para fechamento administrativo."
-          }
+        {
+            "id": "browser.control.close_tab",
+            "title": "Close Tab",
+            "description": "Fecha uma aba registrada por tab_id. Se for a aba ativa da inst\u00e2ncia corrente, encerra o runtime associado.",
+            "handler": "close_tab",
+            "risk_level": "medium",
+            "permissions": {
+                "scopes": [
+                    "browser:control:close_tab"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {
+                        "type": "string",
+                        "description": "ID da aba no registry."
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Quando true, ignora bloqueios de ownership/in_use para fechamento administrativo."
+                    }
+                },
+                "additionalProperties": true,
+                "required": [
+                    "tab_id"
+                ]
+            },
+            "side_effect": "idempotent"
         },
-        "additionalProperties": true,
-        "required": [
-          "instance_id"
-        ]
-      },
-      "side_effect": "idempotent"
-    },
-    {
-      "id": "browser.control.sync_registry",
-      "title": "Sync Registry",
-      "description": "Sincroniza estado de runtime ativo com o registry global (instância/aba/porta).",
-      "handler": "sync_registry",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "browser:control:sync_registry"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": true
-      },
-      "side_effect": "idempotent"
-    },
-    {
-      "id": "browser.control.gc",
-      "title": "Gc",
-      "description": "Executa garbage collection administrativo do registry de browser (locks expirados e instâncias ociosas).",
-      "handler": "gc",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "browser:control:gc"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "idle_seconds": {
-            "type": "number",
-            "description": "Tempo mínimo de ociosidade para fechar instâncias ativas sem uso."
-          },
-          "keep_current_instance": {
-            "type": "boolean",
-            "description": "Quando true, preserva a instância atual da capability durante o GC."
-          }
+        {
+            "id": "browser.control.close_instance",
+            "title": "Close Instance",
+            "description": "Fecha uma inst\u00e2ncia de navegador por instance_id.",
+            "handler": "close_instance",
+            "risk_level": "medium",
+            "permissions": {
+                "scopes": [
+                    "browser:control:close_instance"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "instance_id": {
+                        "type": "string",
+                        "description": "ID da inst\u00e2ncia no registry."
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Quando true, ignora bloqueios de ownership/in_use para fechamento administrativo."
+                    }
+                },
+                "additionalProperties": true,
+                "required": [
+                    "instance_id"
+                ]
+            },
+            "side_effect": "idempotent"
         },
-        "additionalProperties": true
-      },
-      "side_effect": "idempotent"
-    },
-    {
-      "id": "browser.control.health",
-      "title": "Health",
-      "description": "Executa diagnóstico consolidado da capability (inspect + sync_registry + opcionalmente gc).",
-      "handler": "health",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "browser:control:health"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "run_gc": {
-            "type": "boolean",
-            "description": "Quando true, executa GC junto do diagnóstico."
-          },
-          "include_tabs": {
-            "type": "boolean",
-            "description": "Inclui abas no bloco inspect."
-          },
-          "include_last_vision": {
-            "type": "boolean",
-            "description": "Inclui última visão no bloco inspect."
-          },
-          "only_current_session": {
-            "type": "boolean",
-            "description": "Filtra diagnóstico para a sessão atual."
-          },
-          "gc_params": {
-            "type": "object",
-            "description": "Parâmetros opcionais repassados para browser.control.gc."
-          }
+        {
+            "id": "browser.control.sync_registry",
+            "title": "Sync Registry",
+            "description": "Sincroniza estado de runtime ativo com o registry global (inst\u00e2ncia/aba/porta).",
+            "handler": "sync_registry",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "browser:control:sync_registry"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": true
+            },
+            "side_effect": "idempotent"
         },
-        "additionalProperties": true
-      },
-      "side_effect": "none"
+        {
+            "id": "browser.control.gc",
+            "title": "Gc",
+            "description": "Executa garbage collection administrativo do registry de browser (locks expirados e inst\u00e2ncias ociosas).",
+            "handler": "gc",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "browser:control:gc"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "idle_seconds": {
+                        "type": "number",
+                        "description": "Tempo m\u00ednimo de ociosidade para fechar inst\u00e2ncias ativas sem uso."
+                    },
+                    "keep_current_instance": {
+                        "type": "boolean",
+                        "description": "Quando true, preserva a inst\u00e2ncia atual da capability durante o GC."
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "idempotent"
+        },
+        {
+            "id": "browser.control.health",
+            "title": "Health",
+            "description": "Executa diagn\u00f3stico consolidado da capability (inspect + sync_registry + opcionalmente gc).",
+            "handler": "health",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "browser:control:health"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "run_gc": {
+                        "type": "boolean",
+                        "description": "Quando true, executa GC junto do diagn\u00f3stico."
+                    },
+                    "include_tabs": {
+                        "type": "boolean",
+                        "description": "Inclui abas no bloco inspect."
+                    },
+                    "include_last_vision": {
+                        "type": "boolean",
+                        "description": "Inclui \u00faltima vis\u00e3o no bloco inspect."
+                    },
+                    "only_current_session": {
+                        "type": "boolean",
+                        "description": "Filtra diagn\u00f3stico para a sess\u00e3o atual."
+                    },
+                    "gc_params": {
+                        "type": "object",
+                        "description": "Par\u00e2metros opcionais repassados para browser.control.gc."
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "none"
+        }
+    ],
+    "auth": {
+        "mode": "none",
+        "required": false,
+        "fields": []
     }
-  ],
-  "auth": {
-    "mode": "none",
-    "required": false,
-    "fields": []
-  }
 }

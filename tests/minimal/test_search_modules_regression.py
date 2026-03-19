@@ -4,8 +4,8 @@ from capabilities.shared.search_providers.base import SearchResultItem
 from capabilities.shared.search_providers.ddg_provider import DdgProvider
 from capabilities.shared.search_providers.openalex_provider import OpenAlexProvider
 from capabilities.shared.search_providers.router import SearchRouter
-from capabilities.youtube_search import capability as youtube_capability_module
-from capabilities.youtube_search.capability import YouTubeSearchCapability
+from capabilities.youtube import search as youtube_capability_module
+from capabilities.youtube.search import YouTubeSearchCapability
 
 
 class _FakeResponse:

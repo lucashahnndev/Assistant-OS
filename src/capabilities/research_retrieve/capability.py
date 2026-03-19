@@ -7,27 +7,28 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..base import CapabilityBase
 from ..shared.chunking import normalize_whitespace
 from ..shared.error_contract import error_envelope, success_envelope
+from services.external_rag.planner import ExternalRAGPlanner
+from services.external_rag.runtime import ExternalRAGRuntime
 from utils.toon_codec import dumps_toon
 
 logger = logging.getLogger("ResearchRetrieveCapability")
 
 
 class RegistryWrapper:
-    ALLOWLIST = {
-        "web.search.discover",
+    BASE_ALLOWLIST = {
         "web.retrieve.read",
         "web.retrieve.extract",
-        "wikipedia.search",
-        "youtube.search.find",
-        "youtube.retrieve.get",
     }
 
-    def __init__(self, dispatch_fn: Any, envelope: Dict[str, Any]):
+    def __init__(self, dispatch_fn: Any, envelope: Dict[str, Any], allowlist: Optional[set[str]] = None):
         self._dispatch_fn = dispatch_fn
         self.envelope = envelope
+        if allowlist is None:
+            allowlist = set(self.BASE_ALLOWLIST)
+        self._allowlist = set(allowlist)
 
     def dispatch(self, action_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        if action_id not in self.ALLOWLIST:
+        if action_id not in self._allowlist:
             return error_envelope(
                 provider="research.retrieve",
                 error_code="RESEARCH_SCOPE_VIOLATION",
@@ -62,6 +63,7 @@ class RegistryWrapper:
 
 
 class ResearchRetrieveCapability(CapabilityBase):
+    MODULAR_SEARCH_PROVIDER_IDS = {"brave_search", "ddg_search", "searxng_search", "openalex_search", "commoncrawl_search"}
     def __init__(self, kernel=None, config=None):
         self.kernel = kernel
         self.config = config or {}
@@ -97,6 +99,70 @@ class ResearchRetrieveCapability(CapabilityBase):
                 return raw.strip()
         return ""
 
+    def _merged_constraints(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        request_constraints = params.get("constraints") if isinstance(params.get("constraints"), dict) else {}
+        live_config = self._live_config()
+        config_defaults = live_config.get("defaults") if isinstance(live_config.get("defaults"), dict) else {}
+        merged: Dict[str, Any] = self._normalize_default_constraints(config_defaults)
+        merged.update(request_constraints)
+        return merged
+
+    def _live_config(self) -> Dict[str, Any]:
+        base = self.config if isinstance(self.config, dict) else {}
+        out = dict(base)
+        kernel = self.kernel
+        cfg_manager = getattr(kernel, "config_manager", None) if kernel else None
+        if cfg_manager and hasattr(cfg_manager, "get_capability_config"):
+            try:
+                live = cfg_manager.get_capability_config("research_retrieve")
+                if isinstance(live, dict):
+                    out.update(live)
+            except Exception:
+                pass
+        return out
+
+    @staticmethod
+    def _normalize_default_constraints(defaults: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Backward-compatible normalization for capability config defaults.
+        Supports:
+        1) legacy flat keys under `defaults`
+        2) grouped keys under section objects (execution/retry/provider_limits/replan)
+        """
+        out: Dict[str, Any] = {}
+        if not isinstance(defaults, dict):
+            return out
+
+        # Keep existing flat defaults.
+        for key, value in defaults.items():
+            if not isinstance(value, dict):
+                out[key] = value
+
+        section_names = ("execution", "retry", "provider_limits", "replan", "control_plane")
+        for section in section_names:
+            section_obj = defaults.get(section)
+            if not isinstance(section_obj, dict):
+                continue
+            if section == "control_plane":
+                overrides = section_obj.get("overrides")
+                if isinstance(overrides, dict):
+                    out["provider_runtime_overrides"] = dict(overrides)
+                scorecard = section_obj.get("scorecard")
+                if isinstance(scorecard, dict):
+                    out["provider_runtime_scorecard"] = dict(scorecard)
+                # Also accept canonical key names inside grouped config.
+                grouped_overrides = section_obj.get("provider_runtime_overrides")
+                if isinstance(grouped_overrides, dict):
+                    out["provider_runtime_overrides"] = dict(grouped_overrides)
+                grouped_scorecard = section_obj.get("provider_runtime_scorecard")
+                if isinstance(grouped_scorecard, dict):
+                    out["provider_runtime_scorecard"] = dict(grouped_scorecard)
+                continue
+            for key, value in section_obj.items():
+                out[key] = value
+
+        return out
+
     @staticmethod
     def _looks_field_request(goal: str) -> bool:
         text = str(goal or "").lower()
@@ -112,6 +178,32 @@ class ResearchRetrieveCapability(CapabilityBase):
             "price",
         )
         return any(marker in text for marker in field_markers)
+
+    @classmethod
+    def _prefer_modular_offers(
+        cls,
+        offers: List[Dict[str, Any]],
+        *,
+        enabled: bool,
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        if not enabled:
+            return offers, []
+        has_modular = any(
+            str(row.get("capability_id") or "").strip() in cls.MODULAR_SEARCH_PROVIDER_IDS
+            for row in offers
+            if isinstance(row, dict)
+        )
+        if not has_modular:
+            return offers, []
+        dropped: List[Dict[str, Any]] = []
+        filtered = [
+            row
+            for row in offers
+            if isinstance(row, dict) and str(row.get("capability_id") or "").strip() not in {"web_search", "web"}
+        ]
+        if len(filtered) != len(offers):
+            dropped.append({"capability_id": "web", "reason": "prefer_modular_providers"})
+        return (filtered or offers), dropped
 
     @staticmethod
     def _fallback_pick(results: List[Dict[str, Any]], limit: int) -> List[str]:
@@ -305,7 +397,7 @@ class ResearchRetrieveCapability(CapabilityBase):
                 warnings=[],
             )
 
-        constraints = params.get("constraints") if isinstance(params.get("constraints"), dict) else {}
+        constraints = self._merged_constraints(params)
         output_format = str(params.get("output_format") or "md").strip().lower()
         if output_format not in {"md", "toon"}:
             output_format = "md"
@@ -344,7 +436,182 @@ class ResearchRetrieveCapability(CapabilityBase):
             },
             "output_format": output_format,
         }
-        kernel_lite = RegistryWrapper(dispatch_fn=dispatch_fn, envelope=envelope)
+        runtime_allowlist: set[str] = set(RegistryWrapper.BASE_ALLOWLIST)
+        if registry and hasattr(registry, "list_retrieval_offers"):
+            try:
+                        offers_all = registry.list_retrieval_offers()
+                        for offer in offers_all:
+                            if not isinstance(offer, dict):
+                                continue
+                            capability_id = str(offer.get("capability_id") or "").strip()
+                            if capability_id == "research_retrieve":
+                                continue
+                            actions = offer.get("actions") if isinstance(offer.get("actions"), list) else []
+                            for action in actions:
+                                action_id = str(action or "").strip()
+                                if action_id:
+                                    runtime_allowlist.add(action_id)
+            except Exception as e:
+                warnings.append(f"retrieval_allowlist_unavailable: {e}")
+        kernel_lite = RegistryWrapper(dispatch_fn=dispatch_fn, envelope=envelope, allowlist=runtime_allowlist)
+        live_config = self._live_config()
+        use_external_runtime = bool(params.get("use_external_rag_runtime", live_config.get("use_external_rag_runtime", True)))
+        allow_legacy_fallback = bool(
+            params.get("allow_legacy_fallback")
+            if params.get("allow_legacy_fallback") is not None
+            else live_config.get("allow_legacy_fallback", False)
+        )
+
+        if use_external_runtime:
+            try:
+                provider_specs = []
+                offer_selection_trace: Dict[str, Any] = {
+                    "queries": [],
+                    "selected_capability_ids": [],
+                    "dropped": [],
+                    "prefer_modular_providers": bool(constraints.get("prefer_modular_providers", True)),
+                }
+                if registry and hasattr(registry, "list_retrieval_offers"):
+                    try:
+                        planner = ExternalRAGPlanner()
+                        intent, _subintent = planner.classify_intent(query)
+                        domain = planner.intent_to_domain(intent)
+                        offers = registry.list_retrieval_offers(intent=intent, domain=domain)
+                        offer_selection_trace["queries"].append({"intent": intent, "domain": domain, "count": len(offers or [])})
+                        if not offers:
+                            offers = registry.list_retrieval_offers(intent=intent)
+                            offer_selection_trace["queries"].append({"intent": intent, "domain": None, "count": len(offers or [])})
+                        if not offers:
+                            offers = registry.list_retrieval_offers()
+                            offer_selection_trace["queries"].append({"intent": None, "domain": None, "count": len(offers or [])})
+                        prefer_modular = bool(constraints.get("prefer_modular_providers", True))
+                        offers, dropped = self._prefer_modular_offers(list(offers or []), enabled=prefer_modular)
+                        offer_selection_trace["dropped"] = dropped
+                        offer_selection_trace["selected_capability_ids"] = [
+                            str(row.get("capability_id") or "").strip()
+                            for row in offers
+                            if isinstance(row, dict) and str(row.get("capability_id") or "").strip()
+                        ]
+                        provider_specs = ExternalRAGRuntime.provider_specs_from_offers(offers)
+                    except Exception as e:
+                        warnings.append(f"retrieval_offer_index_unavailable: {e}")
+                        offer_selection_trace["error"] = str(e)
+                else:
+                    offer_selection_trace = {
+                        "queries": [],
+                        "selected_capability_ids": [],
+                        "dropped": [],
+                        "prefer_modular_providers": bool(constraints.get("prefer_modular_providers", True)),
+                        "error": "capability_registry_without_retrieval_offers",
+                    }
+
+                runtime = ExternalRAGRuntime(
+                    dispatch=kernel_lite.dispatch,
+                    pick_urls=self._pick_urls_with_llm,
+                    synthesize=self._synthesize_answer,
+                    provider_specs=provider_specs,
+                )
+                runtime_result, docs = runtime.run(
+                    query=query,
+                    constraints=constraints,
+                    language_hint=lang,
+                )
+                warnings.extend(runtime_result.warnings)
+
+                extracted_rows: List[Dict[str, Any]] = []
+                should_extract = bool(extract_schema) or self._looks_field_request(query)
+                if should_extract and docs and extract_schema:
+                    for doc in docs[:max_docs]:
+                        extract_result = kernel_lite.dispatch(
+                            "web.retrieve.extract",
+                            {
+                                "url": doc.get("url"),
+                                "schema": extract_schema,
+                                "max_chars": 1200,
+                            },
+                        )
+                        if isinstance(extract_result, dict) and extract_result.get("ok"):
+                            extracted_rows.append(
+                                {
+                                    "url": doc.get("url"),
+                                    "data": extract_result.get("data")
+                                    if isinstance(extract_result.get("data"), dict)
+                                    else {},
+                                }
+                            )
+
+                answer_md = runtime_result.answer_md
+                if extracted_rows:
+                    answer_md = (
+                        f"{answer_md}\n\n### Extracted Fields\n\n```json\n"
+                        f"{json.dumps(extracted_rows, ensure_ascii=False, indent=2)}\n```"
+                    )
+
+                result = success_envelope(
+                    provider="research.retrieve",
+                    elapsed=self._elapsed_ms(started),
+                    warnings=warnings,
+                )
+                payload = runtime_result.to_payload()
+                result.update(
+                    {
+                        "status": payload.get("status") or "success",
+                        "sources": payload.get("sources") or [],
+                        "evidence": payload.get("evidence") or [],
+                        "stats": payload.get("stats") or {},
+                        "traces": {
+                            **((payload.get("traces") or {}) if isinstance(payload.get("traces"), dict) else {}),
+                            "offer_selection_trace": offer_selection_trace,
+                            "runtime_allowlist_size": len(runtime_allowlist),
+                        },
+                        "content": answer_md,
+                    }
+                )
+
+                if output_format == "toon":
+                    toon_payload = {
+                        "v": "toon.v1",
+                        "t": "research.retrieve.result",
+                        "ok": bool(result["ok"]),
+                        "st": str(result["status"]),
+                        "ans": answer_md,
+                        "src": [{"u": s.get("url"), "t": s.get("title")} for s in (result.get("sources") or [])[:12]],
+                        "ev": [
+                            {
+                                "u": ev.get("source_url"),
+                                "c": ev.get("chunk_id"),
+                                "q": str(ev.get("quote") or "")[:180],
+                            }
+                            for ev in (result.get("evidence") or [])[:16]
+                        ],
+                        "stats": result.get("stats") or {},
+                        "w": warnings[:16],
+                    }
+                    result["toon"] = dumps_toon(toon_payload)
+                else:
+                    result["answer_md"] = answer_md
+                return result
+            except Exception as e:
+                warnings.append(f"external_rag_runtime_failed: {e}")
+                if not allow_legacy_fallback:
+                    result = error_envelope(
+                        provider="research.retrieve",
+                        error_code="EXTERNAL_RAG_RUNTIME_FAILED",
+                        error_message=str(e),
+                        retryable=True,
+                        elapsed=self._elapsed_ms(started),
+                        warnings=warnings,
+                    )
+                    result.update(
+                        {
+                            "status": "error",
+                            "sources": [],
+                            "evidence": [],
+                            "stats": {"steps": 0, "docs_opened": 0, "chars_read": 0},
+                        }
+                    )
+                    return result
+                warnings.append("fallback=legacy_pipeline")
 
         def budget_stop() -> bool:
             return steps >= max_steps or docs_opened >= max_docs or chars_read >= max_total_chars

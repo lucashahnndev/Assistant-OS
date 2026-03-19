@@ -14,7 +14,7 @@ class EventBus:
         self.subscribers: List[asyncio.Queue] = []
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
-    def set_loop(self, loop: asyncio.AbstractEventLoop):
+    def set_loop(self, loop: Optional[asyncio.AbstractEventLoop]):
         self._loop = loop
 
     def subscribe(self) -> asyncio.Queue:
@@ -38,7 +38,9 @@ class EventBus:
         # Add timestamp if missing
         if "ts" not in event:
             import datetime
-            event["ts"] = datetime.datetime.now().isoformat()
+            # Try to get centralized config for timezone if possible, 
+            # but event_bus is low-level. Fallback to UTC-aware.
+            event["ts"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
             
         for queue in self.subscribers:
             await queue.put(event)
@@ -47,12 +49,24 @@ class EventBus:
         """
         Thread-safe way to emit events from outside the main event loop.
         """
-        if not self._loop:
+        loop = self._loop
+        if not loop:
             # In CLI/diagnostic runs there is no loop; drop silently to avoid noisy logs.
             return
-        self._loop.call_soon_threadsafe(
-            lambda: asyncio.create_task(self.emit(event))
-        )
+        if loop.is_closed():
+            logger.warning("EventBus loop is closed. Clearing loop reference.")
+            self._loop = None
+            return
+        try:
+            loop.call_soon_threadsafe(
+                lambda: asyncio.create_task(self.emit(event))
+            )
+        except RuntimeError as e:
+            if "closed" in str(e).lower():
+                logger.warning("EventBus emit failed because loop is closed. Clearing loop reference.")
+                self._loop = None
+                return
+            raise
 
 # Global instance
 global_event_bus = EventBus()

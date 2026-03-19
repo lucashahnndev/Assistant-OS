@@ -5,6 +5,7 @@ import {
     RefreshCw,
     Shield,
     Cpu,
+    Clock,
     Globe,
     Mic,
     MessageCircle,
@@ -397,6 +398,21 @@ const Settings = () => {
             current = current[parts[i]];
         }
         current[parts[parts.length - 1]] = value;
+        setConfig(newConfig);
+        setRawJson(JSON.stringify(newConfig, null, 2));
+    };
+
+    const updateNestedValues = (updates) => {
+        const newConfig = { ...config };
+        updates.forEach(({ path, value }) => {
+            const parts = path.split('.');
+            let current = newConfig;
+            for (let i = 0; i < parts.length - 1; i++) {
+                if (!current[parts[i]]) current[parts[i]] = {};
+                current = current[parts[i]];
+            }
+            current[parts[parts.length - 1]] = value;
+        });
         setConfig(newConfig);
         setRawJson(JSON.stringify(newConfig, null, 2));
     };
@@ -883,16 +899,92 @@ const Settings = () => {
         );
     };
 
-    const renderWeather = () => (
-        <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
-                <h3 className="section-title">
-                    <CloudSun size={20} /> Environmental Data
-                </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '-12px' }}>
+    const getBrowserTimezone = () => {
+        const tz = Intl?.DateTimeFormat?.().resolvedOptions?.().timeZone;
+        if (!tz) {
+            toast.error("Unable to detect timezone");
+            return;
+        }
+        updateNestedValues([
+            { path: 'location.default.timezone', value: tz },
+            { path: 'environment.timezone', value: tz }
+        ]);
+        toast.success("Timezone updated");
+    };
+
+    const getBrowserLanguage = () => {
+        const lang = navigator?.language || (Array.isArray(navigator?.languages) ? navigator.languages[0] : "");
+        if (!lang) {
+            toast.error("Unable to detect language");
+            return;
+        }
+        updateNestedValues([
+            { path: 'i18n.default_locale', value: lang },
+            { path: 'location.default.language', value: lang }
+        ]);
+        toast.success("Language updated");
+    };
+
+    const getTimezoneOptions = () => {
+        if (typeof Intl !== 'undefined' && typeof Intl.supportedValuesOf === 'function') {
+            try {
+                return Intl.supportedValuesOf('timeZone') || [];
+            } catch (err) {
+                console.warn("Timezone list unavailable", err);
+            }
+        }
+        return [
+            "UTC",
+            "America/Sao_Paulo",
+            "America/New_York",
+            "America/Los_Angeles",
+            "Europe/London",
+            "Europe/Berlin",
+            "Asia/Tokyo",
+            "Asia/Shanghai"
+        ];
+    };
+
+    const getLanguageOptions = () => {
+        const base = Array.isArray(navigator?.languages) ? navigator.languages : [];
+        const fallback = ["pt-BR", "en", "en-US", "es", "es-ES"];
+        const combined = [...base, ...fallback]
+            .map((value) => String(value || "").trim())
+            .filter(Boolean);
+        return Array.from(new Set(combined));
+    };
+
+    const renderWeather = () => {
+        const timezoneValue =
+            config?.location?.default?.timezone
+            || config?.environment?.timezone
+            || config?.environment?.tz
+            || '';
+        const languageValue =
+            config?.location?.default?.language
+            || config?.i18n?.default_locale
+            || config?.i18n?.fallback_locale
+            || config?.environment?.language
+            || config?.environment?.locale
+            || config?.environment?.lang
+            || '';
+
+        return (
+            <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
+                    <h3 className="section-title">
+                        <CloudSun size={20} /> Environmental Data
+                    </h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '-12px', gap: '8px', flexWrap: 'wrap' }}>
                         <button onClick={getGeolocation} className="btn-ghost" style={{ fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <Globe size={14} /> Get Current Location
+                        </button>
+                        <button onClick={getBrowserTimezone} className="btn-ghost" style={{ fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <Clock size={14} /> Get Timezone
+                        </button>
+                        <button onClick={getBrowserLanguage} className="btn-ghost" style={{ fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <MessageCircle size={14} /> Get Language
                         </button>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : '1fr 1fr', gap: '20px' }}>
@@ -910,6 +1002,12 @@ const Settings = () => {
                                 onChange={(e) => updateNestedValue('location.default.lon', e.target.value)}
                             />
                         </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '-6px' }}>
+                        <div style={{ fontSize: '12px', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'rgba(148,163,184,0.8)' }}>
+                            Locale Defaults
+                        </div>
+                        <div style={{ flex: 1, height: '1px', background: 'rgba(148,163,184,0.15)' }} />
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : '1fr 1fr 1fr', gap: '20px' }}>
                         <div className="form-group">
@@ -934,10 +1032,59 @@ const Settings = () => {
                             />
                         </div>
                     </div>
-                </div>
-            </section>
-        </div>
-    );
+                    <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : '1fr 1fr', gap: '20px' }}>
+                        <div className="form-group">
+                            <label>Timezone</label>
+                            <select
+                                className="input-field"
+                                value={timezoneValue}
+                                onChange={(e) => updateNestedValues([
+                                    { path: 'location.default.timezone', value: e.target.value },
+                                    { path: 'environment.timezone', value: e.target.value }
+                                ])}
+                            >
+                                <option value="" disabled>Select a timezone</option>
+                                {(() => {
+                                    const current = String(timezoneValue || "").trim();
+                                    const options = getTimezoneOptions();
+                                    const values = options.includes(current) || !current
+                                        ? options
+                                        : [current, ...options];
+                                    return values.map((tz) => (
+                                        <option key={tz} value={tz}>{tz}</option>
+                                    ));
+                                })()}
+                            </select>
+                        </div>
+                        <div className="form-group">
+                            <label>Language</label>
+                            <select
+                                className="input-field"
+                                value={languageValue}
+                                onChange={(e) => updateNestedValues([
+                                    { path: 'i18n.default_locale', value: e.target.value },
+                                    { path: 'location.default.language', value: e.target.value }
+                                ])}
+                            >
+                                <option value="" disabled>Select a language</option>
+                                {(() => {
+                                    const current = String(languageValue || "").trim();
+                                    const options = getLanguageOptions();
+                                    const values = options.includes(current) || !current
+                                        ? options
+                                        : [current, ...options];
+                                    return values.map((lang) => (
+                                        <option key={lang} value={lang}>{lang}</option>
+                                    ));
+                                })()}
+                            </select>
+                        </div>
+                    </div>
+                    </div>
+                </section>
+            </div>
+        );
+    };
 
     const renderSecurity = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>

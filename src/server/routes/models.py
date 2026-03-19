@@ -83,7 +83,8 @@ def update_modality_pool(modality: str, pool: list = Body(...), user: User = Dep
             provider_name = str(item.get("provider") or "").strip()
             provider_catalog = _load_provider_catalog(provider_name) if provider_name else {}
             auth_fields = provider_catalog.get("auth", {}).get("fields", [])
-            for field in auth_fields:
+            settings_fields = provider_catalog.get("settings_fields", [])
+            for field in [*auth_fields, *settings_fields]:
                 if not isinstance(field, dict) or field.get("type") != "secret_ref":
                     continue
                 field_key = str(field.get("key") or "").strip()

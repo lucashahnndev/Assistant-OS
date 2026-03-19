@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": { "type": "boolean", "default": true, "title": "Enabled" },
+    "defaults": {
+      "type": "object",
+      "properties": {
+        "limit": { "type": "integer", "default": 6 },
+        "language": { "type": "string", "default": "en" },
+        "timeout_ms": { "type": "integer", "default": 6000 },
+        "retries": { "type": "integer", "default": 1 },
+        "max_indexes": { "type": "integer", "default": 2 }
+      },
+      "additionalProperties": true
+    },
+    "provider": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "collinfo_url": { "type": "string", "default": "https://index.commoncrawl.org/collinfo.json" },
+        "max_indexes": { "type": "integer", "default": 2 },
+        "timeout_ms": { "type": "integer" },
+        "retries": { "type": "integer" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

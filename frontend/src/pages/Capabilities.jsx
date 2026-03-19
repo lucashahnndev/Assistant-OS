@@ -34,6 +34,11 @@ const Capabilities = () => {
     const [envKeys, setEnvKeys] = useState([]);
     const [secretEditor, setSecretEditor] = useState({ target: '', key: '', value: '' });
     const [isSaving, setIsSaving] = useState(false);
+    const [retrievalControlPlane, setRetrievalControlPlane] = useState(null);
+    const [retrievalControlPlaneLoading, setRetrievalControlPlaneLoading] = useState(false);
+    const [retrievalOffers, setRetrievalOffers] = useState([]);
+    const [retrievalOffersLoading, setRetrievalOffersLoading] = useState(false);
+    const [retrievalControlPlaneSaving, setRetrievalControlPlaneSaving] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [viewMode, setViewMode] = useState(() => {
         try {
@@ -146,6 +151,75 @@ const Capabilities = () => {
 
     const handleOpenDetails = (capability) => {
         setDetailCapability(capability);
+        if (capability?.id === 'research_retrieve') {
+            setRetrievalControlPlaneLoading(true);
+            setRetrievalOffersLoading(true);
+            Promise.all([
+                api.get('/capabilities/retrieval/control-plane'),
+                api.get('/capabilities/retrieval/offers'),
+            ])
+                .then(([controlPlaneData, offersData]) => {
+                    setRetrievalControlPlane(controlPlaneData || null);
+                    setRetrievalOffers(Array.isArray(offersData?.offers) ? offersData.offers : []);
+                })
+                .catch(() => {
+                    setRetrievalControlPlane(null);
+                    setRetrievalOffers([]);
+                })
+                .finally(() => {
+                    setRetrievalControlPlaneLoading(false);
+                    setRetrievalOffersLoading(false);
+                });
+        } else {
+            setRetrievalControlPlane(null);
+            setRetrievalOffers([]);
+            setRetrievalControlPlaneLoading(false);
+            setRetrievalOffersLoading(false);
+        }
+    };
+
+    const isProviderDisabled = (providerId) => {
+        const overrides = retrievalControlPlane?.overrides;
+        if (!overrides || typeof overrides !== 'object') return false;
+        const row = overrides[providerId];
+        return !!(row && typeof row === 'object' && row.disabled);
+    };
+
+    const getProviderOverride = (providerId) => {
+        const overrides = retrievalControlPlane?.overrides;
+        if (!overrides || typeof overrides !== 'object') return {};
+        const row = overrides[providerId];
+        if (!row || typeof row !== 'object') return {};
+        return row;
+    };
+
+    const toggleProviderFlag = async (providerId, flag) => {
+        if (!providerId || !flag || retrievalControlPlaneSaving) return;
+        setRetrievalControlPlaneSaving(true);
+        try {
+            const currentOverrides = (retrievalControlPlane?.overrides && typeof retrievalControlPlane.overrides === 'object')
+                ? retrievalControlPlane.overrides
+                : {};
+            const currentRow = (currentOverrides[providerId] && typeof currentOverrides[providerId] === 'object')
+                ? currentOverrides[providerId]
+                : {};
+            const nextValue = !Boolean(currentRow[flag]);
+            const payload = {
+                overrides: {
+                    [providerId]: {
+                        ...currentRow,
+                        [flag]: nextValue,
+                    },
+                },
+            };
+            const updated = await api.patch('/capabilities/retrieval/control-plane', payload);
+            setRetrievalControlPlane(updated || null);
+            toast.success(`${providerId} ${flag}=${nextValue ? 'on' : 'off'}`);
+        } catch (err) {
+            toast.error(err.message || 'Failed to update retrieval control plane');
+        } finally {
+            setRetrievalControlPlaneSaving(false);
+        }
     };
 
     const handleSaveConfig = async () => {
@@ -317,6 +391,16 @@ const Capabilities = () => {
                         <div style={{ width: '3px', height: '3px', background: 'var(--text-muted)', borderRadius: '50%' }}></div>
                         {schema.title || key}
                     </h4>
+                    {schema.description && (
+                        <p style={{
+                            margin: '0 0 8px 0',
+                            fontSize: '10px',
+                            color: '#94a3b8',
+                            lineHeight: '1.35'
+                        }}>
+                            {schema.description}
+                        </p>
+                    )}
                     {Object.entries(schema.properties).map(([subKey, subSchema]) => renderField(subKey, subSchema, fullPath))}
                 </div>
             );
@@ -324,6 +408,20 @@ const Capabilities = () => {
 
         const widget = ui.widget || (schema.type === 'boolean' ? 'checkbox' : 'text');
         const currentValue = getConfigValue(fullPath);
+        const parseInputBySchema = (rawValue) => {
+            if (rawValue === '') return '';
+            if (schema?.type === 'integer') {
+                const parsed = Number(rawValue);
+                if (Number.isNaN(parsed)) return rawValue;
+                return Math.trunc(parsed);
+            }
+            if (schema?.type === 'number') {
+                const parsed = Number(rawValue);
+                if (Number.isNaN(parsed)) return rawValue;
+                return parsed;
+            }
+            return rawValue;
+        };
 
         if (isSecret) {
             const creating = secretEditor.target === fullPath;
@@ -424,14 +522,20 @@ const Capabilities = () => {
                         className="glass-input"
                         style={{ height: '32px', minHeight: '32px', padding: '5px 8px', borderRadius: '6px', fontSize: '12px' }}
                         value={currentValue || ''}
-                        onChange={(e) => updateConfigValue(fullPath, e.target.value)}
+                        onChange={(e) => updateConfigValue(fullPath, parseInputBySchema(e.target.value))}
                     >
                         {schema.enum?.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                     </select>
                 ) : (
                     <div style={{ position: 'relative' }}>
                         <input
-                            type={widget === 'password' || isSecret ? "password" : "text"}
+                            type={
+                                widget === 'password' || isSecret
+                                    ? 'password'
+                                    : (schema?.type === 'integer' || schema?.type === 'number')
+                                        ? 'number'
+                                        : 'text'
+                            }
                             className="glass-input"
                             style={{
                                 width: '100%',
@@ -447,7 +551,8 @@ const Capabilities = () => {
                             }}
                             placeholder={ui.placeholder || schema.default || ''}
                             value={currentValue || ''}
-                            onChange={(e) => updateConfigValue(fullPath, e.target.value)}
+                            step={schema?.type === 'integer' ? '1' : (schema?.type === 'number' ? 'any' : undefined)}
+                            onChange={(e) => updateConfigValue(fullPath, parseInputBySchema(e.target.value))}
                         />
                         {isSecret && <div style={{ position: 'absolute', right: '8px', top: '8px', opacity: 0.5 }}><Shield size={12} /></div>}
                     </div>
@@ -472,6 +577,42 @@ const Capabilities = () => {
                 {Object.entries(schema.properties).map(([key, propSchema]) => renderField(key, propSchema))}
             </>
         );
+    };
+
+    const getRetrievalSetupIssues = (capability) => {
+        const runtime = capability?.retrieval_runtime;
+        if (!runtime || typeof runtime !== 'object') return [];
+        const profile = capability?.retrieval_profile;
+        if (!profile || typeof profile !== 'object' || !profile.enabled) return [];
+        const setupReady = runtime.setup_ready;
+        const missing = Array.isArray(runtime.missing_required_fields) ? runtime.missing_required_fields : [];
+        if (setupReady === false && missing.length > 0) {
+            return missing.map((field) => `Retrieval setup missing: ${field}`);
+        }
+        if (runtime.operational_state === 'disabled') return ['Retrieval provider is disabled by runtime control plane.'];
+        if (runtime.operational_state === 'degraded') return ['Retrieval provider is marked as degraded in runtime control plane.'];
+        if (runtime.operational_state === 'quota_exceeded') return ['Retrieval provider quota exceeded in runtime control plane.'];
+        if (runtime.operational_state === 'error_previous') return ['Retrieval provider temporarily blocked due to previous runtime error.'];
+        return [];
+    };
+
+    const getRetrievalRuntime = (capability) => {
+        const runtime = capability?.retrieval_runtime;
+        if (!runtime || typeof runtime !== 'object') return null;
+        return runtime;
+    };
+
+    const getRetrievalStateLabel = (capability) => {
+        const runtime = getRetrievalRuntime(capability);
+        const state = String(runtime?.operational_state || '').trim();
+        if (!state) return null;
+        if (state === 'ready') return 'RAG ready';
+        if (state === 'setup_pending') return 'RAG setup pending';
+        if (state === 'disabled') return 'RAG disabled';
+        if (state === 'degraded') return 'RAG degraded';
+        if (state === 'quota_exceeded') return 'RAG quota exceeded';
+        if (state === 'error_previous') return 'RAG temporary error';
+        return `RAG ${state}`;
     };
 
     const filteredCapabilities = capabilities.filter(s =>
@@ -594,6 +735,10 @@ const Capabilities = () => {
                             <p style={{ color: '#64748b' }}>Discovering installed capabilities...</p>
                         </div>
                     ) : filteredCapabilities.length > 0 ? filteredCapabilities.map(capability => (
+                        (() => {
+                            const retrievalIssues = getRetrievalSetupIssues(capability);
+                            const hasIssues = (capability.validation_errors?.length > 0 || capability.missing_required?.length > 0 || retrievalIssues.length > 0);
+                            return (
                         viewMode === 'grid' ? (
                         <div key={capability.id} className="glass-card" style={{
                             padding: isMobile ? '10px' : '10px',
@@ -601,7 +746,7 @@ const Capabilities = () => {
                             flexDirection: 'column',
                             gap: '8px',
                             borderRadius: '12px',
-                            border: capability.validation_errors?.length > 0 || capability.missing_required?.length > 0
+                            border: hasIssues
                                 ? '1px solid rgba(239, 68, 68, 0.3)'
                                 : (!capability.enabled ? '1px solid rgba(148, 163, 184, 0.28)' : '1px solid var(--card-border)'),
                             background: !capability.enabled ? 'linear-gradient(180deg, rgba(148,163,184,0.06), rgba(148,163,184,0.02))' : undefined,
@@ -613,9 +758,7 @@ const Capabilities = () => {
                                     <CapabilityIcon
                                         variant="display"
                                         capabilityId={capability.id}
-                                        capabilityName={capability.name}
-                                        iconKey={capability.icon_key}
-                                        iconUrl={capability.icon_url}
+                                        assets={capability.assets}
                                         size={22}
                                     />
                                     <h3 style={{
@@ -654,6 +797,30 @@ const Capabilities = () => {
                                     <span key={a} style={{ fontSize: '9px', background: 'rgba(255,255,255,0.05)', padding: '1px 6px', borderRadius: '100px', color: '#cbd5e1' }}>{a}</span>
                                 ))}
                                 {capability.actions?.length > 2 && <span style={{ fontSize: '9px', opacity: 0.6 }}>+{capability.actions.length - 2}</span>}
+                                {capability.retrieval_profile?.enabled && (
+                                    <span
+                                        style={{
+                                            fontSize: '9px',
+                                            background: ['disabled', 'quota_exceeded', 'error_previous', 'setup_pending'].includes(String(getRetrievalRuntime(capability)?.operational_state || ''))
+                                                ? 'rgba(239,68,68,0.18)'
+                                                : (String(getRetrievalRuntime(capability)?.operational_state || '') === 'degraded'
+                                                    ? 'rgba(245,158,11,0.16)'
+                                                    : 'rgba(34,197,94,0.16)'),
+                                            color: ['disabled', 'quota_exceeded', 'error_previous', 'setup_pending'].includes(String(getRetrievalRuntime(capability)?.operational_state || ''))
+                                                ? '#fca5a5'
+                                                : (String(getRetrievalRuntime(capability)?.operational_state || '') === 'degraded' ? '#fcd34d' : '#86efac'),
+                                            padding: '1px 6px',
+                                            borderRadius: '100px',
+                                            border: ['disabled', 'quota_exceeded', 'error_previous', 'setup_pending'].includes(String(getRetrievalRuntime(capability)?.operational_state || ''))
+                                                ? '1px solid rgba(239,68,68,0.24)'
+                                                : (String(getRetrievalRuntime(capability)?.operational_state || '') === 'degraded'
+                                                    ? '1px solid rgba(245,158,11,0.24)'
+                                                    : '1px solid rgba(34,197,94,0.24)'),
+                                        }}
+                                    >
+                                        {getRetrievalStateLabel(capability) || 'RAG ready'}
+                                    </span>
+                                )}
                             </div>
 
                             <div style={{
@@ -716,7 +883,7 @@ const Capabilities = () => {
                                 </button>
                             </div>
 
-                            {(capability.validation_errors?.length > 0 || capability.missing_required?.length > 0) && (
+                            {hasIssues && (
                                 <div style={{ background: 'rgba(239, 68, 68, 0.08)', padding: '7px 8px', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.18)', width: '100%' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#f87171', fontSize: '10px', fontWeight: '700', marginBottom: '2px' }}>
                                         <AlertCircle size={11} /> Configuration issue
@@ -724,6 +891,7 @@ const Capabilities = () => {
                                     <ul style={{ margin: 0, paddingLeft: '16px', fontSize: '10px', color: '#fca5a5' }}>
                                         {capability.missing_required.map(f => <li key={f}>Missing required field: <b>{f}</b></li>)}
                                         {capability.validation_errors.map((e, i) => <li key={i}>{e}</li>)}
+                                        {retrievalIssues.map((e, i) => <li key={`retrieval-${i}`}>{e}</li>)}
                                     </ul>
                                 </div>
                             )}
@@ -736,7 +904,7 @@ const Capabilities = () => {
                                 alignItems: isMobile ? 'stretch' : 'center',
                                 gap: isMobile ? '10px' : '12px',
                                 borderRadius: '12px',
-                                border: capability.validation_errors?.length > 0 || capability.missing_required?.length > 0
+                                border: hasIssues
                                     ? '1px solid rgba(239, 68, 68, 0.3)'
                                     : (!capability.enabled ? '1px solid rgba(148, 163, 184, 0.28)' : '1px solid var(--card-border)'),
                                 background: !capability.enabled ? 'linear-gradient(180deg, rgba(148,163,184,0.06), rgba(148,163,184,0.02))' : undefined,
@@ -747,9 +915,7 @@ const Capabilities = () => {
                                     <CapabilityIcon
                                         variant="display"
                                         capabilityId={capability.id}
-                                        capabilityName={capability.name}
-                                        iconKey={capability.icon_key}
-                                        iconUrl={capability.icon_url}
+                                        assets={capability.assets}
                                         size={24}
                                     />
                                     <div style={{ minWidth: 0, flex: 1 }}>
@@ -778,6 +944,30 @@ const Capabilities = () => {
                                                 <span key={a} style={{ fontSize: '9px', background: 'rgba(255,255,255,0.05)', padding: '1px 6px', borderRadius: '100px', color: '#cbd5e1' }}>{a}</span>
                                             ))}
                                             {capability.actions?.length > 3 && <span style={{ fontSize: '9px', opacity: 0.6 }}>+{capability.actions.length - 3}</span>}
+                                            {capability.retrieval_profile?.enabled && (
+                                                <span
+                                                    style={{
+                                                        fontSize: '9px',
+                                                        background: ['disabled', 'quota_exceeded', 'error_previous', 'setup_pending'].includes(String(getRetrievalRuntime(capability)?.operational_state || ''))
+                                                            ? 'rgba(239,68,68,0.18)'
+                                                            : (String(getRetrievalRuntime(capability)?.operational_state || '') === 'degraded'
+                                                                ? 'rgba(245,158,11,0.16)'
+                                                                : 'rgba(34,197,94,0.16)'),
+                                                        color: ['disabled', 'quota_exceeded', 'error_previous', 'setup_pending'].includes(String(getRetrievalRuntime(capability)?.operational_state || ''))
+                                                            ? '#fca5a5'
+                                                            : (String(getRetrievalRuntime(capability)?.operational_state || '') === 'degraded' ? '#fcd34d' : '#86efac'),
+                                                        padding: '1px 6px',
+                                                        borderRadius: '100px',
+                                                        border: ['disabled', 'quota_exceeded', 'error_previous', 'setup_pending'].includes(String(getRetrievalRuntime(capability)?.operational_state || ''))
+                                                            ? '1px solid rgba(239,68,68,0.24)'
+                                                            : (String(getRetrievalRuntime(capability)?.operational_state || '') === 'degraded'
+                                                                ? '1px solid rgba(245,158,11,0.24)'
+                                                                : '1px solid rgba(34,197,94,0.24)'),
+                                                    }}
+                                                >
+                                                    {getRetrievalStateLabel(capability) || 'RAG ready'}
+                                                </span>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
@@ -836,6 +1026,8 @@ const Capabilities = () => {
                                 </div>
                             </div>
                         )
+                            );
+                        })()
                     )) : (
                         <div style={{ textAlign: 'center', marginTop: '60px', gridColumn: '1 / -1' }}>
                             <Puzzle size={64} style={{ marginBottom: '24px', opacity: 0.2, margin: '0 auto' }} />
@@ -854,9 +1046,7 @@ const Capabilities = () => {
                                 <CapabilityIcon
                                     variant="display"
                                     capabilityId={detailCapability.id}
-                                    capabilityName={detailCapability.name}
-                                    iconKey={detailCapability.icon_key}
-                                    iconUrl={detailCapability.icon_url}
+                                    assets={detailCapability.assets}
                                     size={isMobile ? 24 : 28}
                                 />
                                 <div>
@@ -876,7 +1066,29 @@ const Capabilities = () => {
                                 ) : (
                                     <span className="badge badge-slate">Disabled</span>
                                 )}
-                                {detailCapability.validation_errors?.length > 0 || detailCapability.missing_required?.length > 0 ? (
+                                {detailCapability.retrieval_profile?.enabled && (
+                                    <span
+                                        className="badge"
+                                        style={{
+                                            background: ['disabled', 'quota_exceeded', 'error_previous', 'setup_pending'].includes(String(getRetrievalRuntime(detailCapability)?.operational_state || ''))
+                                                ? 'rgba(239,68,68,0.15)'
+                                                : (String(getRetrievalRuntime(detailCapability)?.operational_state || '') === 'degraded'
+                                                    ? 'rgba(245,158,11,0.15)'
+                                                    : 'rgba(34,197,94,0.14)'),
+                                            color: ['disabled', 'quota_exceeded', 'error_previous', 'setup_pending'].includes(String(getRetrievalRuntime(detailCapability)?.operational_state || ''))
+                                                ? '#f87171'
+                                                : (String(getRetrievalRuntime(detailCapability)?.operational_state || '') === 'degraded' ? '#fcd34d' : '#86efac'),
+                                            border: ['disabled', 'quota_exceeded', 'error_previous', 'setup_pending'].includes(String(getRetrievalRuntime(detailCapability)?.operational_state || ''))
+                                                ? '1px solid rgba(239,68,68,0.25)'
+                                                : (String(getRetrievalRuntime(detailCapability)?.operational_state || '') === 'degraded'
+                                                    ? '1px solid rgba(245,158,11,0.25)'
+                                                    : '1px solid rgba(34,197,94,0.25)'),
+                                        }}
+                                    >
+                                        {getRetrievalStateLabel(detailCapability)?.replace('RAG', 'Retrieval') || 'Retrieval ready'}
+                                    </span>
+                                )}
+                                {detailCapability.validation_errors?.length > 0 || detailCapability.missing_required?.length > 0 || getRetrievalSetupIssues(detailCapability).length > 0 ? (
                                     <span className="badge" style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)' }}>Validation issue</span>
                                 ) : (
                                     <span className="badge" style={{ background: 'rgba(34,197,94,0.14)', color: '#86efac', border: '1px solid rgba(34,197,94,0.25)' }}>Validated</span>
@@ -904,6 +1116,190 @@ const Capabilities = () => {
                                 )}
                             </div>
 
+                            {detailCapability.retrieval_profile?.enabled && (
+                                <div style={{ border: '1px solid var(--card-border)', borderRadius: '10px', padding: '12px' }}>
+                                    <div style={{ fontSize: '11px', fontWeight: '900', letterSpacing: '0.08em', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '8px' }}>Retrieval Runtime</div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
+                                        <div style={{ fontSize: '12px', color: '#cbd5e1' }}>
+                                            <strong style={{ color: '#e2e8f0' }}>Operational State:</strong>{' '}
+                                            {String(getRetrievalRuntime(detailCapability)?.operational_state || 'n/a')}
+                                        </div>
+                                        <div style={{ fontSize: '12px', color: '#cbd5e1' }}>
+                                            <strong style={{ color: '#e2e8f0' }}>Setup Ready:</strong>{' '}
+                                            {getRetrievalRuntime(detailCapability)?.setup_ready === false ? 'No' : 'Yes'}
+                                        </div>
+                                        <div style={{ fontSize: '12px', color: '#cbd5e1' }}>
+                                            <strong style={{ color: '#e2e8f0' }}>Trust Tier:</strong>{' '}
+                                            {detailCapability.retrieval_profile?.quality?.trust_tier || 'n/a'}
+                                        </div>
+                                        <div style={{ fontSize: '12px', color: '#cbd5e1' }}>
+                                            <strong style={{ color: '#e2e8f0' }}>Domains:</strong>{' '}
+                                            {(detailCapability.retrieval_profile?.domains || []).join(', ') || 'n/a'}
+                                        </div>
+                                        <div style={{ fontSize: '12px', color: '#cbd5e1' }}>
+                                            <strong style={{ color: '#e2e8f0' }}>Roles:</strong>{' '}
+                                            {(detailCapability.retrieval_profile?.roles || []).join(', ') || 'n/a'}
+                                        </div>
+                                    </div>
+                                    {(getRetrievalRuntime(detailCapability)?.missing_required_fields || []).length > 0 && (
+                                        <div style={{ marginTop: '10px', background: 'rgba(239, 68, 68, 0.08)', padding: '8px 10px', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.18)' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#f87171', fontSize: '11px', fontWeight: '700', marginBottom: '4px' }}>
+                                                <AlertCircle size={12} /> Missing retrieval fields
+                                            </div>
+                                            <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '11px', color: '#fca5a5' }}>
+                                                {(getRetrievalRuntime(detailCapability)?.missing_required_fields || []).map((f) => (
+                                                    <li key={f}><b>{f}</b></li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {detailCapability.id === 'research_retrieve' && (
+                                <div style={{ border: '1px solid var(--card-border)', borderRadius: '10px', padding: '12px' }}>
+                                    <div style={{ fontSize: '11px', fontWeight: '900', letterSpacing: '0.08em', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '8px' }}>Retrieval Control Plane</div>
+                                    {retrievalControlPlaneLoading ? (
+                                        <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>Loading control plane...</p>
+                                    ) : retrievalControlPlane ? (
+                                        <>
+                                            <div style={{ marginBottom: '10px' }}>
+                                                <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--text-main)', marginBottom: '6px' }}>Provider Overrides</div>
+                                                {retrievalOffersLoading ? (
+                                                    <p style={{ margin: 0, fontSize: '11px', color: 'var(--text-muted)' }}>Loading providers...</p>
+                                                ) : retrievalOffers.length > 0 ? (
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                                        {retrievalOffers.map((offer) => {
+                                                            const providerId = String(offer?.capability_id || '').trim();
+                                                            if (!providerId) return null;
+                                                            const disabled = isProviderDisabled(providerId);
+                                                            const row = getProviderOverride(providerId);
+                                                            const degraded = !!row.degraded;
+                                                            const forceFallback = !!row.force_fallback;
+                                                            const quotaExceeded = !!row.quota_exceeded;
+                                                            const errorPrevious = !!row.error_previous;
+                                                            return (
+                                                                <div
+                                                                    key={providerId}
+                                                                    style={{
+                                                                        display: 'flex',
+                                                                        alignItems: 'center',
+                                                                        gap: '6px',
+                                                                        padding: '5px 6px',
+                                                                        borderRadius: '10px',
+                                                                        border: '1px solid var(--card-border)',
+                                                                        background: 'rgba(255,255,255,0.03)',
+                                                                    }}
+                                                                >
+                                                                    <span style={{ fontSize: '10px', color: '#cbd5e1', minWidth: '110px' }}>{providerId}</span>
+                                                                    <button
+                                                                        className="btn-ghost"
+                                                                        disabled={retrievalControlPlaneSaving}
+                                                                        onClick={() => toggleProviderFlag(providerId, 'disabled')}
+                                                                        style={{
+                                                                            fontSize: '9px',
+                                                                            padding: '3px 6px',
+                                                                            borderRadius: '999px',
+                                                                            border: disabled ? '1px solid rgba(239,68,68,0.35)' : '1px solid rgba(34,197,94,0.35)',
+                                                                            color: disabled ? '#fca5a5' : '#86efac',
+                                                                            background: disabled ? 'rgba(239,68,68,0.12)' : 'rgba(34,197,94,0.12)',
+                                                                        }}
+                                                                        title="Toggle disabled"
+                                                                    >
+                                                                        disabled:{disabled ? 'on' : 'off'}
+                                                                    </button>
+                                                                    <button
+                                                                        className="btn-ghost"
+                                                                        disabled={retrievalControlPlaneSaving}
+                                                                        onClick={() => toggleProviderFlag(providerId, 'degraded')}
+                                                                        style={{
+                                                                            fontSize: '9px',
+                                                                            padding: '3px 6px',
+                                                                            borderRadius: '999px',
+                                                                            border: degraded ? '1px solid rgba(245,158,11,0.35)' : '1px solid rgba(148,163,184,0.35)',
+                                                                            color: degraded ? '#fcd34d' : '#cbd5e1',
+                                                                            background: degraded ? 'rgba(245,158,11,0.12)' : 'rgba(148,163,184,0.10)',
+                                                                        }}
+                                                                        title="Toggle degraded"
+                                                                    >
+                                                                        degraded:{degraded ? 'on' : 'off'}
+                                                                    </button>
+                                                                    <button
+                                                                        className="btn-ghost"
+                                                                        disabled={retrievalControlPlaneSaving}
+                                                                        onClick={() => toggleProviderFlag(providerId, 'force_fallback')}
+                                                                        style={{
+                                                                            fontSize: '9px',
+                                                                            padding: '3px 6px',
+                                                                            borderRadius: '999px',
+                                                                            border: forceFallback ? '1px solid rgba(168,85,247,0.35)' : '1px solid rgba(148,163,184,0.35)',
+                                                                            color: forceFallback ? '#d8b4fe' : '#cbd5e1',
+                                                                            background: forceFallback ? 'rgba(168,85,247,0.12)' : 'rgba(148,163,184,0.10)',
+                                                                        }}
+                                                                        title="Toggle force fallback"
+                                                                    >
+                                                                        force_fallback:{forceFallback ? 'on' : 'off'}
+                                                                    </button>
+                                                                    <button
+                                                                        className="btn-ghost"
+                                                                        disabled={retrievalControlPlaneSaving}
+                                                                        onClick={() => toggleProviderFlag(providerId, 'quota_exceeded')}
+                                                                        style={{
+                                                                            fontSize: '9px',
+                                                                            padding: '3px 6px',
+                                                                            borderRadius: '999px',
+                                                                            border: quotaExceeded ? '1px solid rgba(239,68,68,0.35)' : '1px solid rgba(148,163,184,0.35)',
+                                                                            color: quotaExceeded ? '#fca5a5' : '#cbd5e1',
+                                                                            background: quotaExceeded ? 'rgba(239,68,68,0.12)' : 'rgba(148,163,184,0.10)',
+                                                                        }}
+                                                                        title="Toggle quota exceeded"
+                                                                    >
+                                                                        quota_exceeded:{quotaExceeded ? 'on' : 'off'}
+                                                                    </button>
+                                                                    <button
+                                                                        className="btn-ghost"
+                                                                        disabled={retrievalControlPlaneSaving}
+                                                                        onClick={() => toggleProviderFlag(providerId, 'error_previous')}
+                                                                        style={{
+                                                                            fontSize: '9px',
+                                                                            padding: '3px 6px',
+                                                                            borderRadius: '999px',
+                                                                            border: errorPrevious ? '1px solid rgba(239,68,68,0.35)' : '1px solid rgba(148,163,184,0.35)',
+                                                                            color: errorPrevious ? '#fca5a5' : '#cbd5e1',
+                                                                            background: errorPrevious ? 'rgba(239,68,68,0.12)' : 'rgba(148,163,184,0.10)',
+                                                                        }}
+                                                                        title="Toggle previous error"
+                                                                    >
+                                                                        error_previous:{errorPrevious ? 'on' : 'off'}
+                                                                    </button>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                ) : (
+                                                    <p style={{ margin: 0, fontSize: '11px', color: 'var(--text-muted)' }}>No retrieval providers indexed.</p>
+                                                )}
+                                            </div>
+                                            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))', gap: '8px', marginBottom: '8px' }}>
+                                                <div style={{ fontSize: '12px', color: '#cbd5e1' }}>
+                                                    <strong style={{ color: '#e2e8f0' }}>Overrides:</strong>{' '}
+                                                    {Object.keys(retrievalControlPlane.overrides || {}).length}
+                                                </div>
+                                                <div style={{ fontSize: '12px', color: '#cbd5e1' }}>
+                                                    <strong style={{ color: '#e2e8f0' }}>Scorecards:</strong>{' '}
+                                                    {Object.keys(retrievalControlPlane.scorecard || {}).length}
+                                                </div>
+                                            </div>
+                                            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: '11px', color: '#cbd5e1', lineHeight: '1.4' }}>
+                                                {JSON.stringify(retrievalControlPlane, null, 2)}
+                                            </pre>
+                                        </>
+                                    ) : (
+                                        <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>Control plane data unavailable.</p>
+                                    )}
+                                </div>
+                            )}
+
                             <div style={{ border: '1px solid var(--card-border)', borderRadius: '10px', padding: '12px' }}>
                                 <div style={{ fontSize: '11px', fontWeight: '900', letterSpacing: '0.08em', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '8px' }}>Config Snapshot</div>
                                 <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: '11px', color: '#cbd5e1', lineHeight: '1.4' }}>
@@ -911,7 +1307,7 @@ const Capabilities = () => {
                                 </pre>
                             </div>
 
-                            {(detailCapability.validation_errors?.length > 0 || detailCapability.missing_required?.length > 0) && (
+                            {(detailCapability.validation_errors?.length > 0 || detailCapability.missing_required?.length > 0 || getRetrievalSetupIssues(detailCapability).length > 0) && (
                                 <div style={{ background: 'rgba(239, 68, 68, 0.08)', padding: '10px 12px', borderRadius: '10px', border: '1px solid rgba(239, 68, 68, 0.18)' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#f87171', fontSize: '11px', fontWeight: '700', marginBottom: '4px' }}>
                                         <AlertCircle size={12} /> Validation details
@@ -919,6 +1315,7 @@ const Capabilities = () => {
                                     <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '11px', color: '#fca5a5' }}>
                                         {(detailCapability.missing_required || []).map(f => <li key={f}>Missing required field: <b>{f}</b></li>)}
                                         {(detailCapability.validation_errors || []).map((e, i) => <li key={i}>{e}</li>)}
+                                        {getRetrievalSetupIssues(detailCapability).map((e, i) => <li key={`retrieval-detail-${i}`}>{e}</li>)}
                                     </ul>
                                 </div>
                             )}
@@ -936,9 +1333,7 @@ const Capabilities = () => {
                                 <CapabilityIcon
                                     variant="display"
                                     capabilityId={configuringCapability.id}
-                                    capabilityName={configuringCapability.name}
-                                    iconKey={configuringCapability.icon_key}
-                                    iconUrl={configuringCapability.icon_url}
+                                    assets={configuringCapability.assets}
                                     size={isMobile ? 24 : 28}
                                 />
                                 <div>

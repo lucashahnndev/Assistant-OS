@@ -142,14 +142,21 @@ def oauth_provider_callback(
     )
 
     if not oauth_session:
-        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+        logger.warning(f"OAuth session not found for user {current_user.id}, provider {provider_key}, state {state}")
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth session state")
 
-    if oauth_session.expires_at and oauth_session.expires_at < now:
-        oauth_session.status = "expired"
-        oauth_session.error_message = "OAuth state expired"
-        oauth_session.consumed_at = now
-        db.commit()
-        raise HTTPException(status_code=400, detail="OAuth state expired")
+    if oauth_session.expires_at:
+        # SQLite compatibility: comparing naive vs aware
+        check_now = now
+        if oauth_session.expires_at.tzinfo is None and now.tzinfo is not None:
+            check_now = now.replace(tzinfo=None)
+            
+        if oauth_session.expires_at < check_now:
+            oauth_session.status = "expired"
+            oauth_session.error_message = "OAuth state expired"
+            oauth_session.consumed_at = now
+            db.commit()
+            raise HTTPException(status_code=400, detail="OAuth state expired")
 
     target_origin = str(oauth_session.frontend_origin or "").strip()
 
@@ -248,8 +255,7 @@ def oauth_provider_callback(
             try:
                 exp_seconds = int(tokens.get("expires_in") or 0)
                 if exp_seconds > 0:
-                    from datetime import datetime, timezone, timedelta as _td
-                    token_expires_at = datetime.now(timezone.utc) + _td(seconds=exp_seconds)
+                    token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=exp_seconds)
             except Exception:
                 token_expires_at = None
 

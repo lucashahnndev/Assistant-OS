@@ -9,8 +9,10 @@ logger = get_logger("GoogleCloudTTS")
 
 try:
     from google.cloud import texttospeech
+    from google.oauth2 import service_account
 except ImportError:
     texttospeech = None
+    service_account = None
 
 class GoogleCloudProvider(ITTSProvider):
     def __init__(self, config):
@@ -20,25 +22,25 @@ class GoogleCloudProvider(ITTSProvider):
         self.ssml_gender = str(config.get('ssml_gender', 'MALE')).upper()
         self.audio_encoding = str(config.get('audio_encoding', 'MP3')).upper()
         
-        # Credentials handling
-        # Assuming credentials are set in environment or passed via config
         self.credentials_path = resolve_secret_ref(
             config.get('credentials_path')
         )
-        if self.credentials_path:
-             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = self.credentials_path
-             
+
         self.client = None
         if texttospeech:
             try:
-                api_key = resolve_secret_ref(
-                    config.get('secret_ref')
-                ) or os.getenv("GOOGLE_CLOUD_API_KEY")
+                api_key = resolve_secret_ref(config.get('secret_ref'))
                 if api_key:
                     from google.api_core import client_options
                     opts = client_options.ClientOptions(api_key=api_key)
                     self.client = texttospeech.TextToSpeechClient(client_options=opts)
                     logger.info("Google Cloud TTS initialized with API Key.")
+                elif self.credentials_path and service_account:
+                    credentials = service_account.Credentials.from_service_account_file(
+                        self.credentials_path
+                    )
+                    self.client = texttospeech.TextToSpeechClient(credentials=credentials)
+                    logger.info("Google Cloud TTS initialized with explicit service account credentials.")
                 else:
                     self.client = texttospeech.TextToSpeechClient()
                     logger.info("Google Cloud TTS initialized with Default Credentials.")

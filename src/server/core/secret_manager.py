@@ -9,10 +9,9 @@ from typing import Any, Dict, List, Tuple
 from cryptography.fernet import Fernet, InvalidToken
 
 
-SENSITIVE_ENV_HINTS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "PASS", "PRIVATE", "JWT", "AUTH")
+SENSITIVE_ENV_HINTS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "PASS", "PRIVATE", "JWT", "AUTH", "ID")
 INTERNAL_ENV_EXACT = {
     "SECRET_MANAGEMENT_KEY",
-    "EXTERNAL_ACCOUNTS_ENCRYPTION_KEY",
     "PORTAL_SECRET_KEY",
 }
 INTERNAL_ENV_PREFIXES = (
@@ -194,6 +193,24 @@ def _write_vault_payload(payload: Dict[str, Any]) -> None:
                 pass
 
 
+def encrypt_sensitive_json(payload: Dict[str, Any]) -> str:
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return _get_fernet().encrypt(raw).decode("utf-8")
+
+
+def decrypt_sensitive_json(token: str) -> Dict[str, Any]:
+    try:
+        raw = _get_fernet().decrypt(str(token or "").encode("utf-8"))
+        payload = json.loads(raw.decode("utf-8"))
+    except InvalidToken as exc:
+        raise SecretVaultError("Unable to decrypt sensitive payload") from exc
+    except Exception as exc:
+        raise SecretVaultError(f"Unable to decode sensitive payload: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise SecretVaultError("Sensitive payload must decode to an object")
+    return payload
+
+
 def _get_secret_record(payload: Dict[str, Any], key: str) -> Dict[str, Any]:
     config_ref = to_config_ref(key)
     record = payload.get("secrets", {}).get(config_ref)
@@ -212,7 +229,7 @@ def resolve_secret_ref(value: str) -> str:
         vault_value = str(record.get("value") or "").strip()
         if vault_value:
             return vault_value
-        return os.getenv(token) or os.getenv(token[4:]) or ""
+        return ""
     return token
 
 

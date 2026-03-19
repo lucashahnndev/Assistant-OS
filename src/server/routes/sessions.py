@@ -203,6 +203,239 @@ def get_kernel(request: Request):
     return request.app.state.kernel
 
 
+def _clip_text(value, limit: int = 160) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
+def _sample_lines(items, *, max_items: int = 3, max_chars: int = 160) -> list:
+    output = []
+    for item in list(items or [])[: max_items]:
+        text = _clip_text(item, max_chars)
+        if text:
+            output.append(text)
+    return output
+
+
+def _normalize_counts_map(value) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key): int(count)
+        for key, count in value.items()
+        if str(key).strip() and isinstance(count, (int, float))
+    }
+
+
+def _build_cognitive_state_summary(session_obj) -> dict:
+    state = getattr(session_obj, "cognitive_state", None)
+    state = state if isinstance(state, dict) else {}
+    mission = state.get("mission") if isinstance(state.get("mission"), dict) else {}
+    focus = state.get("focus") if isinstance(state.get("focus"), dict) else {}
+    open_loops = list(state.get("open_loops") or [])
+    blockers = list(state.get("blockers") or [])
+    constraints = list(state.get("constraints") or [])
+    watchpoints = list(state.get("watchpoints") or [])
+    decisions = list(state.get("decisions") or [])
+    checkpoints = list(state.get("checkpoints") or [])
+    recent_progress = list(state.get("recent_progress") or [])
+
+    return {
+        "mission": _clip_text(mission.get("objective"), 220),
+        "mission_status": str(mission.get("status") or "").strip(),
+        "focus": {
+            "primary_task_id": str(focus.get("primary_task_id") or "").strip(),
+            "primary_summary": _clip_text(focus.get("primary_summary"), 220),
+            "reasoning_mode": str(focus.get("reasoning_mode") or "").strip(),
+            "attention_mode": str(focus.get("attention_mode") or "").strip(),
+        },
+        "open_loops_count": len(open_loops),
+        "blockers_count": len(blockers),
+        "constraints_count": len(constraints),
+        "watchpoints_count": len(watchpoints),
+        "decisions_count": len(decisions),
+        "checkpoints_count": len(checkpoints),
+        "recent_progress_count": len(recent_progress),
+        "open_loops_preview": _sample_lines(open_loops),
+        "blockers_preview": _sample_lines(blockers),
+        "constraints_preview": _sample_lines(constraints),
+        "watchpoints_preview": _sample_lines(watchpoints),
+        "decisions_preview": _sample_lines(decisions),
+        "checkpoints_preview": _sample_lines(checkpoints),
+        "recent_progress_preview": _sample_lines(recent_progress),
+    }
+
+
+def _build_projection_summary(session_obj) -> dict:
+    projection = getattr(session_obj, "last_cognitive_projection", None)
+    projection = projection if isinstance(projection, dict) else {}
+    focus_lines = [str(item).strip() for item in list(projection.get("focus_lines") or []) if str(item).strip()]
+    background_lines = [str(item).strip() for item in list(projection.get("background_lines") or []) if str(item).strip()]
+    return {
+        "focus_line_count": len(focus_lines),
+        "background_line_count": len(background_lines),
+        "focus_lines": focus_lines[:4],
+        "background_lines": background_lines[:4],
+    }
+
+
+def _build_latest_cognitive_diagnostics(session_obj) -> dict:
+    diagnostics = {}
+    context = getattr(session_obj, "context", None)
+    if isinstance(context, dict) and isinstance(context.get("last_cognitive_layer"), dict):
+        diagnostics = dict(context.get("last_cognitive_layer") or {})
+    elif isinstance(getattr(session_obj, "cognitive_diagnostics", None), dict):
+        diagnostics = dict(getattr(session_obj, "cognitive_diagnostics") or {})
+
+    return {
+        "phase": str(diagnostics.get("phase") or "").strip(),
+        "changed_fields": [str(item).strip() for item in list(diagnostics.get("changed_fields") or []) if str(item).strip()][:8],
+        "cognitive_fields_populated": [str(item).strip() for item in list(diagnostics.get("cognitive_fields_populated") or []) if str(item).strip()][:10],
+        "cognitive_fields_changed": [str(item).strip() for item in list(diagnostics.get("cognitive_fields_changed") or []) if str(item).strip()][:10],
+        "cognitive_fields_projected": [str(item).strip() for item in list(diagnostics.get("cognitive_fields_projected") or []) if str(item).strip()][:10],
+        "projection_field_sizes": {
+            str(key): int(value)
+            for key, value in list((diagnostics.get("projection_field_sizes") or {}).items())[:10]
+            if str(key).strip() and isinstance(value, (int, float))
+        },
+        "commit_performed": bool(diagnostics.get("commit_performed")),
+        "normalized_outcome_type": str(diagnostics.get("normalized_outcome_type") or "").strip(),
+        "outcome_type_generic_fallback_used": bool(diagnostics.get("outcome_type_generic_fallback_used")),
+        "fallback_used": bool(diagnostics.get("fallback_used")),
+        "fallback_mode": str(diagnostics.get("fallback_mode") or "").strip(),
+        "commit_signal_strength": str(diagnostics.get("commit_signal_strength") or "").strip(),
+        "planner_relevance_signal": bool(diagnostics.get("planner_relevance_signal")),
+        "hint_generated": bool(diagnostics.get("broker_hints_generated")),
+        "hint_applied": bool(diagnostics.get("hint_applied")),
+        "hint_ignored": bool(diagnostics.get("hint_ignored")),
+        "hint_suppressed": bool(diagnostics.get("hint_suppressed")),
+        "hinted_domains": [str(item).strip() for item in list(diagnostics.get("hinted_domains") or []) if str(item).strip()][:8],
+        "hint_impact_summary": [str(item).strip() for item in list(diagnostics.get("hint_impact_summary") or []) if str(item).strip()][:8],
+        "ranking_changed_by_hint": bool(diagnostics.get("ranking_changed_by_hint")),
+        "strategic_updates_summary": [str(item).strip() for item in list(diagnostics.get("strategic_updates_summary") or []) if str(item).strip()][:8],
+        "commit_noise_suppressed_count": int(diagnostics.get("commit_noise_suppressed_count") or 0),
+        "outcome_refined": bool(diagnostics.get("outcome_refined")),
+        "strategic_field_pruned_count": int(diagnostics.get("strategic_field_pruned_count") or 0),
+        "effectiveness_flags": [str(item).strip() for item in list(diagnostics.get("effectiveness_flags") or []) if str(item).strip()][:8],
+    }
+
+
+def _build_broker_cross_telemetry(session_obj) -> dict:
+    context = getattr(session_obj, "context", None)
+    broker = context.get("last_context_broker") if isinstance(context, dict) and isinstance(context.get("last_context_broker"), dict) else {}
+    queried = broker.get("queried_domains") if isinstance(broker.get("queried_domains"), dict) else {}
+    queried_domains = [str(key) for key, active in queried.items() if active]
+    return {
+        "evidence_present": bool(broker.get("evidence_count")),
+        "evidence_count": int(broker.get("evidence_count") or 0),
+        "domains_queried": queried_domains[:8],
+        "evidence_domains": [str(item).strip() for item in list(broker.get("evidence_domains") or []) if str(item).strip()][:8],
+        "evidence_counts_by_domain_selected": {
+            str(key): int(value)
+            for key, value in list((broker.get("evidence_counts_by_domain_selected") or {}).items())[:10]
+            if str(key).strip() and isinstance(value, (int, float))
+        },
+        "evidence_counts_by_domain_suppressed": {
+            str(key): int(value)
+            for key, value in list((broker.get("evidence_counts_by_domain_suppressed") or {}).items())[:10]
+            if str(key).strip() and isinstance(value, (int, float))
+        },
+        "rerank_win_by_domain": {
+            str(key): int(value)
+            for key, value in list((broker.get("rerank_win_by_domain") or {}).items())[:10]
+            if str(key).strip() and isinstance(value, (int, float))
+        },
+        "domain_conflict_resolution_summary": [
+            str(item).strip() for item in list(broker.get("domain_conflict_resolution_summary") or []) if str(item).strip()
+        ][:8],
+        "total_evidence_chars": int(broker.get("total_evidence_chars") or 0),
+        "evidence_density_reduction_count": int(broker.get("evidence_density_reduction_count") or 0),
+        "low_value_suppressed_count": int(broker.get("low_value_suppressed_count") or 0),
+        "hint_present": bool(broker.get("hint_present")),
+        "hint_applied": bool(broker.get("hint_applied")),
+        "hint_ignored": bool(broker.get("hint_ignored")),
+        "hinted_domains": [str(item).strip() for item in list(broker.get("hinted_domains") or []) if str(item).strip()][:8],
+        "hint_impact_summary": [str(item).strip() for item in list(broker.get("hint_impact_summary") or []) if str(item).strip()][:8],
+        "hint_ranking_changed": bool(broker.get("hint_ranking_changed")),
+    }
+
+
+def _build_cognition_snapshot_payload(session_obj) -> dict:
+    counters = {}
+    context = getattr(session_obj, "context", None)
+    if isinstance(context, dict) and isinstance(context.get("cognitive_effectiveness_counters"), dict):
+        counters = dict(context.get("cognitive_effectiveness_counters") or {})
+
+    diagnostics = _build_latest_cognitive_diagnostics(session_obj)
+    return {
+        "session_id": getattr(session_obj, "session_id", ""),
+        "source": getattr(session_obj, "source", "web"),
+        "turn_id": int(getattr(session_obj, "turn_id", 0) or 0),
+        "current_cognitive_state": _build_cognitive_state_summary(session_obj),
+        "last_cognitive_projection": _build_projection_summary(session_obj),
+        "last_cognitive_layer": diagnostics,
+        "hint_telemetry": {
+            "generated": bool(diagnostics.get("hint_generated")),
+            "applied": bool(diagnostics.get("hint_applied")),
+            "ignored": bool(diagnostics.get("hint_ignored")),
+            "suppressed": bool(diagnostics.get("hint_suppressed")),
+            "hinted_domains": list(diagnostics.get("hinted_domains") or [])[:8],
+            "hint_impact_summary": list(diagnostics.get("hint_impact_summary") or [])[:8],
+            "ranking_changed_by_hint": bool(diagnostics.get("ranking_changed_by_hint")),
+        },
+        "outcome_coverage": {
+            "counts_by_type": _normalize_counts_map(counters.get("outcome_types")),
+            "generic_fallback_count": int(counters.get("generic_outcomes") or 0),
+            "generic_fallback_streak": int(counters.get("generic_outcome_streak") or 0),
+        },
+        "strategic_usefulness": {
+            "fields_populated": list(diagnostics.get("cognitive_fields_populated") or [])[:10],
+            "fields_changed": list(diagnostics.get("cognitive_fields_changed") or [])[:10],
+            "fields_projected": list(diagnostics.get("cognitive_fields_projected") or [])[:10],
+            "projection_field_sizes": dict(diagnostics.get("projection_field_sizes") or {}),
+            "commit_signal_strength": str(diagnostics.get("commit_signal_strength") or "").strip(),
+            "planner_relevance_signal": bool(diagnostics.get("planner_relevance_signal")),
+            "commit_noise_suppressed_count": int(diagnostics.get("commit_noise_suppressed_count") or 0),
+            "strategic_field_pruned_count": int(diagnostics.get("strategic_field_pruned_count") or 0),
+        },
+        "fallback_telemetry": {
+            "fallback_used": bool(diagnostics.get("fallback_used")),
+            "fallback_mode": str(diagnostics.get("fallback_mode") or "").strip(),
+            "reconcile_turns": int(counters.get("reconcile_turns") or 0),
+            "commit_turns": int(counters.get("commit_turns") or 0),
+        },
+        "broker_cross_telemetry": _build_broker_cross_telemetry(session_obj),
+    }
+
+
+def _build_cognition_counters_payload(session_obj) -> dict:
+    context = getattr(session_obj, "context", None)
+    counters = context.get("cognitive_effectiveness_counters") if isinstance(context, dict) and isinstance(context.get("cognitive_effectiveness_counters"), dict) else {}
+    return {
+        "session_id": getattr(session_obj, "session_id", ""),
+        "reconcile_turns": int(counters.get("reconcile_turns") or 0),
+        "commit_turns": int(counters.get("commit_turns") or 0),
+        "hints_generated": int(counters.get("hints_generated") or 0),
+        "hints_applied": int(counters.get("hints_applied") or 0),
+        "hints_ignored": int(counters.get("hints_ignored") or 0),
+        "hint_suppressed_count": int(counters.get("hint_suppressed_count") or 0),
+        "hint_routing_impacts": int(counters.get("hint_routing_impacts") or 0),
+        "hint_ranking_impacts": int(counters.get("hint_ranking_impacts") or 0),
+        "projection_non_empty_turns": int(counters.get("projection_non_empty_turns") or 0),
+        "planner_relevance_turns": int(counters.get("planner_relevance_turns") or 0),
+        "strategic_update_turns": int(counters.get("strategic_update_turns") or 0),
+        "generic_outcomes": int(counters.get("generic_outcomes") or 0),
+        "generic_outcome_streak": int(counters.get("generic_outcome_streak") or 0),
+        "outcome_types": _normalize_counts_map(counters.get("outcome_types")),
+        "commit_signal_strength": _normalize_counts_map(counters.get("commit_signal_strength")),
+        "commit_noise_suppressed_count": int(counters.get("commit_noise_suppressed_count") or 0),
+        "outcome_refined_count": int(counters.get("outcome_refined_count") or 0),
+        "strategic_field_pruned_count": int(counters.get("strategic_field_pruned_count") or 0),
+    }
+
+
 def _user_visible_history(history: list) -> list:
     visible = []
     for msg in history or []:
@@ -301,6 +534,44 @@ def get_session(session_id: str, request: Request, user: User = Depends(get_curr
         "scratchpad": session.scratchpad,
         "runtime_metrics": orch.get_runtime_metrics(session_id) if hasattr(orch, "get_runtime_metrics") else {},
     }
+
+
+@router.get("/{session_id}/cognition")
+def get_session_cognition(session_id: str, request: Request, user: User = Depends(get_current_user)):
+    kernel = get_kernel(request)
+    orch = kernel.orchestrator
+
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    payload = _build_cognition_snapshot_payload(session)
+    payload["counters"] = _build_cognition_counters_payload(session)
+    return payload
+
+
+@router.get("/{session_id}/cognition/snapshot")
+def get_session_cognition_snapshot(session_id: str, request: Request, user: User = Depends(get_current_user)):
+    kernel = get_kernel(request)
+    orch = kernel.orchestrator
+
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return _build_cognition_snapshot_payload(session)
+
+
+@router.get("/{session_id}/cognition/counters")
+def get_session_cognition_counters(session_id: str, request: Request, user: User = Depends(get_current_user)):
+    kernel = get_kernel(request)
+    orch = kernel.orchestrator
+
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return _build_cognition_counters_payload(session)
 
 @router.patch("/{session_id}")
 def update_session(session_id: str, payload: dict, request: Request, user: User = Depends(get_current_user)):

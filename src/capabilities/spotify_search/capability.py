@@ -128,6 +128,8 @@ class SpotifySearchCapability(CapabilityBase):
                         "title": title,
                         "artist": None,
                         "album": None,
+                        "excerpt": snippet or title,
+                        "content": f"Spotify {search_type}: {title}. {snippet}".strip(),
                         "confidenceScore": 0.55,
                         "matchReason": "Web fallback result",
                         "descriptionSnippet": snippet,
@@ -272,6 +274,12 @@ class SpotifySearchCapability(CapabilityBase):
                     "title": item["name"],
                     "artist": main_artist,
                     "album": item.get("album", {}).get("name") if "album" in item else None,
+                    "excerpt": f"{item['name']} - {main_artist or 'Unknown artist'}",
+                    "content": (
+                        f"Spotify {search_type}: {item['name']}. "
+                        f"Artist: {main_artist or 'unknown'}. "
+                        f"Album: {item.get('album', {}).get('name') if 'album' in item else 'unknown'}."
+                    ),
                     "confidenceScore": score,
                     "matchReason": "Exact match" if score == 1.0 else "Partial match",
                     "source": "spotify_api",

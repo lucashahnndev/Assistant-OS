@@ -4,6 +4,7 @@ import logging
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from capabilities.contract_v1 import (
@@ -143,6 +144,7 @@ def _validate_config(
 @router.get("/")
 def list_capabilities(request: Request, user: User = Depends(get_current_user)):
     kernel = getattr(request.app.state, "kernel", None)
+    registry = getattr(kernel, "capability_registry", None) if kernel else None
     config_manager = getattr(kernel, "config_manager", None) if kernel else None
     raw_config: Dict[str, Any] = {}
     if config_manager and getattr(config_manager, "config_file", None):
@@ -153,6 +155,22 @@ def list_capabilities(request: Request, user: User = Depends(get_current_user)):
         except Exception:
             raw_config = {}
     capabilities_config = raw_config.get("capabilities", {}) if isinstance(raw_config, dict) else {}
+    research_cfg = capabilities_config.get("research_retrieve", {}) if isinstance(capabilities_config, dict) else {}
+    defaults_cfg = research_cfg.get("defaults", {}) if isinstance(research_cfg, dict) else {}
+    control_plane_cfg = defaults_cfg.get("control_plane", {}) if isinstance(defaults_cfg, dict) else {}
+    control_plane_overrides = control_plane_cfg.get("overrides") if isinstance(control_plane_cfg.get("overrides"), dict) else {}
+    control_plane_scorecard = control_plane_cfg.get("scorecard") if isinstance(control_plane_cfg.get("scorecard"), dict) else {}
+    runtime_offer_by_id: Dict[str, Dict[str, Any]] = {}
+    if registry and hasattr(registry, "list_retrieval_offers"):
+        try:
+            offers = registry.list_retrieval_offers()
+            runtime_offer_by_id = {
+                str(row.get("capability_id") or ""): row
+                for row in offers
+                if isinstance(row, dict) and str(row.get("capability_id") or "").strip()
+            }
+        except Exception:
+            runtime_offer_by_id = {}
 
     rows: List[Dict[str, Any]] = []
     if not os.path.exists(CAPABILITIES_DIR):
@@ -189,14 +207,20 @@ def list_capabilities(request: Request, user: User = Depends(get_current_user)):
                     "visibility": contract.capability.visibility,
                     "auth": contract.auth.model_dump(),
                     "actions": [action.id for action in contract.actions],
+                    "retrieval_profile": contract.retrieval_profile.model_dump() if contract.retrieval_profile else None,
+                    "retrieval_runtime": _merged_retrieval_runtime(
+                        capability_id=contract.capability.id,
+                        runtime_offer_by_id=runtime_offer_by_id,
+                        control_plane_overrides=control_plane_overrides,
+                        control_plane_scorecard=control_plane_scorecard,
+                    ),
                     "enabled": enabled,
                     "config": _mask_config(capability_cfg, contract.auth.model_dump()),
                     "config_schema": schema,
                     "validation_errors": errors,
                     "missing_required": missing,
-                    "load_status": "valid",
-                    "icon_key": "",
-                    "icon_url": "",
+                    "icon_url": f"/api/capabilities/{contract.capability.id}/icon/svg",
+                    "assets": contract.capability.assets.model_dump(),
                 }
             )
         except Exception as exc:
@@ -213,17 +237,237 @@ def list_capabilities(request: Request, user: User = Depends(get_current_user)):
                     "visibility": None,
                     "auth": {"mode": "none", "required": False, "fields": []},
                     "actions": [],
+                    "retrieval_profile": None,
                     "enabled": enabled,
                     "config": _mask_config(capability_cfg, {"fields": []}),
                     "config_schema": {},
                     "validation_errors": [str(exc)],
                     "missing_required": [],
-                    "load_status": "invalid_contract",
-                    "icon_key": "",
                     "icon_url": "",
+                    "assets": None,
                 }
             )
     return rows
+
+
+def _merged_retrieval_runtime(
+    *,
+    capability_id: str,
+    runtime_offer_by_id: Dict[str, Dict[str, Any]],
+    control_plane_overrides: Dict[str, Any],
+    control_plane_scorecard: Dict[str, Any],
+) -> Dict[str, Any]:
+    offer = runtime_offer_by_id.get(capability_id, {})
+    row = dict(offer) if isinstance(offer, dict) else {}
+    override = control_plane_overrides.get(capability_id) if isinstance(control_plane_overrides.get(capability_id), dict) else {}
+    scorecard = control_plane_scorecard.get(capability_id) if isinstance(control_plane_scorecard.get(capability_id), dict) else {}
+    if override:
+        row.update(override)
+    if scorecard:
+        row.update(scorecard)
+
+    if not row:
+        return {}
+
+    if bool(row.get("disabled")):
+        state = "disabled"
+    elif bool(row.get("quota_exceeded")):
+        state = "quota_exceeded"
+    elif bool(row.get("error_previous")):
+        state = "error_previous"
+    elif bool(row.get("degraded")):
+        state = "degraded"
+    elif row.get("setup_ready") is False:
+        state = "setup_pending"
+    else:
+        state = "ready"
+    row["operational_state"] = state
+    return row
+
+
+@router.get("/retrieval/offers")
+def list_retrieval_offers(
+    request: Request,
+    intent: str | None = None,
+    domain: str | None = None,
+    role: str | None = None,
+    entity_type: str | None = None,
+    user: User = Depends(get_current_user),
+):
+    _ = user
+    kernel = getattr(request.app.state, "kernel", None)
+    registry = getattr(kernel, "capability_registry", None) if kernel else None
+    if not registry or not hasattr(registry, "list_retrieval_offers"):
+        raise HTTPException(status_code=500, detail="Capability registry retrieval offers unavailable")
+
+    rows = registry.list_retrieval_offers(
+        intent=intent,
+        domain=domain,
+        role=role,
+        entity_type=entity_type,
+    )
+    return {"count": len(rows), "offers": rows}
+
+
+@router.get("/retrieval/control-plane")
+def get_retrieval_control_plane(request: Request, user: User = Depends(get_current_user)):
+    _ = user
+    kernel = getattr(request.app.state, "kernel", None)
+    config_manager = getattr(kernel, "config_manager", None) if kernel else None
+    if not config_manager:
+        raise HTTPException(status_code=500, detail="Config manager not available")
+
+    raw_config: Dict[str, Any] = {}
+    try:
+        if os.path.exists(config_manager.config_file):
+            with open(config_manager.config_file, "r", encoding="utf-8") as handle:
+                raw_config = json.load(handle) or {}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read raw config: {exc}")
+
+    caps = raw_config.get("capabilities", {}) if isinstance(raw_config, dict) else {}
+    research_cfg = caps.get("research_retrieve", {}) if isinstance(caps, dict) else {}
+    defaults = research_cfg.get("defaults", {}) if isinstance(research_cfg, dict) else {}
+    control_plane = defaults.get("control_plane", {}) if isinstance(defaults, dict) else {}
+
+    overrides = control_plane.get("overrides") if isinstance(control_plane.get("overrides"), dict) else {}
+    scorecard = control_plane.get("scorecard") if isinstance(control_plane.get("scorecard"), dict) else {}
+
+    return {
+        "overrides": overrides,
+        "scorecard": scorecard,
+        "constraints_projection": {
+            "provider_runtime_overrides": overrides,
+            "provider_runtime_scorecard": scorecard,
+        },
+    }
+
+
+@router.patch("/retrieval/control-plane")
+def patch_retrieval_control_plane(
+    patch_data: dict,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can patch retrieval control plane")
+    if not isinstance(patch_data, dict):
+        raise HTTPException(status_code=400, detail="Patch payload must be an object")
+
+    kernel = getattr(request.app.state, "kernel", None)
+    config_manager = getattr(kernel, "config_manager", None) if kernel else None
+    if not config_manager:
+        raise HTTPException(status_code=500, detail="Config manager not available")
+
+    raw_config: Dict[str, Any] = {}
+    try:
+        if os.path.exists(config_manager.config_file):
+            with open(config_manager.config_file, "r", encoding="utf-8") as handle:
+                raw_config = json.load(handle) or {}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read raw config: {exc}")
+
+    caps = raw_config.setdefault("capabilities", {})
+    if not isinstance(caps, dict):
+        raise HTTPException(status_code=500, detail="Invalid capabilities config shape")
+    research_cfg = caps.setdefault("research_retrieve", {})
+    if not isinstance(research_cfg, dict):
+        raise HTTPException(status_code=500, detail="Invalid research_retrieve config shape")
+    defaults = research_cfg.setdefault("defaults", {})
+    if not isinstance(defaults, dict):
+        raise HTTPException(status_code=500, detail="Invalid research_retrieve defaults shape")
+    control_plane = defaults.setdefault("control_plane", {})
+    if not isinstance(control_plane, dict):
+        raise HTTPException(status_code=500, detail="Invalid control_plane config shape")
+
+    merged = _merge_patch_preserving_masked(control_plane, patch_data)
+    overrides = merged.get("overrides") if isinstance(merged.get("overrides"), dict) else {}
+    scorecard = merged.get("scorecard") if isinstance(merged.get("scorecard"), dict) else {}
+    control_plane["overrides"] = overrides
+    control_plane["scorecard"] = scorecard
+    defaults["control_plane"] = control_plane
+    research_cfg["defaults"] = defaults
+    caps["research_retrieve"] = research_cfg
+    raw_config["capabilities"] = caps
+
+    try:
+        with open(config_manager.config_file, "w", encoding="utf-8") as handle:
+            json.dump(raw_config, handle, indent=4)
+        config_manager.load()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to save config: {exc}")
+
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            username=user.username,
+            action="patch_retrieval_control_plane",
+            target="research_retrieve.control_plane",
+            details=json.dumps({"keys": sorted(list(patch_data.keys()))}),
+        )
+    )
+    db.commit()
+
+    return {
+        "status": "updated",
+        "overrides": overrides,
+        "scorecard": scorecard,
+        "constraints_projection": {
+            "provider_runtime_overrides": overrides,
+            "provider_runtime_scorecard": scorecard,
+        },
+    }
+
+
+@router.get("/{capability_id}/icon/{size}")
+def get_capability_icon(
+    capability_id: str,
+    size: str,
+    user: User = Depends(get_current_user),
+):
+    """
+    Serves a capability icon asset from its internal assets folder.
+    Protected by authentication.
+    """
+    folder = os.path.join(CAPABILITIES_DIR, capability_id)
+    contract_path = os.path.join(folder, "contract.json")
+    if not os.path.exists(contract_path):
+        raise HTTPException(status_code=404, detail="Capability found")
+
+    try:
+        contract = load_contract_v1(contract_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Invalid contract: {exc}")
+
+    assets = contract.capability.assets
+    filename = None
+    
+    # Resolve the requested size to a filename
+    if size == "svg":
+        filename = assets.icon_svg
+    elif size == "16x16" or size == "16":
+        filename = assets.icon_16 or assets.icon_svg
+    elif size == "32x32" or size == "32":
+        filename = assets.icon_32 or assets.icon_svg
+    elif size == "64x64" or size == "64":
+        filename = assets.icon_64 or assets.icon_svg
+    else:
+        # Generic fallback to SVG if size is unknown
+        filename = assets.icon_svg
+
+    if not filename:
+        raise HTTPException(status_code=404, detail="Icon version not found")
+
+    # Sanitize path to prevent traversal
+    asset_path = os.path.abspath(os.path.join(folder, filename))
+    if not asset_path.startswith(os.path.abspath(folder)):
+         raise HTTPException(status_code=403, detail="Access denied")
+
+    if not os.path.exists(asset_path):
+        raise HTTPException(status_code=404, detail="Icon file missing")
+
+    return FileResponse(asset_path)
 
 
 @router.patch("/{capability_id}/config")
@@ -299,6 +543,16 @@ def update_capability_config(
         with open(config_manager.config_file, "w", encoding="utf-8") as handle:
             json.dump(raw_config, handle, indent=4)
         config_manager.load()
+        if kernel and getattr(kernel, "capability_registry", None):
+            registry = kernel.capability_registry
+            capability_instance = registry.capabilities.get(capability_id) if hasattr(registry, "capabilities") else None
+            if capability_instance is not None:
+                try:
+                    capability_instance.config = dict(capability_config)
+                except Exception:
+                    pass
+            if hasattr(registry, "refresh_retrieval_offer"):
+                registry.refresh_retrieval_offer(capability_id)
     except Exception as exc:
         logger.exception("patch_capability_config.save_failed | capability=%s", capability_id)
         raise HTTPException(status_code=500, detail=f"Failed to save config: {exc}")
@@ -392,8 +646,7 @@ def get_capability_registry(
                 "description": metadata.get("description", ""),
                 "risk_level": metadata.get("risk_level", ""),
                 "permissions": metadata.get("permissions", {}),
-                "icon_key": "",
-                "icon_url": "",
+                "assets": metadata.get("assets"),
             }
         )
     return rows

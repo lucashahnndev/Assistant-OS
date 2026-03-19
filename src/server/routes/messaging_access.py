@@ -36,6 +36,12 @@ class GroupCreateRequest(BaseModel):
     worker_view_scope: str = "owner_identity"
     worker_control_scope: str = "owner_identity"
 
+class OverridesUpdate(BaseModel):
+    allow_capabilities: Optional[List[str]] = None
+    deny_capabilities: Optional[List[str]] = None
+    allow_actions: Optional[List[str]] = None
+    deny_actions: Optional[List[str]] = None
+
 class GroupPatchRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
@@ -160,14 +166,19 @@ async def update_user_status(interface: str, user_id: str, update: StatusUpdate,
     return user
 
 @router.patch("/users/{interface}/{user_id}/overrides")
-async def update_user_overrides(interface: str, user_id: str, overrides: EntityOverrides, request: Request, user_ctx: User = Depends(require_admin_user)):
+async def update_user_overrides(interface: str, user_id: str, overrides: OverridesUpdate, request: Request, user_ctx: User = Depends(require_admin_user)):
     kernel = request.app.state.kernel
     service = kernel.orchestrator.access_controller.identity_service
     user = service.get_user(interface, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    user.overrides = overrides
+    # Map Pydantic model to core EntityOverrides
+    update_data = overrides.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if value is not None:
+            setattr(user.overrides, field, value)
+    
     service.save_user(user)
     return user
 
@@ -205,14 +216,19 @@ async def update_chat_status(interface: str, chat_id: str, update: StatusUpdate,
     return chat
 
 @router.patch("/chats/{interface}/{chat_id}/overrides")
-async def update_chat_overrides(interface: str, chat_id: str, overrides: EntityOverrides, request: Request, user_ctx: User = Depends(require_admin_user)):
+async def update_chat_overrides(interface: str, chat_id: str, overrides: OverridesUpdate, request: Request, user_ctx: User = Depends(require_admin_user)):
     kernel = request.app.state.kernel
     service = kernel.orchestrator.access_controller.identity_service
     chat = service.get_chat(interface, chat_id)
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     
-    chat.overrides = overrides
+    # Map Pydantic model to core EntityOverrides
+    update_data = overrides.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if value is not None:
+            setattr(chat.overrides, field, value)
+    
     service.save_chat(chat)
     return chat
 

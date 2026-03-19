@@ -1043,7 +1043,11 @@ const Tasks = () => {
                             <ul>
                                 {capabilities.map(s => (
                                     <li key={s} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <CapabilityIcon variant="inline" capabilityId={s} capabilityName={s} />
+                                        <CapabilityIcon
+                                            variant="inline"
+                                            capabilityId={s}
+                                            assets={workOverwatch.capabilities_assets?.[s]}
+                                        />
                                         <span>{s}</span>
                                     </li>
                                 ))}

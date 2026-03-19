@@ -1,72 +1,122 @@
 {
-  "contract_version": "1.0",
-  "capability": {
-    "id": "wikipedia_search",
-    "namespace": "wikipedia",
-    "version": "1.0.0",
-    "title": "wikipedia",
-    "description": "Consulta a Wikipedia e retorna conteúdo estruturado para RAG."
-  },
-  "runtime": {
-    "module": "capabilities.wikipedia_search",
-    "factory": "create_capability",
-    "config_schema": "./config.schema.json"
-  },
-  "actions": [
-    {
-      "id": "wikipedia.search",
-      "title": "Search",
-      "description": "Busca artigos na Wikipedia por tema e devolve conteúdo textual em chunks para IA.",
-      "handler": "search",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "wikipedia:search:search"
+    "contract_version": "1.0",
+    "capability": {
+        "id": "wikipedia_search",
+        "namespace": "wikipedia",
+        "version": "1.0.0",
+        "title": "wikipedia",
+        "description": "Consulta a Wikipedia e retorna conte\u00fado estruturado para RAG.",
+        "assets": {
+            "icon_svg": "assets/icon.svg"
+        }
+    },
+    "runtime": {
+        "module": "capabilities.wikipedia_search",
+        "factory": "create_capability",
+        "config_schema": "./config.schema.json"
+    },
+    "actions": [
+        {
+            "id": "wikipedia.search",
+            "title": "Search",
+            "description": "Busca artigos na Wikipedia por tema e devolve conte\u00fado textual em chunks para IA.",
+            "handler": "search",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "wikipedia:search:search"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Tema a pesquisar na Wikipedia."
+                    },
+                    "language": {
+                        "type": "string",
+                        "default": "pt",
+                        "description": "Idioma da Wikipedia (ex.: pt, en, es)."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 3,
+                        "description": "Quantidade m\u00e1xima de artigos retornados (1-5)."
+                    },
+                    "max_chars_per_page": {
+                        "type": "integer",
+                        "default": 4500,
+                        "description": "Limite de caracteres de conte\u00fado por artigo."
+                    },
+                    "chunk_size": {
+                        "type": "integer",
+                        "default": 700,
+                        "description": "Tamanho de cada chunk textual."
+                    },
+                    "chunk_overlap": {
+                        "type": "integer",
+                        "default": 100,
+                        "description": "Sobreposi\u00e7\u00e3o entre chunks."
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "none"
+        }
+    ],
+    "retrieval_profile": {
+        "enabled": true,
+        "roles": [
+            "search",
+            "structured_entity"
         ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "query": {
-            "type": "string",
-            "description": "Tema a pesquisar na Wikipedia."
-          },
-          "language": {
-            "type": "string",
-            "default": "pt",
-            "description": "Idioma da Wikipedia (ex.: pt, en, es)."
-          },
-          "limit": {
-            "type": "integer",
-            "default": 3,
-            "description": "Quantidade máxima de artigos retornados (1-5)."
-          },
-          "max_chars_per_page": {
-            "type": "integer",
-            "default": 4500,
-            "description": "Limite de caracteres de conteúdo por artigo."
-          },
-          "chunk_size": {
-            "type": "integer",
-            "default": 700,
-            "description": "Tamanho de cada chunk textual."
-          },
-          "chunk_overlap": {
-            "type": "integer",
-            "default": 100,
-            "description": "Sobreposição entre chunks."
-          }
+        "domains": [
+            "encyclopedia",
+            "web"
+        ],
+        "entity_types": [
+            "article",
+            "entity"
+        ],
+        "freshness": {
+            "type": "batch",
+            "sla_hours": 168
         },
-        "additionalProperties": true
-      },
-      "side_effect": "none"
+        "quality": {
+            "default_confidence": 0.8,
+            "trust_tier": "curated",
+            "citation_mode": "url_required"
+        },
+        "cost": {
+            "latency_class": "low",
+            "quota_class": "free"
+        },
+        "setup": {
+            "requires_auth": false,
+            "required_fields": [],
+            "healthcheck_action": "wikipedia.search"
+        },
+        "output_contract": {
+            "evidence_schema": "external.evidence.v1",
+            "entity_schema": "external.entity.v1"
+        },
+        "routing_hints": {
+            "preferred_intents": [
+                "entity_lookup",
+                "general_knowledge"
+            ],
+            "avoid_when": [
+                "music_lookup",
+                "location_lookup"
+            ]
+        }
+    },
+    "auth": {
+        "mode": "none",
+        "required": false,
+        "fields": []
     }
-  ],
-  "auth": {
-    "mode": "none",
-    "required": false,
-    "fields": []
-  }
 }

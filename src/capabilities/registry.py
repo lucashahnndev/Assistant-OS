@@ -10,18 +10,29 @@ from .contract_v1 import CapabilityAction, CapabilityContractV1
 logger = logging.getLogger("CapabilityRegistry")
 
 
+def _get_nested_value(data: Dict[str, Any], path: str) -> Any:
+    current: Any = data
+    for token in str(path or "").split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(token)
+    return current
+
+
 class CapabilityRegistry:
     def __init__(self):
         self.capabilities: Dict[str, CapabilityBase] = {}
         self.action_map: Dict[str, CapabilityBase] = {}
         self.action_models: Dict[str, CapabilityAction] = {}
         self.capability_contracts: Dict[str, CapabilityContractV1] = {}
+        self.retrieval_offers: Dict[str, Dict[str, Any]] = {}
         self.schemas: Dict[str, dict] = {}  # capability folder -> config schema
 
     def register(self, capability: CapabilityBase, contract: CapabilityContractV1) -> None:
         capability_id = contract.capability.id
         self.capabilities[capability_id] = capability
         self.capability_contracts[capability_id] = contract
+        self._index_retrieval_offer(capability=capability, contract=contract)
 
         for action in contract.actions:
             if action.id in self.action_map:
@@ -34,6 +45,102 @@ class CapabilityRegistry:
             self.action_map[action.id] = capability
             self.action_models[action.id] = action
             logger.debug("Registered action '%s' for capability '%s'", action.id, capability.name)
+
+    def _index_retrieval_offer(self, capability: CapabilityBase, contract: CapabilityContractV1) -> None:
+        profile = contract.retrieval_profile
+        capability_id = contract.capability.id
+        config = capability.config if isinstance(getattr(capability, "config", None), dict) else {}
+        is_enabled = bool(config.get("enabled", True))
+        if not is_enabled:
+            self.retrieval_offers.pop(capability_id, None)
+            return
+        if not profile or not bool(profile.enabled):
+            self.retrieval_offers.pop(capability_id, None)
+            return
+
+        action_ids = [action.id for action in contract.actions]
+        setup = profile.setup.model_dump() if profile.setup else {}
+        required_fields = [str(x).strip() for x in (setup.get("required_fields") or []) if str(x).strip()]
+        missing_required_fields: List[str] = []
+        for field_path in required_fields:
+            value = _get_nested_value(config, field_path)
+            if value is None:
+                missing_required_fields.append(field_path)
+                continue
+            if isinstance(value, str) and not value.strip():
+                missing_required_fields.append(field_path)
+                continue
+        setup_ready = len(missing_required_fields) == 0
+
+        self.retrieval_offers[capability_id] = {
+            "capability_id": capability_id,
+            "namespace": contract.capability.namespace,
+            "roles": list(profile.roles),
+            "domains": list(profile.domains),
+            "entity_types": list(profile.entity_types),
+            "routing_hints": dict(profile.routing_hints or {}),
+            "actions": action_ids,
+            "quality": profile.quality.model_dump() if profile.quality else {},
+            "freshness": profile.freshness.model_dump() if profile.freshness else {},
+            "cost": profile.cost.model_dump() if profile.cost else {},
+            "setup": setup,
+            "setup_ready": setup_ready,
+            "missing_required_fields": missing_required_fields,
+            "output_contract": profile.output_contract.model_dump() if profile.output_contract else {},
+        }
+
+    def refresh_retrieval_offer(self, capability_id: str) -> None:
+        cap_id = str(capability_id or "").strip()
+        if not cap_id:
+            return
+        capability = self.capabilities.get(cap_id)
+        contract = self.capability_contracts.get(cap_id)
+        if not capability or not contract:
+            self.retrieval_offers.pop(cap_id, None)
+            return
+        self._index_retrieval_offer(capability=capability, contract=contract)
+
+    def refresh_retrieval_offers(self) -> None:
+        for capability_id in list(self.capability_contracts.keys()):
+            self.refresh_retrieval_offer(capability_id)
+
+    def list_retrieval_offers(
+        self,
+        *,
+        intent: Optional[str] = None,
+        domain: Optional[str] = None,
+        role: Optional[str] = None,
+        entity_type: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        # Keep runtime retrieval index in sync with live capability config.
+        self.refresh_retrieval_offers()
+        offers = list(self.retrieval_offers.values())
+        if not offers:
+            return []
+
+        intent_value = str(intent or "").strip().lower()
+        domain_value = str(domain or "").strip().lower()
+        role_value = str(role or "").strip().lower()
+        entity_value = str(entity_type or "").strip().lower()
+
+        filtered: List[Dict[str, Any]] = []
+        for offer in offers:
+            if domain_value and domain_value not in offer.get("domains", []):
+                continue
+            if role_value and role_value not in offer.get("roles", []):
+                continue
+            if entity_value and entity_value not in offer.get("entity_types", []):
+                continue
+            if intent_value:
+                hints = offer.get("routing_hints") if isinstance(offer.get("routing_hints"), dict) else {}
+                preferred = [str(x).strip().lower() for x in (hints.get("preferred_intents") or []) if str(x).strip()]
+                avoid = [str(x).strip().lower() for x in (hints.get("avoid_when") or []) if str(x).strip()]
+                if intent_value in avoid:
+                    continue
+                if preferred and intent_value not in preferred:
+                    continue
+            filtered.append(dict(offer))
+        return sorted(filtered, key=lambda row: str(row.get("capability_id") or ""))
 
     def get_capability_for_action(self, action_id: str) -> Optional[CapabilityBase]:
         return self.action_map.get(action_id)
@@ -118,8 +225,7 @@ class CapabilityRegistry:
                     capability_id = cid
                     break
         contract = self.capability_contracts.get(capability_id) if capability_id else None
-        if contract:
-            namespace = contract.capability.namespace
+        assets = contract.capability.assets.model_dump() if contract else None
         if not namespace and "." in action_id:
             namespace = ".".join(action_id.split(".")[:-1])
 
@@ -134,6 +240,7 @@ class CapabilityRegistry:
             "side_effect": action.side_effect or "none",
             "namespace": namespace,
             "capability_id": capability_id,
+            "assets": assets,
         }
 
     @staticmethod

@@ -1,9 +1,10 @@
-from __future__ import annotations
-
+import logging
 from urllib.parse import urlencode
 from typing import Any, Dict, Optional
 
 from ..base import ExternalAccountProvider, ProviderAuthField, ProviderAuthMetadata, ProviderConfigField, ProviderMetadata
+
+logger = logging.getLogger("GoogleProvider")
 
 
 class GoogleProvider(ExternalAccountProvider):
@@ -62,8 +63,21 @@ class GoogleProvider(ExternalAccountProvider):
     ):
         client_id = self.get_resolved_value(provider_config, "client_id")
         redirect_uri = (provider_config.get("redirect_uri") or "").strip()
-        scopes = provider_config.get("scopes") or self.metadata.default_scopes
+        
+        # Robust scope loading
+        raw_scopes = provider_config.get("scopes")
+        if not raw_scopes:
+            scopes = self.metadata.default_scopes
+        elif isinstance(raw_scopes, str):
+            # Handle space or comma separated strings
+            scopes = [s.strip() for s in raw_scopes.replace(",", " ").split() if s.strip()]
+        elif isinstance(raw_scopes, list):
+            scopes = [str(s).strip() for s in raw_scopes if s]
+        else:
+            scopes = self.metadata.default_scopes
+
         if not client_id or not redirect_uri:
+            logger.error("GoogleProvider: Missing client_id or redirect_uri in config.")
             return None
 
         params = {
@@ -81,7 +95,10 @@ class GoogleProvider(ExternalAccountProvider):
                 if v is None:
                     continue
                 params[str(k)] = str(v)
-        return f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+        
+        auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+        logger.info("GoogleProvider: Generated Authorize URL with scopes: %s", scopes)
+        return auth_url
 
 
 def get_provider() -> ExternalAccountProvider:

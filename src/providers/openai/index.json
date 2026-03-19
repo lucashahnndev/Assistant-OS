@@ -32,11 +32,11 @@
   "settings_fields": [
     {
       "key": "organization_id",
-      "type": "string",
+      "type": "secret_ref",
       "title": "Organization ID",
       "required": false,
       "description": "",
-      "placeholder": ""
+      "placeholder": "ENV_OPENAI_ORG_ID"
     },
     {
       "key": "model",

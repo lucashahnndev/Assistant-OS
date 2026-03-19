@@ -8,10 +8,13 @@ import time
 import datetime
 import platform
 import shutil
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from collections import deque
 from typing import Optional, List, Dict, Callable, Any, Tuple
 from services.llm.manager import LLMManager
-from core.session import Session
+from services.system_sessions.registry import SystemSessionRegistry
+from services.system_sessions.domain_resolver import DomainSessionResolver
+from core.session import Session, SESSION_TYPE_USER, SESSION_TYPE_SYSTEM
 from core.identity import PrincipalContext
 from core.access_controller import AccessController
 from services.memory.memory_service import MemoryService
@@ -25,9 +28,24 @@ from services.i18n import I18nService
 from services.llm.prompt_composer import PromptComposer
 from config.manager import ConfigManager
 from services.location.location_service import LocationService
+from services.context import ContextBroker
+from services.cognition import CognitiveLayer
 from utils.logging_config import get_logger, read_recent_logs
 from utils.event_bus import global_event_bus
-from utils.toon_codec import encode_reasoning_step, encode_state_summary, dumps_toon
+from utils.toon_codec import encode_state_summary, dumps_toon
+
+from services.calendar.models import CalendarEvent
+from services.calendar.store import CalendarStore
+from services.calendar.service import CalendarService
+from services.calendar.scheduler import CalendarScheduler
+from services.calendar.providers.google_provider import GoogleCalendarProvider
+from services.calendar.sync_service import CalendarSyncService
+
+from services.notifications.models import NotificationIntent, NotificationPriority, DeliveryMode
+from services.notifications.store import NotificationStore
+from services.notifications.context_service import CommunicationContextService
+from services.notifications.delivery_resolver import DeliveryResolver
+from services.notifications.dispatcher import NotificationDispatcher
 
 # New resolution and capability imports
 from core.resolution.chain_resolver import FallbackChainResolver
@@ -81,6 +99,9 @@ class AgentOrchestrator:
         return cls._instance
 
     def __init__(self, config_manager=None):
+        self.kernel = None  # Late-bound via set_kernel
+        self.initialized = False
+        
         if hasattr(self, 'initialized') and self.initialized:
             if config_manager:
                 self.config_manager = config_manager
@@ -100,9 +121,11 @@ class AgentOrchestrator:
         self.i18n = I18nService(default_locale="en")
         self.access_controller = AccessController(self.config_manager.base_data_dir)
         self.location_service = LocationService()
+        self.context_broker = ContextBroker(retrieval_handlers=ContextBroker.default_handlers())
+        self.cognitive_layer = CognitiveLayer()
         self.sessions = {} # Dict[str, Session]
         self.session_locks: Dict[str, threading.RLock] = {} # Concurrency guards + persistence serialization (RLock per session)
-        self.index_manager: Optional[SessionIndexManager] = None
+        self.sessions_index: Optional[SessionIndexManager] = None
         self.capability_registry: Optional[CapabilityRegistry] = None
         self.capability_loader: Optional[CapabilityLoader] = None
         self.reflex_registry: Optional[ReflexRegistry] = None
@@ -117,6 +140,12 @@ class AgentOrchestrator:
         self._turn_metrics_cache: Dict[str, Dict[str, Any]] = {}
         self._observation_metrics_cache: Dict[str, deque] = {}
         self._task_func_registry: Dict[str, Callable] = {}
+        
+        # 0. Calendar Domain
+        self.calendar_store = CalendarStore(self.config_manager.base_data_dir)
+        self.calendar_service = CalendarService(self.calendar_store)
+        self.calendar_scheduler = None # Will be linked after Kernel is set
+        
         # Persistence Path
         self.base_data_dir = self.config_manager.base_data_dir
         self.sessions_dir = os.path.join(self.base_data_dir, 'sessions')
@@ -124,17 +153,13 @@ class AgentOrchestrator:
             os.makedirs(self.sessions_dir)
 
         # 0. Session Index Manager
-        self.index_manager = SessionIndexManager(self.sessions_dir)
-        self.index_manager.reconcile()
+        self.sessions_index = SessionIndexManager(self.sessions_dir)
+        self.sessions_index.reconcile()
         
         # 1. Capability System
         self.capability_registry = CapabilityRegistry()
         self.capability_loader = CapabilityLoader(self.capability_registry, config_manager=self.config_manager)
         
-        # Load external capabilities
-        capability_modules_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'capabilities')
-        self.capability_loader.load_from_directory(capability_modules_path)
-
         # 2. Reflex System (Centralized)
         self.reflex_registry = ReflexRegistry()
         for capability in self.capability_registry.capabilities.values():
@@ -152,12 +177,88 @@ class AgentOrchestrator:
             threshold=0.65,
             capability_registry=self.capability_registry,
         )
-        self.intent_resolver_chain = FallbackChainResolver([self.llm_resolver])
+        self.intent_resolver_chain = FallbackChainResolver([self.reflex_resolver, self.llm_resolver])
+
+        # 4. System Sessions
+        self.system_session_registry = SystemSessionRegistry(self)
+        self.domain_resolver = DomainSessionResolver()
+        self.ensure_system_session("attention") # Falls back to domain 'attention'
+        self.ensure_system_session("calendar")  # Pre-create calendar domain session
+
+        # 5. Notification Layer
+        self.notification_store = NotificationStore(self.config_manager.base_data_dir)
+        self.comm_context = CommunicationContextService(self)
+        self.delivery_resolver = DeliveryResolver(self.comm_context)
+        self.notification_dispatcher = None # Will be linked after Kernel is set
 
         # Start GC for Playback
         self._start_playback_gc()
         
         self.initialized = True
+
+    def init_user_calendar_sync(self, user_id: str):
+        """
+        Initializes Google Calendar sync for a user if they have a linked account.
+        Registration is guaranteed; the initial pull is attempted separately.
+        """
+        try:
+            provider = GoogleCalendarProvider(self.kernel, user_id)
+            sync_service = CalendarSyncService(self.kernel, self.calendar_store, provider)
+            self.calendar_service.register_sync_service(user_id, sync_service)
+            logger.info(f"Calendar sync service registered for user '{user_id}'")
+        except Exception as e:
+            logger.error(f"Failed to register calendar sync service for user {user_id}: {e}")
+            return
+
+        # Initial pull in a separate try so registration is not undone if pull fails
+        try:
+            logger.info(f"Triggering initial calendar pull for user '{user_id}'")
+            sync_service.pull(days_back=7, days_forward=30)  # Start with a lightweight window
+        except Exception as e:
+            logger.error(f"Initial calendar pull failed for user {user_id}: {e}")
+
+    def _bootstrap_calendar_sync_from_config(self):
+        """
+        Reads external_accounts.accounts[] from config.json and automatically
+        registers a CalendarSyncService for any connected Google account.
+        Called at kernel startup so the user does not need to re-trigger sync manually.
+        """
+        try:
+            ext_cfg = self.config_manager.get("external_accounts", {}) or {}
+            if not isinstance(ext_cfg, dict):
+                return
+            accounts = ext_cfg.get("accounts", [])
+            if not isinstance(accounts, list) or not accounts:
+                return
+
+            google_accounts = [
+                a for a in accounts
+                if isinstance(a, dict)
+                and str(a.get("provider", "")).lower() == "google"
+                and str(a.get("status", "")).lower() in ("connected", "active")
+            ]
+
+            if not google_accounts:
+                logger.debug("_bootstrap_calendar_sync_from_config: no connected google accounts in config.json")
+                return
+
+            # Use a stable user_id — default portal user is "admin" / user id 1
+            # We'll derive the user_id from the account entry if available
+            for account in google_accounts:
+                # Use the account email or a stable id as user_id key
+                user_id = str(account.get("provider_account_id") or account.get("account") or "admin")
+                if user_id not in self.calendar_service.sync_services:
+                    logger.info(f"Bootstrapping calendar sync for google account: {account.get('account', user_id)}")
+                    self.init_user_calendar_sync(user_id)
+
+                # Also ensure we register for "admin" as the canonical user_id
+                if "admin" not in self.calendar_service.sync_services:
+                    logger.info("Bootstrapping calendar sync for default user 'admin'")
+                    self.init_user_calendar_sync("admin")
+
+        except Exception as e:
+            logger.warning(f"_bootstrap_calendar_sync_from_config failed: {e}")
+
 
     def _release_if_owned(self, lock: threading.RLock) -> bool:
         """Safely release the lock if the current thread owns it."""
@@ -275,10 +376,10 @@ class AgentOrchestrator:
             
         return None
 
-    def create_session(self, session_id: str, interface: str = "web", name: str = "") -> Session:
+    def create_session(self, session_id: str, interface: str = "web", name: str = "", session_type: str = SESSION_TYPE_USER) -> Session:
         """Explicitly creates a new session with the folder structure."""
-        logger.info(f"Creating new session: {session_id} for {interface}")
-        session = Session(session_id)
+        logger.info(f"Creating new session: {session_id} for {interface} (type: {session_type})")
+        session = Session(session_id, session_type=session_type)
         session.source = interface
         session.name = name
         self.sessions[session_id] = session
@@ -290,14 +391,18 @@ class AgentOrchestrator:
         self._save_session(session)
         return session
 
+    def ensure_system_session(self, domain: str):
+        """Guarantees that a specific system session exists for a domain."""
+        return self.system_session_registry.ensure_domain_session(domain)
+
     def get_sessions_list(self, interface: str = "all") -> List[Dict]:
-        if hasattr(self, 'index_manager'):
-            return self.index_manager.list_sessions(interface)
+        if hasattr(self, 'sessions_index'):
+            return self.sessions_index.list_sessions(interface)
         return []
 
     def get_active_session(self, interface: str = "all") -> Optional[Session]:
-        if hasattr(self, 'index_manager'):
-            active_info = self.index_manager.get_active_session(interface)
+        if hasattr(self, 'sessions_index'):
+            active_info = self.sessions_index.get_active_session(interface)
             if active_info:
                 return self.get_session_robust(active_info['session_id'])
         return None
@@ -477,7 +582,70 @@ class AgentOrchestrator:
     def set_kernel(self, kernel):
         """Link back to kernel for system capabilities."""
         self.kernel = kernel
-        self.capability_loader.kernel = kernel
+        if self.capability_loader:
+            self.capability_loader.kernel = kernel
+            
+            # Load external capabilities ONLY after kernel is bound
+            capability_modules_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'capabilities')
+            self.capability_loader.load_from_directory(capability_modules_path)
+            
+            # Re-initialize Reflex Registry after loading capabilities
+            if self.reflex_registry:
+                for capability in self.capability_registry.capabilities.values():
+                    if hasattr(capability, "get_reflex_rules") and callable(capability.get_reflex_rules):
+                        for rule in capability.get_reflex_rules():
+                            self.reflex_registry.register(
+                                pattern=rule['pattern'],
+                                action_id=rule['action_id'],
+                                handler=rule.get('handler')
+                            )
+        
+        # Initialize Calendar Scheduler once we have the kernel (and its InternalDriver)
+        from drivers.interfaces.internal_driver import InternalDriver
+        # Kernel usually creates the internal driver, we need it for the scheduler
+        internal_driver = getattr(kernel, "internal_driver", None)
+        if not internal_driver:
+            # Fallback for initialization order
+            internal_driver = InternalDriver(kernel)
+            kernel.internal_driver = internal_driver
+            
+        self.calendar_scheduler = CalendarScheduler(self.calendar_store, internal_driver)
+        self.calendar_service.set_scheduler(self.calendar_scheduler)
+        self.calendar_scheduler.start()
+
+        # Bootstrap Google Calendar sync if config.json has connected accounts
+        self._bootstrap_calendar_sync_from_config()
+
+        # Initialize Notification Dispatcher
+        self.notification_dispatcher = NotificationDispatcher(kernel, self.delivery_resolver, self.notification_store)
+
+    def notify_user(self, message: str, title: Optional[str] = None, priority: str = "medium", domain: str = "system") -> bool:
+        """
+        Service method to notify the user.
+        """
+        if not self.notification_dispatcher:
+            logger.error("NotificationDispatcher not initialized.")
+            return False
+            
+        # Resolve the active human user ID
+        target_user_id = "default"
+        active_session = self.get_active_session(interface="all")
+        if active_session and getattr(active_session, "session_type", "") == "user":
+            target_user_id = getattr(active_session, "user_id", active_session.session_id)
+        elif hasattr(self, "sessions_index"):
+            # Fallback to the most recent user session in the index
+            user_sessions = self.sessions_index.list_sessions(interface="all", session_type="user")
+            if user_sessions:
+                target_user_id = user_sessions[0].get("user_id") or user_sessions[0].get("session_id")
+
+        intent = NotificationIntent(
+            source_domain=domain,
+            target_user_id=target_user_id,
+            title=title,
+            message=message,
+            priority=NotificationPriority(priority)
+        )
+        return self.notification_dispatcher.dispatch(intent)
 
     def _get_planner_config(self) -> Dict[str, Any]:
         cfg = self.config_manager.get("planner", {})
@@ -766,9 +934,9 @@ class AgentOrchestrator:
         
         # 1. Remove from memory
         if session_id in self.sessions:
-            del self.sessions[session_id]
+            self.sessions.pop(session_id, None)
         if session_id in self.session_locks:
-            del self.session_locks[session_id]
+            self.session_locks.pop(session_id, None)
 
         # 2. Delete Session Folder (JSON, Uploads, Artifacts)
         sess_dir = os.path.join(self.sessions_dir, session_id)
@@ -780,8 +948,8 @@ class AgentOrchestrator:
         # Note: Shared workspace is NOT deleted on per-session basis anymore
 
         # 5. Remove from Index
-        if hasattr(self, 'index_manager'):
-            self.index_manager.delete_session(session_id)
+        if hasattr(self, 'sessions_index'):
+            self.sessions_index.delete_session(session_id)
 
     def get_session_media(self, session_id: str) -> Dict[str, List]:
         """Scans the session media directory and message history for media files and links."""
@@ -1124,8 +1292,8 @@ class AgentOrchestrator:
                 self._atomic_write_json(file_path, session_data)
                 
                 # Update Index
-                if hasattr(self, 'index_manager'):
-                    self.index_manager.register_session(session)
+                if hasattr(self, 'sessions_index'):
+                    self.sessions_index.register_session(session)
         except Exception as e:
             logger.error(f"Error saving session {session.session_id}: {e}")
 
@@ -1456,7 +1624,7 @@ class AgentOrchestrator:
             return f"Executando: {action}"
         return f"Executing: {action}"
 
-    def get_initial_intent(self, user_input: str, session_id: str = "default", user_data: dict = None, context: PrincipalContext = None, attachments: List[str] = None, name: str = "", lock: Optional[threading.RLock] = None, cancel_check: Optional[Callable[[], bool]] = None) -> tuple[Optional[ActionPlan], Optional[str], Any]:
+    def get_initial_intent(self, user_input: str, session_id: str = "default", user_data: dict = None, context: PrincipalContext = None, attachments: List[str] = None, name: str = "", lock: Optional[threading.RLock] = None, cancel_check: Optional[Callable[[], bool]] = None, session_type: str = SESSION_TYPE_USER) -> tuple[Optional[ActionPlan], Optional[str], Any]:
         """
         Runs initial intent resolution using the configured chain (LLM-only).
         Returns (ActionPlan, ReflexResponse_DEPRECATED, Session).
@@ -1468,7 +1636,7 @@ class AgentOrchestrator:
             interface = "web"
             if hasattr(self, "kernel") and self.kernel:
                 interface = self.kernel.resolve_interface_for_session(session_id)
-            session = self.create_session(session_id, interface=interface, name=name)
+            session = self.create_session(session_id, interface=interface, name=name, session_type=session_type)
 
         if user_data:
             session.context.update(user_data)
@@ -1582,7 +1750,7 @@ class AgentOrchestrator:
         except Exception as e:
             logger.error(f"Error auto-naming session {session.session_id}: {e}")
 
-    def process(self, user_input: str, session_id: str = "default", on_partial_response=None, user_data: dict = None, callbacks: dict = None, cancel_check: Callable[[], bool] = None, initial_plan: ActionPlan = None, context: PrincipalContext = None, attachments: List[str] = None, work_id: str = None):
+    def process(self, user_input: str, session_id: str = "default", on_partial_response=None, user_data: dict = None, callbacks: dict = None, cancel_check: Callable[[], bool] = None, initial_plan: ActionPlan = None, context: PrincipalContext = None, attachments: List[str] = None, work_id: str = None, is_internal: bool = False):
         """
         Agentic Loop: Input -> Loop [Reason -> Act -> Observe] -> Response
         """
@@ -1662,10 +1830,20 @@ class AgentOrchestrator:
             )
             if context:
                 session.context["principal_context"] = context.model_dump()
+            
+            # Phase 10: Automatic User Calendar Sync Initialization
+            # Trigger sync if not already active for this session
+            if session_id != "default" and session.session_type == "user":
+                user_id = getattr(session, "user_id", session_id)
+                self.init_user_calendar_sync(user_id)
                 
             # Note: Auto-naming logic was moved to main.py process_input to ensure it runs even for quick replies.
             
             plan = initial_plan
+            
+            # ENSURE PERSISTENCE: Add user message to history
+            if user_input and not initial_plan:
+                session.add_message("user", user_input, attachments=attachments, silent=is_internal)
 
             # HITL pending action resumption
             if session.pending_action:
@@ -1687,6 +1865,20 @@ class AgentOrchestrator:
                         )
                         session.pending_action = None
                         session.add_message("user", user_input, work_id=work_id)
+                        self._commit_cognitive_turn_state(
+                            session=session,
+                            user_input=user_input,
+                            turn_outcome={
+                                "outcome_type": "approval_forwarded" if is_yes else "handoff_or_escalation",
+                                "commit_path": "pending_work_command",
+                                "action_id": str(pending.get("action") or ""),
+                                "last_action_id": str(pending.get("action") or ""),
+                                "last_action_status": "handoff",
+                                "last_action_reason": "approval_forwarded" if is_yes else "approval_denied",
+                                "final_response": self._t(session, "reply.decision_forwarded"),
+                                "handoff_or_escalation": True,
+                            },
+                        )
                         self._save_session(session)
                         return self._t(session, "reply.decision_forwarded")
                     if scheduler:
@@ -1709,6 +1901,18 @@ class AgentOrchestrator:
                 elif is_no:
                     session.pending_action = None
                     session.add_message("user", user_input, work_id=work_id)
+                    self._commit_cognitive_turn_state(
+                        session=session,
+                        user_input=user_input,
+                        turn_outcome={
+                            "outcome_type": "handoff_or_escalation",
+                            "commit_path": "pending_action_cancel",
+                            "last_action_status": "cancelled",
+                            "last_action_reason": "approval_denied",
+                            "final_response": self._t(session, "reply.canceled_sensitive_action"),
+                            "handoff_or_escalation": True,
+                        },
+                    )
                     return self._t(session, "reply.canceled_sensitive_action")
 
             planner_cfg = self._get_planner_config()
@@ -1748,9 +1952,11 @@ class AgentOrchestrator:
             media_used: List[str] = []
             sources_used: List[Dict[str, Any]] = []
             queued_messages: List[str] = []
+            turn_outcome_overrides: Dict[str, Any] = {}
             feedback_cfg = self.config_manager.get("work_feedback", {}) if hasattr(self, "config_manager") else {}
             progress_feedback_enabled = bool(feedback_cfg.get("progress_updates_enabled", False))
             emitted_progress_events: set[str] = set()
+            calendar_create_success_signatures: set[str] = set()
     
             def current_step_title() -> str:
                 if not planner_tree:
@@ -2023,6 +2229,11 @@ class AgentOrchestrator:
                                     'action': last_action_id or "",
                                 }
                             )
+                        turn_outcome_overrides = {
+                            "outcome_type": "fallback_used",
+                            "commit_path": "no_plan_recovery",
+                            "fallback_used": True,
+                        }
                         break
     
                     if isinstance(plan.metadata, dict) and plan.metadata.get("plan"):
@@ -2184,6 +2395,54 @@ class AgentOrchestrator:
                         namespace = ".".join(plan.action_id.split(".")[:2]) if "." in plan.action_id else plan.action_id
                         if namespace not in capabilities_used:
                             capabilities_used.append(namespace)
+
+                    # Guardrail: prevent repeated create_event executions in the same turn.
+                    # For singular requests, any second create should be blocked even if
+                    # the planner drifts args/title between loops.
+                    if plan.action_id == "calendar.create_event":
+                        create_sig = self._calendar_create_signature(plan.args if isinstance(plan.args, dict) else {})
+                        is_singular_create = self._is_single_calendar_create_request(user_input)
+                        already_created_this_turn = bool(calendar_create_success_signatures)
+                        duplicate_signature = bool(create_sig and create_sig in calendar_create_success_signatures)
+                        if duplicate_signature or (is_singular_create and already_created_this_turn):
+                            tool_data = self._summarize_last_success_data(
+                                action_id=last_success_action_id,
+                                structured_result=last_success_structured,
+                                raw_output=last_success_output,
+                            )
+                            final_response = self._generate_recovery_reply(
+                                session=session,
+                                user_input=user_input,
+                                reason="calendar_create_duplicate_blocked",
+                                last_tool_data=tool_data,
+                                last_action_id=last_success_action_id,
+                            )
+                            if not str(final_response or "").strip():
+                                is_pt = self._session_locale(session).startswith("pt")
+                                final_response = (
+                                    "Concluído. O evento já foi criado e evitei uma duplicação."
+                                    if is_pt else
+                                    "Done. The event was already created, so I prevented a duplicate."
+                                )
+                            final_structured_attachments = self._standardize_attachments(
+                                session,
+                                last_generated_attachment_paths,
+                            ) if last_generated_attachment_paths else None
+                            session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id)
+                            final_response_persisted = True
+                            session.scratchpad = ""
+                            session.plan = []
+                            if callbacks and 'send_response' in callbacks:
+                                callbacks['send_response'](
+                                    final_response,
+                                    is_chunk=True,
+                                    attachments=final_structured_attachments,
+                                )
+                                final_response_streamed = True
+                            if callbacks and 'send_complete' in callbacks:
+                                callbacks['send_complete']()
+                                stream_completed = True
+                            break
 
 
                     # Short-circuit repeated semantic fallback loops:
@@ -2402,27 +2661,21 @@ class AgentOrchestrator:
                         plan = None
                         continue
                     
-                    # Add current turn to history for context.
-                    # Prefer TOON compact encoding to reduce prompt footprint.
-                    reasoning_mode = str(prompt_cfg.get("reasoning_history_mode", "toon")).strip().lower()
-                    history_data = {
-                        "thought": plan.thought,
-                        "plan": plan.metadata.get('plan', []),
-                        "action": plan.action_id,
-                        "params": plan.args
-                    }
-                    if reasoning_mode in {"legacy", "json"}:
-                        history_entry = json.dumps(history_data, ensure_ascii=False, separators=(",", ":"))
-                    else:
-                        history_entry = dumps_toon(
-                            encode_reasoning_step(
-                                thought=history_data.get("thought"),
-                                plan=history_data.get("plan"),
-                                action=history_data.get("action"),
-                                params=history_data.get("params"),
-                            )
+                    # Do not append raw thought/plan traces to conversational history.
+                    # Keep only a compact execution digest in session state so the model
+                    # can ground the final reply without leaking internal planner language.
+                    if isinstance(session.state_summary, dict):
+                        digest = session.state_summary.get("execution_digest")
+                        if not isinstance(digest, list):
+                            digest = []
+                        digest.append(
+                            {
+                                "loop": int(loops),
+                                "action": plan.action_id,
+                                "status": "pending_execution",
+                            }
                         )
-                    session.add_message("assistant", history_entry, msg_type="reasoning", work_id=work_id)
+                        session.state_summary["execution_digest"] = digest[-8:]
     
                     if plan.action_id == 'reply':
                         final_response = self._ground_reply_against_last_result(
@@ -2585,11 +2838,17 @@ class AgentOrchestrator:
                                     interface = kernel.resolve_interface_for_session(owner_session_id)
                                 target_session = self.create_session(owner_session_id, interface=interface)
 
+                            tz_name = self.config_manager.get_timezone()
+                            try:
+                                now_str = datetime.datetime.now(ZoneInfo(tz_name)).isoformat()
+                            except Exception:
+                                now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
                             target_session.pending_action = {
                                 "action": plan.action_id,
                                 "params": plan.args,
                                 "work_id": work_id,
-                                "requested_at": datetime.datetime.now().isoformat(),
+                                "requested_at": now_str,
                             }
                             target_session.add_message("assistant", approval_msg, work_id=work_id)
                             self._save_session(target_session)
@@ -2677,6 +2936,13 @@ class AgentOrchestrator:
                                     target_session.pending_action = None
                                     self._save_session(target_session)
                                     final_response = "Sensitive action was denied or timed out. I stopped this worker safely."
+                                    turn_outcome_overrides = {
+                                        "outcome_type": "handoff_or_escalation",
+                                        "commit_path": "approval_wait_denied",
+                                        "last_action_status": "cancelled",
+                                        "last_action_reason": "approval_denied",
+                                        "handoff_or_escalation": True,
+                                    }
                                     session.add_message("assistant", final_response, work_id=work_id)
                                     final_response_persisted = True
                                     if callbacks and 'send_response' in callbacks:
@@ -2694,6 +2960,21 @@ class AgentOrchestrator:
                                     for intent in session.intent_agenda.get_active_intents():
                                         session.intent_agenda.update_intent_status(intent.intent_id, "PAUSED", blocking_reason="approval_pending")
                                 session.add_message("assistant", approval_msg, work_id=work_id)
+                                self._commit_cognitive_turn_state(
+                                    session=session,
+                                    user_input=user_input,
+                                    turn_outcome={
+                                        "outcome_type": "approval_pending",
+                                        "action_id": plan.action_id,
+                                        "last_action_id": plan.action_id,
+                                        "last_action_status": "pending_approval",
+                                        "last_action_reason": "approval_required",
+                                        "final_response": approval_msg,
+                                        "pending_action": session.pending_action,
+                                        "planner_tree": planner_tree,
+                                        "replans_used": replans_used,
+                                    },
+                                )
                                 if callbacks and 'send_complete' in callbacks:
                                     callbacks['send_complete']()
                                     stream_completed = True
@@ -2956,6 +3237,10 @@ class AgentOrchestrator:
                         last_success_structured = structured_result
                         repeated_failure_count = 0
                         last_failure_signature = None
+                        if plan.action_id == "calendar.create_event":
+                            sig = self._calendar_create_signature(plan.args if isinstance(plan.args, dict) else {})
+                            if sig:
+                                calendar_create_success_signatures.add(sig)
 
                         logger.info(
                             "Tool goal progress | action=%s session_id=%s work_id=%s",
@@ -2986,6 +3271,7 @@ class AgentOrchestrator:
                         "maps.",
                         "wikipedia.",
                         "system.control.capabilities.",
+                        "calendar.",
                     ]
                     is_exempt = any(plan.action_id.startswith(ext) for ext in exemptions)
                     
@@ -3019,6 +3305,19 @@ class AgentOrchestrator:
                     
                     session.add_message("system", observation, msg_type="reasoning", summary=summary, work_id=work_id)
                     session.state_summary['last_outcome'] = summary if summary else truncated_result[:300]
+                    if isinstance(session.state_summary, dict):
+                        digest = session.state_summary.get("execution_digest")
+                        if not isinstance(digest, list):
+                            digest = []
+                        digest.append(
+                            {
+                                "loop": int(loops),
+                                "action": plan.action_id,
+                                "status": str(result_status),
+                                "reason": str(result_reason or ""),
+                            }
+                        )
+                        session.state_summary["execution_digest"] = digest[-8:]
     
                     # Persist reasoning/action episodes for future retrieval/debugging.
                     try:
@@ -3059,6 +3358,70 @@ class AgentOrchestrator:
                             },
                         },
                     )
+
+                    # One-shot completion: singular create_event requests should finish
+                    # after the first successful creation to avoid duplicate side effects.
+                    if (
+                        not is_internal
+                        and result_status == "success"
+                        and plan.action_id == "calendar.create_event"
+                        and self._is_single_calendar_create_request(user_input)
+                    ):
+                        final_response = self._generate_recovery_reply(
+                            session=session,
+                            user_input=user_input,
+                            reason="calendar_create_completed",
+                            last_tool_data=self._summarize_last_success_data(
+                                action_id=plan.action_id,
+                                structured_result=last_action_structured,
+                                raw_output=last_action_output,
+                            ),
+                            last_action_id=plan.action_id,
+                        )
+                        if not str(final_response or "").strip():
+                            is_pt = self._session_locale(session).startswith("pt")
+                            final_response = (
+                                "Perfeito. O evento foi criado com sucesso."
+                                if is_pt else
+                                "Perfect. The event was created successfully."
+                            )
+                        final_structured_attachments = self._standardize_attachments(
+                            session,
+                            last_generated_attachment_paths,
+                        ) if last_generated_attachment_paths else None
+                        session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id)
+                        final_response_persisted = True
+                        session.scratchpad = ""
+                        session.plan = []
+                        if callbacks and 'send_response' in callbacks:
+                            callbacks['send_response'](
+                                final_response,
+                                is_chunk=True,
+                                attachments=final_structured_attachments,
+                            )
+                            final_response_streamed = True
+                        if callbacks and 'send_complete' in callbacks:
+                            callbacks['send_complete']()
+                            stream_completed = True
+                        logger.info(
+                            "Calendar create one-shot short-circuit | session=%s work_id=%s",
+                            session_id,
+                            work_id,
+                        )
+                        break
+
+                    # Internal notification actions are one-shot by design.
+                    # After the first successful dispatch, stop reasoning loop to avoid
+                    # repeated reflex re-invocations over the same internal event input.
+                    if is_internal and str(plan.action_id).startswith("notifications.") and str(result_status) == "success":
+                        logger.info(
+                            "Internal one-shot short-circuit | action=%s session=%s work_id=%s",
+                            plan.action_id,
+                            session_id,
+                            work_id,
+                        )
+                        final_response = ""
+                        break
 
                     # Fast-path for vision outputs: avoid unnecessary re-reasoning loops.
                     # IMPORTANT: in assistive overlay requests, vision is an intermediate
@@ -3193,6 +3556,12 @@ class AgentOrchestrator:
                 )
     
             # Guarantee final response lifecycle (persist -> stream -> complete) in all loop exit paths.
+            if final_response and not session.pending_action:
+                final_response = self._sanitize_user_facing_response(
+                    final_response,
+                    language=self._session_locale(session),
+                )
+
             if final_response and not final_response_persisted and not session.pending_action:
                 session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id)
                 final_response_persisted = True
@@ -3219,6 +3588,24 @@ class AgentOrchestrator:
                 last_action_status=last_action_status,
                 last_action_reason=last_action_reason,
                 final_response=final_response,
+            )
+
+            self._commit_cognitive_turn_state(
+                session=session,
+                user_input=user_input,
+                turn_outcome={
+                    "outcome_type": "turn_complete",
+                    "last_action_id": last_action_id,
+                    "last_action_status": last_action_status,
+                    "last_action_reason": last_action_reason,
+                    "last_action_plan": session.context.get("last_action_plan") if isinstance(session.context, dict) else None,
+                    "final_response": final_response,
+                    "pending_action": session.pending_action if isinstance(session.pending_action, dict) else None,
+                    "planner_tree": planner_tree,
+                    "replans_used": replans_used,
+                    "loops": loops,
+                    **turn_outcome_overrides,
+                },
             )
 
             total_tokens = sum(m.get("tokens", 0) for m in session.history)
@@ -4612,6 +4999,7 @@ class AgentOrchestrator:
             or lowered.startswith("overlay command")
         ):
             return "Destaque aplicado na tela." if is_pt else "Highlight applied on screen."
+
         return text
 
     @staticmethod
@@ -4620,6 +5008,36 @@ class AgentOrchestrator:
         if len(text) <= limit:
             return text
         return text[:limit].rstrip() + "..."
+
+    @staticmethod
+    def _is_single_calendar_create_request(user_input: str) -> bool:
+        text = str(user_input or "").strip().lower()
+        if not text:
+            return True
+        plural_markers = (
+            "eventos",
+            "vários",
+            "varios",
+            "dois eventos",
+            "2 eventos",
+            "3 eventos",
+            "mais de um",
+            "todos os eventos",
+            "e outro",
+            "e mais um",
+        )
+        return not any(marker in text for marker in plural_markers)
+
+    @staticmethod
+    def _calendar_create_signature(args: Dict[str, Any]) -> str:
+        if not isinstance(args, dict):
+            return ""
+        title = " ".join(str(args.get("title") or "").strip().lower().split())
+        start = str(args.get("start_time") or "").strip().lower()
+        relative = str(args.get("start_time_relative") or "").strip().lower()
+        if not title and not start and not relative:
+            return ""
+        return f"{title}|{start}|{relative}"
 
     def _build_instruction_pack(
         self,
@@ -4638,55 +5056,31 @@ class AgentOrchestrator:
         if style == "off":
             return ""
 
-        personality_limit = int(prompt_cfg.get("personality_max_chars", 220) or 220)
+        personality_limit = int(prompt_cfg.get("personality_max_chars", 180) or 180)
         policy_compact = [
-            "full_namespaced_actions",
-            "read_before_destructive",
-            "browser_only_for_ui",
-            "failure_honesty_and_alternative",
-            "reply_only_when_done_or_blocked",
-            "non_reply_must_be_progress_ack",
+            "fq_action_ids",
+            "read_before_write",
+            "grounded_failures",
+            "reply_when_done_or_blocked",
+            "progress_ack_for_non_reply",
             "stop_after_3_same_failures",
         ]
         pack = {
-            "v": "ip.v1",
+            "v": "ip.v3",
             "n": self._clip_text(agent_name, 40),
-            "persona_scope": str(personality_scope or "response_text_only").strip().lower(),
-            "lang": {"think": "en", "actions": "en", "reply": user_language or "auto", "single_reply_lang": True},
-            "present": {
-                "mode": presentation_mode,
-                "markdown": bool(markdown_supported),
-            },
+            "scope": str(personality_scope or "response_text_only").strip().lower(),
+            "lang": f"ta=en;r={user_language or 'auto'};single",
+            "present": presentation_mode + ("+md" if markdown_supported else ""),
             "policy": policy_compact,
-            "browser_intent_classes": {
-                "required_for": "browser.control.run",
-                "allowed": {
-                    "controlar_midia": "media playback and stream control",
-                    "realizar_pesquisa": "general browsing/search/reading",
-                    "automacao_ui": "UI workflow automation",
-                    "validacao_visual": "visual verification",
-                    "manutencao": "inspect/health/gc admin actions",
-                },
-                "rule": "never ask user to choose when inferable from request",
-            },
-            "output": {
-                "format": "json_only",
-                "schema_keys": ["thought", "plan", "state_summary", "action", "params", "task_label", "response_text", "attachments"],
-            },
+            "browser": "browser.control.run|infer|controlar_midia,realizar_pesquisa,automacao_ui,validacao_visual,manutencao",
+            "out": "thought,plan,state_summary,action,params,task_label,response_text,attachments",
         }
         if str(personality_scope or "").strip().lower() == "global":
             pack["p"] = self._clip_text(personality, max(80, personality_limit))
         if voice_interaction:
-            pack["reply_constraints"] = {
-                "apply_to": "response_text_only",
-                "style": "ultra_brief",
-                "max_sentences": 2,
-                "prefer_one_sentence": True,
-                "allow_detail_only_if_user_asks": True,
-                "do_not_limit": ["thought", "plan", "action", "params"],
-            }
+            pack["reply"] = "response_text_only|ultra_brief|max2|prefer1|detail_on_request"
         if specialist_hint:
-            pack["sp"] = self._clip_text(specialist_hint, 180)
+            pack["sp"] = self._clip_text(specialist_hint, 120)
         cache_key = json.dumps(pack, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         cached = self._instruction_pack_cache.get(cache_key)
         if cached:
@@ -4713,9 +5107,11 @@ class AgentOrchestrator:
     def _capture_prompt_metrics(self, session_id: str, prompt: str) -> None:
         headers = [
             "[INSTRUCTION PACK]",
+            "[SYSTEM CONTEXT]",
             "[INTERNAL STATE (TOON)]",
-            "[DYNAMIC CONTEXT]",
-            "[AVAILABLE ACTIONS]",
+            "[SESSION SUMMARY]",
+            "[BROKER EVIDENCE]",
+            "[ACTIONS]",
             "[STRUCTURED OUTPUT CONTRACT]",
         ]
         sizes: Dict[str, int] = {}
@@ -4730,13 +5126,14 @@ class AgentOrchestrator:
         }
         self._prompt_metrics_cache[session_id] = metrics
         logger.info(
-            "Prompt Metrics | Session: %s | TotalTok~%d | InstrTok~%d | StateTok~%d | DynTok~%d | ActionsTok~%d | ContractTok~%d",
+            "Prompt Metrics | Session: %s | TotalTok~%d | InstrTok~%d | SysTok~%d | StateTok~%d | BrokerTok~%d | ActionsTok~%d | ContractTok~%d",
             session_id,
             metrics["prompt_tokens_approx"],
             metrics["block_tokens_approx"].get("[INSTRUCTION PACK]", 0),
+            metrics["block_tokens_approx"].get("[SYSTEM CONTEXT]", 0),
             metrics["block_tokens_approx"].get("[INTERNAL STATE (TOON)]", 0),
-            metrics["block_tokens_approx"].get("[DYNAMIC CONTEXT]", 0),
-            metrics["block_tokens_approx"].get("[AVAILABLE ACTIONS]", 0),
+            metrics["block_tokens_approx"].get("[BROKER EVIDENCE]", 0),
+            metrics["block_tokens_approx"].get("[ACTIONS]", 0),
             metrics["block_tokens_approx"].get("[STRUCTURED OUTPUT CONTRACT]", 0),
         )
 
@@ -4904,13 +5301,15 @@ class AgentOrchestrator:
 
     def _construct_system_prompt(self, session: Session, user_input: str = "", worker_updates: List[Dict[str, Any]] = None, active_alerts: List[Dict[str, Any]] = None) -> str:
         """Builds the provider-agnostic system prompt with dynamic sections."""
-        now = datetime.datetime.now()
+        tz_name = self._resolve_session_timezone(session)
+        now = self._now_with_timezone(tz_name)
         sys_info = {
             "time": now.strftime("%H:%M:%S"),
             "date": now.strftime("%Y-%m-%d"),
             "os": platform.system(),
             "dist": platform.release(),
-            "user": os.getlogin() if hasattr(os, 'getlogin') else "unknown"
+            "user": os.getlogin() if hasattr(os, 'getlogin') else "unknown",
+            "timezone": tz_name or ""
         }
         
         prompt_cfg = self.config_manager.get("prompt_context", {}) if hasattr(self, "config_manager") else {}
@@ -4961,34 +5360,34 @@ class AgentOrchestrator:
             or str(session.context.get("interaction_mode", "")).strip().lower() == "voice"
         )
 
+        prompt_profile = "conversational" if self._is_conversational_turn(user_input) else "operational"
         presentation_mode = "markdown"
-        presentation_directive = "[PRESENTATION DIRECTIVE]\n"
+        presentation_lines: List[str] = []
         if voice_only:
             presentation_mode = "voice"
-            presentation_directive += "- Voice mode: plain conversational text only; no markdown.\n"
+            presentation_lines.append("mode=voice_plain")
         elif not markdown_supported:
             presentation_mode = "plain_text"
-            presentation_directive += "- Plain text only; keep structure simple.\n"
+            presentation_lines.append("mode=plain")
         else:
             presentation_mode = "markdown"
-            presentation_directive += "- Markdown preferred for structured outputs (tables/code/lists).\n"
-            presentation_directive += "- Show concrete result snippets; avoid generic completion lines.\n"
+            presentation_lines.append("mode=markdown")
+            if prompt_profile == "operational":
+                presentation_lines.append("result=concrete")
         if voice_interaction:
-            presentation_directive += "- Voice interaction: keep replies short and direct (1-3 brief sentences by default).\n"
-            presentation_directive += "- IMPORTANT: this brevity constraint applies to FINAL USER RESPONSE (`response_text`) only; keep internal `thought` and `plan` complete.\n"
-        
-        # Phase 4: Task-Role Communication Directives
-        presentation_directive += "- When referring to background tasks or workers, ALWAYS use their role (e.g., 'Web Researcher', 'Code Auditor') instead of internal task IDs.\n"
-        presentation_directive += "- You are the sole voice of the system. Interpret worker events and represent them naturally to the user when relevant.\n"
+            presentation_lines.append("reply=brief")
+            presentation_lines.append("brevity=response_text_only")
+        presentation_lines.append("workers=role_names")
+        presentation_lines.append("voice=single_user_facing")
 
-        # Phase 8: Execution Hardening - Degraded Mode Injection
         if hasattr(session, "tool_health") and session.tool_health:
             unhealthy_tools = {name: status for name, status in session.tool_health.items() if status != "HEALTHY"}
             if unhealthy_tools:
-                presentation_directive += "\n[CRITICAL: DEGRADED CAPABILITIES]\n"
+                presentation_lines.append("degraded=present")
                 for name, status in unhealthy_tools.items():
-                    presentation_directive += f"- Tool/Worker '{name}' is currently {status}.\n"
-                presentation_directive += "You must operate in Degraded mode: avoid relying on these tools, prefer alternatives, and notify the user if a core capability is missing.\n"
+                    presentation_lines.append(f"tool={name}:{status}")
+                presentation_lines.append("degraded=avoid_unhealthy_tools")
+        presentation_directive = "[PRESENTATION DIRECTIVE]\n" + "\n".join(f"- {line}" for line in presentation_lines)
 
         instruction_pack = self._build_instruction_pack(
             agent_name=agent_name,
@@ -5021,6 +5420,177 @@ class AgentOrchestrator:
         location_payload = self.location_service.get_current_location(session.context)
         prompt_location = self._format_prompt_location(location_payload)
 
+        cognitive_projection = None
+        legacy_cognitive_frame = None
+        broker_hints = None
+        previous_broker_snapshot = session.context.get("last_context_broker") if isinstance(session.context, dict) else {}
+        try:
+            cognitive_result = self.cognitive_layer.reconcile_and_project(
+                session=session,
+                user_input=user_input,
+                broker_snapshot=previous_broker_snapshot if isinstance(previous_broker_snapshot, dict) else None,
+            )
+            session.cognitive_state = dict(cognitive_result.get("state") or session.cognitive_state or {})
+            session.last_cognitive_projection = cognitive_result.get("projection")
+            session.cognitive_diagnostics = cognitive_result.get("diagnostics")
+            broker_hints = self.cognitive_layer.build_broker_hints(state=session.cognitive_state)
+            suppressed_hints = None
+            if isinstance(broker_hints, dict) and broker_hints.get("hint_suppressed"):
+                suppressed_hints = dict(broker_hints)
+                broker_hints = None
+            if isinstance(session.context, dict) and session.cognitive_diagnostics is not None:
+                diag_snapshot = dict(session.cognitive_diagnostics)
+                diag_snapshot["broker_hints_generated"] = bool(broker_hints)
+                diag_snapshot["broker_hint_summary"] = list((broker_hints or suppressed_hints or {}).get("hint_summary") or [])[:6]
+                diag_snapshot["hint_categories_generated"] = list((broker_hints or suppressed_hints or {}).get("hint_categories") or [])[:6]
+                diag_snapshot["hint_suppressed"] = bool(suppressed_hints)
+                diag_snapshot["hint_suppression_reasons"] = list((suppressed_hints or {}).get("suppression_reasons") or [])[:4]
+                session.context["last_cognitive_layer"] = diag_snapshot
+            if cognitive_result.get("use_legacy_frame"):
+                session.last_cognitive_projection = None
+                legacy_cognitive_frame = session.get_cognitive_frame(user_input).to_dict()
+            else:
+                cognitive_projection = cognitive_result.get("projection")
+        except Exception:
+            session.last_cognitive_projection = None
+            legacy_cognitive_frame = session.get_cognitive_frame(user_input).to_dict()
+            fallback_diag = {
+                "version": "cognitive.v1",
+                "phase": "reconcile",
+                "reconciled_at": int(time.time()),
+                "turn_id": int(getattr(session, "turn_id", 0) or 0),
+                "primary_task_id": "",
+                "agenda_count": 0,
+                "open_loops_count": 0,
+                "blockers_count": 0,
+                "constraints_count": 0,
+                "decisions_count": 0,
+                "working_set_count": 0,
+                "changed_fields": [],
+                "commit_performed": False,
+                "decisions_added": 0,
+                "checkpoints_added": 0,
+                "progress_added": 0,
+                "open_loops_added": 0,
+                "open_loops_closed": 0,
+                "blockers_added": 0,
+                "blockers_cleared": 0,
+                "watchpoints_added": 0,
+                "normalized_outcome_type": "",
+                "outcome_type_generic_fallback_used": False,
+                "commit_coverage_path": "",
+                "broker_hints_generated": False,
+                "broker_hint_summary": [],
+                "hint_categories_generated": [],
+                "hint_applied": False,
+                "hint_ignored": True,
+                "hinted_domains": [],
+                "hint_impact_summary": [],
+                "ranking_changed_by_hint": False,
+                "hint_low_signal": False,
+                "hint_suppressed": False,
+                "hint_suppression_reasons": [],
+                "cognitive_fields_populated": [],
+                "cognitive_fields_changed": [],
+                "cognitive_fields_projected": [],
+                "cognitive_fields_derived_from_outcome": [],
+                "projection_field_sizes": {},
+                "projection_non_empty": False,
+                "strategic_updates_summary": [],
+                "commit_signal_strength": "none",
+                "commit_noise_suppressed_count": 0,
+                "outcome_refined": False,
+                "strategic_field_pruned_count": 0,
+                "effectiveness_flags": [],
+                "planner_relevance_signal": False,
+                "fallback_used": True,
+                "fallback_mode": "legacy_frame",
+            }
+            session.cognitive_diagnostics = fallback_diag
+            if isinstance(session.context, dict):
+                session.context["last_cognitive_layer"] = dict(fallback_diag)
+
+        context_bundle = self.context_broker.build_bundle(
+            user_input=user_input,
+            session=session,
+            capability_registry=self.capability_registry,
+            allowed_actions=allowed_actions,
+            broker_hints=broker_hints,
+            situational_context={
+                "channel": session.context.get("channel", "Unknown"),
+                "location": prompt_location,
+                "attachments_present": bool(session.context.get("last_attachments", [])),
+                "pending_action_present": bool(session.pending_action),
+            },
+            session_context={
+                "session_id": session.session_id,
+                "turn_id": getattr(session, "turn_id", 0),
+                "active_focus_task_id": getattr(session, "active_focus_task_id", None),
+                "summary_present": bool(session.summary),
+                "scratchpad_present": bool(self.scratchpad_service.read(session.session_id)),
+            },
+        )
+        if isinstance(session.context, dict):
+            broker_hint_applied = bool(context_bundle.diagnostics.hint_applied or context_bundle.diagnostics.hint_effects)
+            broker_hint_ignored = bool(context_bundle.diagnostics.hint_ignored)
+            if broker_hints and not broker_hint_applied and not broker_hint_ignored:
+                broker_hint_ignored = True
+            session.context["last_context_broker"] = {
+                "intent": context_bundle.diagnostics.intent,
+                "selected_targets": list(context_bundle.diagnostics.selected_targets),
+                "evidence_domains": list(context_bundle.diagnostics.evidence_domains),
+                "evidence_count": int(context_bundle.diagnostics.evidence_count),
+                "queried_domains": dict(context_bundle.diagnostics.queried_domains),
+                "result_counts_by_domain": dict(context_bundle.diagnostics.result_counts_by_domain),
+                "evidence_counts_by_domain": dict(context_bundle.diagnostics.evidence_counts_by_domain),
+                "evidence_counts_by_domain_selected": dict(context_bundle.diagnostics.evidence_counts_by_domain_selected),
+                "evidence_counts_by_domain_suppressed": dict(context_bundle.diagnostics.evidence_counts_by_domain_suppressed),
+                "rerank_win_by_domain": dict(context_bundle.diagnostics.rerank_win_by_domain),
+                "domain_conflict_resolution_summary": list(context_bundle.diagnostics.domain_conflict_resolution_summary),
+                "total_evidence_chars": int(context_bundle.diagnostics.total_evidence_chars),
+                "evidence_density_reduction_count": int(context_bundle.diagnostics.evidence_density_reduction_count),
+                "low_value_suppressed_count": int(context_bundle.diagnostics.low_value_suppressed_count),
+                "ingestion_stats_by_domain": dict(context_bundle.diagnostics.ingestion_stats_by_domain),
+                "hint_present": bool(context_bundle.diagnostics.hint_present),
+                "hint_generated": bool(context_bundle.diagnostics.hint_generated),
+                "hint_summary": list(context_bundle.diagnostics.hint_summary),
+                "hint_categories": list(context_bundle.diagnostics.hint_categories),
+                "hint_effects": list(context_bundle.diagnostics.hint_effects),
+                "hinted_domains": list(context_bundle.diagnostics.hinted_domains),
+                "hint_applied": broker_hint_applied,
+                "hint_ignored": broker_hint_ignored,
+                "hint_routing_changed": bool(context_bundle.diagnostics.hint_routing_changed),
+                "hint_ranking_changed": bool(context_bundle.diagnostics.hint_ranking_changed),
+                "hint_low_signal": bool(context_bundle.diagnostics.hint_low_signal),
+                "hint_impact_summary": list(context_bundle.diagnostics.hint_impact_summary),
+                "rerank_summary": list(context_bundle.diagnostics.rerank_summary),
+                "classifier_notes": list(context_bundle.diagnostics.classifier_notes),
+                "retrieval_notes": list(context_bundle.diagnostics.retrieval_notes),
+            }
+            if isinstance(session.context.get("last_cognitive_layer"), dict):
+                cognitive_diag = session.context["last_cognitive_layer"]
+                cognitive_diag["hint_applied"] = broker_hint_applied
+                cognitive_diag["hint_ignored"] = broker_hint_ignored
+                cognitive_diag["hinted_domains"] = list(context_bundle.diagnostics.hinted_domains)
+                cognitive_diag["hint_impact_summary"] = list(context_bundle.diagnostics.hint_impact_summary)
+                cognitive_diag["ranking_changed_by_hint"] = bool(context_bundle.diagnostics.hint_ranking_changed)
+                cognitive_diag["hint_low_signal"] = bool(context_bundle.diagnostics.hint_low_signal)
+                cognitive_diag["hint_categories_generated"] = list(context_bundle.diagnostics.hint_categories or cognitive_diag.get("hint_categories_generated") or [])[:6]
+                if broker_hint_applied:
+                    cognitive_diag["planner_relevance_signal"] = True
+                    flags = [
+                        str(item).strip()
+                        for item in list(cognitive_diag.get("effectiveness_flags") or [])
+                        if str(item).strip()
+                    ]
+                    if "hint_influenced_broker" not in flags:
+                        flags.append("hint_influenced_broker")
+                    if "planner_relevance_signal" not in flags:
+                        flags.append("planner_relevance_signal")
+                    cognitive_diag["effectiveness_flags"] = flags[:8]
+                session.cognitive_diagnostics = cognitive_diag
+                self._record_cognitive_effectiveness(session, cognitive_diag)
+
         relevant_memory = self._retrieve_relevant_memory(session, user_input)
 
         prompt = self.prompt_composer.compose(
@@ -5050,57 +5620,352 @@ class AgentOrchestrator:
             capabilities_summary=capabilities_summary,
             capability_scope=capability_scope,
             relevant_memory=relevant_memory,
-            cognitive_frame=session.get_cognitive_frame(user_input).to_dict(),
+            cognitive_frame=legacy_cognitive_frame,
+            cognitive_projection=cognitive_projection,
+            context_bundle=context_bundle,
+            prompt_profile=prompt_profile,
         )
-        # Inject Worker Updates if present
-        if worker_updates:
-            current_turn = getattr(session, "turn_id", 0) or 0
-            formatted_updates = []
-            for event in worker_updates:
-                base_turn = event.get("base_turn_id", 0) or 0
-                turn_dist = current_turn - base_turn
-                stale_prefix = f"[STALE - {turn_dist} turns ago] " if turn_dist > 1 else ""
-                
-                e_type = str(event.get("event_type", "UNKNOWN")).upper()
-                task_role = event.get("task_role", "Worker")
-                summary = event.get("summary") or event.get("failure_summary", "No details")
-                progress = event.get("progress", 0.0)
-                
-                if e_type == "PROGRESS":
-                    line = f"- {stale_prefix}{task_role}: {summary} ({int(progress*100)}%)"
-                elif e_type == "FAILED":
-                    error_code = event.get("error_code", "ERROR")
-                    line = f"- {stale_prefix}{task_role} FAILED [{error_code}]: {summary}"
-                elif e_type == "SLOW":
-                    line = f"- {stale_prefix}ATTENTION: {task_role} is taking longer than expected. {summary}"
-                else:
-                    line = f"- {stale_prefix}{task_role} {e_type}: {summary}"
-                formatted_updates.append(line)
-            
-            if formatted_updates:
-                header = "### Background Worker Updates\n(Information received since last turn)\n"
-                prompt += "\n\n" + header + "\n".join(formatted_updates)
+        prompt_reduction_metrics = dict(getattr(self.prompt_composer, "last_compose_metrics", {}) or {})
+        if isinstance(session.context, dict):
+            session.context["last_prompt_reduction"] = prompt_reduction_metrics
+            broker_snapshot = session.context.get("last_context_broker")
+            if isinstance(broker_snapshot, dict):
+                broker_snapshot["prompt_reduction"] = prompt_reduction_metrics
+        worker_appendix, worker_stats = self._build_worker_appendix(
+            worker_updates=worker_updates or [],
+            current_turn=getattr(session, "turn_id", 0) or 0,
+        )
+        if worker_appendix:
+            prompt += "\n\n" + worker_appendix
 
-        # Inject Structured Active Alerts if present
-        if active_alerts:
-            header = "\n\n### ACTIVE SUPERVISORY ALERTS\n(Actionable status recommendations for the current turn)\n"
-            alert_lines = []
-            for alert in active_alerts:
-                level = alert["outcome"]
-                message = alert["message"]
-                if level == "INPUT":
-                    alert_lines.append(f"!! [USER INPUT REQUIRED] {message}")
-                elif level == "CHAT":
-                    alert_lines.append(f"! [RECOMMENDED CHAT UPDATE] {message}")
-                elif level == "PANEL":
-                    alert_lines.append(f"- [STATUS UPDATE] {message}")
-            
-            if alert_lines:
-                prompt += header + "\n".join(alert_lines)
-                prompt += "\n\nInstruction: As Supervisor, you should interpret these alerts and communicate them to the user ONLY if they are relevant to the current conversation context. WAITING_INPUT events MUST be addressed."
+        supervisory_appendix, supervisory_stats = self._build_supervisory_appendix(active_alerts or [])
+        if supervisory_appendix:
+            prompt += "\n\n" + supervisory_appendix
+
+        prompt_reduction_metrics.update(
+            {
+                "estimated_after_pass5_chars": len(prompt),
+                "worker_appendix_metrics": worker_stats,
+                "supervisory_appendix_metrics": supervisory_stats,
+            }
+        )
+        if isinstance(session.context, dict):
+            session.context["last_prompt_reduction"] = prompt_reduction_metrics
+            broker_snapshot = session.context.get("last_context_broker")
+            if isinstance(broker_snapshot, dict):
+                broker_snapshot["prompt_reduction"] = prompt_reduction_metrics
 
         self._capture_prompt_metrics(session.session_id, prompt)
         return prompt
+
+    def _commit_cognitive_turn_state(
+        self,
+        *,
+        session: Session,
+        user_input: str,
+        turn_outcome: Dict[str, Any],
+    ) -> None:
+        broker_snapshot = session.context.get("last_context_broker") if isinstance(session.context, dict) else {}
+        try:
+            commit_result = self.cognitive_layer.commit_after_turn(
+                session=session,
+                user_input=user_input,
+                broker_snapshot=broker_snapshot if isinstance(broker_snapshot, dict) else None,
+                turn_outcome=turn_outcome,
+            )
+            session.cognitive_state = dict(commit_result.get("state") or session.cognitive_state or {})
+            session.last_cognitive_projection = commit_result.get("projection")
+            session.cognitive_diagnostics = commit_result.get("diagnostics")
+            if isinstance(session.context, dict) and session.cognitive_diagnostics is not None:
+                commit_diag = dict(session.cognitive_diagnostics)
+                previous_diag = session.context.get("last_cognitive_layer")
+                broker_snapshot = session.context.get("last_context_broker")
+                if isinstance(previous_diag, dict):
+                    for key in (
+                        "broker_hints_generated",
+                        "broker_hint_summary",
+                        "hint_categories_generated",
+                        "hint_applied",
+                        "hint_ignored",
+                        "hinted_domains",
+                        "hint_impact_summary",
+                        "ranking_changed_by_hint",
+                        "hint_low_signal",
+                        "hint_suppressed",
+                        "hint_suppression_reasons",
+                    ):
+                        if key in previous_diag:
+                            commit_diag[key] = previous_diag.get(key)
+                if isinstance(broker_snapshot, dict):
+                    commit_diag["hint_applied"] = bool(broker_snapshot.get("hint_applied") or commit_diag.get("hint_applied"))
+                    commit_diag["hint_ignored"] = bool(broker_snapshot.get("hint_ignored") or commit_diag.get("hint_ignored"))
+                    commit_diag["hinted_domains"] = list(broker_snapshot.get("hinted_domains") or commit_diag.get("hinted_domains") or [])[:8]
+                    commit_diag["hint_impact_summary"] = list(broker_snapshot.get("hint_impact_summary") or commit_diag.get("hint_impact_summary") or [])[:8]
+                    commit_diag["ranking_changed_by_hint"] = bool(broker_snapshot.get("hint_ranking_changed") or commit_diag.get("ranking_changed_by_hint"))
+                    commit_diag["hint_low_signal"] = bool(broker_snapshot.get("hint_low_signal") or commit_diag.get("hint_low_signal"))
+                if bool(commit_diag.get("hint_applied")) and not bool(commit_diag.get("planner_relevance_signal")):
+                    commit_diag["planner_relevance_signal"] = True
+                session.cognitive_diagnostics = commit_diag
+                session.context["last_cognitive_layer"] = commit_diag
+                self._record_cognitive_effectiveness(session, commit_diag)
+        except Exception:
+            fallback_diag = {
+                "version": "cognitive.v1",
+                "phase": "commit",
+                "reconciled_at": int(time.time()),
+                "turn_id": int(getattr(session, "turn_id", 0) or 0),
+                "primary_task_id": str(((session.cognitive_state or {}).get("focus") or {}).get("primary_task_id") or ""),
+                "agenda_count": len(list((session.cognitive_state or {}).get("agenda") or [])),
+                "open_loops_count": len(list((session.cognitive_state or {}).get("open_loops") or [])),
+                "blockers_count": len(list((session.cognitive_state or {}).get("blockers") or [])),
+                "constraints_count": len(list((session.cognitive_state or {}).get("constraints") or [])),
+                "decisions_count": len(list((session.cognitive_state or {}).get("decisions") or [])),
+                "working_set_count": len(list((session.cognitive_state or {}).get("working_set") or [])),
+                "changed_fields": [],
+                "commit_performed": False,
+                "decisions_added": 0,
+                "checkpoints_added": 0,
+                "progress_added": 0,
+                "open_loops_added": 0,
+                "open_loops_closed": 0,
+                "blockers_added": 0,
+                "blockers_cleared": 0,
+                "watchpoints_added": 0,
+                "normalized_outcome_type": "",
+                "outcome_type_generic_fallback_used": False,
+                "commit_coverage_path": str(turn_outcome.get("commit_path") or ""),
+                "broker_hints_generated": False,
+                "broker_hint_summary": [],
+                "hint_categories_generated": [],
+                "hint_applied": False,
+                "hint_ignored": False,
+                "hinted_domains": [],
+                "hint_impact_summary": [],
+                "ranking_changed_by_hint": False,
+                "hint_low_signal": False,
+                "hint_suppressed": False,
+                "hint_suppression_reasons": [],
+                "cognitive_fields_populated": [],
+                "cognitive_fields_changed": [],
+                "cognitive_fields_projected": [],
+                "cognitive_fields_derived_from_outcome": [],
+                "projection_field_sizes": {},
+                "projection_non_empty": False,
+                "strategic_updates_summary": [],
+                "commit_signal_strength": "none",
+                "commit_noise_suppressed_count": 0,
+                "outcome_refined": False,
+                "strategic_field_pruned_count": 0,
+                "effectiveness_flags": [],
+                "planner_relevance_signal": False,
+                "fallback_used": True,
+                "fallback_mode": "commit_error",
+            }
+            session.cognitive_diagnostics = fallback_diag
+            if isinstance(session.context, dict):
+                session.context["last_cognitive_layer"] = dict(fallback_diag)
+                self._record_cognitive_effectiveness(session, session.context["last_cognitive_layer"])
+
+    @staticmethod
+    def _record_cognitive_effectiveness(session: Session, diagnostics: Dict[str, Any]) -> None:
+        if not isinstance(getattr(session, "context", None), dict) or not isinstance(diagnostics, dict):
+            return
+
+        counters = session.context.get("cognitive_effectiveness_counters")
+        if not isinstance(counters, dict):
+            counters = {
+                "reconcile_turns": 0,
+                "commit_turns": 0,
+                "hints_generated": 0,
+                "hints_applied": 0,
+                "hints_ignored": 0,
+                "hint_suppressed_count": 0,
+                "hint_routing_impacts": 0,
+                "hint_ranking_impacts": 0,
+                "projection_non_empty_turns": 0,
+                "planner_relevance_turns": 0,
+                "strategic_update_turns": 0,
+                "generic_outcomes": 0,
+                "generic_outcome_streak": 0,
+                "outcome_types": {},
+                "commit_signal_strength": {},
+                "commit_noise_suppressed_count": 0,
+                "outcome_refined_count": 0,
+                "strategic_field_pruned_count": 0,
+                "last_reconcile_turn_id": -1,
+                "last_commit_turn_id": -1,
+            }
+
+        phase = str(diagnostics.get("phase") or "").strip().lower()
+        turn_id = int(diagnostics.get("turn_id") or 0)
+        turn_key = f"last_{phase}_turn_id" if phase in {"reconcile", "commit"} else ""
+        if turn_key and int(counters.get(turn_key, -1)) == turn_id:
+            session.context["cognitive_effectiveness_counters"] = counters
+            return
+
+        if phase == "reconcile":
+            counters["reconcile_turns"] = int(counters.get("reconcile_turns") or 0) + 1
+        elif phase == "commit":
+            counters["commit_turns"] = int(counters.get("commit_turns") or 0) + 1
+
+        if turn_key:
+            counters[turn_key] = turn_id
+
+        if bool(diagnostics.get("broker_hints_generated")):
+            counters["hints_generated"] = int(counters.get("hints_generated") or 0) + 1
+        if bool(diagnostics.get("hint_applied")):
+            counters["hints_applied"] = int(counters.get("hints_applied") or 0) + 1
+        if bool(diagnostics.get("hint_ignored")):
+            counters["hints_ignored"] = int(counters.get("hints_ignored") or 0) + 1
+        if bool(diagnostics.get("hint_suppressed")):
+            counters["hint_suppressed_count"] = int(counters.get("hint_suppressed_count") or 0) + 1
+        if any(str(item).strip().endswith(":active") or str(item).strip().endswith(":priority") for item in list(diagnostics.get("hint_impact_summary") or [])):
+            counters["hint_routing_impacts"] = int(counters.get("hint_routing_impacts") or 0) + 1
+        if bool(diagnostics.get("ranking_changed_by_hint")):
+            counters["hint_ranking_impacts"] = int(counters.get("hint_ranking_impacts") or 0) + 1
+        if bool(diagnostics.get("projection_non_empty")):
+            counters["projection_non_empty_turns"] = int(counters.get("projection_non_empty_turns") or 0) + 1
+        if bool(diagnostics.get("planner_relevance_signal")):
+            counters["planner_relevance_turns"] = int(counters.get("planner_relevance_turns") or 0) + 1
+        if list(diagnostics.get("strategic_updates_summary") or []):
+            counters["strategic_update_turns"] = int(counters.get("strategic_update_turns") or 0) + 1
+
+        if bool(diagnostics.get("outcome_refined")):
+            counters["outcome_refined_count"] = int(counters.get("outcome_refined_count") or 0) + 1
+
+        commit_noise_suppressed = int(diagnostics.get("commit_noise_suppressed_count") or 0)
+        if commit_noise_suppressed > 0:
+            counters["commit_noise_suppressed_count"] = int(counters.get("commit_noise_suppressed_count") or 0) + commit_noise_suppressed
+
+        strategic_field_pruned = int(diagnostics.get("strategic_field_pruned_count") or 0)
+        if strategic_field_pruned > 0:
+            counters["strategic_field_pruned_count"] = int(counters.get("strategic_field_pruned_count") or 0) + strategic_field_pruned
+
+        outcome_type = str(diagnostics.get("normalized_outcome_type") or "").strip()
+        if outcome_type:
+            outcome_counts = counters.get("outcome_types")
+            if not isinstance(outcome_counts, dict):
+                outcome_counts = {}
+            outcome_counts[outcome_type] = int(outcome_counts.get(outcome_type) or 0) + 1
+            counters["outcome_types"] = outcome_counts
+
+        if bool(diagnostics.get("outcome_type_generic_fallback_used")):
+            counters["generic_outcomes"] = int(counters.get("generic_outcomes") or 0) + 1
+            counters["generic_outcome_streak"] = int(counters.get("generic_outcome_streak") or 0) + 1
+        elif phase == "commit":
+            counters["generic_outcome_streak"] = 0
+
+        signal_strength = str(diagnostics.get("commit_signal_strength") or "").strip().lower()
+        if signal_strength:
+            signal_counts = counters.get("commit_signal_strength")
+            if not isinstance(signal_counts, dict):
+                signal_counts = {}
+            signal_counts[signal_strength] = int(signal_counts.get(signal_strength) or 0) + 1
+            counters["commit_signal_strength"] = signal_counts
+
+        if phase == "commit" and int(counters.get("generic_outcome_streak") or 0) >= 3:
+            flags = [str(item).strip() for item in list(diagnostics.get("effectiveness_flags") or []) if str(item).strip()]
+            if "generic_outcome_streak" not in flags:
+                flags.append("generic_outcome_streak")
+            diagnostics["effectiveness_flags"] = flags[:8]
+
+        session.context["cognitive_effectiveness_counters"] = counters
+
+    @staticmethod
+    def _build_worker_appendix(worker_updates: List[Dict[str, Any]], current_turn: int) -> tuple[str, Dict[str, Any]]:
+        if not worker_updates:
+            return "", {
+                "mode": "suppressed",
+                "seen": 0,
+                "kept": 0,
+                "suppressed": 0,
+                "chars": 0,
+            }
+
+        kept_lines: List[str] = []
+        seen = len(worker_updates)
+        for event in worker_updates:
+            event_type = str(event.get("event_type", "UNKNOWN")).upper()
+            attention = str(event.get("attention_level", "")).lower()
+            progress = float(event.get("progress", 0.0) or 0.0)
+            if event_type == "PROGRESS" and progress < 0.5 and attention not in {"medium", "high"}:
+                continue
+
+            base_turn = event.get("base_turn_id", 0) or 0
+            turn_dist = current_turn - base_turn
+            stale = f" stale={turn_dist}" if turn_dist > 1 else ""
+            task_role = str(event.get("task_role") or event.get("task_id") or "Worker")
+            summary = str(event.get("summary") or event.get("failure_summary") or "No details").strip()
+            if event_type == "FAILED":
+                code = str(event.get("error_code") or "ERROR")
+                kept_lines.append(f"{task_role}|FAILED[{code}]{stale}|{summary}")
+            elif event_type == "SLOW":
+                kept_lines.append(f"{task_role}|SLOW{stale}|{summary}")
+            else:
+                kept_lines.append(f"{task_role}|{event_type}{stale}|{int(progress * 100)}% {summary}".strip())
+            if len(kept_lines) >= 3:
+                break
+
+        if not kept_lines:
+            return "", {
+                "mode": "suppressed",
+                "seen": seen,
+                "kept": 0,
+                "suppressed": seen,
+                "chars": 0,
+            }
+
+        appendix = "[WORKER UPDATES]\n- " + "\n- ".join(kept_lines)
+        return appendix, {
+            "mode": "compact",
+            "seen": seen,
+            "kept": len(kept_lines),
+            "suppressed": max(0, seen - len(kept_lines)),
+            "chars": len(appendix),
+        }
+
+    @staticmethod
+    def _build_supervisory_appendix(active_alerts: List[Dict[str, Any]]) -> tuple[str, Dict[str, Any]]:
+        if not active_alerts:
+            return "", {
+                "mode": "suppressed",
+                "seen": 0,
+                "kept": 0,
+                "suppressed": 0,
+                "chars": 0,
+            }
+
+        tag_map = {"INPUT": "input", "CHAT": "chat", "PANEL": "panel"}
+        kept_lines: List[str] = []
+        seen = len(active_alerts)
+        for alert in active_alerts:
+            outcome = str(alert.get("outcome") or "").upper()
+            if outcome not in tag_map:
+                continue
+            message = str(alert.get("message") or "").strip()
+            kept_lines.append(f"{tag_map[outcome]}|{message}")
+            if len(kept_lines) >= 3:
+                break
+
+        if not kept_lines:
+            return "", {
+                "mode": "suppressed",
+                "seen": seen,
+                "kept": 0,
+                "suppressed": seen,
+                "chars": 0,
+            }
+
+        appendix = "[SUPERVISION]\n- " + "\n- ".join(kept_lines)
+        if any(line.startswith("input|") for line in kept_lines):
+            appendix += "\n- prioritize user input requests when relevant"
+        return appendix, {
+            "mode": "compact",
+            "seen": seen,
+            "kept": len(kept_lines),
+            "suppressed": max(0, seen - len(kept_lines)),
+            "chars": len(appendix),
+        }
 
     @staticmethod
     def _format_prompt_location(location_payload: Any) -> str:
@@ -5110,22 +5975,66 @@ class AgentOrchestrator:
         city = str(location_payload.get("city") or "").strip()
         state = str(location_payload.get("state") or "").strip()
         country = str(location_payload.get("country") or "").strip()
+        timezone = str(location_payload.get("timezone") or "").strip()
+        language = str(location_payload.get("language") or "").strip()
         lat = location_payload.get("latitude")
         lon = location_payload.get("longitude")
 
         parts = [p for p in (city, state, country) if p and p.lower() != "unknown"]
+        extras = []
+        if timezone and timezone.lower() not in {"unknown", "none"}:
+            extras.append(f"TZ: {timezone}")
+        if language and language.lower() not in {"unknown", "none"}:
+            extras.append(f"Lang: {language}")
         if parts:
             if lat is not None and lon is not None:
-                return f"{', '.join(parts)} [{lat},{lon}]"
-            return ", ".join(parts)
+                base = f"{', '.join(parts)} [{lat},{lon}]"
+            else:
+                base = ", ".join(parts)
+            if extras:
+                return f"{base} | " + " | ".join(extras)
+            return base
 
         if lat is not None and lon is not None:
             try:
-                return f"{float(lat):.6f},{float(lon):.6f}"
+                base = f"{float(lat):.6f},{float(lon):.6f}"
             except Exception:
-                return f"{lat},{lon}"
+                base = f"{lat},{lon}"
+            if extras:
+                return f"{base} | " + " | ".join(extras)
+            return base
 
+        if extras:
+            return "Unknown | " + " | ".join(extras)
         return "Unknown"
+
+    def _resolve_session_timezone(self, session: Optional[Session]) -> str:
+        if session and isinstance(getattr(session, "context", None), dict):
+            context = session.context
+            direct = (
+                context.get("timezone")
+                or context.get("tz")
+                or context.get("user_timezone")
+            )
+            if direct:
+                return str(direct)
+            loc = context.get("location")
+            if isinstance(loc, dict):
+                loc_tz = loc.get("timezone") or loc.get("tz")
+                if loc_tz:
+                    return str(loc_tz)
+
+        return self.config_manager.get_timezone()
+
+    @staticmethod
+    def _now_with_timezone(timezone_name: str) -> datetime.datetime:
+        if not timezone_name:
+            # Fallback to UTC instead of naive local if no TZ provided
+            return datetime.datetime.now(datetime.timezone.utc)
+        try:
+            return datetime.datetime.now(ZoneInfo(timezone_name))
+        except (ZoneInfoNotFoundError, ValueError):
+            return datetime.datetime.now(datetime.timezone.utc)
 
     def _build_prompt_actions_block(self, user_input: str, allowed_actions: Optional[List[str]]) -> str:
         """
@@ -5161,28 +6070,25 @@ class AgentOrchestrator:
                 mode = "compact_hybrid"
             else:
                 base_payload = {
-                    "v": "ac.v2",
-                    "m": "on_demand",
-                    "discover": bootstrap,
-                    "rules": [
-                        "discover_if_unknown",
-                        "prefer_ai_over_ui",
-                        "capabilities_catalog_only_not_content_search",
-                    ],
+                    "v": "ac.v4",
+                    "m": "od",
+                    "d": bootstrap,
+                    "r": ["discover", "prefer_ai", "catalog_only"],
                 }
                 if self._is_conversational_turn(user_input):
                     return _pack(
                         {
                             **base_payload,
-                            "m": "on_demand_chat",
-                            "prefer_reply": True,
+                            "m": "od_chat",
+                            "pr": True,
                         },
-                        "Catalog mode: on_demand_chat",
+                        "m=od_chat",
                     )
-                return _pack(base_payload, "Catalog mode: on_demand")
+                return _pack(base_payload, "m=od")
 
         manifest = self.capability_registry.get_compact_manifest(allowed_actions)
         focus_limit = int(prompt_cfg.get("focus_limit", 8))
+        dense_threshold = int(prompt_cfg.get("dense_catalog_threshold", 24) or 24)
         focus = self.capability_registry.get_focus_actions(
             user_input=user_input or "",
             allowed_actions=allowed_actions,
@@ -5193,25 +6099,41 @@ class AgentOrchestrator:
             short_focus_ids = [str(row.get("id") or "") for row in focus[:4] if str(row.get("id") or "").strip()]
             return _pack(
                 {
-                    "v": "ac.v2",
-                    "m": "compact_chat",
-                    "prefer_reply": True,
-                    "focus": short_focus_ids,
+                    "v": "ac.v4",
+                    "m": "chat",
+                    "pr": True,
+                    "f": short_focus_ids,
                 },
-                "Catalog mode: compact_chat",
+                "m=chat",
             )
 
         focus_ids = [str(row.get("id") or "") for row in focus if str(row.get("id") or "").strip()]
+        action_ids = [str(item) for item in list(manifest.get("actions", []))]
+        total_actions = int(manifest.get("count", 0) or len(action_ids))
+        if total_actions > dense_threshold:
+            dense_seed = focus_ids[:10] or action_ids[:12]
+            payload = {
+                "v": "ac.v4",
+                "m": "dense_hybrid" if mode == "compact_hybrid" else "dense",
+                "c": total_actions,
+                "h": str(manifest.get("hash", "none") or "none"),
+                "ns": list(manifest.get("namespaces", [])[:8]),
+                "a": dense_seed,
+                "f": focus_ids[:10],
+                "more": max(0, total_actions - len(dense_seed)),
+            }
+            return _pack(payload, f"m={payload['m']}")
+
         payload = {
-            "v": "ac.v2",
+            "v": "ac.v4",
             "m": mode,
-            "c": int(manifest.get("count", 0) or 0),
+            "c": total_actions,
             "h": str(manifest.get("hash", "none") or "none"),
-            "ns": list(manifest.get("namespaces", [])[:12]),
-            "a": list(manifest.get("actions", [])),
+            "ns": list(manifest.get("namespaces", [])[:10]),
+            "a": action_ids,
             "f": focus_ids,
         }
-        return _pack(payload, f"Catalog mode: {mode}")
+        return _pack(payload, f"m={mode}")
 
 
     @staticmethod
@@ -5447,6 +6369,81 @@ class AgentOrchestrator:
         )
         return any(marker in value for marker in markers)
 
+    @staticmethod
+    def _looks_like_interactive_browser_request(text: str) -> bool:
+        value = str(text or "").strip().lower()
+        if not value:
+            return False
+        interactive_markers = (
+            "clique",
+            "clicar",
+            "preencha",
+            "preencher",
+            "digite",
+            "arraste",
+            "scroll",
+            "role",
+            "login",
+            "log in",
+            "signin",
+            "sign in",
+            "senha",
+            "password",
+            "captcha",
+            "formulário",
+            "formulario",
+            "form",
+            "botão",
+            "botao",
+            "button",
+            "cookie",
+            "aceitar cookies",
+            "aceite cookies",
+            "interface",
+            "na tela",
+            "screen",
+            "ui",
+            "site",
+            "website",
+            "navegador",
+            "browser",
+            "abrir ",
+            "open ",
+            "go to ",
+            "acessar ",
+        )
+        return any(marker in value for marker in interactive_markers)
+
+    @staticmethod
+    def _looks_like_knowledge_research_request(text: str) -> bool:
+        value = str(text or "").strip().lower()
+        if not value:
+            return False
+        research_markers = (
+            "pesquise",
+            "pesquisar",
+            "procure",
+            "buscar",
+            "busque",
+            "search",
+            "find",
+            "look up",
+            "qual ",
+            "quais ",
+            "quando ",
+            "como ",
+            "quem ",
+            "o que",
+            "por que",
+            "data de",
+            "what ",
+            "when ",
+            "why ",
+            "how ",
+            "where ",
+        )
+        return any(marker in value for marker in research_markers)
+
     def _apply_media_decision_policy(
         self,
         *,
@@ -5482,6 +6479,47 @@ class AgentOrchestrator:
                         args=enriched,
                         confidence=plan.confidence,
                         source=f"{plan.source}_assistive_nudge",
+                        response_text=plan.response_text,
+                        thought=plan.thought,
+                        metadata=dict(plan.metadata or {}),
+                        attachments=plan.attachments,
+                    )
+
+        action_id = str(plan.action_id or "").strip().lower()
+        args = plan.args if isinstance(plan.args, dict) else {}
+        intent_class = str(args.get("intent_class") or "").strip().lower()
+        if (
+            action_id == "browser.control.run"
+            and intent_class in {"", "realizar_pesquisa"}
+            and not self._is_youtube_playback_request(user_input)
+            and self._looks_like_knowledge_research_request(user_input)
+            and not self._looks_like_interactive_browser_request(user_input)
+        ):
+            query = str(user_input or "").strip()
+            if query:
+                if self.capability_registry.get_capability_for_action("research.retrieve.run"):
+                    logger.info(
+                        "Decision policy guardrail: browser.control.run -> research.retrieve.run for non-interactive knowledge query."
+                    )
+                    return ActionPlan(
+                        action_id="research.retrieve.run",
+                        args={"query": query},
+                        confidence=max(float(plan.confidence or 0.0), 0.76),
+                        source=f"{plan.source}_knowledge_guardrail",
+                        response_text=plan.response_text,
+                        thought=plan.thought,
+                        metadata=dict(plan.metadata or {}),
+                        attachments=plan.attachments,
+                    )
+                if self.capability_registry.get_capability_for_action("web.search.discover"):
+                    logger.info(
+                        "Decision policy guardrail: browser.control.run -> web.search.discover for non-interactive knowledge query."
+                    )
+                    return ActionPlan(
+                        action_id="web.search.discover",
+                        args={"query": query, "mode": "links", "limit": 5},
+                        confidence=max(float(plan.confidence or 0.0), 0.75),
+                        source=f"{plan.source}_knowledge_guardrail",
                         response_text=plan.response_text,
                         thought=plan.thought,
                         metadata=dict(plan.metadata or {}),

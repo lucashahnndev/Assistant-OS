@@ -13,6 +13,7 @@ import Dashboard from './pages/Dashboard';
 import Chat from './pages/Chat';
 import Capabilities from './pages/Capabilities';
 import Memory from './pages/Memory';
+import CognitionDiagnostics from './pages/CognitionDiagnostics';
 import Settings from './pages/Settings';
 import Tasks from './pages/Tasks';
 import MessagingAccess from './pages/MessagingAccess';
@@ -54,6 +55,7 @@ const AppRoutes = () => {
                 <Route path="chat" element={<Chat />} />
                 <Route path="capabilities" element={<Capabilities />} />
                 <Route path="memory" element={<Memory />} />
+                <Route path="cognition" element={<CognitionDiagnostics />} />
                 <Route path="tasks" element={<Tasks />} />
                 <Route path="settings" element={<Settings />} />
                 <Route path="security" element={<Security />} />

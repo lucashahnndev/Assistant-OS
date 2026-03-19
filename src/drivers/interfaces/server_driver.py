@@ -115,6 +115,14 @@ class ServerDriver(BaseDriver):
             
             asyncio.create_task(event_bridge())
 
+        @self.app.on_event("shutdown")
+        async def shutdown_event():
+            from utils.event_bus import global_event_bus
+            logger.info("ServerDriver shutdown event: clearing EventBus loop reference.")
+            global_event_bus.set_loop(None)
+            self.loop = None
+            self.loop_ready.clear()
+
         @self.app.websocket("/ws/{session_id}")
         async def websocket_endpoint(websocket: WebSocket, session_id: str):
             await self.connection_manager.connect(websocket, session_id)
@@ -301,6 +309,13 @@ class ServerDriver(BaseDriver):
             logger.info("Uvicorn stopped.")
         except Exception as e:
             logger.error(f"Server start error: {e}", exc_info=True)
+        finally:
+            # If startup failed (e.g., port already in use) or server stopped,
+            # prevent stale closed loop references from breaking the kernel.
+            from utils.event_bus import global_event_bus
+            global_event_bus.set_loop(None)
+            self.loop = None
+            self.loop_ready.clear()
 
     def stop(self):
         self.running = False
@@ -321,7 +336,7 @@ class ServerDriver(BaseDriver):
             logger.info("ServerDriver: Waiting for asyncio loop to be ready...")
             self.loop_ready.wait(timeout=5.0)
 
-        if self.loop and target:
+        if self.loop and not self.loop.is_closed() and target:
             # Prepare JSON response
             # Standardized message types for the new Portal UI
             msg_type = "final_message_chunk" if is_chunk else "assistant_response"
@@ -341,7 +356,7 @@ class ServerDriver(BaseDriver):
 
     def send_status(self, target, phase, payload=None):
         """Sends a status update (loader phase)."""
-        if not self.loop or not target: return
+        if not self.loop or self.loop.is_closed() or not target: return
         
         # Backward compatibility: Extract 'label' from payload dict if present
         # Most of our front-ends expect 'message' to be a string.
@@ -365,7 +380,7 @@ class ServerDriver(BaseDriver):
 
     def send_reasoning_chunk(self, target, content):
         """Sends a reasoning step log."""
-        if not self.loop or not target: return
+        if not self.loop or self.loop.is_closed() or not target: return
         payload = json.dumps({
             "type": "reasoning_chunk",
             "content": content,
@@ -378,7 +393,7 @@ class ServerDriver(BaseDriver):
 
     def send_complete(self, target):
         """Sends completion signal."""
-        if not self.loop or not target: return
+        if not self.loop or self.loop.is_closed() or not target: return
         payload = json.dumps({
             "type": "complete",
             "timestamp": time.time()
@@ -397,7 +412,7 @@ class ServerDriver(BaseDriver):
         if not self.loop_ready.is_set():
             self.loop_ready.wait(timeout=2.0)
 
-        if self.loop:
+        if self.loop and not self.loop.is_closed():
             payload = json.dumps({
                 "type": "assistant_thought",
                 "content": thought,
@@ -416,7 +431,7 @@ class ServerDriver(BaseDriver):
         if not self.loop_ready.is_set():
             self.loop_ready.wait(timeout=5.0)
 
-        if self.loop and target:
+        if self.loop and not self.loop.is_closed() and target:
             import os
             filename = os.path.basename(file_path)
             # Use the new secure proxy route for the URL
@@ -443,7 +458,7 @@ class ServerDriver(BaseDriver):
 
     def send_voice_event(self, session_id, payload):
         """Standardized method to send Voice Protocol events to the client."""
-        if not self.loop or not session_id: return
+        if not self.loop or self.loop.is_closed() or not session_id: return
         
         json_payload = json.dumps(payload)
         asyncio.run_coroutine_threadsafe(

@@ -129,7 +129,12 @@ class WorkerManager:
                     # Warning-only: do not kill/mark failed from watchdog.
                     work = self.scheduler.get_work(work_id)
                     if work and work.status == WorkStatus.RUNNING:
-                        age = (datetime.datetime.now() - work.updated_at).total_seconds()
+                        # work.updated_at is aware if it comes from Scheduler
+                        now_aware = datetime.datetime.now(datetime.timezone.utc)
+                        if work.updated_at.tzinfo:
+                             age = (now_aware - work.updated_at).total_seconds()
+                        else:
+                             age = (datetime.datetime.now() - work.updated_at).total_seconds()
                         if age > 360:  # 6 minutes without scheduler update
                             now = time.time()
                             last_warn = float(self._hung_warned_at.get(work_id, 0.0))

@@ -1,61 +1,114 @@
 {
-  "contract_version": "1.0",
-  "capability": {
-    "id": "deezer_search",
-    "namespace": "deezer.search",
-    "version": "1.0.0",
-    "title": "deezer.search",
-    "description": "Encontra músicas, artistas, álbuns e playlists no Deezer, com retorno estruturado para recomendação e reprodução."
-  },
-  "runtime": {
-    "module": "capabilities.deezer_search",
-    "factory": "create_capability",
-    "config_schema": "./config.schema.json"
-  },
-  "actions": [
-    {
-      "id": "deezer.search.search",
-      "title": "Search",
-      "description": "Pesquisa catálogo do Deezer por tipo de conteúdo e retorna melhor correspondência + lista.",
-      "handler": "search",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "deezer:search:search"
+    "contract_version": "1.0",
+    "capability": {
+        "id": "deezer_search",
+        "namespace": "deezer.search",
+        "version": "1.0.0",
+        "title": "deezer.search",
+        "description": "Encontra m\u00fasicas, artistas, \u00e1lbuns e playlists no Deezer, com retorno estruturado para recomenda\u00e7\u00e3o e reprodu\u00e7\u00e3o.",
+        "assets": {
+            "icon_svg": "assets/icon.svg"
+        }
+    },
+    "runtime": {
+        "module": "capabilities.deezer_search",
+        "factory": "create_capability",
+        "config_schema": "./config.schema.json"
+    },
+    "actions": [
+        {
+            "id": "deezer.search.search",
+            "title": "Search",
+            "description": "Pesquisa cat\u00e1logo do Deezer por tipo de conte\u00fado e retorna melhor correspond\u00eancia + lista.",
+            "handler": "search",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "deezer:search:search"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Termo de busca"
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "track",
+                            "artist",
+                            "album",
+                            "playlist"
+                        ],
+                        "default": "track"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 5
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "none"
+        }
+    ],
+    "retrieval_profile": {
+        "enabled": true,
+        "roles": [
+            "search",
+            "structured_entity",
+            "metadata_only"
         ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "query": {
-            "type": "string",
-            "description": "Termo de busca"
-          },
-          "type": {
-            "type": "string",
-            "enum": [
-              "track",
-              "artist",
-              "album",
-              "playlist"
-            ],
-            "default": "track"
-          },
-          "limit": {
-            "type": "integer",
-            "default": 5
-          }
+        "domains": [
+            "music",
+            "media"
+        ],
+        "entity_types": [
+            "track",
+            "artist",
+            "album",
+            "playlist"
+        ],
+        "freshness": {
+            "type": "live",
+            "sla_hours": 24
         },
-        "additionalProperties": true
-      },
-      "side_effect": "none"
+        "quality": {
+            "default_confidence": 0.72,
+            "trust_tier": "public_api",
+            "citation_mode": "url_required"
+        },
+        "cost": {
+            "latency_class": "low",
+            "quota_class": "free"
+        },
+        "setup": {
+            "requires_auth": false,
+            "required_fields": [],
+            "healthcheck_action": "deezer.search.search"
+        },
+        "output_contract": {
+            "evidence_schema": "external.evidence.v1",
+            "entity_schema": "external.entity.v1"
+        },
+        "routing_hints": {
+            "preferred_intents": [
+                "music_lookup",
+                "media_lookup"
+            ],
+            "avoid_when": [
+                "policy_lookup",
+                "location_lookup"
+            ]
+        }
+    },
+    "auth": {
+        "mode": "none",
+        "required": false,
+        "fields": []
     }
-  ],
-  "auth": {
-    "mode": "none",
-    "required": false,
-    "fields": []
-  }
 }

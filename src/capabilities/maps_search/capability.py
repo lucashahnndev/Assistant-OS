@@ -93,6 +93,45 @@ class MapsSearchCapability(CapabilityBase):
             "confidenceScore": 0.9,
         }
 
+    @staticmethod
+    def _places_to_results(places: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for place in places:
+            if not isinstance(place, dict):
+                continue
+            name = str(place.get("name") or "").strip()
+            url = str(place.get("url") or "").strip()
+            address = str(place.get("address") or "").strip()
+            rating = place.get("rating")
+            types = place.get("types") if isinstance(place.get("types"), list) else []
+            open_now = place.get("open_now")
+            parts = [name, address]
+            if rating is not None:
+                parts.append(f"rating {rating}")
+            if types:
+                parts.append(f"types: {', '.join(str(x) for x in types[:4])}")
+            if open_now is not None:
+                parts.append("open now" if bool(open_now) else "closed now")
+            content = ". ".join([p for p in parts if p]).strip()
+            if not url or not content:
+                continue
+            rows.append(
+                {
+                    "url": url,
+                    "title": name or address or url,
+                    "excerpt": address or content[:220],
+                    "content": content,
+                    "confidenceScore": place.get("confidenceScore"),
+                    "source": "google_maps",
+                    "placeId": place.get("placeId"),
+                    "location": place.get("location"),
+                    "rating": rating,
+                    "types": types,
+                    "open_now": open_now,
+                }
+            )
+        return rows
+
     def _get_api_key(self) -> Optional[str]:
         api_key = resolve_secret_ref(self.config.get("apiKey"))
         return str(api_key or "").strip() or None
@@ -347,6 +386,7 @@ class MapsSearchCapability(CapabilityBase):
             city=city or None,
             count=len(places),
             places=places,
+            results=self._places_to_results(places),
             best=places[0],
             queries_executed=[composed_query],
             fallback_from="google_maps",
@@ -525,6 +565,7 @@ class MapsSearchCapability(CapabilityBase):
                 location_bias=location_bias,
                 count=len(merged),
                 places=merged,
+                results=self._places_to_results(merged),
                 best=merged[0] if merged else None,
                 queries_executed=query_variants,
                 filters={

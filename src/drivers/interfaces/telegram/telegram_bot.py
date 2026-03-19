@@ -15,16 +15,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class TelegramInterface:
-    def __init__(self, token, router_process_func, allowed_users=None):
+    def __init__(self, token, router_process_func):
         """
         Initialize the Telegram Bot Interface.
         :param token: Telegram Bot Token
         :param router_process_func: Function to process text commands (from src/router.py)
-        :param allowed_users: List of allowed User IDs (integers). If None, all users are allowed.
         """
         self.token = token
         self.router_process = router_process_func # Signature: (user_id, message, user_name, chat_id, chat_title, is_group, message_id, attachments)
-        self.allowed_users = allowed_users
         self.application = None
         
         # Setup download directory
@@ -32,20 +30,10 @@ class TelegramInterface:
         if not os.path.exists(self.download_dir):
             os.makedirs(self.download_dir)
 
-    def is_authorized(self, update: Update):
-        if self.allowed_users is None:
-            return True
-        user_id = update.effective_user.id
-        return user_id in self.allowed_users
-
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self.is_authorized(update):
-            return
         await update.message.reply_text("Olá! Eu sou o assistant bot no Telegram. Envie comandos de texto ou arquivos.")
 
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self.is_authorized(update):
-            return
 
         text = update.message.text
         user_name = update.effective_user.first_name
@@ -76,8 +64,6 @@ class TelegramInterface:
             await update.message.reply_text("Ocorreu um erro ao processar seu comando.")
 
     async def handle_approval_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self.is_authorized(update):
-            return
         query = update.callback_query
         if not query:
             return
@@ -124,8 +110,6 @@ class TelegramInterface:
             await query.answer("Falha ao enviar decisão.", show_alert=True)
 
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self.is_authorized(update):
-            return
             
         file_id = update.message.document.file_id
         file_name = update.message.document.file_name
@@ -144,8 +128,6 @@ class TelegramInterface:
         )
 
     async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self.is_authorized(update):
-            return
             
         file_id = update.message.photo[-1].file_id
         file_name = f"photo_{update.message.id}.jpg"

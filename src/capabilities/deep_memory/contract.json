@@ -1,75 +1,78 @@
 {
-  "contract_version": "1.0",
-  "capability": {
-    "id": "deep_memory",
-    "namespace": "deep.memory",
-    "version": "1.0.0",
-    "title": "Deep Memory",
-    "description": "Compatibility capability to store and recall long-term memory explicitly."
-  },
-  "runtime": {
-    "module": "capabilities.deep_memory",
-    "factory": "create_capability"
-  },
-  "actions": [
-    {
-      "id": "deep.memory.recall_memory",
-      "title": "Recall Memory",
-      "description": "Search long-term memory by semantic query.",
-      "handler": "recall_memory",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "deep:memory:recall_memory"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "properties": {
-            "type": "string"
-          },
-          "required": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": true
-      },
-      "side_effect": "none"
+    "contract_version": "1.0",
+    "capability": {
+        "id": "deep_memory",
+        "namespace": "deep.memory",
+        "version": "1.0.0",
+        "title": "Deep Memory",
+        "description": "Compatibility capability to store and recall long-term memory explicitly.",
+        "assets": {
+            "icon_svg": "assets/icon.svg"
+        }
     },
-    {
-      "id": "deep.memory.store_memory",
-      "title": "Store Memory",
-      "description": "Store a long-term memory fact.",
-      "handler": "store_memory",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "deep:memory:store_memory"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "properties": {
-            "type": "string"
-          },
-          "required": {
-            "type": "string"
-          }
+    "runtime": {
+        "module": "capabilities.deep_memory",
+        "factory": "create_capability"
+    },
+    "actions": [
+        {
+            "id": "deep.memory.recall_memory",
+            "title": "Recall Memory",
+            "description": "Search long-term memory by semantic query.",
+            "handler": "recall_memory",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "deep:memory:recall_memory"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "properties": {
+                        "type": "string"
+                    },
+                    "required": {
+                        "type": "string"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "none"
         },
-        "additionalProperties": true
-      },
-      "side_effect": "idempotent"
+        {
+            "id": "deep.memory.store_memory",
+            "title": "Store Memory",
+            "description": "Store a long-term memory fact.",
+            "handler": "store_memory",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "deep:memory:store_memory"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "properties": {
+                        "type": "string"
+                    },
+                    "required": {
+                        "type": "string"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "idempotent"
+        }
+    ],
+    "auth": {
+        "mode": "none",
+        "required": false,
+        "fields": []
     }
-  ],
-  "auth": {
-    "mode": "none",
-    "required": false,
-    "fields": []
-  }
 }

@@ -32,13 +32,11 @@ class TelegramDriver(BaseDriver):
 
         telegram_conf = cm.get_interfaces_config().get('telegram', {})
         token = resolve_secret_ref(telegram_conf.get('secret_ref'))
-        allowed_users = telegram_conf.get('allowed_users') or []
 
         if token:
             self.bot = TelegramInterface(
                 token=token,
-                router_process_func=self._bridge_process,
-                allowed_users=allowed_users
+                router_process_func=self._bridge_process
             )
             self.bot.start_in_thread()
             logger.info(f"Telegram Driver started.")
@@ -307,7 +305,7 @@ class TelegramDriver(BaseDriver):
                         self.kernel.orchestrator._save_session(session)
                         
                         # Notify index manager to update its cache
-                        self.kernel.orchestrator.index_manager.register_session(session)
+                        self.kernel.orchestrator.sessions_index.register_session(session)
             except Exception as e:
                 logger.error(f"Error in background processing: {e}")
                 # We do not send a hardcoded conversational error message here.

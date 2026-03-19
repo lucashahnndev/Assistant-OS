@@ -22,6 +22,7 @@ class LocationService:
         config_loc = config_root.get('default', {})
 
         # Compatibility with legacy 'environment.location' if needed
+        env_root = {}
         if not config_loc:
             env_root = self.config_manager.get('environment', {})
             if not isinstance(env_root, dict):
@@ -30,10 +31,29 @@ class LocationService:
         if not isinstance(config_loc, dict):
             config_loc = {}
 
+        if not env_root:
+            env_root = self.config_manager.get('environment', {})
+            if not isinstance(env_root, dict):
+                env_root = {}
+
         cached_loc = {
             "city": config_loc.get("city") or config_loc.get("name") or "Unknown",
             "state": config_loc.get("state"),
             "country": config_loc.get("country"),
+            "timezone": (
+                config_loc.get("timezone")
+                or config_loc.get("tz")
+                or env_root.get("timezone")
+                or env_root.get("tz")
+            ),
+            "language": (
+                config_loc.get("language")
+                or config_loc.get("lang")
+                or config_loc.get("locale")
+                or env_root.get("language")
+                or env_root.get("lang")
+                or env_root.get("locale")
+            ),
             "latitude": config_loc.get("latitude") or config_loc.get("lat"),
             "longitude": config_loc.get("longitude") or config_loc.get("lon")
         }
@@ -55,11 +75,20 @@ class LocationService:
                 if lat is not None and lon is not None:
                     cfg = self._read_config_default_location()
                     cached_loc = cfg["cached"]
+                    context_timezone = context_data.get("timezone") or context_data.get("tz")
+                    context_language = (
+                        context_data.get("user_language")
+                        or context_data.get("language")
+                        or context_data.get("locale")
+                        or context_data.get("lang")
+                    )
                     logger.debug(f"Location from context: {loc.get('city', 'Unknown')}")
                     return {
                         "city": loc.get("city") or cached_loc.get("city"),
                         "state": loc.get("state") or cached_loc.get("state"),
                         "country": loc.get("country") or cached_loc.get("country"),
+                        "timezone": context_timezone or cached_loc.get("timezone"),
+                        "language": context_language or cached_loc.get("language"),
                         "latitude": lat,
                         "longitude": lon,
                     }

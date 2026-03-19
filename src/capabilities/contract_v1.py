@@ -3,15 +3,23 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from utils.schema_utils import check_json_schema
-
 
 NAMESPACE_RE = re.compile(r"^[a-z][a-z0-9]*(\.[a-z0-9]+)*$")
 CONFIG_PATH_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$")
 
+class CapabilityAssets(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+    
+    icon_svg: str  # Mandatory vector format
+    icon_16: Optional[str] = None
+    icon_32: Optional[str] = None
+    icon_64: Optional[str] = None
 
 class CapabilityMeta(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+    
     id: str
     namespace: str
     version: str
@@ -20,48 +28,51 @@ class CapabilityMeta(BaseModel):
     owner: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     visibility: Optional[str] = None
+    icon: Optional[str] = None
+    assets: Optional[CapabilityAssets] = None
 
     @field_validator("id", "version", "title", "description")
     @classmethod
-    def _non_empty(cls, value: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            raise ValueError("must be non-empty")
-        return text
+    def validate_non_empty(cls, v: str, info) -> str:
+        if not str(v or "").strip():
+            raise ValueError(f"{info.field_name} must be non-empty")
+        return v
 
     @field_validator("namespace")
     @classmethod
-    def _valid_namespace(cls, value: str) -> str:
-        ns = str(value or "").strip()
+    def validate_namespace(cls, v: str) -> str:
+        ns = str(v or "").strip()
         if not NAMESPACE_RE.fullmatch(ns):
             raise ValueError("invalid namespace format")
         if "_" in ns:
             raise ValueError("namespace cannot contain underscores")
         return ns
 
-
 class RuntimeMeta(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+    
     module: str
     factory: str
     config_schema: Optional[str] = None
 
     @field_validator("module", "factory")
     @classmethod
-    def _non_empty(cls, value: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            raise ValueError("must be non-empty")
-        return text
-
+    def validate_non_empty(cls, v: str, info) -> str:
+        if not str(v or "").strip():
+            raise ValueError(f"{info.field_name} must be non-empty")
+        return v
 
 class AuthSecretPolicy(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+    
     allow_create: bool = True
     allow_select: bool = True
 
-
 class AuthSource(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+    
     id: str
-    type: Literal["oauth_account", "secret_ref", "strategy"]
+    type: str # Literal["oauth_account", "secret_ref", "strategy"]
     title: str
     description: str = ""
     provider: Optional[str] = None
@@ -69,67 +80,55 @@ class AuthSource(BaseModel):
 
     @field_validator("id")
     @classmethod
-    def _validate_id(cls, value: str) -> str:
-        token = str(value or "").strip()
-        if not re.fullmatch(r"[a-z][a-z0-9_]*", token):
+    def validate_id(cls, v: str) -> str:
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", str(v or "").strip()):
             raise ValueError("auth source id must be snake_case")
-        return token
-
+        return v
 
 class AuthField(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+    
     id: str
-    type: Literal["secret_ref", "text", "username", "password", "client_id"]
+    type: str # Literal["secret_ref", "text", "username", "password", "client_id"]
     config_path: str
-    required: bool = False
     title: str
+    required: bool = False
     description: Optional[str] = None
     secret_policy: Optional[AuthSecretPolicy] = None
 
     @field_validator("id", "config_path", "title")
     @classmethod
-    def _non_empty(cls, value: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            raise ValueError("must be non-empty")
-        return text
+    def validate_non_empty_fields(cls, v: str, info) -> str:
+        if not str(v or "").strip():
+            raise ValueError(f"{info.field_name} must be non-empty")
+        return v
 
     @field_validator("id")
     @classmethod
-    def _auth_id(cls, value: str) -> str:
-        token = str(value or "").strip()
-        if not re.fullmatch(r"[a-z][a-z0-9_]*", token):
+    def validate_field_id(cls, v: str) -> str:
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", str(v or "").strip()):
             raise ValueError("auth field id must match [a-z][a-z0-9_]*")
-        return token
+        return v
 
     @field_validator("config_path")
     @classmethod
-    def _auth_config_path(cls, value: str) -> str:
-        path = str(value or "").strip()
-        if not CONFIG_PATH_RE.fullmatch(path):
+    def validate_config_path(cls, v: str) -> str:
+        if not CONFIG_PATH_RE.fullmatch(str(v or "").strip()):
             raise ValueError("auth field config_path is invalid")
-        return path
+        return v
 
-    @model_validator(mode="after")
-    def _validate_secret_policy(self) -> "AuthField":
+    def model_post_init(self, __context: Any) -> None:
         if self.type == "secret_ref":
-            self.secret_policy = self.secret_policy or AuthSecretPolicy()
+            if self.secret_policy is None:
+                self.secret_policy = AuthSecretPolicy()
         else:
             if self.secret_policy is not None:
                 raise ValueError("secret_policy is allowed only for secret_ref fields")
-        return self
-
 
 class CapabilityAuth(BaseModel):
-    mode: Literal[
-        "none",
-        "api_key",
-        "oauth2",
-        "basic",
-        "bearer",
-        "client_credentials",
-        "custom",
-        "hybrid",
-    ]
+    model_config = ConfigDict(extra='ignore')
+    
+    mode: str # Literal["none", "api_key", "oauth2", "basic", "bearer", "client_credentials", "custom", "hybrid"]
     required: bool = False
     fields: List[AuthField] = Field(default_factory=list)
     oauth2: Optional[Dict[str, Any]] = None
@@ -137,8 +136,7 @@ class CapabilityAuth(BaseModel):
     default_source: Optional[str] = None
     source_config_path: Optional[str] = None
 
-    @model_validator(mode="after")
-    def _validate_auth(self) -> "CapabilityAuth":
+    def model_post_init(self, __context: Any) -> None:
         if self.mode == "none":
             if self.fields:
                 raise ValueError("auth.fields must be empty when auth.mode is 'none'")
@@ -152,7 +150,7 @@ class CapabilityAuth(BaseModel):
                 raise ValueError("auth.default_source must be absent when auth.mode is 'none'")
             if self.source_config_path is not None:
                 raise ValueError("auth.source_config_path must be absent when auth.mode is 'none'")
-            return self
+            return
 
         if self.mode == "oauth2":
             if self.oauth2 is None:
@@ -173,44 +171,42 @@ class CapabilityAuth(BaseModel):
             if self.source_config_path is not None:
                 raise ValueError("auth.source_config_path is allowed only when auth.mode is 'hybrid'")
 
-        ids = set()
-        paths = set()
-        for field in self.fields:
-            if field.id in ids:
-                raise ValueError(f"duplicate auth field id: {field.id}")
-            ids.add(field.id)
-            if field.config_path in paths:
-                raise ValueError(f"duplicate auth field config_path: {field.config_path}")
-            paths.add(field.config_path)
+        ids = {f.id for f in self.fields}
+        paths = {f.config_path for f in self.fields}
+        if len(ids) < len(self.fields):
+            raise ValueError("duplicate auth field ids detected")
+        if len(paths) < len(self.fields):
+            raise ValueError("duplicate auth field config_paths detected")
 
-        source_ids = set()
+        source_ids = {s.id for s in self.sources}
+        if len(source_ids) < len(self.sources):
+            raise ValueError("duplicate auth source ids detected")
+            
         for source in self.sources:
-            if source.id in source_ids:
-                raise ValueError(f"duplicate auth source id: {source.id}")
-            source_ids.add(source.id)
             if source.type == "secret_ref" and source.field_id and source.field_id not in ids:
                 raise ValueError(f"auth source references unknown field_id: {source.field_id}")
 
         if self.default_source and self.default_source not in source_ids:
             raise ValueError("auth.default_source must reference an existing auth source")
-        return self
-
 
 class ActionPermissions(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+    
     scopes: List[str]
     allow_anyone: bool
     requires_approval: bool
 
     @field_validator("scopes")
     @classmethod
-    def _scopes_non_empty(cls, scopes: List[str]) -> List[str]:
-        clean = [str(scope or "").strip() for scope in scopes or [] if str(scope or "").strip()]
-        if not clean:
+    def validate_scopes(cls, v: List[str]) -> List[str]:
+        cleaned = [str(s or "").strip() for s in v if str(s or "").strip()]
+        if not cleaned:
             raise ValueError("permissions.scopes must contain at least one scope")
-        return clean
-
+        return cleaned
 
 class CapabilityAction(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+    
     id: str
     title: str
     description: str
@@ -224,58 +220,111 @@ class CapabilityAction(BaseModel):
 
     @field_validator("id", "title", "description", "handler")
     @classmethod
-    def _required_text(cls, value: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            raise ValueError("must be non-empty")
-        return text
+    def validate_non_empty_action(cls, v: str, info) -> str:
+        if not str(v or "").strip():
+            raise ValueError(f"{info.field_name} must be non-empty")
+        return v
 
     @field_validator("risk_level")
     @classmethod
-    def _risk_level(cls, value: str) -> str:
-        risk = str(value or "").strip().lower()
+    def validate_risk(cls, v: str) -> str:
+        risk = str(v or "").strip().lower()
         if risk not in {"low", "medium", "high"}:
             raise ValueError("risk_level must be low|medium|high")
         return risk
 
-    @field_validator("parameters")
-    @classmethod
-    def _json_schema(cls, value: Dict[str, Any]) -> Dict[str, Any]:
-        if not isinstance(value, dict):
+    def model_post_init(self, __context: Any) -> None:
+        if not isinstance(self.parameters, dict):
             raise ValueError("parameters must be a JSON Schema object")
-        check_json_schema(value)
-        return value
+        check_json_schema(self.parameters)
+        
+        if self.result_schema is not None:
+            if not isinstance(self.result_schema, dict):
+                raise ValueError("result_schema must be a JSON Schema object")
+            check_json_schema(self.result_schema)
 
-    @field_validator("result_schema")
+
+class CapabilityRetrievalFreshness(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+
+    type: str = "live"
+    sla_hours: Optional[int] = None
+
+
+class CapabilityRetrievalQuality(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+
+    default_confidence: Optional[float] = None
+    trust_tier: Optional[str] = None
+    citation_mode: Optional[str] = None
+
+
+class CapabilityRetrievalCost(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+
+    latency_class: Optional[str] = None
+    quota_class: Optional[str] = None
+
+
+class CapabilityRetrievalSetup(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+
+    requires_auth: bool = False
+    required_fields: List[str] = Field(default_factory=list)
+    healthcheck_action: Optional[str] = None
+
+
+class CapabilityRetrievalOutputContract(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+
+    evidence_schema: Optional[str] = None
+    entity_schema: Optional[str] = None
+
+
+class CapabilityRetrievalProfile(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+
+    enabled: bool = False
+    roles: List[str] = Field(default_factory=list)
+    domains: List[str] = Field(default_factory=list)
+    entity_types: List[str] = Field(default_factory=list)
+    freshness: Optional[CapabilityRetrievalFreshness] = None
+    quality: Optional[CapabilityRetrievalQuality] = None
+    cost: Optional[CapabilityRetrievalCost] = None
+    setup: Optional[CapabilityRetrievalSetup] = None
+    output_contract: Optional[CapabilityRetrievalOutputContract] = None
+    routing_hints: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("roles", "domains", "entity_types")
     @classmethod
-    def _result_json_schema(cls, value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        if value is None:
-            return None
-        if not isinstance(value, dict):
-            raise ValueError("result_schema must be a JSON Schema object")
-        check_json_schema(value)
-        return value
+    def _clean_string_lists(cls, v: List[str]) -> List[str]:
+        seen: set[str] = set()
+        out: List[str] = []
+        for raw in v or []:
+            value = str(raw or "").strip().lower()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            out.append(value)
+        return out
 
 
 class CapabilityContractV1(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+    
     contract_version: str
     capability: CapabilityMeta
     runtime: RuntimeMeta
     auth: CapabilityAuth
     actions: List[CapabilityAction]
+    retrieval_profile: Optional[CapabilityRetrievalProfile] = None
     policy_hints: Optional[Dict[str, Any]] = None
 
-    @field_validator("contract_version")
-    @classmethod
-    def _contract_version(cls, value: str) -> str:
-        version = str(value or "").strip()
-        if version != "1.0":
+    def model_post_init(self, __context: Any) -> None:
+        if self.contract_version != "1.0":
             raise ValueError("contract_version must be '1.0'")
-        return version
-
-    @model_validator(mode="after")
-    def _validate_actions(self) -> "CapabilityContractV1":
-        seen: set[str] = set()
+        
+        seen = set()
         ns = self.capability.namespace
         for action in self.actions:
             if action.id in seen:
@@ -283,14 +332,18 @@ class CapabilityContractV1(BaseModel):
             seen.add(action.id)
             if not action.id.startswith(f"{ns}."):
                 raise ValueError(f"action id '{action.id}' outside namespace '{ns}'")
-        return self
-
 
 def load_contract_v1(contract_path: str) -> CapabilityContractV1:
     with open(contract_path, "r", encoding="utf-8") as handle:
         raw = json.load(handle)
-    return CapabilityContractV1.model_validate(raw)
-
+        
+    try:
+        if hasattr(CapabilityContractV1, "model_validate"):
+            return CapabilityContractV1.model_validate(raw)
+    except Exception:
+        pass
+        
+    return CapabilityContractV1(**raw)
 
 def resolve_contract_config_schema_path(contract_path: str, contract: CapabilityContractV1) -> Optional[str]:
     schema_ref = str(contract.runtime.config_schema or "").strip()
@@ -299,7 +352,6 @@ def resolve_contract_config_schema_path(contract_path: str, contract: Capability
     if os.path.isabs(schema_ref):
         return schema_ref
     return os.path.abspath(os.path.join(os.path.dirname(contract_path), schema_ref))
-
 
 def load_contract_config_schema(contract_path: str, contract: CapabilityContractV1) -> Optional[Dict[str, Any]]:
     schema_path = resolve_contract_config_schema_path(contract_path, contract)
@@ -314,7 +366,6 @@ def load_contract_config_schema(contract_path: str, contract: CapabilityContract
     check_json_schema(schema)
     return schema
 
-
 def resolve_schema_node(schema: Dict[str, Any], config_path: str) -> Optional[Dict[str, Any]]:
     current: Optional[Dict[str, Any]] = schema
     for token in config_path.split("."):
@@ -328,7 +379,6 @@ def resolve_schema_node(schema: Dict[str, Any], config_path: str) -> Optional[Di
             return None
         current = child
     return current
-
 
 def validate_auth_schema_alignment(
     contract: CapabilityContractV1,
@@ -361,7 +411,6 @@ def validate_auth_schema_alignment(
                 errors.append(f"auth source_config_path must map to string config node: {auth.source_config_path}")
     return errors
 
-
 def _get_config_value(config: Dict[str, Any], config_path: str) -> Any:
     current: Any = config
     for key in config_path.split("."):
@@ -369,7 +418,6 @@ def _get_config_value(config: Dict[str, Any], config_path: str) -> Any:
             return None
         current = current.get(key)
     return current
-
 
 def validate_auth_configuration(
     contract: CapabilityContractV1,

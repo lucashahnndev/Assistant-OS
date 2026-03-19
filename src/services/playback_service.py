@@ -7,6 +7,11 @@ import threading
 from typing import Dict, Any, List, Optional
 from utils.logging_config import get_logger
 
+import uuid
+import logging
+from config.manager import ConfigManager
+from zoneinfo import ZoneInfo
+
 logger = get_logger("PlaybackService")
 
 class PlaybackService:
@@ -43,7 +48,7 @@ class PlaybackService:
                 "title": title,
                 "source": source,
                 "status": "running",
-                "created_at": datetime.datetime.now().isoformat(),
+                "created_at": self._now_iso(),
                 "ended_at": None,
                 "total_steps": 0,
                 "steps": []
@@ -85,7 +90,7 @@ class PlaybackService:
 
                 step_meta = {
                     "step": step,
-                    "ts": datetime.datetime.now().isoformat(),
+                    "ts": self._now_iso(),
                     "action": action,
                     "frame_filename": filename,
                     "frame_sha256": sha256,
@@ -110,7 +115,7 @@ class PlaybackService:
                     manifest = json.load(f)
 
                 manifest["status"] = status
-                manifest["ended_at"] = datetime.datetime.now().isoformat()
+                manifest["ended_at"] = self._now_iso()
                 self._atomic_write_json(manifest_path, manifest)
 
                 logger.info(f"Playback run ended: {run_id} with status {status}")
@@ -133,7 +138,12 @@ class PlaybackService:
             return
             
         all_runs = []
-        now = datetime.datetime.now()
+        tz_name = ConfigManager().get_timezone()
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = datetime.timezone.utc
+        now = datetime.datetime.now(tz)
         
         # 1. Collect all runs
         for session_id in os.listdir(sessions_dir):
@@ -152,6 +162,8 @@ class PlaybackService:
                         
                         ts_str = manifest.get("ended_at") or manifest.get("created_at")
                         ts = datetime.datetime.fromisoformat(ts_str)
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=datetime.timezone.utc)
                         
                         # Calculate size
                         total_size = 0
@@ -187,3 +199,11 @@ class PlaybackService:
             logger.info(f"GC: Removing old playback run to free space: {oldest['path']} (Current Total: {total_mb:.1f}MB)")
             shutil.rmtree(oldest["path"])
             total_mb -= oldest["size"] / (1024 * 1024)
+
+    def _now_iso(self) -> str:
+        tz_name = ConfigManager().get_timezone()
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = datetime.timezone.utc
+        return datetime.datetime.now(tz).isoformat()

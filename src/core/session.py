@@ -7,11 +7,18 @@ from typing import Optional, List, Dict, Callable, Any
 from utils.event_bus import global_event_bus
 from core.cognition import build_cognitive_frame, CognitiveFrame
 from core.intents import IntentAgenda
+from services.cognition import default_cognitive_state_dict
+from config.manager import ConfigManager
+
+SESSION_TYPE_USER = "user"
+SESSION_TYPE_SYSTEM = "system"
 
 class Session:
-    def __init__(self, session_id: str, source: str = "web"):
+    def __init__(self, session_id: str, source: str = "web", session_type: str = SESSION_TYPE_USER, domain: Optional[str] = None):
         self.session_id = session_id
         self.source = source
+        self.session_type = session_type
+        self.domain = domain
         self.name = "" # Display name for the session
         self.name_generated = False # Flag for whether the LLM auto-generated the name
         self.profile_picture = "" # Path or URL to the session's avatar
@@ -50,6 +57,9 @@ class Session:
         self.rejected_memory: List[Dict[str, Any]] = [] # Audit store for memory governance
         self.audit_trail: List[Dict[str, Any]] = [] # Auditable ledger of admin changes
         self._max_trace_history = 50
+        self.cognitive_state: Dict[str, Any] = default_cognitive_state_dict()
+        self.last_cognitive_projection: Optional[Dict[str, Any]] = None
+        self.cognitive_diagnostics: Optional[Dict[str, Any]] = None
         
         # Phase 15: Lightweight persistent snapshot of the last active frame
         self.last_cognitive_frame_snapshot: Optional[Dict[str, Any]] = None
@@ -57,10 +67,26 @@ class Session:
         # Phase 16: Intent Agenda for tracking open loops
         self.intent_agenda = IntentAgenda()
 
-    def add_message(self, role: str, content: str, file: Optional[Dict] = None, attachments: Optional[List[Dict]] = None, msg_type: str = "default", summary: str = None, work_id: str = None):
+    def add_message(
+        self,
+        role: str,
+        content: str,
+        file: Optional[Dict] = None,
+        attachments: Optional[List[Dict]] = None,
+        msg_type: str = "default",
+        summary: str = None,
+        work_id: str = None,
+        silent: bool = False,
+        actor: Optional[Dict[str, Any]] = None,
+    ):
         # Rough token estimation (chars / 4)
         tokens = len(content) // 4
-        timestamp = datetime.datetime.now().isoformat()
+        from zoneinfo import ZoneInfo
+        tz_name = ConfigManager().get_timezone()
+        try:
+            timestamp = datetime.datetime.now(ZoneInfo(tz_name)).isoformat()
+        except Exception:
+            timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
         msg = {
             "id": str(uuid.uuid4()),
             "role": role, 
@@ -72,6 +98,8 @@ class Session:
         }
         if work_id:
             msg["work_id"] = work_id
+        if actor and isinstance(actor, dict):
+            msg["actor"] = actor
             
         if summary:
             msg["summary"] = summary
@@ -86,16 +114,17 @@ class Session:
         self.turn_id += 1 # Advance turn counter
         self.last_interaction = time.time()
         
-        # Emit event for real-time synchronization
-        global_event_bus.emit_threadsafe({
-            "type": "message_added",
-            "session_id": self.session_id,
-            "role": role,
-            "message": msg,
-            "msg_type": msg_type,
-            "work_id": work_id,
-            "unread_count": self.get_unread_count("assistant")
-        })
+        if not silent and self.session_type != SESSION_TYPE_SYSTEM:
+            # Emit event for real-time synchronization
+            global_event_bus.emit_threadsafe({
+                "type": "message_added",
+                "session_id": self.session_id,
+                "role": role,
+                "message": msg,
+                "msg_type": msg_type,
+                "work_id": work_id,
+                "unread_count": self.get_unread_count("assistant")
+            })
 
     def get_history(self) -> List[Dict[str, str]]:
         return self.history
@@ -138,6 +167,8 @@ class Session:
         return {
             "session_id": self.session_id,
             "source": self.source,
+            "session_type": self.session_type,
+            "domain": self.domain,
             "name": self.name,
             "name_generated": self.name_generated,
             "profile_picture": self.profile_picture,
@@ -165,13 +196,21 @@ class Session:
             "audit_trail": self.audit_trail,
             "tool_health": self.tool_health,
             "tool_failure_counts": self.tool_failure_counts,
+            "cognitive_state": self.cognitive_state,
+            "last_cognitive_projection": self.last_cognitive_projection,
+            "cognitive_diagnostics": self.cognitive_diagnostics,
             "last_cognitive_frame_snapshot": self.last_cognitive_frame_snapshot,
             "intent_agenda": self.intent_agenda.to_dict()
         }
 
     @classmethod
     def from_dict(cls, data: Dict):
-        session = cls(data["session_id"], data.get("source", "web"))
+        session = cls(
+            data["session_id"], 
+            data.get("source", "web"), 
+            data.get("session_type", SESSION_TYPE_USER),
+            domain=data.get("domain")
+        )
         session.name = data.get("name", "")
         session.name_generated = data.get("name_generated", False)
         session.profile_picture = data.get("profile_picture", "")
@@ -185,7 +224,13 @@ class Session:
             if "id" not in msg:
                 msg["id"] = str(uuid.uuid4())
             if "timestamp" not in msg:
-                msg["timestamp"] = datetime.datetime.now().isoformat()
+                tz = ConfigManager().get_timezone()
+                # Simplified: for legacy, just use UTC or system local but aware
+                from zoneinfo import ZoneInfo
+                try:
+                    msg["timestamp"] = datetime.datetime.now(ZoneInfo(tz)).isoformat()
+                except Exception:
+                    msg["timestamp"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
             if "is_read" not in msg:
                 # Default: assistant messages old history as read, unless we want to flag them
                 msg["is_read"] = True
@@ -219,6 +264,9 @@ class Session:
         session.audit_trail = data.get("audit_trail", [])
         session.tool_health = data.get("tool_health", {})
         session.tool_failure_counts = data.get("tool_failure_counts", {})
+        session.cognitive_state = data.get("cognitive_state", default_cognitive_state_dict())
+        session.last_cognitive_projection = data.get("last_cognitive_projection")
+        session.cognitive_diagnostics = data.get("cognitive_diagnostics")
         session.last_cognitive_frame_snapshot = data.get("last_cognitive_frame_snapshot")
         if "intent_agenda" in data:
             session.intent_agenda = IntentAgenda.from_dict(data["intent_agenda"])
@@ -406,6 +454,9 @@ class Session:
                 break
             
             clean_role = str(msg.get("role", "user"))
+            actor = msg.get("actor") if isinstance(msg.get("actor"), dict) else {}
+            actor_label = str(actor.get("display_name") or actor.get("name") or actor.get("id") or "").strip()
+            actor_kind = str(actor.get("kind") or "").strip().lower()
             is_recent = turns_added < recent_threshold
             
             # Demotion Rule: System observations older than recent threshold are discarded 
@@ -426,6 +477,16 @@ class Session:
             if clean_role == "system":
                 clean_role = "user"
                 llm_content = f"[SYSTEM/OBSERVATION]:\n{llm_content}"
+            elif clean_role not in {"user", "assistant"}:
+                # Multi-role compatibility layer: preserve role semantics as prefixed content
+                # while mapping to user role for downstream model APIs.
+                clean_role = "user"
+                role_tag = str(msg.get("role") or "event").upper()
+                llm_content = f"[ROLE:{role_tag}]:\n{llm_content}"
+
+            # Distinguish multi-user/group actors without forcing everything into a single "user" identity.
+            if clean_role == "user" and actor_kind in {"group_participant", "participant", "human_user"} and actor_label:
+                llm_content = f"[FROM:{actor_label}]\n{llm_content}"
                 
             clean_msg: Dict[str, Any] = {"role": clean_role, "content": llm_content}
             

@@ -1,0 +1,164 @@
+{
+  "contract_version": "1.0",
+  "capability": {
+    "id": "web",
+    "namespace": "web",
+    "version": "1.0.0",
+    "title": "web",
+    "description": "Domínio Web unificado: descoberta e retrieval estruturado para RAG externo.",
+    "assets": {
+      "icon_svg": "assets/icon.svg"
+    }
+  },
+  "runtime": {
+    "module": "capabilities.web",
+    "factory": "create_capability",
+    "config_schema": "./config.schema.json"
+  },
+  "actions": [
+    {
+      "id": "web.search.discover",
+      "title": "Discover",
+      "description": "Pesquisa web por tema e devolve links ou conhecimento extraído.",
+      "handler": "search.discover",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "web:search:discover"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "default": 5
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "links",
+              "knowledge",
+              "auto"
+            ],
+            "default": "links"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "web.retrieve.read",
+      "title": "Read",
+      "description": "Lê uma URL e extrai texto limpo para ingestão RAG.",
+      "handler": "retrieve.read",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "web:retrieve:read"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "max_chars": {
+            "type": "integer",
+            "default": 12000
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "web.retrieve.extract",
+      "title": "Extract",
+      "description": "Extrai campos estruturados de uma URL via schema determinístico.",
+      "handler": "retrieve.extract",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "web:retrieve:extract"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "array"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    }
+  ],
+  "retrieval_profile": {
+    "enabled": true,
+    "roles": [
+      "search",
+      "retrieve"
+    ],
+    "domains": [
+      "web",
+      "academic",
+      "location"
+    ],
+    "entity_types": [
+      "article",
+      "snippet",
+      "document"
+    ],
+    "freshness": {
+      "type": "live",
+      "sla_hours": 24
+    },
+    "quality": {
+      "default_confidence": 0.7,
+      "trust_tier": "public_api",
+      "citation_mode": "url_required"
+    },
+    "cost": {
+      "latency_class": "medium",
+      "quota_class": "metered"
+    },
+    "setup": {
+      "requires_auth": false,
+      "required_fields": [],
+      "healthcheck_action": "web.search.discover"
+    },
+    "output_contract": {
+      "evidence_schema": "external.evidence.v1"
+    },
+    "routing_hints": {
+      "preferred_intents": [
+        "general_knowledge",
+        "latest_update",
+        "structured_fact",
+        "academic_lookup"
+      ],
+      "avoid_when": []
+    }
+  },
+  "auth": {
+    "mode": "none",
+    "required": false,
+    "fields": []
+  }
+}

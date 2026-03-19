@@ -11,10 +11,20 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Union, Any, Callable
 from croniter import croniter
 import holidays
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from config.manager import ConfigManager
 
 logger = logging.getLogger("Scheduler")
 SYSTEM_WORKER_ANCHOR_SESSION_ID = "__system_worker_anchor__"
+
+def _local_now() -> datetime.datetime:
+    """Helper for dataclass default factories using the configured timezone."""
+    from config.manager import ConfigManager
+    tz_name = ConfigManager().get_timezone()
+    try:
+        return datetime.datetime.now(ZoneInfo(tz_name))
+    except (ZoneInfoNotFoundError, ValueError):
+        return datetime.datetime.now(datetime.timezone.utc)
 
 class WorkStatus(Enum):
     QUEUED = "queued"
@@ -33,9 +43,9 @@ class Work:
     session_id: str
     input_text: str
     status: WorkStatus = WorkStatus.QUEUED
-    created_at: datetime.datetime = field(default_factory=datetime.datetime.now)
+    created_at: datetime.datetime = field(default_factory=_local_now)
     started_at: Optional[datetime.datetime] = None
-    updated_at: datetime.datetime = field(default_factory=datetime.datetime.now)
+    updated_at: datetime.datetime = field(default_factory=_local_now)
     result: Optional[str] = None
     error: Optional[str] = None
     progress_updates: list = field(default_factory=list)
@@ -89,7 +99,7 @@ class TaskDefinition:
     owner_session_id: Optional[str] = None
     owner_sender_id: Optional[str] = None
     notes: list[str] = field(default_factory=list)
-    created_at: datetime.datetime = field(default_factory=datetime.datetime.now)
+    created_at: datetime.datetime = field(default_factory=_local_now)
 
     def to_dict(self):
         return {
@@ -104,6 +114,15 @@ class TaskDefinition:
 
     @staticmethod
     def from_dict(data):
+        # Local import or use helper to ensure aware
+        def _parse(val):
+            dt = datetime.datetime.fromisoformat(val)
+            if dt.tzinfo is None:
+                from config.manager import ConfigManager
+                tz = ZoneInfo(ConfigManager().get_timezone())
+                return dt.replace(tzinfo=tz)
+            return dt
+
         return TaskDefinition(
             task_id=data["task_id"],
             name=data["name"],
@@ -111,7 +130,7 @@ class TaskDefinition:
             owner_session_id=data.get("owner_session_id"),
             owner_sender_id=data.get("owner_sender_id"),
             notes=data.get("notes", []),
-            created_at=datetime.datetime.fromisoformat(data["created_at"])
+            created_at=_parse(data["created_at"])
         )
 
 @dataclass
@@ -124,7 +143,7 @@ class ScheduleTrigger:
     enabled: bool = True
     last_run: Optional[datetime.datetime] = None
     next_run: Optional[datetime.datetime] = None
-    created_at: datetime.datetime = field(default_factory=datetime.datetime.now)
+    created_at: datetime.datetime = field(default_factory=_local_now)
 
     def to_dict(self):
         return {
@@ -141,6 +160,15 @@ class ScheduleTrigger:
 
     @staticmethod
     def from_dict(data):
+        def _parse(val):
+            if not val: return None
+            dt = datetime.datetime.fromisoformat(val)
+            if dt.tzinfo is None:
+                from config.manager import ConfigManager
+                tz = ZoneInfo(ConfigManager().get_timezone())
+                return dt.replace(tzinfo=tz)
+            return dt
+
         trigger = ScheduleTrigger(
             trigger_id=data["trigger_id"],
             task_id=data["task_id"],
@@ -149,12 +177,9 @@ class ScheduleTrigger:
             holiday_rules=data.get("holiday_rules", {}),
             enabled=data.get("enabled", True)
         )
-        if data.get("last_run"):
-            trigger.last_run = datetime.datetime.fromisoformat(data["last_run"])
-        if data.get("next_run"):
-            trigger.next_run = datetime.datetime.fromisoformat(data["next_run"])
-        if data.get("created_at"):
-            trigger.created_at = datetime.datetime.fromisoformat(data["created_at"])
+        trigger.last_run = _parse(data.get("last_run"))
+        trigger.next_run = _parse(data.get("next_run"))
+        trigger.created_at = _parse(data.get("created_at")) or _local_now()
         return trigger
 
 @dataclass
@@ -163,7 +188,7 @@ class TaskExecution:
     task_id: str
     trigger_id: Optional[str]
     status: str # running, success, failed
-    start_time: datetime.datetime = field(default_factory=datetime.datetime.now)
+    start_time: datetime.datetime = field(default_factory=_local_now)
     end_time: Optional[datetime.datetime] = None
     log_file: Optional[str] = None # Path to detailed log
     cancel_requested: bool = False
@@ -182,16 +207,25 @@ class TaskExecution:
     
     @staticmethod
     def from_dict(data):
+        def _parse(val):
+            if not val: return None
+            dt = datetime.datetime.fromisoformat(val)
+            if dt.tzinfo is None:
+                from config.manager import ConfigManager
+                tz = ZoneInfo(ConfigManager().get_timezone())
+                return dt.replace(tzinfo=tz)
+            return dt
+
         exec = TaskExecution(
             execution_id=data["execution_id"],
             task_id=data["task_id"],
             trigger_id=data.get("trigger_id"),
             status=data["status"],
-            start_time=datetime.datetime.fromisoformat(data["start_time"]),
+            start_time=_parse(data["start_time"]),
             log_file=data.get("log_file")
         )
         if data.get("end_time"):
-            exec.end_time = datetime.datetime.fromisoformat(data["end_time"])
+            exec.end_time = _parse(data["end_time"])
         return exec
 
 class Scheduler:
@@ -200,6 +234,7 @@ class Scheduler:
     Manages the lifecycle of asynchronous tasks.
     """
     def __init__(self, event_bus: queue.Queue, persistence_file="scheduler_jobs.json"):
+        self.config_manager = ConfigManager()
         self.registry: Dict[str, Work] = {}
         self.tasks: Dict[str, TaskDefinition] = {}
         self.triggers: Dict[str, ScheduleTrigger] = {}
@@ -223,6 +258,15 @@ class Scheduler:
         os.makedirs(self.global_works_dir, exist_ok=True)
         
         self.load_data()
+        self.initialized = True
+
+    def _now(self) -> datetime.datetime:
+        """Returns the current time in the configured timezone."""
+        tz_name = self.config_manager.get_timezone()
+        try:
+            return datetime.datetime.now(ZoneInfo(tz_name))
+        except (ZoneInfoNotFoundError, ValueError):
+            return datetime.datetime.now(datetime.timezone.utc)
 
     @staticmethod
     def _is_active_work_status(status: WorkStatus) -> bool:
@@ -320,7 +364,7 @@ class Scheduler:
             return
         try:
             record = {
-                "ts": datetime.datetime.now().isoformat(),
+                "ts": self._now().isoformat(),
                 "event": event_type,
                 "work_id": work.work_id,
                 "session_id": work.session_id,
@@ -355,7 +399,7 @@ class Scheduler:
                 "owner_sender_id": work.owner_sender_id,
                 "favorite_sender_id": work.favorite_sender_id,
                 "scope": work.scope,
-                "updated_at": datetime.datetime.now().isoformat(),
+                "updated_at": self._now().isoformat(),
             }
             payload.update(context_payload or {})
             self._safe_write_json(work.context_file, payload)
@@ -390,7 +434,7 @@ class Scheduler:
             if not work:
                 return False
             entry = {
-                "ts": datetime.datetime.now().isoformat(),
+                "ts": self._now().isoformat(),
                 "command": str(command or "").strip().lower(),
                 "payload": payload or {},
                 "source_session_id": source_session_id,
@@ -636,9 +680,9 @@ class Scheduler:
                     )
                     return
                 work.status = status
-                work.updated_at = datetime.datetime.now()
+                work.updated_at = self._now()
                 if status == WorkStatus.RUNNING and not work.started_at:
-                    work.started_at = datetime.datetime.now()
+                    work.started_at = self._now()
                 if result: work.result = result
                 if error: work.error = error
                 self._persist_work_status(work)
@@ -692,10 +736,10 @@ class Scheduler:
             work = self.registry.get(work_id)
             if work:
                 work.progress_updates.append({
-                    "timestamp": datetime.datetime.now().isoformat(),
+                    "timestamp": self._now().isoformat(),
                     "message": message
                 })
-                work.updated_at = datetime.datetime.now()
+                work.updated_at = self._now()
                 self._persist_work_status(work)
                 self._append_event(work, "progress", {"message": message})
                 # EMIT EVENT: Notify Kernel of progress
@@ -732,16 +776,27 @@ class Scheduler:
                 logger.error(f"Scheduler loop error: {e}")
             time.sleep(1)
 
-    @staticmethod
-    def _parse_dt(value: Any, fallback: Optional[datetime.datetime] = None) -> datetime.datetime:
+    def _parse_dt(self, value: Any, fallback: Optional[datetime.datetime] = None) -> datetime.datetime:
+        dt = None
         if isinstance(value, datetime.datetime):
-            return value
-        if isinstance(value, str):
+            dt = value
+        elif isinstance(value, str):
             try:
-                return datetime.datetime.fromisoformat(value)
+                dt = datetime.datetime.fromisoformat(value)
             except Exception:
                 pass
-        return fallback or datetime.datetime.now()
+        
+        if dt is None:
+            dt = fallback or self._now()
+            
+        # Ensure it's offset-aware (Crucial for sorting/comparison)
+        if dt.tzinfo is None:
+            tz_name = self.config_manager.get_timezone()
+            try:
+                dt = dt.replace(tzinfo=ZoneInfo(tz_name))
+            except Exception:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt
 
     @staticmethod
     def _parse_work_status(value: Any) -> WorkStatus:
@@ -910,13 +965,12 @@ class Scheduler:
     def delete_task(self, task_id: str):
         with self._lock:
             if task_id in self.tasks:
-                del self.tasks[task_id]
+                self.tasks.pop(task_id, None)
                 # Cascade delete triggers
                 to_del = [tid for tid, t in self.triggers.items() if t.task_id == task_id]
                 for tid in to_del:
-                    del self.triggers[tid]
+                    self.triggers.pop(tid, None)
         self.save_data()
-
     # --- Trigger Management ---
     def add_trigger(self, task_id: str, schedule_type: str, schedule_value: Union[str, int], holiday_rules: dict = None) -> ScheduleTrigger:
         if task_id not in self.tasks:
@@ -931,7 +985,7 @@ class Scheduler:
             holiday_rules=holiday_rules or {}
         )
         
-        now = datetime.datetime.now()
+        now = self._now()
         if schedule_type == "interval":
             # Start next interval from now
             trigger.next_run = now + datetime.timedelta(seconds=int(schedule_value))
@@ -941,7 +995,8 @@ class Scheduler:
                 trigger.next_run = iter.get_next(datetime.datetime)
         elif schedule_type == "date":
             if isinstance(schedule_value, str):
-                trigger.next_run = datetime.datetime.fromisoformat(schedule_value.replace("Z", "+00:00"))
+                # Ensure it's offset-aware using helper
+                trigger.next_run = self._parse_dt(schedule_value.replace("Z", "+00:00"))
 
         with self._lock:
             self.triggers[trigger_id] = trigger
@@ -968,7 +1023,7 @@ class Scheduler:
         log_filename = f"{execution_id}.log"
         log_path = os.path.join(self.logs_dir, log_filename)
         with open(log_path, "w") as f:
-            f.write(f"Execution {execution_id} started at {datetime.datetime.now()}\n")
+            f.write(f"Execution {execution_id} started at {self._now()}\n")
 
         execution = TaskExecution(
             execution_id=execution_id,
@@ -988,7 +1043,7 @@ class Scheduler:
                 exec_obj = self.executions[execution_id]
                 exec_obj.status = status
                 if status in ["success", "failed", "cancelled", "succeeded"]:
-                     exec_obj.end_time = datetime.datetime.now()
+                     exec_obj.end_time = self._now()
                 
                 # We don't store result/error in TaskExecution struct yet, 
                 # but we should log it
@@ -1025,7 +1080,7 @@ class Scheduler:
                 logger.info(f"Requested cancellation for Execution {execution_id}")
 
     def check_pending_triggers(self):
-        now = datetime.datetime.now()
+        now = self._now()
         triggers_to_run = []
         country_holidays = {} 
 

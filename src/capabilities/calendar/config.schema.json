@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": false,
+      "title": "Enabled"
+    },
+    "retention_days": {
+      "type": "integer",
+      "title": "Dias de Retenção (Past TTL)",
+      "description": "Número de dias para manter eventos passados sincronizados localmente. Eventos fora desta janela não serão excluídos, mas sim mantidos como histórico offline.",
+      "default": 730,
+      "minimum": 1
+    },
+    "title_max_length": {
+      "type": "integer",
+      "title": "Máximo de caracteres do título",
+      "description": "Limite para títulos de evento (curtos e objetivos).",
+      "default": 72,
+      "minimum": 8,
+      "maximum": 200
+    },
+    "description_max_length": {
+      "type": "integer",
+      "title": "Máximo de caracteres dos detalhes",
+      "description": "Limite para campo de detalhes/descrição.",
+      "default": 4000,
+      "minimum": 128,
+      "maximum": 20000
+    },
+    "short_id_length": {
+      "type": "integer",
+      "title": "Tamanho do short_id",
+      "description": "Quantidade de caracteres do identificador curto usado em listagens e ações.",
+      "default": 10,
+      "minimum": 6,
+      "maximum": 20
+    },
+    "default_reminder_offsets_minutes": {
+      "type": "array",
+      "title": "Offsets padrão de lembrete (minutos)",
+      "description": "Offsets de lembrete antes do início do evento quando não houver lembretes no evento nem preferência explícita.",
+      "default": [30, 10, 1],
+      "items": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10080
+      }
+    },
+    "default_reminder_offset_minutes": {
+      "type": "integer",
+      "title": "Offset padrão legado (minutos)",
+      "description": "Compatibilidade legada para um único offset padrão.",
+      "default": 30,
+      "minimum": 1,
+      "maximum": 10080
+    }
+  },
+  "additionalProperties": true
+}

@@ -3,6 +3,7 @@ from typing import Dict, Any, List
 import logging
 import requests
 from services.location.location_service import LocationService
+from server.core.secret_manager import resolve_secret_ref
 
 logger = logging.getLogger("WeatherCapability")
 

@@ -9,6 +9,7 @@ import {
     Settings,
     Cpu,
     Database,
+    Activity,
     LogOut,
     User as UserIcon,
     ClipboardCheck,
@@ -80,6 +81,7 @@ const DashboardLayout = () => {
         { to: '/tasks', icon: ClipboardCheck, label: t('nav.tasks') },
         { to: '/capabilities', icon: Cpu, label: t('nav.capabilities') },
         { to: '/memory', icon: Database, label: t('nav.memory') },
+        { to: '/cognition', icon: Activity, label: t('nav.cognition') },
         { to: '/security', icon: Shield, label: t('nav.security') },
         { to: '/settings', icon: Settings, label: t('nav.settings') },
     ];

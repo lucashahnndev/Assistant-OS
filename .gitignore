@@ -159,6 +159,10 @@ frontend/dist/
 frontend/node_modules/
 docs/*
 !docs/worker_task_contract.md
+!docs/architecture/
+!docs/architecture/**
+!docs/reports/
+!docs/reports/**
 tests/*
 !tests/minimal/
 !tests/minimal/*.py

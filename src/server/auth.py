@@ -9,15 +9,23 @@ from fastapi import Request, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from .core.database import get_db
 from .core.models import User
+from .core.secret_manager import resolve_secret_ref
 
-# Secrets should be loaded from env. If missing, generate a runtime-only fallback.
+# Secrets should be loaded from Vault (preferred) or env.
 logger = logging.getLogger("PortalAuth")
-_env_secret = os.getenv("Portal_SECRET_KEY", "").strip()
-if _env_secret:
-    SECRET_KEY = _env_secret
+SECRET_KEY = resolve_secret_ref("ENV_Portal_SECRET_KEY")
+
+if not SECRET_KEY:
+    # Fallback for transition
+    _env_secret = os.getenv("Portal_SECRET_KEY", "").strip()
+    if _env_secret:
+        SECRET_KEY = _env_secret
+        logger.info("Portal_SECRET_KEY loaded from environment.")
+    else:
+        SECRET_KEY = secrets.token_urlsafe(48)
+        logger.warning("Portal_SECRET_KEY not found in Vault or Env. Generated ephemeral SECRET_KEY.")
 else:
-    SECRET_KEY = secrets.token_urlsafe(48)
-    logger.warning("Portal_SECRET_KEY not set. Generated ephemeral SECRET_KEY for this process.")
+    logger.info("Portal_SECRET_KEY loaded from Vault.")
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 1 day

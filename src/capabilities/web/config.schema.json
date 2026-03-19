@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Enabled"
+    },
+    "search": {
+      "type": "object",
+      "title": "Search",
+      "properties": {
+        "defaults": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "search_router": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "inherit_provider_capabilities": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "retrieve": {
+      "type": "object",
+      "title": "Retrieve",
+      "properties": {
+        "defaults": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

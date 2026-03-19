@@ -1,0 +1,191 @@
+{
+    "contract_version": "1.0",
+    "capability": {
+        "id": "calendar",
+        "namespace": "calendar",
+        "version": "1.0.0",
+        "title": "Calendar",
+        "description": "Manage internal and Google Calendar events and synchronization.",
+        "icon": "calendar",
+        "assets": {
+            "icon_svg": "assets/icon.svg"
+        }
+    },
+    "runtime": {
+        "module": "capabilities.calendar.runtime",
+        "factory": "create_capability",
+        "config_schema": "./config.schema.json"
+    },
+    "actions": [
+        {
+            "id": "calendar.list_events",
+            "title": "List Events",
+            "description": "Lists events in compact format (short_id, concise title, start time). Use get_event for full details.",
+            "handler": "handle_list",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "calendar:read"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_time": {
+                        "type": "string",
+                        "description": "ISO start time"
+                    },
+                    "end_time": {
+                        "type": "string",
+                        "description": "ISO end time"
+                    },
+                    "include_internal_id": {
+                        "type": "boolean",
+                        "description": "When true, includes internal UUID in output (diagnostics only)."
+                    }
+                }
+            }
+        },
+        {
+            "id": "calendar.create_event",
+            "title": "Create Event",
+            "description": "Creates a calendar event. Keep title concise; put long information in details/description.",
+            "handler": "handle_create",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "calendar:write"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Short and objective title."
+                    },
+                    "start_time": {
+                        "type": "string"
+                    },
+                    "end_time": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Long details field."
+                    },
+                    "details": {
+                        "type": "string",
+                        "description": "Alias for description (long details)."
+                    },
+                    "location": {
+                        "type": "string"
+                    },
+                    "include_internal_id": {
+                        "type": "boolean",
+                        "description": "When true, includes internal UUID in output (diagnostics only)."
+                    }
+                },
+                "required": [
+                    "title",
+                    "start_time"
+                ]
+            }
+        },
+        {
+            "id": "calendar.delete_event",
+            "title": "Delete Event",
+            "description": "Deletes a calendar event by short_id (preferred) or event_id.",
+            "handler": "handle_delete",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "calendar:delete"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "short_id": {
+                        "type": "string"
+                    },
+                    "event_id": {
+                        "type": "string"
+                    },
+                    "event_ref": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "include_internal_id": {
+                        "type": "boolean",
+                        "description": "When true, includes internal UUID in output (diagnostics only)."
+                    }
+                }
+            }
+        },
+        {
+            "id": "calendar.get_event",
+            "title": "Get Event Details",
+            "description": "Retrieves full event details by short_id (preferred) or event_id.",
+            "handler": "handle_get",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "calendar:read"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "short_id": {
+                        "type": "string"
+                    },
+                    "event_id": {
+                        "type": "string"
+                    },
+                    "event_ref": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "include_internal_id": {
+                        "type": "boolean",
+                        "description": "When true, includes internal UUID in output (diagnostics only)."
+                    }
+                }
+            }
+        },
+        {
+            "id": "calendar.sync",
+            "title": "Sync Calendar",
+            "description": "Triggers a full synchronization with external providers (e.g., Google Calendar).",
+            "handler": "handle_sync",
+            "risk_level": "medium",
+            "permissions": {
+                "scopes": [
+                    "calendar:sync"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    ],
+    "auth": {
+        "mode": "none"
+    }
+}

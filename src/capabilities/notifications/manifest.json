@@ -1,0 +1,22 @@
+{
+    "id": "notifications",
+    "name": "Notification System",
+    "description": "Allows the agent to send formal notifications to the user across different channels.",
+    "version": "1.0.0",
+    "capabilities": [
+        "notifications.send",
+        "notifications.list_targets",
+        "notifications.set_preference",
+        "notifications.list_preferences",
+        "notifications.record_feedback",
+        "notifications.list_signal_assessments",
+        "notifications.list_policy_suggestions",
+        "notifications.review_policy_suggestion",
+        "notifications.list_policy_patch_queue",
+        "notifications.set_policy_patch_status",
+        "notifications.explain_policy_decision",
+        "notifications.apply_policy_patch_candidate",
+        "notifications.list_applied_policy_patches",
+        "notifications.rollback_applied_policy_patch"
+    ]
+}

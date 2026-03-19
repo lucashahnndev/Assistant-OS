@@ -824,6 +824,10 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
             ...prev,
             ...next,
             events: mergedEvents,
+            capabilities_assets: {
+                ...(prev.capabilities_assets || {}),
+                ...(next.capabilities_assets || {}),
+            },
         };
         return isEqualObject(prev, merged) ? prev : merged;
     };
@@ -1015,7 +1019,11 @@ const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: 
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                         {capabilities.map((s, i) => (
                             <span key={i} style={{ padding: '3px 8px', background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.35)', borderRadius: '8px', fontSize: '11px', color: 'var(--text-primary)', fontWeight: '700', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                                <CapabilityIcon variant="inline" capabilityId={s} capabilityName={s} />
+                                <CapabilityIcon
+                                    variant="inline"
+                                    capabilityId={s}
+                                    assets={overwatch?.capabilities_assets?.[s]}
+                                />
                                 {s}
                             </span>
                         ))}

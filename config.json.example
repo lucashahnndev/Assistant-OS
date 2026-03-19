@@ -249,6 +249,8 @@
             "city": "Canoas",
             "state": "RS",
             "country": "Brazil",
+            "timezone": "America/Sao_Paulo",
+            "language": "pt-BR",
             "lat": "-29.928474",
             "lon": "-51.190630"
         }
@@ -314,12 +316,21 @@
                 "limit": 5
             }
         },
-        "youtube_search": {
+        "youtube": {
             "enabled": true,
-            "secret_ref": "ENV_GOOGLE_CLOUD_API_KEY",
-            "defaults": {
-                "surfaceMode": "auto",
-                "limit": 5
+            "authSource": "auto",
+            "apiKey": "ENV_GOOGLE_CLOUD_API_KEY",
+            "search": {
+                "defaults": {
+                    "surfaceMode": "auto",
+                    "limit": 5
+                }
+            },
+            "retrieve": {
+                "defaults": {
+                    "include_transcript": false,
+                    "max_chars": 12000
+                }
             }
         },
         "maps_search": {
@@ -330,14 +341,107 @@
                 "language": "en-US"
             }
         },
-        "web_search": {
+        "web": {
             "enabled": true,
-            "provider": "duckduckgo"
+            "search": {
+                "defaults": {
+                    "limit": 5,
+                    "mode": "links",
+                    "language": "en",
+                    "timeout_ms": 5000,
+                    "retries": 1
+                },
+                "search_router": {
+                    "inherit_provider_capabilities": true,
+                    "provider_order": [
+                        "searxng",
+                        "brave",
+                        "ddg",
+                        "openalex",
+                        "commoncrawl"
+                    ],
+                    "providers": {}
+                }
+            },
+            "retrieve": {
+                "defaults": {
+                    "timeout_ms": 10000,
+                    "retries": 1,
+                    "max_chars": 12000
+                }
+            }
+        },
+        "brave_search": {
+            "enabled": true,
+            "provider": {
+                "enabled": false,
+                "api_key": "ENV_BRAVE_API_KEY"
+            }
+        },
+        "ddg_search": {
+            "enabled": true,
+            "provider": {
+                "enabled": false
+            }
+        },
+        "searxng_search": {
+            "enabled": true,
+            "provider": {
+                "enabled": true,
+                "endpoints": [
+                    "https://searx.be",
+                    "https://search.inetol.net"
+                ]
+            }
+        },
+        "openalex_search": {
+            "enabled": true,
+            "provider": {
+                "enabled": true
+            }
+        },
+        "commoncrawl_search": {
+            "enabled": true,
+            "provider": {
+                "enabled": true,
+                "collinfo_url": "https://index.commoncrawl.org/collinfo.json",
+                "max_indexes": 2
+            }
+        },
+        "research_retrieve": {
+            "enabled": true,
+            "use_external_rag_runtime": true,
+            "defaults": {
+                "execution": {
+                    "max_docs": 3,
+                    "max_total_chars": 14000,
+                    "latency_budget_ms": 12000
+                },
+                "provider_limits": {
+                    "max_providers": 2,
+                    "max_fallback_depth": 2,
+                    "prefer_modular_providers": true
+                },
+                "control_plane": {
+                    "overrides": {},
+                    "scorecard": {}
+                }
+            }
         },
         "system_control": {
             "enabled": true
         },
         "task_management": {
+            "enabled": true
+        },
+        "calendar": {
+            "enabled": true,
+            "retention_days": 730,
+            "title_max_length": 72,
+            "description_max_length": 4000,
+            "short_id_length": 10
+        },
+        "notifications": {
             "enabled": true
         },
         "memory_management": {

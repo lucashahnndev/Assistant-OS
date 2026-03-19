@@ -157,10 +157,17 @@ class SystemCapability(CapabilityBase):
         local = self._local_action(action_id)
 
         if local == "info":
-            now = datetime.datetime.now()
+            from config.manager import ConfigManager
+            from zoneinfo import ZoneInfo
+            tz_name = ConfigManager().get_timezone()
+            try:
+                now = datetime.datetime.now(ZoneInfo(tz_name))
+            except Exception:
+                now = datetime.datetime.now(datetime.timezone.utc)
             payload = {
                 "time": now.strftime("%H:%M:%S"),
                 "date": now.strftime("%Y-%m-%d"),
+                "timezone": tz_name,
                 "os": platform.system(),
                 "dist": platform.release(),
                 "user": os.getlogin() if hasattr(os, "getlogin") else "unknown",
@@ -173,7 +180,13 @@ class SystemCapability(CapabilityBase):
             )
 
         if local == "time":
-            now_dt = datetime.datetime.now()
+            from config.manager import ConfigManager
+            from zoneinfo import ZoneInfo
+            tz_name = ConfigManager().get_timezone()
+            try:
+                now_dt = datetime.datetime.now(ZoneInfo(tz_name))
+            except Exception:
+                now_dt = datetime.datetime.now(datetime.timezone.utc)
             now = now_dt.strftime("%H:%M:%S")
             today = now_dt.strftime("%Y-%m-%d")
             include_date = bool(params.get("include_date"))

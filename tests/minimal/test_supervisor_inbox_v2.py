@@ -93,8 +93,8 @@ def test_stale_labeling_in_prompt():
     # Create a basic prompt and inject updates
     prompt = orchestrator._construct_system_prompt(session, worker_updates=worker_updates)
     
-    assert "### Background Worker Updates" in prompt
-    assert "[STALE - 2 turns ago] Searcher: Looking for files (80%)" in prompt
+    assert "[WORKER UPDATES]" in prompt
+    assert "Searcher|PROGRESS stale=2|80% Looking for files" in prompt
 
 def test_failed_not_lost_by_coalescing():
     orchestrator = AgentOrchestrator(MagicMock())

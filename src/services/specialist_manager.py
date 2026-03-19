@@ -7,7 +7,7 @@ class SpecialistManager:
                 "title": "Web Automation & Playwright",
                 "focus": ["browser_navigation", "data_extraction", "selector_reasoning"],
                 "rules": [
-                    "prefer_browser_driver_actions",
+                    "prefer_search_retrieval_for_non_interactive_queries",
                     "avoid_guessing_urls",
                     "confirm_interactive_state_before_completion",
                 ],
@@ -28,6 +28,16 @@ class SpecialistManager:
                     "follow_pep8",
                     "prefer_existing_project_patterns",
                     "verify_changes_with_tests",
+                ],
+            },
+            "calendar": {
+                "title": "Calendar & Sync Management",
+                "focus": ["event_scheduling", "conflict_resolution", "sync_integrity"],
+                "rules": [
+                    "when detecting a sync conflict (local vs external), prioritize data safety",
+                    "if an external deletion is ambiguous (active local changes), ask the user instead of deleting",
+                    "inform the user clearly about the divergence and offer simple choices",
+                    "ensure timezones are handled consistently during resolution",
                 ],
             },
         }

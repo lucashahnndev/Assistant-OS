@@ -1,0 +1,79 @@
+{
+  "contract_version": "1.0",
+  "capability": {
+    "id": "ddg_search",
+    "namespace": "ddg.search",
+    "version": "1.0.0",
+    "title": "ddg.search",
+    "description": "Busca web via DuckDuckGo e retorna resultados estruturados para RAG externo.",
+    "assets": {
+      "icon_svg": "assets/icon.svg"
+    }
+  },
+  "runtime": {
+    "module": "capabilities.ddg_search",
+    "factory": "create_capability",
+    "config_schema": "./config.schema.json"
+  },
+  "actions": [
+    {
+      "id": "ddg.search.query",
+      "title": "Query",
+      "description": "Executa busca web no provider DDG.",
+      "handler": "query",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": ["ddg:search:query"],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "limit": { "type": "integer", "default": 6 },
+          "recency_days": { "type": "integer", "default": 0 },
+          "language": { "type": "string", "default": "en" },
+          "domains_allow": { "type": "array" },
+          "domains_deny": { "type": "array" },
+          "location": { "type": "object" }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    }
+  ],
+  "retrieval_profile": {
+    "enabled": true,
+    "roles": ["search"],
+    "domains": ["web", "news"],
+    "entity_types": ["article", "snippet"],
+    "freshness": { "type": "live", "sla_hours": 24 },
+    "quality": {
+      "default_confidence": 0.64,
+      "trust_tier": "community",
+      "citation_mode": "url_required"
+    },
+    "cost": {
+      "latency_class": "low",
+      "quota_class": "free"
+    },
+    "setup": {
+      "requires_auth": false,
+      "required_fields": [],
+      "healthcheck_action": "ddg.search.query"
+    },
+    "output_contract": {
+      "evidence_schema": "external.evidence.v1"
+    },
+    "routing_hints": {
+      "preferred_intents": ["general_knowledge", "latest_update"],
+      "avoid_when": []
+    }
+  },
+  "auth": {
+    "mode": "none",
+    "required": false,
+    "fields": []
+  }
+}

@@ -51,7 +51,7 @@ class ConfigManager:
         self.initialized = True
 
     def load(self):
-        """Loads configuration from file and environment variables."""
+        """Loads configuration from file."""
         # Load .env file from the dynamic data directory
         from dotenv import load_dotenv
         env_path = os.path.join(self.base_data_dir, '.env')
@@ -73,40 +73,13 @@ class ConfigManager:
                         json.dump(data, fw, indent=4)
                         logger.info("Migrated config.json to new Model Pool format.")
                         
-                self.config_data = self._substitute_env_vars(data)
+                self.config_data = data
             except Exception as e:
                 logger.error(f"Error loading config: {e}")
                 self.config_data = {}
         else:
             logger.warning(f"Config file not found: {self.config_file}")
             self.config_data = {}
-
-    def _substitute_env_vars(self, data):
-        """Recursively substitutes string values starting with ENV_ from os.environ."""
-        if isinstance(data, dict):
-            return {k: self._substitute_env_vars(v) for k, v in data.items()}
-        elif isinstance(data, list):
-            return [self._substitute_env_vars(v) for v in data]
-        elif isinstance(data, str) and data.startswith("ENV_"):
-            # Extract variable name from value (e.g., "ENV_TELEGRAM_TOKEN" -> "TELEGRAM_TOKEN" or match full name)
-            # Strategy: User said "coloca ENV_OPENAI_KEY". 
-            # I will check if the *exact string* exists as an env var first.
-            # Strategy: User said "coloca ENV_OPENAI_KEY" in config.
-            # 1. Try exact match (e.g. is there a var named ENV_OPENAI_KEY?)
-            env_val = os.getenv(data)
-            if env_val:
-                return env_val
-            
-            # 2. Try stripping ENV_ prefix (e.g. ENV_OPENAI_KEY -> OPENAI_KEY)
-            # This allows config to say "ENV_TOKEN" and .env to have "TOKEN"
-            stripped_key = data.replace("ENV_", "", 1)
-            env_val_stripped = os.getenv(stripped_key)
-            if env_val_stripped:
-                return env_val_stripped
-
-            return data # Return original if not found
-        else:
-            return data
 
     def get_config(self, key, default=None):
         """Retrieves a configuration value."""
@@ -172,11 +145,30 @@ class ConfigManager:
             "mode": "auto",
             "default": {
                 "city": "Unknown",
+                "timezone": "UTC",
+                "language": "en",
                 "latitude": 0.0,
                 "longitude": 0.0
             }
         }
         return self.get("location", default_loc)
+
+    def get_timezone(self) -> str:
+        """Returns the configured timezone, falling back to UTC."""
+        location_cfg = self.get_location_config()
+        # default_loc is already nested in get_location_config default, but let's be safe
+        default_tz = location_cfg.get("default", {}).get("timezone") if isinstance(location_cfg.get("default"), dict) else None
+        if not default_tz:
+             default_tz = location_cfg.get("timezone") # Flat structure support
+
+        if default_tz:
+            return str(default_tz)
+        
+        env_tz = self.get("environment", {}).get("timezone")
+        if env_tz:
+            return str(env_tz)
+            
+        return "UTC"
 
     def get_i18n_config(self):
         """Returns i18n/language configuration."""

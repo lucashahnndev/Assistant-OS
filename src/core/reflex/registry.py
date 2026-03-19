@@ -15,8 +15,16 @@ class ReflexRegistry:
     def __init__(self):
         self.rules: List[ReflexRule] = []
         self._compiled_rules = []
+        self._rule_fingerprints = set()
 
     def register(self, pattern: str, action_id: str, priority: int = 0, handler: Optional[Callable] = None):
+        handler_id = None
+        if handler is not None:
+            handler_id = getattr(handler, "__qualname__", None) or getattr(handler, "__name__", None) or str(handler)
+        fp = (str(pattern or ""), str(action_id or ""), int(priority or 0), str(handler_id or ""))
+        if fp in self._rule_fingerprints:
+            return
+        self._rule_fingerprints.add(fp)
         rule = ReflexRule(pattern, action_id, priority, handler)
         self.rules.append(rule)
         # Sort by priority (higher first)
@@ -26,7 +34,7 @@ class ReflexRegistry:
     def _compile(self):
         self._compiled_rules = []
         for rule in self.rules:
-            self._compiled_rules.append((re.compile(rule.pattern, re.IGNORECASE), rule))
+            self._compiled_rules.append((re.compile(rule.pattern, re.IGNORECASE | re.DOTALL), rule))
 
     def match(self, text: str) -> Optional[ActionPlan]:
         for regex, rule in self._compiled_rules:

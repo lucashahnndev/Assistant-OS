@@ -7,6 +7,7 @@ import threading
 import re
 from dotenv import load_dotenv
 load_dotenv()
+from drivers.interfaces.internal_driver import InternalDriver
 from core.orchestrator import AgentOrchestrator
 from core.identity import PrincipalContext
 # Drivers are imported dynamically in Kernel.__init__
@@ -174,6 +175,31 @@ class Kernel:
             return self._normalize_interface_name(str(session.source))
         return self._normalize_interface_name(self._infer_interface_from_session_id(session_id))
 
+    @staticmethod
+    def _build_message_actor(context: Optional[PrincipalContext], is_internal: bool) -> Dict[str, Any]:
+        if is_internal:
+            source_name = str(getattr(context, "sender_name", "") or "System") if isinstance(context, PrincipalContext) else "System"
+            source_roles = list(getattr(context, "roles", []) or []) if isinstance(context, PrincipalContext) else []
+            return {
+                "kind": "system_event",
+                "id": "system",
+                "display_name": source_name,
+                "interface": "system",
+                "roles": source_roles or ["system_event"],
+            }
+        if not isinstance(context, PrincipalContext):
+            return {"kind": "human_user", "id": "unknown"}
+        kind = "group_participant" if bool(getattr(context, "is_group", False)) else "human_user"
+        return {
+            "kind": kind,
+            "id": str(getattr(context, "sender_id", "") or ""),
+            "display_name": str(getattr(context, "sender_name", "") or ""),
+            "chat_id": str(getattr(context, "chat_id", "") or ""),
+            "chat_name": str(getattr(context, "chat_name", "") or ""),
+            "interface": str(getattr(context, "interface", "") or ""),
+            "roles": list(getattr(context, "roles", []) or []),
+        }
+
     def can_interface_control_permissions(self, interface: str) -> bool:
         normalized = self._normalize_interface_name(interface)
         try:
@@ -301,8 +327,15 @@ class Kernel:
         sig = self._permission_signature(action_id, args)
         if not sig:
             return
+        tz_name = self.config_manager.get_timezone()
+        from zoneinfo import ZoneInfo
+        try:
+            now_str = datetime.datetime.now(ZoneInfo(tz_name)).isoformat()
+        except Exception:
+            now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            
         record = {
-            "granted_at": datetime.datetime.now().isoformat(),
+            "granted_at": now_str,
             "scope": str(scope or "worker"),
             "action_id": str(action_id or ""),
             "session_id": session_id,
@@ -353,6 +386,12 @@ class Kernel:
     def _admission_gate(self, session_id: str, action_id: str) -> Tuple[str, List[str]]:
         # 1. Bypass gate for control/interrupt signals
         if action_id in {"cancel", "stop", "clear"}:
+            return "allow", []
+        # Internal system sessions carry platform events (calendar, alerts, etc.).
+        # They must not be blocked by conversational admission gating, otherwise
+        # reflex actions (e.g., notifications.send) can be dropped with session_busy.
+        sid = str(session_id or "").strip().lower()
+        if sid.startswith("system."):
             return "allow", []
 
         active = self.scheduler.get_active_works(session_id=session_id)
@@ -442,7 +481,7 @@ class Kernel:
             return "voice"
         return "web"
 
-    def _send_to_session(self, session_id: str, text: str, phase: str = "thinking"):
+    def _send_to_session(self, session_id: str, text: str, phase: str = "thinking", attachments: Optional[List[Dict]] = None):
         driver = self._resolve_driver_for_session(session_id)
         if not driver:
             return False
@@ -450,7 +489,7 @@ class Kernel:
             if hasattr(driver, "send_status"):
                 driver.send_status(session_id, phase, {"message": text})
             if hasattr(driver, "send_response"):
-                driver.send_response(text, target=session_id, is_chunk=True)
+                driver.send_response(text, target=session_id, is_chunk=True, attachments=attachments)
             if hasattr(driver, "send_complete"):
                 driver.send_complete(session_id)
             return True
@@ -458,19 +497,25 @@ class Kernel:
             logger.debug(f"Failed sending routed message to {session_id}: {e}")
             return False
 
-    def _enqueue_approval_request(self, owner_session_id: str, work_id: str, prompt: str):
+        tz_name = self.config_manager.get_timezone()
+        from zoneinfo import ZoneInfo
+        try:
+            now_str = datetime.datetime.now(ZoneInfo(tz_name)).isoformat()
+        except Exception:
+            now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
         bucket = self.pending_approval_queue.setdefault(owner_session_id, [])
         for item in bucket:
             if item.get("work_id") == work_id:
                 item["prompt"] = prompt
-                item["updated_at"] = datetime.datetime.now().isoformat()
+                item["updated_at"] = now_str
                 return
         bucket.append(
             {
                 "work_id": work_id,
                 "prompt": prompt,
-                "created_at": datetime.datetime.now().isoformat(),
-                "updated_at": datetime.datetime.now().isoformat(),
+                "created_at": now_str,
+                "updated_at": now_str,
             }
         )
         bucket.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
@@ -963,7 +1008,7 @@ class Kernel:
             except Exception as e:
                 logger.error(f"Error in Event Consumer: {e}")
 
-    def process_input(self, text, driver_instance, user_id=None, user_data: dict = None, context: PrincipalContext = None, attachments: List[str] = None):
+    def process_input(self, text, driver_instance, user_id=None, user_data: dict = None, context: PrincipalContext = None, attachments: List[str] = None, is_internal: bool = False):
         """
         Asynchronous processing logic.
         Creates a 'Work', spawns a 'Worker', and returns acknowledgment.
@@ -988,22 +1033,26 @@ class Kernel:
         if preempt_on_new_input:
             self.scheduler.cancel_session_work(session_id)
         
-        # Map session to driver for back-routing responses
-        self.driver_instances[session_id] = driver_instance
+        # Map session to driver for back-routing responses.
+        # Internal injections must not clobber the real user-channel routing
+        # (e.g., telegram session being temporarily mapped to InternalDriver).
+        if not is_internal or session_id.startswith("system."):
+            self.driver_instances[session_id] = driver_instance
 
-        # IMMEDIATE FEEDBACK: Let the user know we're working BEFORE the synchronous LLM intent resolution
-        try:
-            existing_session = self.orchestrator.get_session_robust(session_id)
-            session_fallback_locale = "en"
-            if existing_session and isinstance(getattr(existing_session, "context", None), dict):
-                session_fallback_locale = str(existing_session.context.get("user_language") or "en")
-            session_locale = self.orchestrator._normalize_locale(
-                self.orchestrator._detect_user_language(text, fallback=session_fallback_locale)
-            )
-            start_msg = self.orchestrator.i18n.t("status.processing_start", locale=session_locale)
-            driver_instance.send_status(session_id, 'thinking', start_msg)
-        except Exception as e:
-            logger.debug(f"Failed to send early status: {e}")
+        # IMMEDIATE FEEDBACK: Let the user know we're working (Only for non-internal)
+        if not is_internal:
+            try:
+                existing_session = self.orchestrator.get_session_robust(session_id)
+                session_fallback_locale = "en"
+                if existing_session and isinstance(getattr(existing_session, "context", None), dict):
+                    session_fallback_locale = str(existing_session.context.get("user_language") or "en")
+                session_locale = self.orchestrator._normalize_locale(
+                    self.orchestrator._detect_user_language(text, fallback=session_fallback_locale)
+                )
+                start_msg = self.orchestrator.i18n.t("status.processing_start", locale=session_locale)
+                driver_instance.send_status(session_id, 'thinking', start_msg)
+            except Exception as e:
+                logger.debug(f"Failed to send early status: {e}")
 
         try:
             # Inject driver capabilities into context
@@ -1016,7 +1065,19 @@ class Kernel:
             user_name = user_data.get('user_name', "")
 
             # 1. Get Initial Resolution (Reflex or Chain)
-            plan, _, session = self.orchestrator.get_initial_intent(effective_text, session_id=session_id, user_data=user_data, context=context, attachments=attachments, name=user_name)
+            # Use SESSION_TYPE_SYSTEM if internal
+            from core.session import SESSION_TYPE_SYSTEM, SESSION_TYPE_USER
+            session_type = SESSION_TYPE_SYSTEM if is_internal else SESSION_TYPE_USER
+            
+            plan, _, session = self.orchestrator.get_initial_intent(
+                effective_text, 
+                session_id=session_id, 
+                user_data=user_data, 
+                context=context, 
+                attachments=attachments, 
+                name=user_name,
+                session_type=session_type
+            )
 
             if session and isinstance(context, PrincipalContext):
                 session.context["last_interface"] = str(context.interface or "web")
@@ -1030,16 +1091,27 @@ class Kernel:
                 session.context["last_is_group"] = bool(context.is_group)
             
             # ENSURE PERSISTENCE: Add user message to history before processing the plan
-            # (unless it's an internal/hidden trigger which we don't have yet in this flow)
             if session:
-                session.add_message("user", text, attachments=attachments)
+                inbound_role = "notification" if is_internal else "user"
+                inbound_type = "internal_event" if is_internal else "default"
+                session.add_message(
+                    inbound_role,
+                    text,
+                    attachments=attachments,
+                    silent=is_internal,
+                    msg_type=inbound_type,
+                    actor=self._build_message_actor(context, is_internal),
+                )
                 self.orchestrator._save_session(session)
                 
                 # Trigger auto-naming for web sessions on first user messages
-                if session.source == "web" and not session.name_generated and len(session.history) <= 3:
+                if not is_internal and session.source == "web" and not session.name_generated and len(session.history) <= 3:
                     threading.Thread(target=self.orchestrator._auto_name_session, args=(session, text), daemon=True).start()
 
             if not plan:
+                if is_internal:
+                    return None # No plan for internal is fine
+                
                 caps = user_data.get("driver_capabilities", {}) if isinstance(user_data, dict) else {}
                 is_voice_interaction = bool(caps.get("voice_only")) or (bool(context) and str(getattr(context, "interface", "")).lower() == "voice")
                 no_plan_key = "reply.voice_rephrase" if is_voice_interaction else "reply.no_plan_resolved"
@@ -1065,12 +1137,22 @@ class Kernel:
                 if self._expose_reasoning_to_ui() and hasattr(driver_instance, 'send_reasoning_chunk') and plan.thought:
                     driver_instance.send_reasoning_chunk(session_id, plan.thought)
 
-                # Send response as chunks to trigger the correct responding UI
-                driver_instance.send_response(coached_response, target=session_id, is_chunk=True, attachments=plan.attachments)
-                
-                # Crucial: Send complete to clear the "Thinking" block in Web UI
-                if hasattr(driver_instance, 'send_complete'):
-                    driver_instance.send_complete(session_id)
+                # Internal events targeted to a user session must be routed through the
+                # real channel driver (telegram/web/voice), not the InternalDriver itself.
+                if is_internal and not session_id.startswith("system."):
+                    self._send_to_session(
+                        session_id,
+                        coached_response,
+                        phase="notification",
+                        attachments=plan.attachments,
+                    )
+                else:
+                    # Send response as chunks to trigger the correct responding UI
+                    driver_instance.send_response(coached_response, target=session_id, is_chunk=True, attachments=plan.attachments)
+                    
+                    # Crucial: Send complete to clear the "Thinking" block in Web UI
+                    if hasattr(driver_instance, 'send_complete'):
+                        driver_instance.send_complete(session_id)
                 
                 return session_id
             # 3. Background Path (Work/Worker)
@@ -1087,13 +1169,20 @@ class Kernel:
                     user_input=text,
                     reason="media_busy_takeover",
                 )
+                tz_name = self.config_manager.get_timezone()
+                from zoneinfo import ZoneInfo
+                try:
+                    now_str = datetime.datetime.now(ZoneInfo(tz_name)).isoformat()
+                except Exception:
+                    now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                
                 session.pending_action = {
                     "type": "media_takeover",
                     "blocked_work_ids": blocked_work_ids,
                     "original_text": text,
                     "original_user_data": user_data if isinstance(user_data, dict) else {},
                     "requested_action": plan.action_id,
-                    "requested_at": datetime.datetime.now().isoformat(),
+                    "requested_at": now_str,
                 }
                 session.add_message("assistant", prompt)
                 self.orchestrator._save_session(session)
@@ -1188,20 +1277,21 @@ class Kernel:
                 callbacks=callbacks,
                 initial_plan=plan, # Resume from this resolved plan
                 context=context,
-                attachments=attachments
+                attachments=attachments,
+                is_internal=is_internal
             )
 
             # 4. Immediate technical receipt (Status only)
-            # This keeps the driver UI updated without committing to a conversational response.
-            driver_instance.send_status(
-                session_id,
-                "thinking",
-                {
-                    "message": self.orchestrator.i18n.t("status.task_started", locale=self.orchestrator._session_locale(session)),
-                    "work_id": work.work_id,
-                    "code": "receipt",
-                },
-            )
+            if not is_internal:
+                driver_instance.send_status(
+                    session_id,
+                    "thinking",
+                    {
+                        "message": self.orchestrator.i18n.t("status.task_started", locale=self.orchestrator._session_locale(session)),
+                        "work_id": work.work_id,
+                        "code": "receipt",
+                    },
+                )
             
             # Persist an empty placeholder or technical record if needed, 
             # but do NOT add a conversational assistant message here.
