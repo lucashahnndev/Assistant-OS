@@ -1491,14 +1491,28 @@ Example:
     async def _get_page_state(self, goal: Optional[str] = None) -> Dict[str, Any]:
         """Captures fused perception state using parallel analyzers."""
         await self._ensure_target_binding()
-        url = await self._get_current_url()
-        title = ""
-        try:
-            res = await self.runtime._call_cdp("Runtime.evaluate", {"expression": "JSON.stringify({title: document.title, w: window.innerWidth, h: window.innerHeight})", "returnByValue": True})
-            info = json.loads(res.get("result", {}).get("value", "{}"))
-            title = info.get("title", "")
-            if info.get("w"): self._viewport = {"w": info["w"], "h": info["h"]}
-        except: pass
+        page_info = {}
+        if hasattr(self.runtime, "get_page_info"):
+            try:
+                page_info = await self.runtime.get_page_info()
+            except Exception:
+                page_info = {}
+        url = str(page_info.get("url", "") or "") if isinstance(page_info, dict) else ""
+        title = str(page_info.get("title", "") or "") if isinstance(page_info, dict) else ""
+        if not url:
+            url = await self._get_current_url()
+        if not title:
+            try:
+                title = await self.runtime._get_current_title()
+            except Exception:
+                title = ""
+        if isinstance(page_info, dict):
+            viewport = page_info.get("viewport") if isinstance(page_info.get("viewport"), dict) else {}
+            if viewport.get("w") and viewport.get("h"):
+                try:
+                    self._viewport = {"w": int(viewport.get("w")), "h": int(viewport.get("h"))}
+                except Exception:
+                    pass
 
         # Quick page signature: enables short-TTL cache reuse when state is unchanged.
         page_signature: Dict[str, Any] = {}

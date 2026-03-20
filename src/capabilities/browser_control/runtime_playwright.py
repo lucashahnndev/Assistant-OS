@@ -180,6 +180,35 @@ class BrowserRuntimePlaywright:
         except Exception:
             return ""
 
+    async def get_page_info(self) -> Dict[str, Any]:
+        if not self._page:
+            return {"url": "", "title": "", "viewport": {"w": 0, "h": 0}}
+        try:
+            payload = await self._page.evaluate(
+                """() => ({
+                  url: String(window.location.href || ""),
+                  title: String(document.title || ""),
+                  w: Number(window.innerWidth || 0),
+                  h: Number(window.innerHeight || 0),
+                })"""
+            )
+            if not isinstance(payload, dict):
+                payload = {}
+            return {
+                "url": str(payload.get("url", "") or ""),
+                "title": str(payload.get("title", "") or ""),
+                "viewport": {
+                    "w": int(payload.get("w", 0) or 0),
+                    "h": int(payload.get("h", 0) or 0),
+                },
+            }
+        except Exception:
+            return {
+                "url": await self._get_current_url(),
+                "title": await self._get_current_title(),
+                "viewport": {"w": 0, "h": 0},
+            }
+
     async def _call_cdp(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not self._page:
             raise RuntimeError("Playwright page is not available")
