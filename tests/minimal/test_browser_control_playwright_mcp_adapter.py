@@ -9,6 +9,25 @@ async def _fake_invoker(name, args):
         return {"result": {"ok": True, "url": args.get("url")}}
     if name == "browser_run_code":
         code = str(args.get("code") or "")
+        if "querySelectorAll" in code and "total_count" in code:
+            return {
+                "result": {
+                    "nodes": [
+                        {
+                            "id": "pw_node_0",
+                            "tag": "button",
+                            "role": "button",
+                            "text": "Sort by",
+                            "inViewport": True,
+                            "bbox": {"x": 10, "y": 20, "w": 100, "h": 30},
+                        }
+                    ],
+                    "markers": [{"id": "mk_1", "kind": "heading", "text": "Results"}],
+                    "focus": {"tag": "input", "id": "twotabsearchtextbox", "role": "searchbox"},
+                    "total_count": 1,
+                    "viewport_count": 1,
+                }
+            }
         if "page.url" in code or "window.innerWidth" in code:
             return {"result": {"url": "https://example.com", "title": "Example", "viewport": {"w": 1280, "h": 720}}}
         if "window.scrollBy" in code:
@@ -44,6 +63,11 @@ def test_playwright_mcp_adapter_basic_calls_via_invoker():
 
     raw = asyncio.run(adapter.capture_screenshot_bytes())
     assert raw == b"fake"
+    dom = asyncio.run(adapter.get_skeletal_dom())
+    assert dom["total_count"] == 1
+    assert len(dom["nodes"]) == 1
+    assert dom["nodes"][0]["id"] == "pw_node_0"
+    assert dom["markers"][0]["id"] == "mk_1"
     assert adapter.calls_total >= 4
 
 

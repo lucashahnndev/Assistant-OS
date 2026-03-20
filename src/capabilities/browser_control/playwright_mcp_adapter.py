@@ -153,8 +153,104 @@ class PlaywrightMCPAdapter:
                 pass
 
     async def get_skeletal_dom(self) -> Dict[str, Any]:
-        # Conservative fallback: no full MCP DOM schema assumption here.
-        return {"nodes": [], "markers": [], "focus": {}, "total_count": 0, "viewport_count": 0}
+        # Primary path: collect a lightweight, planner-compatible DOM slice via MCP run_code/evaluate.
+        result = await self._call_tool_preferred(
+            ["browser_run_code", "browser_evaluate"],
+            {
+                "code": (
+                    "async (page) => page.evaluate(() => {"
+                    "  const vw = Number(window.innerWidth || 1280);"
+                    "  const vh = Number(window.innerHeight || 720);"
+                    "  const all = Array.from(document.querySelectorAll("
+                    "    'a,button,input,textarea,select,[role],h1,h2,h3,p,span,div'"
+                    "  ));"
+                    "  const nodes = [];"
+                    "  const markers = [];"
+                    "  let idx = 0;"
+                    "  for (const el of all.slice(0, 260)) {"
+                    "    const rect = el.getBoundingClientRect();"
+                    "    const text = String("
+                    "      (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || '')"
+                    "    ).trim().slice(0, 140);"
+                    "    const role = String(el.getAttribute('role') || '').trim();"
+                    "    const tag = String(el.tagName || '').toLowerCase();"
+                    "    const inViewport = rect.width > 1 && rect.height > 1 && "
+                    "      rect.bottom >= 0 && rect.right >= 0 && rect.top <= vh && rect.left <= vw;"
+                    "    const node = {"
+                    "      id: `pw_node_${idx++}`,"
+                    "      tag,"
+                    "      role,"
+                    "      text,"
+                    "      inViewport,"
+                    "      bbox: {"
+                    "        x: Math.max(0, Number(rect.left || 0)),"
+                    "        y: Math.max(0, Number(rect.top || 0)),"
+                    "        w: Math.max(0, Number(rect.width || 0)),"
+                    "        h: Math.max(0, Number(rect.height || 0))"
+                    "      }"
+                    "    };"
+                    "    nodes.push(node);"
+                    "    if ((tag === 'h1' || tag === 'h2' || role === 'heading') && text) {"
+                    "      markers.push({ text, tag, role, id: `mk_${markers.length + 1}`, kind: 'heading' });"
+                    "    }"
+                    "  }"
+                    "  const ae = document.activeElement;"
+                    "  const focus = ae ? {"
+                    "    tag: String(ae.tagName || '').toLowerCase(),"
+                    "    id: String(ae.id || ''),"
+                    "    role: ae.getAttribute ? String(ae.getAttribute('role') || '') : ''"
+                    "  } : {};"
+                    "  return {"
+                    "    nodes,"
+                    "    markers,"
+                    "    focus,"
+                    "    total_count: Number(nodes.length || 0),"
+                    "    viewport_count: Number(nodes.filter(n => !!n.inViewport).length || 0)"
+                    "  };"
+                    "})"
+                ),
+                "function": (
+                    "() => {"
+                    "  const vw = Number(window.innerWidth || 1280);"
+                    "  const vh = Number(window.innerHeight || 720);"
+                    "  const all = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role],h1,h2,h3,p,span,div'));"
+                    "  const nodes = [];"
+                    "  const markers = [];"
+                    "  let idx = 0;"
+                    "  for (const el of all.slice(0, 260)) {"
+                    "    const rect = el.getBoundingClientRect();"
+                    "    const text = String((el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || '')).trim().slice(0, 140);"
+                    "    const role = String(el.getAttribute('role') || '').trim();"
+                    "    const tag = String(el.tagName || '').toLowerCase();"
+                    "    const inViewport = rect.width > 1 && rect.height > 1 && rect.bottom >= 0 && rect.right >= 0 && rect.top <= vh && rect.left <= vw;"
+                    "    nodes.push({"
+                    "      id: `pw_node_${idx++}`, tag, role, text, inViewport,"
+                    "      bbox: { x: Math.max(0, Number(rect.left||0)), y: Math.max(0, Number(rect.top||0)), w: Math.max(0, Number(rect.width||0)), h: Math.max(0, Number(rect.height||0)) }"
+                    "    });"
+                    "    if ((tag === 'h1' || tag === 'h2' || role === 'heading') && text) markers.push({ text, tag, role, id: `mk_${markers.length + 1}`, kind: 'heading' });"
+                    "  }"
+                    "  const ae = document.activeElement;"
+                    "  const focus = ae ? { tag: String(ae.tagName || '').toLowerCase(), id: String(ae.id || ''), role: ae.getAttribute ? String(ae.getAttribute('role') || '') : '' } : {};"
+                    "  return { nodes, markers, focus, total_count: Number(nodes.length || 0), viewport_count: Number(nodes.filter(n => !!n.inViewport).length || 0) };"
+                    "}"
+                ),
+            },
+        )
+        payload = self._coerce_result_payload(result)
+        nodes = payload.get("nodes") if isinstance(payload.get("nodes"), list) else []
+        markers = payload.get("markers") if isinstance(payload.get("markers"), list) else []
+        focus = payload.get("focus") if isinstance(payload.get("focus"), dict) else {}
+        total_count = int(payload.get("total_count", len(nodes)) or len(nodes))
+        viewport_count = int(payload.get("viewport_count", 0) or 0)
+        if viewport_count <= 0 and nodes:
+            viewport_count = sum(1 for n in nodes if isinstance(n, dict) and bool(n.get("inViewport")))
+        return {
+            "nodes": nodes,
+            "markers": markers,
+            "focus": focus,
+            "total_count": total_count,
+            "viewport_count": viewport_count,
+        }
 
     async def _call_tool_preferred(self, tool_names: List[str], args: Dict[str, Any]) -> Dict[str, Any]:
         last_error: Optional[Exception] = None
