@@ -55,6 +55,12 @@ def _write_text(path: str, content: str) -> None:
     p.write_text(content, encoding="utf-8")
 
 
+def _write_json(path: str, payload: Dict[str, Any]) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def evaluate_gate(
     smoke: Dict[str, Any],
     *,
@@ -163,6 +169,15 @@ def cmd_gate(args: argparse.Namespace) -> Dict[str, Any]:
             result["ok"] = False
             result["error_code"] = "REPORT_WRITE_FAILED"
             result["report_write_error"] = str(e)
+    json_report_file = str(args.json_report_file or "").strip()
+    if json_report_file:
+        try:
+            _write_json(json_report_file, result)
+            result["json_report_file"] = json_report_file
+        except Exception as e:
+            result["ok"] = False
+            result["error_code"] = "REPORT_WRITE_FAILED"
+            result["report_write_error"] = str(e)
     return result
 
 
@@ -184,6 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-mcp-calls", type=int, default=1)
     parser.add_argument("--allow-health-issue", action="append", default=[])
     parser.add_argument("--markdown-report-file", default="")
+    parser.add_argument("--json-report-file", default="")
     parser.set_defaults(handler=cmd_gate)
     return parser
 

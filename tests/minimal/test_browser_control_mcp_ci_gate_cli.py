@@ -118,3 +118,42 @@ def test_gate_cli_markdown_report_marks_failed_checks():
         assert payload["ok"] is False
         text = md.read_text(encoding="utf-8")
         assert "| `mcp_calls_threshold` | `FAIL` |" in text
+
+
+def test_gate_cli_writes_json_report_file():
+    with tempfile.TemporaryDirectory() as tmp:
+        report = Path(tmp) / "smoke.json"
+        out_json = Path(tmp) / "out" / "gate.json"
+        report.write_text(json.dumps(_smoke_payload()), encoding="utf-8")
+        out = _run_cli(["--smoke-report-file", str(report), "--json-report-file", str(out_json)])
+        assert out.returncode == 0
+        payload = json.loads(out.stdout.strip())
+        assert payload["ok"] is True
+        assert payload["json_report_file"] == str(out_json)
+        stored = json.loads(out_json.read_text(encoding="utf-8"))
+        assert stored["ok"] is True
+        assert stored["mode"] == "gate"
+        assert isinstance(stored["checks"], list)
+
+
+def test_gate_cli_writes_both_markdown_and_json_reports():
+    with tempfile.TemporaryDirectory() as tmp:
+        report = Path(tmp) / "smoke.json"
+        out_md = Path(tmp) / "out" / "gate.md"
+        out_json = Path(tmp) / "out" / "gate.json"
+        report.write_text(json.dumps(_smoke_payload()), encoding="utf-8")
+        out = _run_cli(
+            [
+                "--smoke-report-file",
+                str(report),
+                "--markdown-report-file",
+                str(out_md),
+                "--json-report-file",
+                str(out_json),
+            ]
+        )
+        assert out.returncode == 0
+        payload = json.loads(out.stdout.strip())
+        assert payload["ok"] is True
+        assert out_md.exists() is True
+        assert out_json.exists() is True
