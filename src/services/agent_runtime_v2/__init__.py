@@ -6,6 +6,7 @@ from .contracts import (
 )
 from .cost_budget import RuntimeCostBudget
 from .flags import get_agent_runtime_v2_config, is_agent_runtime_v2_enabled
+from .observability import RuntimeV2Observability
 from .policy_layer import BusinessPolicyLayer, PolicyLayer, PolicyMerger, SecurityPolicyLayer
 from .policy_rollout import PolicyRolloutEngine
 from .policy_simulation import PolicySimulationInput, PolicySimulationMode
@@ -20,6 +21,7 @@ __all__ = [
     "ExecutionContextEnvelope",
     "PolicyDecisionEnvelope",
     "RuntimeCostBudget",
+    "RuntimeV2Observability",
     "get_agent_runtime_v2_config",
     "is_agent_runtime_v2_enabled",
     "BusinessPolicyLayer",

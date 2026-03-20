@@ -51,6 +51,7 @@ from services.agent_runtime_v2 import (
     ExecutionContextEnvelope,
     GlobalScheduler,
     PolicyLayer,
+    RuntimeV2Observability,
     PolicyRolloutEngine,
     PolicySimulationMode,
     RuntimeCostBudget,
@@ -162,6 +163,7 @@ class AgentOrchestrator:
         self._runtime_v2_rate_limiter = RuntimeRateLimiter()
         self._runtime_v2_cost_budget = RuntimeCostBudget()
         self._runtime_v2_scheduler_global = GlobalScheduler()
+        self._runtime_v2_observability = RuntimeV2Observability(self.config_manager)
         
         # 0. Calendar Domain
         self.calendar_store = CalendarStore(self.config_manager.base_data_dir)
@@ -2146,6 +2148,67 @@ class AgentOrchestrator:
             )
         return result
 
+    def _record_runtime_v2_observability(
+        self,
+        *,
+        exec_context: Dict[str, Any],
+        action_id: str,
+        action_args: Dict[str, Any],
+        result_status: str,
+        result_reason: str,
+        latency_ms: int,
+        loop_index: int,
+        work_id: Optional[str],
+    ) -> None:
+        telemetry = getattr(self, "_runtime_v2_observability", None)
+        if telemetry is None:
+            return
+        try:
+            envelope = exec_context.get("execution_context_envelope") if isinstance(exec_context, dict) else {}
+            envelope = envelope if isinstance(envelope, dict) else {}
+            governance = exec_context.get("runtime_v2_governance") if isinstance(exec_context, dict) else {}
+            governance = governance if isinstance(governance, dict) else {}
+            replay_payload = telemetry.build_replay_payload(
+                envelope=envelope,
+                governance=governance,
+                action_id=action_id,
+                action_args=action_args,
+                result_status=result_status,
+                result_reason=result_reason,
+                latency_ms=latency_ms,
+                loop_index=loop_index,
+            )
+            policy_decision = governance.get("policy_decision") if isinstance(governance.get("policy_decision"), dict) else {}
+            telemetry_snapshot = telemetry.record_execution_event(
+                {
+                    "session_id": str(exec_context.get("session_id", "") or ""),
+                    "work_id": str(work_id or ""),
+                    "action_id": str(action_id or ""),
+                    "result_status": str(result_status or "unknown"),
+                    "result_reason": str(result_reason or ""),
+                    "latency_ms": int(latency_ms),
+                    "tenant_id": str(envelope.get("tenant_id", "default") or "default"),
+                    "qos_class": str(envelope.get("qos_class", "NORMAL") or "NORMAL"),
+                    "risk_level": str(envelope.get("risk_level", "low") or "low"),
+                    "policy_version": str(envelope.get("policy_version", "policy_v1") or "policy_v1"),
+                    "policy_decision": str(policy_decision.get("decision", "allow") or "allow"),
+                    "environment_mode": str(envelope.get("environment_mode", "production") or "production"),
+                    "replay_payload": replay_payload,
+                }
+            )
+            if work_id:
+                self._touch_work_context(
+                    work_id,
+                    {
+                        "runtime_v2": {
+                            "last_replay_payload": replay_payload,
+                            "metrics_snapshot": telemetry_snapshot,
+                        }
+                    },
+                )
+        except Exception as e:
+            logger.warning("Runtime v2 observability failed (non-fatal): %s", e)
+
 
     def build_work_start_ack(
         self,
@@ -3773,6 +3836,16 @@ class AgentOrchestrator:
                     )
                     result_status, result_reason = self._assess_action_result(result, raw_result)
                     structured_result = self._extract_structured_result(result, raw_result)
+                    self._record_runtime_v2_observability(
+                        exec_context=exec_context,
+                        action_id=str(plan.action_id or ""),
+                        action_args=plan.args if isinstance(plan.args, dict) else {},
+                        result_status=result_status,
+                        result_reason=result_reason,
+                        latency_ms=latency_ms,
+                        loop_index=loops,
+                        work_id=work_id,
+                    )
                     last_action_status = result_status
                     last_action_reason = result_reason
                     last_action_id = plan.action_id

@@ -69,6 +69,11 @@
                 "enabled": true,
                 "max_error_rate": 0.2,
                 "max_latency_increase": 0.5
+            },
+            "observability": {
+                "enabled": true,
+                "event_log": "data/runtime_v2/governance_events.jsonl",
+                "replay_payload_enabled": true
             }
         }
     },
