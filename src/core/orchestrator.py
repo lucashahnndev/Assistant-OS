@@ -2622,6 +2622,7 @@ class AgentOrchestrator:
             last_generated_attachment_paths: List[str] = []
             browser_open_recovery_attempts = 0
             browser_control_recovery_attempts = 0
+            browser_run_failures_in_turn = 0
             no_plan_global_retry_attempts = 0
             final_response = self._t(session, "reply.step_budget_exceeded")
             final_structured_attachments = None
@@ -2833,8 +2834,15 @@ class AgentOrchestrator:
                             
                             # Fix #4: Check Tool Override Cooldown
                             if plan and plan.action_id == "browser.control.run":
+                                now_ts = float(time.time())
+                                cooldown_until = float(session.context.get("browser_run_cooldown_until", 0.0) or 0.0)
                                 cooldowns = session.context.get("cooldowns", {})
-                                if "browser.control.run" in cooldowns and cooldowns["browser.control.run"] > 0:
+                                legacy_cooldown = bool(
+                                    isinstance(cooldowns, dict)
+                                    and "browser.control.run" in cooldowns
+                                    and int(cooldowns.get("browser.control.run") or 0) > 0
+                                )
+                                if browser_run_failures_in_turn > 0 or now_ts < cooldown_until or legacy_cooldown:
                                     logger.warning("Action browser.control.run is in cooldown. Blocking planner override.")
                                     # Overwrite the plan to force a different strategy or halt
                                     plan = ActionPlan(
@@ -3970,6 +3978,9 @@ class AgentOrchestrator:
                             if "cooldowns" not in session.context:
                                 session.context["cooldowns"] = {}
                             session.context["cooldowns"][plan.action_id] = 2 # Block for 2 turns
+                        if plan.action_id == "browser.control.run":
+                            browser_run_failures_in_turn += 1
+                            session.context["browser_run_cooldown_until"] = float(time.time()) + 120.0
 
                         if planner_tree:
                             self._mark_planner_blocked(planner_tree)
