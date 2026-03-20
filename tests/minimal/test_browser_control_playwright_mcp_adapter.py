@@ -26,6 +26,19 @@ async def _fake_invoker(name, args):
         return {"result": {"ok": True, "url": args.get("url")}}
     if name == "browser_run_code":
         code = str(args.get("code") or "")
+        if "fallback_clicked" in code and "elementFromPoint" in code:
+            return {
+                "result": {
+                    "clicked": True,
+                    "fallback_clicked": True,
+                    "hit_after": {
+                        "top_tag": "span",
+                        "top_text": "Sort by",
+                        "has_interactive_ancestor": True,
+                        "interactive_tag": "button",
+                    },
+                }
+            }
         if "querySelectorAll" in code and "total_count" in code:
             return {
                 "result": {
@@ -181,6 +194,40 @@ def test_runtime_playwright_mcp_open_new_tab_and_attach_target():
         attached = asyncio.run(rt.attach_to_target("mcp_tab_0"))
         assert attached is True
         assert rt.target_id == "mcp_tab_0"
+
+
+def test_runtime_playwright_mcp_click_receipt_exposes_fallback_clicked():
+    _FAKE_TAB_STATE["tabs"] = [{"index": 0, "title": "Tab 0"}]
+    _FAKE_TAB_STATE["active_index"] = 0
+    rt = BrowserRuntimePlaywright(
+        chrome_path="",
+        base_profile_path="data/browser_data/profile",
+        overlay_profile_parent="data/browser_data/profile/sessions",
+        desktop_cache_dir="data/browser_data/desktop_cache",
+        desktop_launch_enabled=False,
+        extension_install_mode="auto",
+        extension_fallback_enabled=True,
+        headless=True,
+        muted=True,
+        app_mode=False,
+        launch_url="about:blank",
+        humanize_input_enabled=True,
+        visual_cursor_enabled=True,
+        tab_user_lock_enabled=True,
+        tab_control_bar_enabled=True,
+        agent_name="Test",
+        playwright_transport_mode="mcp",
+        playwright_mcp_endpoint="http://localhost:8787",
+        playwright_mcp_fallback_to_local=False,
+    )
+    with patch(
+        "src.capabilities.browser_control.runtime_playwright.PlaywrightMCPAdapter",
+        side_effect=lambda endpoint: PlaywrightMCPAdapter(endpoint="http://unused", invoker=_fake_invoker),
+    ):
+        asyncio.run(rt.launch())
+        resp = asyncio.run(rt.click(x=780, y=170))
+    data = resp.result_data if isinstance(resp.result_data, dict) else {}
+    assert data.get("fallback_clicked") is True
 
 
 def test_runtime_playwright_mcp_without_endpoint_and_no_fallback_fails_fast():

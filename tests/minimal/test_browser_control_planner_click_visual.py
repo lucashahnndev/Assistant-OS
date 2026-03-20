@@ -62,3 +62,18 @@ def test_click_visual_receipt_accepts_actionable_target():
     }
     assessment = BrowserSubagent._assess_click_visual_receipt(result_data)
     assert assessment.get("ok") is True
+
+
+def test_click_visual_receipt_accepts_interactive_fallback_click():
+    result_data = {
+        "fallback_clicked": True,
+        "hit_after": {
+            "top_text": "Sort by",
+            "has_interactive_ancestor": False,
+            "interactive_tag": "",
+            "top_tag": "div",
+        },
+    }
+    assessment = BrowserSubagent._assess_click_visual_receipt(result_data)
+    assert assessment.get("ok") is True
+    assert assessment.get("reason") == "interactive_fallback_clicked"

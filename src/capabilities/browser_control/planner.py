@@ -258,6 +258,8 @@ class BrowserSubagent:
     def _assess_click_visual_receipt(result_data: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(result_data, dict):
             return {"ok": True, "reason": "no_result_data"}
+        if bool(result_data.get("fallback_clicked", False)):
+            return {"ok": True, "reason": "interactive_fallback_clicked"}
 
         hit = result_data.get("hit_after")
         if not isinstance(hit, dict):

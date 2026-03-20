@@ -541,16 +541,26 @@ class BrowserRuntimePlaywright:
             if self._mcp_adapter is None:
                 return self._error_response("click", "No MCP adapter for click")
             t0 = time.time()
-            await self._mcp_adapter.click(x=x, y=y, selector=selector)
+            raw = await self._mcp_adapter.click(x=x, y=y, selector=selector)
+            payload = PlaywrightMCPAdapter._coerce_result_payload(raw)
+            hit_after = payload.get("hit_after") if isinstance(payload.get("hit_after"), dict) else {}
+            delivered = bool(payload.get("clicked", payload.get("ok", True)))
+            fallback_clicked = bool(payload.get("fallback_clicked", False))
             return self._success_response(
                 action="click",
                 elapsed=time.time() - t0,
-                result_data={"kind": "click_action_receipt_v1", "delivered": True, "hit_after": {}},
+                result_data={
+                    "kind": "click_action_receipt_v1",
+                    "delivered": bool(delivered),
+                    "hit_after": hit_after,
+                    "fallback_clicked": bool(fallback_clicked),
+                },
             )
         if not self._page:
             return self._error_response("click", "No page for click")
         t0 = time.time()
         delivered = False
+        fallback_clicked = False
 
         if selector:
             locator = self._page.locator(selector).first
@@ -578,6 +588,50 @@ class BrowserRuntimePlaywright:
             [float(x or 0), float(y or 0)],
         ) if x is not None and y is not None else {}
 
+        if (
+            x is not None
+            and y is not None
+            and isinstance(hit_after, dict)
+            and not bool(hit_after.get("has_interactive_ancestor", False))
+        ):
+            fallback = await self._page.evaluate(
+                """([x, y]) => {
+                  const el = document.elementFromPoint(Number(x || 0), Number(y || 0));
+                  if (!el) return { clicked: false, hit_after: {} };
+                  const nearest = el.closest('a,button,input,textarea,select,[role="button"],[role="link"]');
+                  let clicked = false;
+                  try {
+                    if (nearest && typeof nearest.click === 'function') {
+                      nearest.click();
+                      clicked = true;
+                    } else if (typeof el.click === 'function') {
+                      el.click();
+                      clicked = true;
+                    }
+                  } catch (_) {}
+                  const after = document.elementFromPoint(Number(x || 0), Number(y || 0));
+                  const afterInteractive = after ? after.closest('a,button,input,textarea,select,[role="button"],[role="link"]') : null;
+                  const text = after ? String((after.innerText || after.textContent || '')).trim().slice(0, 160) : '';
+                  return {
+                    clicked,
+                    hit_after: {
+                      top_tag: after ? String(after.tagName || '').toLowerCase() : '',
+                      top_text: text,
+                      has_interactive_ancestor: !!afterInteractive,
+                      interactive_tag: afterInteractive ? String(afterInteractive.tagName || '').toLowerCase() : '',
+                    },
+                  };
+                }""",
+                [float(x or 0), float(y or 0)],
+            )
+            if isinstance(fallback, dict):
+                fallback_clicked = bool(fallback.get("clicked", False))
+                fallback_hit = fallback.get("hit_after") if isinstance(fallback.get("hit_after"), dict) else {}
+                if fallback_hit:
+                    hit_after = fallback_hit
+                if fallback_clicked:
+                    delivered = True
+
         return self._success_response(
             action="click",
             elapsed=time.time() - t0,
@@ -585,6 +639,7 @@ class BrowserRuntimePlaywright:
                 "kind": "click_action_receipt_v1",
                 "delivered": bool(delivered),
                 "hit_after": hit_after if isinstance(hit_after, dict) else {},
+                "fallback_clicked": bool(fallback_clicked),
             },
         )
 

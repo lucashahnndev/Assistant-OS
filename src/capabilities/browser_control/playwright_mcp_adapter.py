@@ -62,7 +62,32 @@ class PlaywrightMCPAdapter:
         return await self._call_tool_preferred(
             ["browser_run_code", "browser_click"],
             {
-                "code": f"async (page) => {{ await page.mouse.click({float(x or 0)}, {float(y or 0)}); return {{clicked:true}}; }}",
+                "code": (
+                    "async (page) => page.evaluate(([x, y]) => {"
+                    "  const el = document.elementFromPoint(Number(x || 0), Number(y || 0));"
+                    "  if (!el) return { clicked: false, fallback_clicked: false, hit_after: {} };"
+                    "  const nearest = el.closest('a,button,input,textarea,select,[role=\"button\"],[role=\"link\"]');"
+                    "  let clicked = false;"
+                    "  let fallbackClicked = false;"
+                    "  try {"
+                    "    if (nearest && typeof nearest.click === 'function') { nearest.click(); clicked = true; fallbackClicked = true; }"
+                    "    else if (typeof el.click === 'function') { el.click(); clicked = true; }"
+                    "  } catch (_) {}"
+                    "  const after = document.elementFromPoint(Number(x || 0), Number(y || 0));"
+                    "  const afterInteractive = after ? after.closest('a,button,input,textarea,select,[role=\"button\"],[role=\"link\"]') : null;"
+                    "  const topText = after ? String((after.innerText || after.textContent || '')).trim().slice(0, 160) : '';"
+                    "  return {"
+                    "    clicked,"
+                    "    fallback_clicked: fallbackClicked,"
+                    "    hit_after: {"
+                    "      top_tag: after ? String(after.tagName || '').toLowerCase() : '',"
+                    "      top_text: topText,"
+                    "      has_interactive_ancestor: !!afterInteractive,"
+                    "      interactive_tag: afterInteractive ? String(afterInteractive.tagName || '').toLowerCase() : ''"
+                    "    }"
+                    "  };"
+                    "}, [" + str(float(x or 0)) + ", " + str(float(y or 0)) + "])"
+                ),
                 "element": f"coords:{float(x or 0)},{float(y or 0)}",
                 "ref": "viewport",
             },
