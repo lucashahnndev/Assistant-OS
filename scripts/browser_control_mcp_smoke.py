@@ -30,6 +30,36 @@ from src.capabilities.browser_control.browser_control_capability import (  # noq
 class _KernelStub:
     config = {"agent": {"agent_name": "SmokeRunner"}}
     browser_session_registry = None
+    class _SmokeLLMManager:
+        chat_pool = object()
+
+        @staticmethod
+        def _execute_with_router(_pool, method, **_kwargs):
+            kind = str(method or "").strip().lower()
+            if kind == "generate_text":
+                return (
+                    "1. Open target page\n2. Execute smoke intent\n3. Confirm completion",
+                    None,
+                )
+            if kind == "generate_structured":
+                return (
+                    {
+                        "thought": "Smoke runner planner decision.",
+                        "step_status": "completed",
+                        "action": "answer",
+                        "args": {"text": "Smoke execution completed."},
+                    },
+                    None,
+                )
+            return ({}, None)
+
+        @staticmethod
+        def analyze_image(*, image_path: str, prompt: str) -> str:
+            _ = image_path
+            _ = prompt
+            return '{"candidates":[]}'
+
+    llm_manager = _SmokeLLMManager()
 
 
 def _build_context(goal: str) -> Dict[str, Any]:
@@ -37,6 +67,13 @@ def _build_context(goal: str) -> Dict[str, Any]:
         "session_id": "smoke-session",
         "work_id": "smoke-work",
         "original_user_input": goal,
+        "execution_context_envelope": {
+            "action_id": "browser.control.run",
+            "delegation": {
+                "delegation_id": "smoke-delegation",
+                "child_agent_id": "browser_subagent_executor",
+            },
+        },
         "callbacks": {},
     }
 
@@ -90,7 +127,12 @@ def run_smoke(
     goal = str(args.goal or "").strip()
     intent_class = str(args.intent_class or "").strip().lower()
     run_ctx = _build_context(goal)
-    run_params = {"goal": goal, "intent_class": intent_class, "headless": bool(args.headless)}
+    run_params = {
+        "goal": goal,
+        "intent_class": intent_class,
+        "headless": bool(args.headless),
+        "completion_mode": "execution_only",
+    }
     close_payload: Optional[Dict[str, Any]] = None
     try:
         run_out = cap.execute("browser.control.run", run_params, run_ctx)
