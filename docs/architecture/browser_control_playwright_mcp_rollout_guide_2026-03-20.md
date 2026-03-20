@@ -55,6 +55,17 @@ Optional full smoke runner (preflight + probe + run + inspect/sync/health):
   --require-ready
 ```
 
+CI gate (fails pipeline if checks are not met):
+
+```bash
+./env/bin/python scripts/browser_control_mcp_ci_gate.py \
+  --config-file data/config.json \
+  --goal "Abra https://example.com e valide o título da página." \
+  --intent-class automacao_ui \
+  --require-ready \
+  --min-mcp-calls 1
+```
+
 ## Fallback and Rollback
 - Immediate fallback (same deploy):
   - Keep `runtime_backend=playwright`
