@@ -127,6 +127,21 @@
       "default": 60,
       "minimum": 25,
       "maximum": 95
+    },
+    "planner_max_same_action_repeats": {
+      "type": "integer",
+      "default": 3,
+      "minimum": 2
+    },
+    "planner_max_state_unchanged_loops": {
+      "type": "integer",
+      "default": 5,
+      "minimum": 3
+    },
+    "planner_max_forced_recovery_attempts": {
+      "type": "integer",
+      "default": 2,
+      "minimum": 1
     }
   }
 }

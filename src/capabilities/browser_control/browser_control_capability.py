@@ -39,6 +39,9 @@ class BrowserControlCapability(CapabilityBase):
         self._perception_cache_ttl_s = self._cfg_float("perception_cache_ttl_s", 3.5)
         self._perception_fast_screenshot_format = self._cfg_str("perception_fast_screenshot_format", "jpeg")
         self._perception_fast_screenshot_quality = self._cfg_int("perception_fast_screenshot_quality", 60)
+        self._planner_max_same_action_repeats = self._cfg_int("planner_max_same_action_repeats", 3)
+        self._planner_max_state_unchanged_loops = self._cfg_int("planner_max_state_unchanged_loops", 5)
+        self._planner_max_forced_recovery_attempts = self._cfg_int("planner_max_forced_recovery_attempts", 2)
         
         agent_config = getattr(self.kernel, "config", {}).get("agent", {}) if self.kernel else {}
         self._agent_name = agent_config.get("agent_name", "Agent")
@@ -354,6 +357,9 @@ class BrowserControlCapability(CapabilityBase):
                 perception_cache_ttl_s=self._perception_cache_ttl_s,
                 fast_screenshot_format=self._perception_fast_screenshot_format,
                 fast_screenshot_quality=self._perception_fast_screenshot_quality,
+                max_same_action_repeats=self._planner_max_same_action_repeats,
+                max_state_unchanged_loops=self._planner_max_state_unchanged_loops,
+                max_forced_recovery_attempts=self._planner_max_forced_recovery_attempts,
             )
 
     @staticmethod

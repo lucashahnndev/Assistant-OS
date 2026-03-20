@@ -73,6 +73,9 @@ class BrowserSubagent:
         perception_cache_ttl_s: float = 3.5,
         fast_screenshot_format: str = "jpeg",
         fast_screenshot_quality: int = 60,
+        max_same_action_repeats: int = 3,
+        max_state_unchanged_loops: int = 5,
+        max_forced_recovery_attempts: int = 2,
     ):
         self.runtime = runtime
         self.llm_manager = llm_manager
@@ -88,6 +91,10 @@ class BrowserSubagent:
         self._last_action = None
         self._last_args = None
         self._consecutive_same_action = 0
+        self._max_same_action_repeats = max(2, int(max_same_action_repeats))
+        self._max_state_unchanged_loops = max(3, int(max_state_unchanged_loops))
+        self._max_forced_recovery_attempts = max(1, int(max_forced_recovery_attempts))
+        self._forced_recovery_attempts = 0
         self._consecutive_parse_failures = 0
         self._max_parse_failures = 2
         self._locked_target_id = str(getattr(runtime, "target_id", "") or "")
@@ -125,6 +132,52 @@ class BrowserSubagent:
         self._last_vision_signature_hash: str = ""
         self._last_vision_at: float = 0.0
         self._vision_cache_ttl_s: float = 30.0
+
+    def _evaluate_loop_guard(
+        self,
+        *,
+        action: str,
+        goal: str,
+        state: Dict[str, Any],
+        state_changed: bool,
+    ) -> Dict[str, Any]:
+        """
+        Enforces deterministic anti-loop behavior:
+        - First threshold breach -> force one recovery action.
+        - Persistent breach after bounded recoveries -> hard stop.
+        """
+        if state_changed:
+            self._forced_recovery_attempts = 0
+            return {"mode": "none"}
+
+        severe_state = self._consecutive_same_state >= self._max_state_unchanged_loops
+        severe_action = self._consecutive_same_action >= self._max_same_action_repeats
+        if not (severe_state or severe_action):
+            return {"mode": "none"}
+
+        trigger = "State Stall" if severe_state else "Action Loop"
+        if self._forced_recovery_attempts < self._max_forced_recovery_attempts:
+            self._forced_recovery_attempts += 1
+            recovery_action, recovery_args, recovery_note = self._choose_recovery_action(trigger, goal, state)
+            return {
+                "mode": "force_recovery",
+                "trigger": trigger,
+                "recovery_action": recovery_action,
+                "recovery_args": recovery_args,
+                "note": recovery_note,
+                "attempt": int(self._forced_recovery_attempts),
+                "max_attempts": int(self._max_forced_recovery_attempts),
+            }
+
+        return {
+            "mode": "hard_stop",
+            "trigger": trigger,
+            "reason": (
+                f"Loop guard hard-stop: {trigger} persisted "
+                f"(same_state={self._consecutive_same_state}, same_action={self._consecutive_same_action}) "
+                f"after {self._forced_recovery_attempts}/{self._max_forced_recovery_attempts} recovery attempts."
+            ),
+        }
 
     @staticmethod
     def _tokenize_text(value: str) -> List[str]:
@@ -1117,6 +1170,50 @@ Example:
                         )
                         logger.warning(f"⚠️ [Loop Detection] {alert_note}")
                         thought = f"{thought} | {alert_note}"
+
+                    guard = self._evaluate_loop_guard(
+                        action=action,
+                        goal=goal,
+                        state=state,
+                        state_changed=state_changed,
+                    )
+                    if str(guard.get("mode")) == "force_recovery":
+                        forced_action = str(guard.get("recovery_action") or action)
+                        forced_args = guard.get("recovery_args") if isinstance(guard.get("recovery_args"), dict) else args
+                        guard_note = str(guard.get("note") or "Forced recovery action by loop guard.")
+                        logger.warning(
+                            f"[{step_id}] 🛟 Loop guard forcing recovery "
+                            f"attempt {guard.get('attempt')}/{guard.get('max_attempts')}: "
+                            f"{forced_action}({forced_args})"
+                        )
+                        thought = f"{thought} | {guard_note}"
+                        action = forced_action
+                        args = forced_args
+                        self._last_action = action
+                        self._last_args = args
+                    elif str(guard.get("mode")) == "hard_stop":
+                        stop_reason = str(guard.get("reason") or "Loop guard hard-stop")
+                        logger.error(f"[{step_id}] 🛑 {stop_reason}")
+                        self._append_run_report_event(
+                            "loop_guard_hard_stop",
+                            {
+                                "trace_id": trace_id,
+                                "step_id": step_id,
+                                "step_num": int(step_num),
+                                "reason": stop_reason,
+                                "url": str(state.get("url") or ""),
+                                "title": str(state.get("title") or ""),
+                            },
+                        )
+                        self._emit_worker_planner_update(
+                            {
+                                "phase": "loop_guard_hard_stop",
+                                "step_id": step_id,
+                                "step_num": step_num,
+                                "reason": stop_reason,
+                            }
+                        )
+                        return self._fail(stop_reason, trace_id, step_id)
                     
                     logger.info(f"[{step_id}] 🧠 THOUGHT: {thought}")
                     logger.info(f"[{step_id}] 🎯 ACTION: {action}({args})")
