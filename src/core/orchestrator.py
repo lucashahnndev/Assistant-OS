@@ -48,6 +48,10 @@ from services.notifications.delivery_resolver import DeliveryResolver
 from services.notifications.dispatcher import NotificationDispatcher
 from services.agent_runtime_v2 import (
     ExecutionContextEnvelope,
+    PolicyLayer,
+    RiskModel,
+    TenantGovernance,
+    TenantGovernanceContext,
     is_agent_runtime_v2_enabled,
 )
 
@@ -144,6 +148,9 @@ class AgentOrchestrator:
         self._turn_metrics_cache: Dict[str, Dict[str, Any]] = {}
         self._observation_metrics_cache: Dict[str, deque] = {}
         self._task_func_registry: Dict[str, Callable] = {}
+        self._runtime_v2_policy_layer = PolicyLayer()
+        self._runtime_v2_risk_model = RiskModel()
+        self._runtime_v2_tenant_governance = TenantGovernance()
         
         # 0. Calendar Domain
         self.calendar_store = CalendarStore(self.config_manager.base_data_dir)
@@ -1588,6 +1595,51 @@ class AgentOrchestrator:
             },
         )
         return envelope.to_dict()
+
+    def _evaluate_runtime_v2_governance(
+        self,
+        *,
+        envelope_payload: Dict[str, Any],
+        action_params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if not isinstance(envelope_payload, dict):
+            return {}
+        envelope = ExecutionContextEnvelope(
+            envelope_version=str(envelope_payload.get("envelope_version", "1.0")),
+            environment_mode=str(envelope_payload.get("environment_mode", "production")),
+            tenant_id=str(envelope_payload.get("tenant_id", "default")),
+            agent_id=str(envelope_payload.get("agent_id", "")),
+            session_id=str(envelope_payload.get("session_id", "")),
+            work_id=str(envelope_payload.get("work_id", "")),
+            action_id=str(envelope_payload.get("action_id", "")),
+            qos_class=str(envelope_payload.get("qos_class", "NORMAL")),
+            risk_level=str(envelope_payload.get("risk_level", "low")),
+            runtime_version=str(envelope_payload.get("runtime_version", "runtime_v1")),
+            planner_version=str(envelope_payload.get("planner_version", "planner_v1")),
+            policy_version=str(envelope_payload.get("policy_version", "policy_v1")),
+            metadata=dict(envelope_payload.get("metadata", {}) or {}),
+        )
+        action_data = action_params if isinstance(action_params, dict) else {}
+        metadata = {}
+        if self.capability_registry and envelope.action_id:
+            metadata = self.capability_registry.get_action_metadata(envelope.action_id) or {}
+        envelope.risk_level = self._runtime_v2_risk_model.evaluate(
+            envelope.action_id,
+            action_metadata=metadata,
+            context=action_data,
+        )
+        governance = self._runtime_v2_tenant_governance.evaluate(
+            TenantGovernanceContext(
+                tenant_id=envelope.tenant_id,
+                agent_id=envelope.agent_id,
+                qos_class=envelope.qos_class,
+            )
+        )
+        policy_decision = self._runtime_v2_policy_layer.evaluate(envelope, action_params=action_data)
+        return {
+            "tenant_governance": governance,
+            "policy_decision": policy_decision.to_dict(),
+        }
 
 
     def build_work_start_ack(
@@ -3054,6 +3106,10 @@ class AgentOrchestrator:
                         context=context,
                         session_id=session_id,
                         work_id=work_id,
+                    )
+                    exec_context["runtime_v2_governance"] = self._evaluate_runtime_v2_governance(
+                        envelope_payload=exec_context["execution_context_envelope"],
+                        action_params=plan.args if isinstance(plan.args, dict) else {},
                     )
                     
                     start_ts = time.time()
