@@ -59,6 +59,22 @@
         "playwright"
       ]
     },
+    "playwright_transport_mode": {
+      "type": "string",
+      "default": "local",
+      "enum": [
+        "local",
+        "mcp"
+      ]
+    },
+    "playwright_mcp_endpoint": {
+      "type": "string",
+      "default": ""
+    },
+    "playwright_mcp_fallback_to_local": {
+      "type": "boolean",
+      "default": true
+    },
     "browser_engine_preference": {
       "type": "string",
       "default": "managed_chromium",

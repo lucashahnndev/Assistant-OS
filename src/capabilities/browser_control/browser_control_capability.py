@@ -24,6 +24,9 @@ class BrowserControlCapability(CapabilityBase):
         self._tab_user_lock_enabled = self._cfg_bool("tab_user_lock_enabled", True)
         self._tab_control_bar_enabled = self._cfg_bool("tab_control_bar_enabled", True)
         self._runtime_backend = self._cfg_str("runtime_backend", "cdp").lower()
+        self._playwright_transport_mode = self._cfg_str("playwright_transport_mode", "local").lower()
+        self._playwright_mcp_endpoint = self._cfg_str("playwright_mcp_endpoint", "")
+        self._playwright_mcp_fallback_to_local = self._cfg_bool("playwright_mcp_fallback_to_local", True)
         self._browser_engine_preference = self._cfg_str("browser_engine_preference", "managed_chromium")
         self._chrome_path_override = self._cfg_str("chrome_path", "")
         self._managed_chromium_path = self._cfg_path(
@@ -82,6 +85,41 @@ class BrowserControlCapability(CapabilityBase):
         from .runtime import BrowserRuntime
 
         return BrowserRuntime
+
+    def _build_runtime_kwargs(
+        self,
+        *,
+        resolved_browser_path: str,
+        runtime_base_profile: str,
+        runtime_overlay_parent: str,
+        headless: bool,
+        muted: bool,
+        use_app_mode: bool,
+        launch_url: str,
+    ) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {
+            "chrome_path": resolved_browser_path,
+            "base_profile_path": runtime_base_profile,
+            "overlay_profile_parent": runtime_overlay_parent,
+            "desktop_cache_dir": self._desktop_cache_dir,
+            "desktop_launch_enabled": self._desktop_launch_enabled,
+            "extension_install_mode": self._extension_install_mode,
+            "extension_fallback_enabled": self._extension_fallback_enabled,
+            "headless": headless,
+            "muted": muted,
+            "app_mode": use_app_mode,
+            "launch_url": launch_url,
+            "humanize_input_enabled": self._humanize_input_enabled,
+            "visual_cursor_enabled": self._visual_cursor_enabled,
+            "tab_user_lock_enabled": self._tab_user_lock_enabled,
+            "tab_control_bar_enabled": self._tab_control_bar_enabled,
+            "agent_name": self._agent_name,
+        }
+        if self._resolve_runtime_backend() == "playwright":
+            kwargs["playwright_transport_mode"] = self._playwright_transport_mode
+            kwargs["playwright_mcp_endpoint"] = self._playwright_mcp_endpoint
+            kwargs["playwright_mcp_fallback_to_local"] = self._playwright_mcp_fallback_to_local
+        return kwargs
 
     def _cfg_bool(self, key: str, default: bool) -> bool:
         if not isinstance(self._config, dict):
@@ -338,24 +376,16 @@ class BrowserControlCapability(CapabilityBase):
                 runtime_overlay_parent,
             )
             logger.info("Browser runtime backend selected: %s", self._resolve_runtime_backend())
-            self._runtime = RuntimeClass(
-                chrome_path=resolved_browser_path,
-                base_profile_path=runtime_base_profile,
-                overlay_profile_parent=runtime_overlay_parent,
-                desktop_cache_dir=self._desktop_cache_dir,
-                desktop_launch_enabled=self._desktop_launch_enabled,
-                extension_install_mode=self._extension_install_mode,
-                extension_fallback_enabled=self._extension_fallback_enabled,
+            runtime_kwargs = self._build_runtime_kwargs(
+                resolved_browser_path=resolved_browser_path,
+                runtime_base_profile=runtime_base_profile,
+                runtime_overlay_parent=runtime_overlay_parent,
                 headless=headless,
                 muted=muted,
-                app_mode=use_app_mode,
+                use_app_mode=use_app_mode,
                 launch_url=launch_url,
-                humanize_input_enabled=self._humanize_input_enabled,
-                visual_cursor_enabled=self._visual_cursor_enabled,
-                tab_user_lock_enabled=self._tab_user_lock_enabled,
-                tab_control_bar_enabled=self._tab_control_bar_enabled,
-                agent_name=self._agent_name,
             )
+            self._runtime = RuntimeClass(**runtime_kwargs)
             await self._runtime.launch()
             dom_analyzer = DomAnalyzer()
             image_analyzer = ImageAnalyzer(self.kernel.llm_manager)

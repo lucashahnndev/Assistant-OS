@@ -36,6 +36,9 @@ class BrowserRuntimePlaywright:
         tab_user_lock_enabled: bool,
         tab_control_bar_enabled: bool,
         agent_name: str,
+        playwright_transport_mode: str = "local",
+        playwright_mcp_endpoint: str = "",
+        playwright_mcp_fallback_to_local: bool = True,
     ):
         self.chrome_path = str(chrome_path or "")
         self.base_profile_path = str(base_profile_path or "")
@@ -53,6 +56,9 @@ class BrowserRuntimePlaywright:
         self.tab_user_lock_enabled = bool(tab_user_lock_enabled)
         self.tab_control_bar_enabled = bool(tab_control_bar_enabled)
         self.agent_name = str(agent_name or "Agent")
+        self.playwright_transport_mode = str(playwright_transport_mode or "local").strip().lower()
+        self.playwright_mcp_endpoint = str(playwright_mcp_endpoint or "").strip()
+        self.playwright_mcp_fallback_to_local = bool(playwright_mcp_fallback_to_local)
 
         self._playwright = None
         self._browser = None
@@ -76,8 +82,29 @@ class BrowserRuntimePlaywright:
             "interface": "",
             "channel": "",
         }
+        self._transport_mode_effective = "local"
+
+    def _resolve_transport_mode(self) -> str:
+        mode = str(self.playwright_transport_mode or "local").strip().lower()
+        if mode not in {"local", "mcp"}:
+            mode = "local"
+        return mode
 
     async def launch(self) -> None:
+        configured_mode = self._resolve_transport_mode()
+        if configured_mode == "mcp":
+            if not self.playwright_mcp_fallback_to_local:
+                raise RuntimeError(
+                    "Playwright MCP mode selected but MCP transport adapter is not enabled yet. "
+                    "Set playwright_mcp_fallback_to_local=true or use playwright_transport_mode=local."
+                )
+            logger.warning(
+                "Playwright MCP transport requested but adapter is not enabled yet; falling back to local transport."
+            )
+            self._transport_mode_effective = "local"
+        else:
+            self._transport_mode_effective = "local"
+
         os.makedirs(self.overlay_profile_parent, exist_ok=True)
         os.makedirs(self.desktop_cache_dir, exist_ok=True)
         self._overlay_profile_path = os.path.join(self.overlay_profile_parent, f"pw_{int(time.time() * 1000)}")
@@ -227,6 +254,10 @@ class BrowserRuntimePlaywright:
             "app_mode": bool(self.app_mode),
             "launch_url": self.launch_url,
             "backend": "playwright",
+            "transport_mode_configured": self._resolve_transport_mode(),
+            "transport_mode_effective": self._transport_mode_effective,
+            "mcp_endpoint": self.playwright_mcp_endpoint,
+            "mcp_fallback_to_local": bool(self.playwright_mcp_fallback_to_local),
         }
 
     async def attach_to_target(self, target_id: str) -> bool:
