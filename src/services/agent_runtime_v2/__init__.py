@@ -7,6 +7,7 @@ from .contracts import (
 from .cost_budget import RuntimeCostBudget
 from .flags import get_agent_runtime_v2_config, is_agent_runtime_v2_enabled
 from .policy_layer import BusinessPolicyLayer, PolicyLayer, PolicyMerger, SecurityPolicyLayer
+from .policy_rollout import PolicyRolloutEngine
 from .policy_simulation import PolicySimulationInput, PolicySimulationMode
 from .risk_model import RiskModel
 from .scheduler_global import GlobalScheduler
@@ -24,6 +25,7 @@ __all__ = [
     "BusinessPolicyLayer",
     "PolicyLayer",
     "PolicyMerger",
+    "PolicyRolloutEngine",
     "PolicySimulationInput",
     "PolicySimulationMode",
     "SecurityPolicyLayer",

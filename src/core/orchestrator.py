@@ -51,6 +51,7 @@ from services.agent_runtime_v2 import (
     ExecutionContextEnvelope,
     GlobalScheduler,
     PolicyLayer,
+    PolicyRolloutEngine,
     PolicySimulationMode,
     RuntimeCostBudget,
     RuntimeRateLimiter,
@@ -154,6 +155,7 @@ class AgentOrchestrator:
         self._observation_metrics_cache: Dict[str, deque] = {}
         self._task_func_registry: Dict[str, Callable] = {}
         self._runtime_v2_policy_layer = PolicyLayer()
+        self._runtime_v2_policy_rollout = PolicyRolloutEngine(self.config_manager)
         self._runtime_v2_policy_simulation = PolicySimulationMode(self._runtime_v2_policy_layer)
         self._runtime_v2_risk_model = RiskModel()
         self._runtime_v2_tenant_governance = TenantGovernance()
@@ -1743,9 +1745,10 @@ class AgentOrchestrator:
         v2_cfg = runtime_cfg.get("agent_runtime_v2", {})
         if not isinstance(v2_cfg, dict):
             v2_cfg = {}
-        policy_cfg = v2_cfg.get("policy", {})
-        if not isinstance(policy_cfg, dict):
-            policy_cfg = {}
+        policy_cfg = self._resolve_runtime_v2_effective_policy_cfg(
+            tenant_id=envelope.tenant_id,
+            v2_cfg=v2_cfg,
+        )
         governance = self._runtime_v2_tenant_governance.evaluate(
             TenantGovernanceContext(
                 tenant_id=envelope.tenant_id,
@@ -1774,6 +1777,102 @@ class AgentOrchestrator:
             "policy_decision": policy_decision.to_dict(),
             "scheduler": {"selected": queue_profile},
         }
+
+    def _resolve_runtime_v2_effective_policy_cfg(
+        self,
+        *,
+        tenant_id: str,
+        v2_cfg: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        cfg = v2_cfg if isinstance(v2_cfg, dict) else {}
+        default_policy = cfg.get("policy", {})
+        if not isinstance(default_policy, dict):
+            default_policy = {}
+        rollout_cfg = cfg.get("policy_rollout", {})
+        if not isinstance(rollout_cfg, dict):
+            rollout_cfg = {}
+        if not bool(rollout_cfg.get("enabled", True)):
+            return dict(default_policy)
+        rollout_engine = getattr(self, "_runtime_v2_policy_rollout", None)
+        if rollout_engine is None or not hasattr(rollout_engine, "resolve_effective_policy"):
+            return dict(default_policy)
+        return rollout_engine.resolve_effective_policy(
+            tenant_id=str(tenant_id or "default"),
+            default_policy_cfg=default_policy,
+        )
+
+    def _runtime_v2_policy_rollout_create_draft(
+        self,
+        *,
+        policy_id: str,
+        policy_cfg: Dict[str, Any],
+        created_by: str = "",
+    ) -> Dict[str, Any]:
+        return self._runtime_v2_policy_rollout.create_draft(
+            policy_id=policy_id,
+            policy_cfg=policy_cfg,
+            created_by=created_by,
+        )
+
+    def _runtime_v2_policy_rollout_mark_simulated(
+        self,
+        *,
+        policy_id: str,
+        simulation_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._runtime_v2_policy_rollout.mark_simulated(
+            policy_id=policy_id,
+            simulation_result=simulation_result,
+        )
+
+    def _runtime_v2_policy_rollout_start_canary(
+        self,
+        *,
+        policy_id: str,
+        tenant_ids: Optional[List[str]] = None,
+        rollout_percent: float = 0.0,
+        qos_classes: Optional[List[str]] = None,
+        risk_levels: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        return self._runtime_v2_policy_rollout.start_canary(
+            policy_id=policy_id,
+            tenant_ids=tenant_ids,
+            rollout_percent=rollout_percent,
+            qos_classes=qos_classes,
+            risk_levels=risk_levels,
+        )
+
+    def _runtime_v2_policy_rollout_promote_active(
+        self,
+        *,
+        policy_id: str,
+        tenant_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        return self._runtime_v2_policy_rollout.promote_active(
+            policy_id=policy_id,
+            tenant_ids=tenant_ids,
+        )
+
+    def _runtime_v2_policy_rollout_rollback(
+        self,
+        *,
+        policy_id: str,
+        reason: str = "",
+    ) -> Dict[str, Any]:
+        return self._runtime_v2_policy_rollout.rollback(policy_id=policy_id, reason=reason)
+
+    def _runtime_v2_policy_rollout_auto_abort_canary(
+        self,
+        *,
+        policy_id: str,
+        metrics: Dict[str, Any],
+        thresholds: Optional[Dict[str, float]] = None,
+    ) -> Dict[str, Any]:
+        return self._runtime_v2_policy_rollout.evaluate_canary_regression(
+            policy_id=policy_id,
+            metrics=metrics,
+            thresholds=thresholds,
+        )
 
     def _simulate_runtime_v2_policy(
         self,

@@ -64,6 +64,11 @@
             "policy_simulation": {
                 "enabled": true,
                 "max_replay_events": 500
+            },
+            "policy_rollout": {
+                "enabled": true,
+                "max_error_rate": 0.2,
+                "max_latency_increase": 0.5
             }
         }
     },
