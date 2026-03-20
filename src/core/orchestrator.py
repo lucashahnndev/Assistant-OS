@@ -47,6 +47,7 @@ from services.notifications.context_service import CommunicationContextService
 from services.notifications.delivery_resolver import DeliveryResolver
 from services.notifications.dispatcher import NotificationDispatcher
 from services.agent_runtime_v2 import (
+    DelegationContract,
     ExecutionContextEnvelope,
     PolicyLayer,
     RiskModel,
@@ -1573,6 +1574,10 @@ class AgentOrchestrator:
         work_id: Optional[str],
     ) -> Dict[str, Any]:
         action_id = str(getattr(plan, "action_id", "") or "").strip()
+        plan_metadata = plan.metadata if (plan and isinstance(plan.metadata, dict)) else {}
+        runtime_v2_cfg = self.config_manager.get("runtime", {}).get("agent_runtime_v2", {})
+        if not isinstance(runtime_v2_cfg, dict):
+            runtime_v2_cfg = {}
         capability_metadata: Dict[str, Any] = {}
         if self.capability_registry and action_id:
             capability_metadata = self.capability_registry.get_action_metadata(action_id) or {}
@@ -1581,20 +1586,72 @@ class AgentOrchestrator:
             risk_level = "low"
 
         tenant_id = "default"
+        context_tenant = str(getattr(context, "tenant_id", "") or "").strip() if context else ""
+        if context_tenant:
+            tenant_id = context_tenant
         if context and getattr(context, "group_id", None):
             tenant_id = str(getattr(context, "group_id", "") or "default").strip() or "default"
+        plan_tenant = str(plan_metadata.get("tenant_id", "") or "").strip()
+        if plan_tenant:
+            tenant_id = plan_tenant
+
+        qos_class = str(plan_metadata.get("qos_class", "NORMAL") or "NORMAL").strip().upper()
+        if qos_class not in {"CRITICAL", "HIGH", "NORMAL", "LOW"}:
+            qos_class = "NORMAL"
+
+        policy_version = str(runtime_v2_cfg.get("policy_version", "policy_v1") or "policy_v1").strip() or "policy_v1"
+        planner_version = str(runtime_v2_cfg.get("planner_version", "planner_v1") or "planner_v1").strip() or "planner_v1"
+        runtime_version = str(runtime_v2_cfg.get("runtime_version", "runtime_v2") or "runtime_v2").strip() or "runtime_v2"
+
+        delegation = self._build_delegation_contract(plan=plan, context=context)
 
         envelope = ExecutionContextEnvelope(
             tenant_id=tenant_id,
+            agent_id=str(plan_metadata.get("agent_id", "main_orchestrator") or "main_orchestrator"),
             session_id=str(session_id or ""),
             work_id=str(work_id or ""),
             action_id=action_id,
+            qos_class=qos_class,
             risk_level=risk_level,
+            runtime_version=runtime_version,
+            planner_version=planner_version,
+            policy_version=policy_version,
+            delegation=delegation,
             metadata={
                 "runtime_v2_enabled": bool(is_agent_runtime_v2_enabled(self.config_manager)),
             },
         )
         return envelope.to_dict()
+
+    def _build_delegation_contract(
+        self,
+        *,
+        plan: Optional[ActionPlan],
+        context: Optional[PrincipalContext],
+    ) -> Optional[DelegationContract]:
+        plan_metadata = plan.metadata if (plan and isinstance(plan.metadata, dict)) else {}
+        candidate = plan_metadata.get("delegation_contract")
+        if not isinstance(candidate, dict):
+            candidate = plan_metadata.get("delegation")
+        if not isinstance(candidate, dict):
+            candidate = {}
+
+        delegation_id = str(candidate.get("delegation_id", "") or "").strip()
+        if not delegation_id:
+            delegation_id = str(getattr(context, "delegation_id", "") or "").strip() if context else ""
+        if not delegation_id:
+            return None
+
+        return DelegationContract(
+            delegation_id=delegation_id,
+            parent_agent_id=str(candidate.get("parent_agent_id", "") or "").strip(),
+            child_agent_id=str(candidate.get("child_agent_id", "") or "").strip(),
+            delegated_goal=str(candidate.get("delegated_goal", "") or "").strip(),
+            allowed_scopes=[str(x).strip() for x in candidate.get("allowed_scopes", []) if str(x).strip()],
+            inherited_budget=dict(candidate.get("inherited_budget", {}) or {}),
+            success_criteria=[str(x).strip() for x in candidate.get("success_criteria", []) if str(x).strip()],
+            cancellation_criteria=[str(x).strip() for x in candidate.get("cancellation_criteria", []) if str(x).strip()],
+        )
 
     def _evaluate_runtime_v2_governance(
         self,
@@ -1640,6 +1697,48 @@ class AgentOrchestrator:
             "tenant_governance": governance,
             "policy_decision": policy_decision.to_dict(),
         }
+
+    @staticmethod
+    def _build_runtime_v2_receipt(
+        *,
+        exec_context: Dict[str, Any],
+        latency_ms: int,
+    ) -> Dict[str, Any]:
+        envelope = exec_context.get("execution_context_envelope") if isinstance(exec_context, dict) else {}
+        envelope = envelope if isinstance(envelope, dict) else {}
+        governance = exec_context.get("runtime_v2_governance") if isinstance(exec_context, dict) else {}
+        governance = governance if isinstance(governance, dict) else {}
+        policy_decision = governance.get("policy_decision") if isinstance(governance.get("policy_decision"), dict) else {}
+        return {
+            "receipt_version": "2.0",
+            "engine": "agent_runtime_v2",
+            "tenant_id": str(envelope.get("tenant_id", "default") or "default"),
+            "qos_class": str(envelope.get("qos_class", "NORMAL") or "NORMAL"),
+            "risk_level": str(envelope.get("risk_level", "low") or "low"),
+            "policy_version": str(envelope.get("policy_version", "policy_v1") or "policy_v1"),
+            "policy_decision": str(policy_decision.get("decision", "allow") or "allow"),
+            "latency_ms": int(latency_ms),
+        }
+
+    def _attach_runtime_v2_receipt(
+        self,
+        *,
+        result: Any,
+        exec_context: Dict[str, Any],
+        latency_ms: int,
+        work_id: Optional[str],
+    ) -> Any:
+        receipt = self._build_runtime_v2_receipt(exec_context=exec_context, latency_ms=latency_ms)
+        if isinstance(result, dict):
+            metadata = result.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["runtime_v2_receipt"] = receipt
+            result["metadata"] = metadata
+            result["runtime_v2_receipt"] = receipt
+        if work_id:
+            self._touch_work_context(work_id, {"runtime_v2": {"last_receipt": receipt}})
+        return result
 
 
     def build_work_start_ack(
@@ -3164,6 +3263,12 @@ class AgentOrchestrator:
                             "error_code": error_code.value,
                             "message": str(e)
                         }
+                    result = self._attach_runtime_v2_receipt(
+                        result=result,
+                        exec_context=exec_context,
+                        latency_ms=latency_ms,
+                        work_id=work_id,
+                    )
                     
                     # Persistence: Attach playback metadata if returned by capability.
                     # First try a user-visible assistant message for this work_id (e.g. work ack),
