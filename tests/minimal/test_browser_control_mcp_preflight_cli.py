@@ -93,6 +93,42 @@ def test_cli_check_config_fails_for_missing_file():
     assert payload["error_code"] == "CONFIG_NOT_FOUND"
 
 
+def test_cli_check_config_require_ready_fails_when_not_ready():
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg_path = Path(tmp) / "config.json"
+        cfg_path.write_text(json.dumps({"capabilities": {"browser_control": {"runtime_backend": "cdp"}}}), encoding="utf-8")
+        out = _run_cli(["--config-file", str(cfg_path), "check-config", "--require-ready"])
+        assert out.returncode == 2
+        payload = json.loads(out.stdout.strip())
+        assert payload["ok"] is False
+        assert payload["error_code"] == "MCP_NOT_READY"
+
+
+def test_cli_check_config_fail_on_warnings_blocks_fallback_warning():
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg_path = Path(tmp) / "config.json"
+        cfg_path.write_text(
+            json.dumps(
+                {
+                    "capabilities": {
+                        "browser_control": {
+                            "runtime_backend": "playwright",
+                            "playwright_transport_mode": "mcp",
+                            "playwright_mcp_endpoint": "http://127.0.0.1:8787",
+                            "playwright_mcp_fallback_to_local": True,
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        out = _run_cli(["--config-file", str(cfg_path), "check-config", "--fail-on-warnings"])
+        assert out.returncode == 2
+        payload = json.loads(out.stdout.strip())
+        assert payload["ok"] is False
+        assert payload["error_code"] == "MCP_WARNINGS_PRESENT"
+
+
 def test_probe_endpoint_missing_endpoint_returns_error():
     out = preflight.cmd_probe_endpoint(Namespace(endpoint="", timeout_s=2.0, navigate_url=""))
     assert out["ok"] is False

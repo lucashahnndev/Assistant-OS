@@ -73,12 +73,21 @@ def cmd_check_config(args: argparse.Namespace) -> Dict[str, Any]:
     cfg = _load_json(path)
     browser_cfg = _extract_browser_control_cfg(cfg)
     readiness = analyze_browser_control_mcp_readiness(browser_cfg)
-    return {
+    payload = {
         "ok": True,
         "mode": "check-config",
         "config_file": path,
         "browser_control": readiness,
     }
+    require_ready = bool(getattr(args, "require_ready", False))
+    fail_on_warnings = bool(getattr(args, "fail_on_warnings", False))
+    if require_ready and not readiness.get("ready"):
+        payload["ok"] = False
+        payload["error_code"] = "MCP_NOT_READY"
+    if fail_on_warnings and readiness.get("warnings"):
+        payload["ok"] = False
+        payload["error_code"] = "MCP_WARNINGS_PRESENT"
+    return payload
 
 
 def cmd_probe_endpoint(args: argparse.Namespace) -> Dict[str, Any]:
@@ -125,6 +134,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_check = sub.add_parser("check-config", help="Validate browser_control MCP configuration readiness")
+    p_check.add_argument("--require-ready", action="store_true")
+    p_check.add_argument("--fail-on-warnings", action="store_true")
     p_check.set_defaults(handler=cmd_check_config)
 
     p_probe = sub.add_parser("probe-endpoint", help="Probe MCP endpoint via Playwright MCP adapter")

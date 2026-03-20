@@ -28,6 +28,11 @@ Notes:
 ```
 
 If the output has `browser_control.ready=false`, fix config before continuing.
+For CI gate (strict mode), use:
+
+```bash
+./env/bin/python scripts/browser_control_mcp_preflight.py --config-file data/config.json check-config --require-ready --fail-on-warnings
+```
 3. Trigger a simple browser action (`browser.control.run` with a basic navigation goal).
 4. Validate `inspect` output:
    - `current_execution.runtime_backend=playwright`
