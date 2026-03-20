@@ -11,13 +11,15 @@ Set in `config.json` under `capabilities.browser_control`:
   "runtime_backend": "playwright",
   "playwright_transport_mode": "mcp",
   "playwright_mcp_endpoint": "http://127.0.0.1:8787",
-  "playwright_mcp_fallback_to_local": true
+  "playwright_mcp_fallback_to_local": true,
+  "max_new_tabs_per_session": 3
 }
 ```
 
 Notes:
 - Keep `playwright_mcp_fallback_to_local=true` during first rollout.
 - If you want strict fail-fast (no local fallback), set `false` only after endpoint validation.
+- Keep `max_new_tabs_per_session` low in production to prevent runaway tab storms.
 
 ## Smoke Flow
 1. Start service with the config above.
@@ -78,9 +80,7 @@ For compact CI logs, add `--summary-only` (keeps full artifacts in files):
 - Immediate fallback (same deploy):
   - Keep `runtime_backend=playwright`
   - Set `playwright_transport_mode=local`
-- Full rollback:
-  - Set `runtime_backend=cdp`
-  - Restart service
+- Full rollback to CDP is no longer supported in runtime migration mode.
 
 ## Operational Signals
 - If MCP endpoint is missing and fallback is enabled:

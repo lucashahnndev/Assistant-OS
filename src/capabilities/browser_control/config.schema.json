@@ -53,9 +53,8 @@
     },
     "runtime_backend": {
       "type": "string",
-      "default": "cdp",
+      "default": "playwright",
       "enum": [
-        "cdp",
         "playwright"
       ]
     },
@@ -74,6 +73,11 @@
     "playwright_mcp_fallback_to_local": {
       "type": "boolean",
       "default": true
+    },
+    "max_new_tabs_per_session": {
+      "type": "integer",
+      "default": 3,
+      "minimum": 0
     },
     "browser_engine_preference": {
       "type": "string",

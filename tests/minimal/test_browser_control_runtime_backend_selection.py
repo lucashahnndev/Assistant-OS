@@ -6,19 +6,19 @@ class _KernelStub:
     config = {"agent": {"agent_name": "Test"}}
 
 
-def test_runtime_backend_defaults_to_cdp_on_invalid_config():
+def test_runtime_backend_defaults_to_playwright_on_invalid_config():
     cap = BrowserControlCapability(_KernelStub(), {"runtime_backend": "invalid_backend"})
-    assert cap._resolve_runtime_backend() == "cdp"
+    assert cap._resolve_runtime_backend() == "playwright"
 
 
-def test_runtime_backend_supports_playwright_and_cdp_runtime_class_resolution():
-    cap_cdp = BrowserControlCapability(_KernelStub(), {"runtime_backend": "cdp"})
-    cls_cdp = cap_cdp._resolve_runtime_class()
-    assert cls_cdp.__name__ == "BrowserRuntime"
-
+def test_runtime_backend_forces_playwright_runtime_class_resolution():
     cap_pw = BrowserControlCapability(_KernelStub(), {"runtime_backend": "playwright"})
     cls_pw = cap_pw._resolve_runtime_class()
     assert cls_pw.__name__ == "BrowserRuntimePlaywright"
+
+    cap_legacy = BrowserControlCapability(_KernelStub(), {"runtime_backend": "cdp"})
+    cls_legacy = cap_legacy._resolve_runtime_class()
+    assert cls_legacy.__name__ == "BrowserRuntimePlaywright"
 
 
 def test_playwright_transport_mode_defaults_and_fallback_behavior():

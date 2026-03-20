@@ -23,10 +23,11 @@ class BrowserControlCapability(CapabilityBase):
         self._visual_cursor_enabled = self._cfg_bool("visual_cursor_enabled", True)
         self._tab_user_lock_enabled = self._cfg_bool("tab_user_lock_enabled", True)
         self._tab_control_bar_enabled = self._cfg_bool("tab_control_bar_enabled", True)
-        self._runtime_backend = self._cfg_str("runtime_backend", "cdp").lower()
+        self._runtime_backend = self._cfg_str("runtime_backend", "playwright").lower()
         self._playwright_transport_mode = self._cfg_str("playwright_transport_mode", "local").lower()
         self._playwright_mcp_endpoint = self._cfg_str("playwright_mcp_endpoint", "")
         self._playwright_mcp_fallback_to_local = self._cfg_bool("playwright_mcp_fallback_to_local", True)
+        self._max_new_tabs_per_session = self._cfg_int("max_new_tabs_per_session", 3)
         self._browser_engine_preference = self._cfg_str("browser_engine_preference", "managed_chromium")
         self._chrome_path_override = self._cfg_str("chrome_path", "")
         self._managed_chromium_path = self._cfg_path(
@@ -67,24 +68,33 @@ class BrowserControlCapability(CapabilityBase):
         self._tab_id: Optional[str] = None
         self._owner_session_id: Optional[str] = None
         self._runtime_intent_class: Optional[str] = None
+        self._new_tabs_opened_by_session: Dict[str, int] = {}
         self._policy = BrowserSessionPolicy({"app_mode_enabled": self._app_mode_enabled})
         self._initialize_global_browser_storage()
 
+    def _get_new_tab_open_count(self, owner_session_id: str) -> int:
+        key = str(owner_session_id or "default")
+        return int(self._new_tabs_opened_by_session.get(key, 0))
+
+    def _increment_new_tab_open_count(self, owner_session_id: str) -> int:
+        key = str(owner_session_id or "default")
+        count = self._get_new_tab_open_count(key) + 1
+        self._new_tabs_opened_by_session[key] = count
+        return count
+
     def _resolve_runtime_backend(self) -> str:
-        backend = str(self._runtime_backend or "cdp").strip().lower()
-        if backend not in {"cdp", "playwright"}:
-            return "cdp"
-        return backend
+        backend = str(self._runtime_backend or "playwright").strip().lower()
+        if backend != "playwright":
+            logger.warning(
+                "runtime_backend=%s is deprecated and ignored; forcing playwright backend.",
+                backend,
+            )
+        return "playwright"
 
     def _resolve_runtime_class(self):
-        backend = self._resolve_runtime_backend()
-        if backend == "playwright":
-            from .runtime_playwright import BrowserRuntimePlaywright
+        from .runtime_playwright import BrowserRuntimePlaywright
 
-            return BrowserRuntimePlaywright
-        from .runtime import BrowserRuntime
-
-        return BrowserRuntime
+        return BrowserRuntimePlaywright
 
     def _build_runtime_kwargs(
         self,
@@ -115,10 +125,9 @@ class BrowserControlCapability(CapabilityBase):
             "tab_control_bar_enabled": self._tab_control_bar_enabled,
             "agent_name": self._agent_name,
         }
-        if self._resolve_runtime_backend() == "playwright":
-            kwargs["playwright_transport_mode"] = self._playwright_transport_mode
-            kwargs["playwright_mcp_endpoint"] = self._playwright_mcp_endpoint
-            kwargs["playwright_mcp_fallback_to_local"] = self._playwright_mcp_fallback_to_local
+        kwargs["playwright_transport_mode"] = self._playwright_transport_mode
+        kwargs["playwright_mcp_endpoint"] = self._playwright_mcp_endpoint
+        kwargs["playwright_mcp_fallback_to_local"] = self._playwright_mcp_fallback_to_local
         return kwargs
 
     def _cfg_bool(self, key: str, default: bool) -> bool:
@@ -522,12 +531,29 @@ class BrowserControlCapability(CapabilityBase):
         self._runtime_intent_class = intent_class
         decision_data: Dict[str, Any] = {**decision.as_dict(), "launch_url": launch_url, "current_url": current_url}
         if decision.route == "new_tab" and self._runtime and hasattr(self._runtime, "open_new_tab"):
+            current_count = self._get_new_tab_open_count(owner_session_id)
+            max_tabs = int(max(0, self._max_new_tabs_per_session))
+            if max_tabs > 0 and current_count >= max_tabs:
+                decision_data["new_tab_opened"] = False
+                decision_data["new_tab_blocked"] = "max_new_tabs_per_session_exceeded"
+                decision_data["new_tab_opened_count"] = current_count
+                decision_data["max_new_tabs_per_session"] = max_tabs
+                decision_data["route"] = "reuse_tab"
+                decision_data["reason"] = "new_tab_budget_exceeded"
+                if hasattr(self._runtime, "navigate"):
+                    try:
+                        await self._runtime.navigate(launch_url)
+                        decision_data["fallback_navigation"] = "reuse_tab_navigate"
+                    except Exception as e:
+                        decision_data["fallback_navigation_error"] = str(e)
+                return decision_data
             try:
                 new_target = await self._runtime.open_new_tab(launch_url)
                 decision_data["new_tab_opened"] = bool(new_target)
                 if new_target:
                     self._tab_id = None
                     decision_data["new_tab_target_id"] = str(new_target)
+                    decision_data["new_tab_opened_count"] = self._increment_new_tab_open_count(owner_session_id)
             except Exception as e:
                 decision_data["new_tab_opened"] = False
                 decision_data["new_tab_error"] = str(e)
@@ -664,7 +690,7 @@ class BrowserControlCapability(CapabilityBase):
             "browser_instance_id": browser_instance_id or "",
             "tab_id": tab_id or "",
             "debug_port": debug_port,
-            "runtime_backend": str(runtime_backend or "cdp"),
+            "runtime_backend": str(runtime_backend or "playwright"),
             "runtime_target_id": target_id,
             "cdp_target_id": target_id,
             "intent_class": intent_class,
@@ -1547,6 +1573,7 @@ class BrowserControlCapability(CapabilityBase):
         await self._close_registered_instance(reason="capability_close")
         self._owner_session_id = None
         self._runtime_intent_class = None
+        self._new_tabs_opened_by_session = {}
         return {"ok": True}
 
     async def inspect(self, params: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
