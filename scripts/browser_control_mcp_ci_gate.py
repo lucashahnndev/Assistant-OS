@@ -61,6 +61,22 @@ def _write_json(path: str, payload: Dict[str, Any]) -> None:
     p.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _build_summary_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    checks = payload.get("checks") if isinstance(payload.get("checks"), list) else []
+    failed = [str(c.get("name") or "") for c in checks if not bool(c.get("passed"))]
+    out: Dict[str, Any] = {
+        "ok": bool(payload.get("ok")),
+        "mode": str(payload.get("mode") or "gate"),
+        "error_code": str(payload.get("error_code") or ""),
+        "failed_checks": failed,
+    }
+    if payload.get("markdown_report_file"):
+        out["markdown_report_file"] = str(payload.get("markdown_report_file"))
+    if payload.get("json_report_file"):
+        out["json_report_file"] = str(payload.get("json_report_file"))
+    return out
+
+
 def evaluate_gate(
     smoke: Dict[str, Any],
     *,
@@ -200,6 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-health-issue", action="append", default=[])
     parser.add_argument("--markdown-report-file", default="")
     parser.add_argument("--json-report-file", default="")
+    parser.add_argument("--summary-only", action="store_true")
     parser.set_defaults(handler=cmd_gate)
     return parser
 
@@ -208,7 +225,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     out = args.handler(args)
-    print(json.dumps(out, ensure_ascii=False))
+    output_payload = _build_summary_payload(out) if bool(args.summary_only) else out
+    print(json.dumps(output_payload, ensure_ascii=False))
     return 0 if out.get("ok") else 2
 
 

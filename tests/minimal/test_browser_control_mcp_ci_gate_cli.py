@@ -157,3 +157,29 @@ def test_gate_cli_writes_both_markdown_and_json_reports():
         assert payload["ok"] is True
         assert out_md.exists() is True
         assert out_json.exists() is True
+
+
+def test_gate_cli_summary_only_returns_compact_payload_success():
+    with tempfile.TemporaryDirectory() as tmp:
+        report = Path(tmp) / "smoke.json"
+        report.write_text(json.dumps(_smoke_payload()), encoding="utf-8")
+        out = _run_cli(["--smoke-report-file", str(report), "--summary-only"])
+        assert out.returncode == 0
+        payload = json.loads(out.stdout.strip())
+        assert payload["ok"] is True
+        assert payload["mode"] == "gate"
+        assert payload["failed_checks"] == []
+        assert "smoke" not in payload
+        assert "checks" not in payload
+
+
+def test_gate_cli_summary_only_returns_failed_checks_on_error():
+    with tempfile.TemporaryDirectory() as tmp:
+        report = Path(tmp) / "smoke.json"
+        report.write_text(json.dumps(_smoke_payload(mcp_calls_total=0)), encoding="utf-8")
+        out = _run_cli(["--smoke-report-file", str(report), "--min-mcp-calls", "1", "--summary-only"])
+        assert out.returncode == 2
+        payload = json.loads(out.stdout.strip())
+        assert payload["ok"] is False
+        assert "mcp_calls_threshold" in payload["failed_checks"]
+        assert "smoke" not in payload

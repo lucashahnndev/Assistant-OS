@@ -68,6 +68,12 @@ CI gate (fails pipeline if checks are not met):
   --json-report-file data/reports/browser_control_mcp_ci_gate.json
 ```
 
+For compact CI logs, add `--summary-only` (keeps full artifacts in files):
+
+```bash
+./env/bin/python scripts/browser_control_mcp_ci_gate.py --config-file data/config.json --summary-only --json-report-file data/reports/browser_control_mcp_ci_gate.json
+```
+
 ## Fallback and Rollback
 - Immediate fallback (same deploy):
   - Keep `runtime_backend=playwright`
