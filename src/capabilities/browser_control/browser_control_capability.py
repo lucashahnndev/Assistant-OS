@@ -1,8 +1,10 @@
 import asyncio
+import hashlib
 import logging
 import os
 import re
 import shutil
+import time
 from typing import List, Dict, Any, Optional, Union
 from ..base import CapabilityBase
 from .session_policy import BrowserSessionPolicy
@@ -26,6 +28,7 @@ class BrowserControlCapability(CapabilityBase):
         self._require_delegated_executor_for_browser_launch = self._cfg_bool(
             "require_delegated_executor_for_browser_launch", True
         )
+        self._run_failure_cooldown_seconds = self._cfg_int("run_failure_cooldown_seconds", 45)
         self._runtime_backend = self._cfg_str("runtime_backend", "playwright").lower()
         self._playwright_transport_mode = self._cfg_str("playwright_transport_mode", "local").lower()
         self._playwright_mcp_endpoint = self._cfg_str("playwright_mcp_endpoint", "")
@@ -72,6 +75,8 @@ class BrowserControlCapability(CapabilityBase):
         self._owner_session_id: Optional[str] = None
         self._runtime_intent_class: Optional[str] = None
         self._new_tabs_opened_by_session: Dict[str, int] = {}
+        self._active_run_by_session: Dict[str, float] = {}
+        self._recent_failed_goal_by_session: Dict[str, Dict[str, Any]] = {}
         self._policy = BrowserSessionPolicy({"app_mode_enabled": self._app_mode_enabled})
         self._initialize_global_browser_storage()
 
@@ -558,6 +563,36 @@ class BrowserControlCapability(CapabilityBase):
             return True
         child_id = self._delegation_child_id(context)
         return bool(child_id.startswith("browser_subagent"))
+
+    @staticmethod
+    def _goal_fingerprint(goal: str, intent_class: str) -> str:
+        payload = f"{str(intent_class or '').strip().lower()}::{str(goal or '').strip().lower()}"
+        return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+    def _should_block_run_by_cooldown(self, *, session_id: str, goal_fingerprint: str) -> Optional[Dict[str, Any]]:
+        cooldown_s = int(max(0, self._run_failure_cooldown_seconds))
+        if cooldown_s <= 0:
+            return None
+        record = self._recent_failed_goal_by_session.get(str(session_id or "default"))
+        if not isinstance(record, dict):
+            return None
+        last_fp = str(record.get("goal_fingerprint") or "")
+        last_ts = float(record.get("failed_at_ts") or 0.0)
+        if not last_fp or not last_ts or last_fp != goal_fingerprint:
+            return None
+        elapsed = max(0, int(time.time() - last_ts))
+        if elapsed >= cooldown_s:
+            return None
+        return {
+            "ok": False,
+            "error": (
+                "Browser run blocked by cooldown after repeated failure for the same goal. "
+                "Please wait before retrying."
+            ),
+            "error_code": "BROWSER_RUN_COOLDOWN",
+            "cooldown_seconds": cooldown_s,
+            "retry_after_seconds": max(0, cooldown_s - elapsed),
+        }
 
     def _run_sync(self, coro):
         """Helper to run a coroutine from a synchronous context, 
@@ -1167,10 +1202,23 @@ class BrowserControlCapability(CapabilityBase):
                 ),
                 "error_code": "BROWSER_LAUNCH_NOT_DELEGATED",
             }
+        session_key = str(ctx.get("session_id", "default") or "default")
+        now_ts = float(time.time())
+        if session_key in self._active_run_by_session:
+            return {
+                "ok": False,
+                "error": "Another browser run is already active for this session.",
+                "error_code": "BROWSER_RUN_ALREADY_ACTIVE",
+            }
         try:
             intent_class = self._resolve_intent_class(intent_class)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+        goal_fp = self._goal_fingerprint(goal, intent_class)
+        cooldown_block = self._should_block_run_by_cooldown(session_id=session_key, goal_fingerprint=goal_fp)
+        if cooldown_block is not None:
+            return cooldown_block
+        self._active_run_by_session[session_key] = now_ts
         callbacks = ctx.get("callbacks") if isinstance(ctx.get("callbacks"), dict) else {}
         planner_callbacks = self._build_planner_callbacks(ctx, callbacks)
         gc_info = self._maybe_run_registry_gc(ctx)
@@ -1283,6 +1331,11 @@ class BrowserControlCapability(CapabilityBase):
         exec_ctx["instance_lock"] = lock_info
         if not lock_info.get("ok"):
             reason = str(lock_info.get("reason") or "instance lock denied")
+            self._recent_failed_goal_by_session[session_key] = {
+                "goal_fingerprint": goal_fp,
+                "failed_at_ts": float(time.time()),
+                "reason": reason,
+            }
             self._touch_work_context(
                 ctx,
                 {
@@ -1300,6 +1353,11 @@ class BrowserControlCapability(CapabilityBase):
             exec_ctx["tab_lock"] = tab_lock_info
             if not tab_lock_info.get("ok"):
                 reason = str(tab_lock_info.get("reason") or "tab lock denied")
+                self._recent_failed_goal_by_session[session_key] = {
+                    "goal_fingerprint": goal_fp,
+                    "failed_at_ts": float(time.time()),
+                    "reason": reason,
+                }
                 self._touch_work_context(
                     ctx,
                     {
@@ -1331,6 +1389,11 @@ class BrowserControlCapability(CapabilityBase):
             is_error_response = response_status in {"error", "failed", "failure"}
             if is_error_response:
                 run_status = "failed"
+                self._recent_failed_goal_by_session[session_key] = {
+                    "goal_fingerprint": goal_fp,
+                    "failed_at_ts": float(time.time()),
+                    "reason": str(response_payload.get("error_details") or response_payload.get("error") or "planner_error"),
+                }
             result_data = {
                 "ok": not is_error_response,
                 "status": "error" if is_error_response else "success",
@@ -1373,6 +1436,11 @@ class BrowserControlCapability(CapabilityBase):
         except Exception as e:
             logger.error(f"Error in run_goal: {e}")
             run_status = "failed"
+            self._recent_failed_goal_by_session[session_key] = {
+                "goal_fingerprint": goal_fp,
+                "failed_at_ts": float(time.time()),
+                "reason": str(e),
+            }
             self._touch_work_context(
                 ctx,
                 {
@@ -1389,6 +1457,7 @@ class BrowserControlCapability(CapabilityBase):
                 fail_payload["metadata"] = metadata
             return fail_payload
         finally:
+            self._active_run_by_session.pop(session_key, None)
             try:
                 release_tab_info = await self._release_tab_execution_lock(browser_instance_id, tab_id, ctx)
                 exec_ctx["tab_lock_release"] = release_tab_info
@@ -1413,6 +1482,8 @@ class BrowserControlCapability(CapabilityBase):
                     },
                     "browser": exec_ctx,
                 })
+            if run_status == "completed":
+                self._recent_failed_goal_by_session.pop(session_key, None)
 
     async def step(self, instruction: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         ctx = context or {}

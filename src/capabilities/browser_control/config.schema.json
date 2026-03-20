@@ -55,6 +55,11 @@
       "type": "boolean",
       "default": true
     },
+    "run_failure_cooldown_seconds": {
+      "type": "integer",
+      "default": 45,
+      "minimum": 0
+    },
     "runtime_backend": {
       "type": "string",
       "default": "playwright",

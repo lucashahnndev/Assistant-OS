@@ -13,6 +13,7 @@ Set in `config.json` under `capabilities.browser_control`:
   "playwright_mcp_endpoint": "http://127.0.0.1:8787",
   "playwright_mcp_fallback_to_local": true,
   "require_delegated_executor_for_browser_launch": true,
+  "run_failure_cooldown_seconds": 45,
   "max_new_tabs_per_session": 3
 }
 ```
@@ -21,6 +22,7 @@ Notes:
 - Keep `playwright_mcp_fallback_to_local=true` during first rollout.
 - If you want strict fail-fast (no local fallback), set `false` only after endpoint validation.
 - Browser launch now requires delegated executor context (`browser_subagent*`) in orchestrated flow.
+- `run_failure_cooldown_seconds` prevents immediate replay storms of the same failed browser goal.
 - Keep `max_new_tabs_per_session` low in production to prevent runaway tab storms.
 
 ## Smoke Flow

@@ -345,6 +345,7 @@
             "playwright_mcp_endpoint": "",
             "playwright_mcp_fallback_to_local": true,
             "require_delegated_executor_for_browser_launch": true,
+            "run_failure_cooldown_seconds": 45,
             "max_new_tabs_per_session": 3,
             "browser_engine_preference": "managed_chromium",
             "chrome_path": "",
