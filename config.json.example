@@ -20,6 +20,12 @@
         "persist_on_success": true,
         "persist_on_error": true
     },
+    "runtime": {
+        "agent_runtime_v2_enabled": false,
+        "agent_runtime_v2": {
+            "policy_mode": "log_only"
+        }
+    },
     "interfaces": {
         "voice": {
             "enabled": false,

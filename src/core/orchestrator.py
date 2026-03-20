@@ -46,6 +46,10 @@ from services.notifications.store import NotificationStore
 from services.notifications.context_service import CommunicationContextService
 from services.notifications.delivery_resolver import DeliveryResolver
 from services.notifications.dispatcher import NotificationDispatcher
+from services.agent_runtime_v2 import (
+    ExecutionContextEnvelope,
+    is_agent_runtime_v2_enabled,
+)
 
 # New resolution and capability imports
 from core.resolution.chain_resolver import FallbackChainResolver
@@ -1553,6 +1557,39 @@ class AgentOrchestrator:
             allowed["send_status"] = callbacks["send_status"]
         return allowed
 
+    def _build_execution_context_envelope(
+        self,
+        *,
+        plan: Optional[ActionPlan],
+        context: Optional[PrincipalContext],
+        session_id: str,
+        work_id: Optional[str],
+    ) -> Dict[str, Any]:
+        action_id = str(getattr(plan, "action_id", "") or "").strip()
+        capability_metadata: Dict[str, Any] = {}
+        if self.capability_registry and action_id:
+            capability_metadata = self.capability_registry.get_action_metadata(action_id) or {}
+        risk_level = str(capability_metadata.get("risk_level", "low") or "low").strip().lower()
+        if risk_level not in {"low", "medium", "high", "critical"}:
+            risk_level = "low"
+
+        tenant_id = "default"
+        if context and getattr(context, "group_id", None):
+            tenant_id = str(getattr(context, "group_id", "") or "default").strip() or "default"
+
+        envelope = ExecutionContextEnvelope(
+            tenant_id=tenant_id,
+            session_id=str(session_id or ""),
+            work_id=str(work_id or ""),
+            action_id=action_id,
+            risk_level=risk_level,
+            metadata={
+                "runtime_v2_enabled": bool(is_agent_runtime_v2_enabled(self.config_manager)),
+            },
+        )
+        return envelope.to_dict()
+
+
     def build_work_start_ack(
         self,
         session: Optional[Session],
@@ -3012,6 +3049,12 @@ class AgentOrchestrator:
                         "capability_registry": self.capability_registry,
                         "playback_service": getattr(self, "playback_service", None),
                     }
+                    exec_context["execution_context_envelope"] = self._build_execution_context_envelope(
+                        plan=plan,
+                        context=context,
+                        session_id=session_id,
+                        work_id=work_id,
+                    )
                     
                     start_ts = time.time()
                     try:
