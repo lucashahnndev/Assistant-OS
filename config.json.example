@@ -340,6 +340,7 @@
         "browser_control": {
             "enabled": true,
             "headless": false,
+            "runtime_backend": "cdp",
             "browser_engine_preference": "managed_chromium",
             "chrome_path": "",
             "managed_chromium_path": "data/browser_bin/chromium/current/chrome",

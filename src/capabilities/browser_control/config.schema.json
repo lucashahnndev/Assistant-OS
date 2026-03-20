@@ -51,6 +51,14 @@
       "type": "boolean",
       "default": true
     },
+    "runtime_backend": {
+      "type": "string",
+      "default": "cdp",
+      "enum": [
+        "cdp",
+        "playwright"
+      ]
+    },
     "browser_engine_preference": {
       "type": "string",
       "default": "managed_chromium",

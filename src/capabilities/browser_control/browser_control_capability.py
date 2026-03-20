@@ -23,6 +23,7 @@ class BrowserControlCapability(CapabilityBase):
         self._visual_cursor_enabled = self._cfg_bool("visual_cursor_enabled", True)
         self._tab_user_lock_enabled = self._cfg_bool("tab_user_lock_enabled", True)
         self._tab_control_bar_enabled = self._cfg_bool("tab_control_bar_enabled", True)
+        self._runtime_backend = self._cfg_str("runtime_backend", "cdp").lower()
         self._browser_engine_preference = self._cfg_str("browser_engine_preference", "managed_chromium")
         self._chrome_path_override = self._cfg_str("chrome_path", "")
         self._managed_chromium_path = self._cfg_path(
@@ -65,6 +66,22 @@ class BrowserControlCapability(CapabilityBase):
         self._runtime_intent_class: Optional[str] = None
         self._policy = BrowserSessionPolicy({"app_mode_enabled": self._app_mode_enabled})
         self._initialize_global_browser_storage()
+
+    def _resolve_runtime_backend(self) -> str:
+        backend = str(self._runtime_backend or "cdp").strip().lower()
+        if backend not in {"cdp", "playwright"}:
+            return "cdp"
+        return backend
+
+    def _resolve_runtime_class(self):
+        backend = self._resolve_runtime_backend()
+        if backend == "playwright":
+            from .runtime_playwright import BrowserRuntimePlaywright
+
+            return BrowserRuntimePlaywright
+        from .runtime import BrowserRuntime
+
+        return BrowserRuntime
 
     def _cfg_bool(self, key: str, default: bool) -> bool:
         if not isinstance(self._config, dict):
@@ -279,11 +296,11 @@ class BrowserControlCapability(CapabilityBase):
         use_app_mode: bool = False,
         launch_url: str = "about:blank",
     ):
-        from .runtime import BrowserRuntime
         from .planner import BrowserSubagent
         from .perception_merger import PerceptionMerger
         from .dom_analyzer import DomAnalyzer
         from .image_analyzer import ImageAnalyzer
+        RuntimeClass = self._resolve_runtime_class()
         current_loop = asyncio.get_running_loop()
         should_recreate = force_new_instance
         loop_changed = False
@@ -320,7 +337,8 @@ class BrowserControlCapability(CapabilityBase):
                 runtime_base_profile,
                 runtime_overlay_parent,
             )
-            self._runtime = BrowserRuntime(
+            logger.info("Browser runtime backend selected: %s", self._resolve_runtime_backend())
+            self._runtime = RuntimeClass(
                 chrome_path=resolved_browser_path,
                 base_profile_path=runtime_base_profile,
                 overlay_profile_parent=runtime_overlay_parent,
