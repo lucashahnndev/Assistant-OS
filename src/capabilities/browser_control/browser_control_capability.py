@@ -903,6 +903,15 @@ class BrowserControlCapability(CapabilityBase):
         except Exception:
             return ""
 
+    def _runtime_connection_meta(self) -> Dict[str, Any]:
+        if not self._runtime or not hasattr(self._runtime, "get_connection_metadata"):
+            return {}
+        try:
+            meta = self._runtime.get_connection_metadata() or {}
+            return meta if isinstance(meta, dict) else {}
+        except Exception:
+            return {}
+
     def _build_registry_snapshot(self, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not self._registry_enabled:
             return {"enabled": False, "instances": [], "open_tabs": [], "count_instances": 0, "count_tabs": 0}
@@ -1576,6 +1585,8 @@ class BrowserControlCapability(CapabilityBase):
                     row["tabs"] = []
             rows.append(row)
 
+        runtime_connection = self._runtime_connection_meta()
+
         return {
             "ok": True,
             "instances": rows,
@@ -1584,6 +1595,8 @@ class BrowserControlCapability(CapabilityBase):
                 "browser_instance_id": self._browser_instance_id,
                 "tab_id": self._tab_id,
                 "owner_session_id": self._owner_session_id,
+                "runtime_backend": self._resolve_runtime_backend(),
+                "runtime_connection": runtime_connection,
                 "last_vision_observation": self._get_last_vision_observation() if include_last_vision else {},
             },
         }
@@ -1698,6 +1711,7 @@ class BrowserControlCapability(CapabilityBase):
             "runtime_backend": self._resolve_runtime_backend(),
             "runtime_target_id": self._current_target_id(),
             "cdp_target_id": self._current_target_id(),
+            "mcp_calls_total": int((self._runtime_connection_meta().get("mcp_calls_total", 0) or 0)),
             "registry_snapshot": self._build_registry_snapshot(ctx),
             "last_vision_observation": last_vision if last_vision else {},
         }

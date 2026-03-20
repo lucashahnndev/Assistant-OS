@@ -44,6 +44,7 @@ def test_playwright_mcp_adapter_basic_calls_via_invoker():
 
     raw = asyncio.run(adapter.capture_screenshot_bytes())
     assert raw == b"fake"
+    assert adapter.calls_total >= 4
 
 
 def test_runtime_playwright_launches_in_mcp_mode_when_endpoint_present():
@@ -72,6 +73,7 @@ def test_runtime_playwright_launches_in_mcp_mode_when_endpoint_present():
     meta = rt.get_connection_metadata()
     assert meta["transport_mode_configured"] == "mcp"
     assert meta["transport_mode_effective"] == "mcp"
+    assert meta["mcp_calls_total"] == 0
 
 
 def test_runtime_playwright_mcp_without_endpoint_and_no_fallback_fails_fast():

@@ -291,6 +291,7 @@ class BrowserRuntimePlaywright:
             "transport_mode_effective": self._transport_mode_effective,
             "mcp_endpoint": self.playwright_mcp_endpoint,
             "mcp_fallback_to_local": bool(self.playwright_mcp_fallback_to_local),
+            "mcp_calls_total": int(self._mcp_adapter.calls_total) if self._mcp_adapter is not None else 0,
         }
 
     async def attach_to_target(self, target_id: str) -> bool:

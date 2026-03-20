@@ -21,6 +21,7 @@ class PlaywrightMCPAdapter:
         self.endpoint = str(endpoint or "").strip()
         self.timeout_s = float(max(1.0, timeout_s))
         self._invoker = invoker
+        self.calls_total = 0
 
     async def get_page_info(self) -> Dict[str, Any]:
         # Preferred path for MCP servers exposing an evaluate/run-code tool.
@@ -168,6 +169,7 @@ class PlaywrightMCPAdapter:
         raise RuntimeError("No MCP tool names provided")
 
     async def _call_tool(self, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        self.calls_total += 1
         if self._invoker is not None:
             out = await self._invoker(name, dict(args or {}))
             return out if isinstance(out, dict) else {"result": out}
