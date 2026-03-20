@@ -21,7 +21,7 @@ def test_runtime_backend_forces_playwright_runtime_class_resolution():
     assert cls_legacy.__name__ == "BrowserRuntimePlaywright"
 
 
-def test_playwright_transport_mode_defaults_and_fallback_behavior():
+def test_playwright_transport_mode_defaults_and_strict_mcp_metadata():
     rt = BrowserRuntimePlaywright(
         chrome_path="",
         base_profile_path="data/browser_data/profile",
@@ -46,4 +46,4 @@ def test_playwright_transport_mode_defaults_and_fallback_behavior():
     assert rt._resolve_transport_mode() == "mcp"
     meta = rt.get_connection_metadata()
     assert meta["transport_mode_configured"] == "mcp"
-    assert meta["mcp_fallback_to_local"] is True
+    assert meta["mcp_fallback_to_local"] is False

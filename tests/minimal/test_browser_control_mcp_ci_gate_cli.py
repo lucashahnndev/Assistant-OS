@@ -77,14 +77,14 @@ def test_gate_cli_uses_smoke_report_file_and_fails_when_threshold_not_met():
 def test_gate_cli_allows_health_issue_when_whitelisted():
     with tempfile.TemporaryDirectory() as tmp:
         report = Path(tmp) / "smoke.json"
-        report.write_text(json.dumps(_smoke_payload(issues=["mcp_fell_back_to_local"])), encoding="utf-8")
+        report.write_text(json.dumps(_smoke_payload(issues=["mcp_transport_not_effective"])), encoding="utf-8")
         out = _run_cli(
             [
                 "--smoke-report-file",
                 str(report),
                 "--allow-local-fallback",
                 "--allow-health-issue",
-                "mcp_fell_back_to_local",
+                "mcp_transport_not_effective",
             ]
         )
         assert out.returncode == 0

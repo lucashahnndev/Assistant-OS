@@ -36,7 +36,6 @@ def analyze_browser_control_mcp_readiness(browser_cfg: Dict[str, Any]) -> Dict[s
     runtime_backend = str(browser_cfg.get("runtime_backend", "cdp") or "cdp").strip().lower()
     transport_mode = str(browser_cfg.get("playwright_transport_mode", "local") or "local").strip().lower()
     endpoint = str(browser_cfg.get("playwright_mcp_endpoint", "") or "").strip()
-    fallback = bool(browser_cfg.get("playwright_mcp_fallback_to_local", True))
 
     issues = []
     warnings = []
@@ -49,14 +48,12 @@ def analyze_browser_control_mcp_readiness(browser_cfg: Dict[str, Any]) -> Dict[s
         issues.append("mcp_endpoint_missing")
     elif not (endpoint.startswith("http://") or endpoint.startswith("https://")):
         warnings.append("mcp_endpoint_unusual_scheme")
-    if fallback:
-        warnings.append("mcp_fallback_enabled")
 
     return {
         "runtime_backend": runtime_backend,
         "playwright_transport_mode": transport_mode,
         "playwright_mcp_endpoint": endpoint,
-        "playwright_mcp_fallback_to_local": fallback,
+        "playwright_mcp_fallback_to_local": False,
         "ready": len(issues) == 0,
         "issues": issues,
         "warnings": warnings,

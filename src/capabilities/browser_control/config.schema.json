@@ -69,7 +69,7 @@
     },
     "playwright_transport_mode": {
       "type": "string",
-      "default": "local",
+      "default": "mcp",
       "enum": [
         "local",
         "mcp"
@@ -81,7 +81,7 @@
     },
     "playwright_mcp_fallback_to_local": {
       "type": "boolean",
-      "default": true
+      "default": false
     },
     "max_new_tabs_per_session": {
       "type": "integer",

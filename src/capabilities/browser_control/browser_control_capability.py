@@ -31,9 +31,9 @@ class BrowserControlCapability(CapabilityBase):
         )
         self._run_failure_cooldown_seconds = self._cfg_int("run_failure_cooldown_seconds", 45)
         self._runtime_backend = self._cfg_str("runtime_backend", "playwright").lower()
-        self._playwright_transport_mode = self._cfg_str("playwright_transport_mode", "local").lower()
+        self._playwright_transport_mode = self._cfg_str("playwright_transport_mode", "mcp").lower()
         self._playwright_mcp_endpoint = self._cfg_str("playwright_mcp_endpoint", "")
-        self._playwright_mcp_fallback_to_local = self._cfg_bool("playwright_mcp_fallback_to_local", True)
+        self._playwright_mcp_fallback_to_local = self._cfg_bool("playwright_mcp_fallback_to_local", False)
         self._max_new_tabs_per_session = self._cfg_int("max_new_tabs_per_session", 3)
         self._browser_engine_preference = self._cfg_str("browser_engine_preference", "managed_chromium")
         self._chrome_path_override = self._cfg_str("chrome_path", "")
@@ -1896,7 +1896,7 @@ class BrowserControlCapability(CapabilityBase):
         transport_mode_effective = str(sync_result.get("transport_mode_effective", "") or "").strip().lower()
         if transport_mode_configured == "mcp":
             if transport_mode_effective and transport_mode_effective != "mcp":
-                issues.append("mcp_fell_back_to_local")
+                issues.append("mcp_transport_not_effective")
             if not str(sync_result.get("mcp_endpoint", "") or "").strip():
                 issues.append("mcp_mode_without_endpoint")
         runtime_target = str(sync_result.get("runtime_target_id", "") or sync_result.get("cdp_target_id", "")).strip()

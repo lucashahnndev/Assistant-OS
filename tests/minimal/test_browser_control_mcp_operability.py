@@ -70,7 +70,7 @@ def test_health_reports_missing_runtime_target_issue_when_sync_has_none():
     assert "no_active_runtime_target" in issues
 
 
-def test_health_reports_mcp_fallback_and_missing_endpoint_signals():
+def test_health_reports_mcp_transport_not_effective_and_missing_endpoint_signals():
     cap = BrowserControlCapability(_KernelStub(), {"runtime_backend": "playwright"})
 
     async def _fake_inspect(params=None, context=None):
@@ -105,5 +105,5 @@ def test_health_reports_mcp_fallback_and_missing_endpoint_signals():
     out = asyncio.run(cap.health(params={"run_gc": False}, context={}))
     assert out["ok"] is True
     issues = (out.get("health") or {}).get("issues") or []
-    assert "mcp_fell_back_to_local" in issues
+    assert "mcp_transport_not_effective" in issues
     assert "mcp_mode_without_endpoint" in issues

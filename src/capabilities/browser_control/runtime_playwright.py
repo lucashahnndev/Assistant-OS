@@ -59,7 +59,13 @@ class BrowserRuntimePlaywright:
         self.agent_name = str(agent_name or "Agent")
         self.playwright_transport_mode = str(playwright_transport_mode or "local").strip().lower()
         self.playwright_mcp_endpoint = str(playwright_mcp_endpoint or "").strip()
-        self.playwright_mcp_fallback_to_local = bool(playwright_mcp_fallback_to_local)
+        # Legacy compatibility flag kept for config/API stability only.
+        # Local fallback is intentionally disabled in MCP mode (fail-fast).
+        self.playwright_mcp_fallback_to_local = False
+        if bool(playwright_mcp_fallback_to_local):
+            logger.warning(
+                "playwright_mcp_fallback_to_local is deprecated and ignored; MCP transport now runs in strict mode."
+            )
 
         self._playwright = None
         self._browser = None
@@ -95,20 +101,15 @@ class BrowserRuntimePlaywright:
     async def launch(self) -> None:
         configured_mode = self._resolve_transport_mode()
         if configured_mode == "mcp":
-            if self.playwright_mcp_endpoint:
-                self._mcp_adapter = PlaywrightMCPAdapter(self.playwright_mcp_endpoint)
-                self._transport_mode_effective = "mcp"
-                logger.info("Playwright runtime using MCP transport endpoint: %s", self.playwright_mcp_endpoint)
-                return
-            if not self.playwright_mcp_fallback_to_local:
+            if not self.playwright_mcp_endpoint:
                 raise RuntimeError(
-                    "Playwright MCP mode selected but MCP transport adapter is not enabled yet. "
-                    "Set playwright_mcp_fallback_to_local=true or use playwright_transport_mode=local."
+                    "Playwright MCP mode selected but playwright_mcp_endpoint is missing. "
+                    "Set a valid endpoint or switch explicitly to playwright_transport_mode=local."
                 )
-            logger.warning(
-                "Playwright MCP transport requested but endpoint is missing; falling back to local transport."
-            )
-            self._transport_mode_effective = "local"
+            self._mcp_adapter = PlaywrightMCPAdapter(self.playwright_mcp_endpoint)
+            self._transport_mode_effective = "mcp"
+            logger.info("Playwright runtime using MCP transport endpoint: %s", self.playwright_mcp_endpoint)
+            return
         else:
             self._transport_mode_effective = "local"
 

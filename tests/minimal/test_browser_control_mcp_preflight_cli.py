@@ -30,7 +30,6 @@ def test_analyze_readiness_detects_required_mcp_fields():
         "runtime_backend": "playwright",
         "playwright_transport_mode": "mcp",
         "playwright_mcp_endpoint": "http://127.0.0.1:8787",
-        "playwright_mcp_fallback_to_local": False,
     }
     ready = analyze_browser_control_mcp_readiness(ready_cfg)
     assert ready["ready"] is True
@@ -68,7 +67,6 @@ def test_cli_check_config_reports_ready_for_mcp_with_endpoint():
                             "runtime_backend": "playwright",
                             "playwright_transport_mode": "mcp",
                             "playwright_mcp_endpoint": "http://127.0.0.1:8787",
-                            "playwright_mcp_fallback_to_local": True,
                         }
                     }
                 }
@@ -82,7 +80,7 @@ def test_cli_check_config_reports_ready_for_mcp_with_endpoint():
         assert payload["ok"] is True
         assert payload["browser_control"]["ready"] is True
         assert payload["browser_control"]["issues"] == []
-        assert payload["browser_control"]["warnings"] == ["mcp_fallback_enabled"]
+        assert payload["browser_control"]["warnings"] == []
 
 
 def test_cli_check_config_fails_for_missing_file():
@@ -104,7 +102,7 @@ def test_cli_check_config_require_ready_fails_when_not_ready():
         assert payload["error_code"] == "MCP_NOT_READY"
 
 
-def test_cli_check_config_fail_on_warnings_blocks_fallback_warning():
+def test_cli_check_config_fail_on_warnings_passes_without_warnings():
     with tempfile.TemporaryDirectory() as tmp:
         cfg_path = Path(tmp) / "config.json"
         cfg_path.write_text(
@@ -115,7 +113,6 @@ def test_cli_check_config_fail_on_warnings_blocks_fallback_warning():
                             "runtime_backend": "playwright",
                             "playwright_transport_mode": "mcp",
                             "playwright_mcp_endpoint": "http://127.0.0.1:8787",
-                            "playwright_mcp_fallback_to_local": True,
                         }
                     }
                 }
@@ -123,10 +120,9 @@ def test_cli_check_config_fail_on_warnings_blocks_fallback_warning():
             encoding="utf-8",
         )
         out = _run_cli(["--config-file", str(cfg_path), "check-config", "--fail-on-warnings"])
-        assert out.returncode == 2
+        assert out.returncode == 0
         payload = json.loads(out.stdout.strip())
-        assert payload["ok"] is False
-        assert payload["error_code"] == "MCP_WARNINGS_PRESENT"
+        assert payload["ok"] is True
 
 
 def test_probe_endpoint_missing_endpoint_returns_error():
