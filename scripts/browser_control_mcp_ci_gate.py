@@ -25,6 +25,36 @@ def _load_json_file(path: str) -> Dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
+def _render_markdown_report(payload: Dict[str, Any]) -> str:
+    checks = payload.get("checks") if isinstance(payload.get("checks"), list) else []
+    smoke = payload.get("smoke") if isinstance(payload.get("smoke"), dict) else {}
+    lines: List[str] = []
+    lines.append("# Browser Control MCP CI Gate Report")
+    lines.append("")
+    lines.append(f"- ok: `{bool(payload.get('ok'))}`")
+    lines.append(f"- error_code: `{str(payload.get('error_code') or '')}`")
+    lines.append(f"- smoke_ok: `{bool(smoke.get('ok'))}`")
+    lines.append("")
+    lines.append("## Checks")
+    lines.append("")
+    lines.append("| Check | Status | Details |")
+    lines.append("|---|---|---|")
+    for item in checks:
+        name = str(item.get("name") or "")
+        status = "PASS" if bool(item.get("passed")) else "FAIL"
+        details_obj = item.get("details") if isinstance(item.get("details"), dict) else {}
+        details = json.dumps(details_obj, ensure_ascii=False, sort_keys=True)
+        lines.append(f"| `{name}` | `{status}` | `{details}` |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _write_text(path: str, content: str) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+
+
 def evaluate_gate(
     smoke: Dict[str, Any],
     *,
@@ -117,13 +147,23 @@ def cmd_gate(args: argparse.Namespace) -> Dict[str, Any]:
         min_mcp_calls=int(args.min_mcp_calls),
         allowed_health_issues=allowed,
     )
-    return {
+    result = {
         "ok": bool(passed),
         "mode": "gate",
         "error_code": "" if passed else "CI_GATE_FAILED",
         "checks": checks,
         "smoke": smoke,
     }
+    markdown_report_file = str(args.markdown_report_file or "").strip()
+    if markdown_report_file:
+        try:
+            _write_text(markdown_report_file, _render_markdown_report(result))
+            result["markdown_report_file"] = markdown_report_file
+        except Exception as e:
+            result["ok"] = False
+            result["error_code"] = "REPORT_WRITE_FAILED"
+            result["report_write_error"] = str(e)
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -143,6 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-local-fallback", action="store_true")
     parser.add_argument("--min-mcp-calls", type=int, default=1)
     parser.add_argument("--allow-health-issue", action="append", default=[])
+    parser.add_argument("--markdown-report-file", default="")
     parser.set_defaults(handler=cmd_gate)
     return parser
 

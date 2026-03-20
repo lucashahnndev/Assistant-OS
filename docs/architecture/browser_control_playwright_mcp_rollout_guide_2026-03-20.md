@@ -63,7 +63,8 @@ CI gate (fails pipeline if checks are not met):
   --goal "Abra https://example.com e valide o título da página." \
   --intent-class automacao_ui \
   --require-ready \
-  --min-mcp-calls 1
+  --min-mcp-calls 1 \
+  --markdown-report-file data/reports/browser_control_mcp_ci_gate.md
 ```
 
 ## Fallback and Rollback

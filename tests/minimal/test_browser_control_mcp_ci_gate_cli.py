@@ -90,3 +90,31 @@ def test_gate_cli_allows_health_issue_when_whitelisted():
         assert out.returncode == 0
         payload = json.loads(out.stdout.strip())
         assert payload["ok"] is True
+
+
+def test_gate_cli_writes_markdown_report_file():
+    with tempfile.TemporaryDirectory() as tmp:
+        report = Path(tmp) / "smoke.json"
+        md = Path(tmp) / "out" / "gate.md"
+        report.write_text(json.dumps(_smoke_payload()), encoding="utf-8")
+        out = _run_cli(["--smoke-report-file", str(report), "--markdown-report-file", str(md)])
+        assert out.returncode == 0
+        payload = json.loads(out.stdout.strip())
+        assert payload["ok"] is True
+        assert payload["markdown_report_file"] == str(md)
+        text = md.read_text(encoding="utf-8")
+        assert "# Browser Control MCP CI Gate Report" in text
+        assert "| `smoke_ok` | `PASS` |" in text
+
+
+def test_gate_cli_markdown_report_marks_failed_checks():
+    with tempfile.TemporaryDirectory() as tmp:
+        report = Path(tmp) / "smoke.json"
+        md = Path(tmp) / "gate.md"
+        report.write_text(json.dumps(_smoke_payload(mcp_calls_total=0)), encoding="utf-8")
+        out = _run_cli(["--smoke-report-file", str(report), "--min-mcp-calls", "1", "--markdown-report-file", str(md)])
+        assert out.returncode == 2
+        payload = json.loads(out.stdout.strip())
+        assert payload["ok"] is False
+        text = md.read_text(encoding="utf-8")
+        assert "| `mcp_calls_threshold` | `FAIL` |" in text
