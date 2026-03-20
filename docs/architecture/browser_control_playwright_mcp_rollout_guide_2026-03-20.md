@@ -45,6 +45,16 @@ For CI gate (strict mode), use:
 6. Validate `health`:
    - no `no_active_runtime_target` issue
 
+Optional full smoke runner (preflight + probe + run + inspect/sync/health):
+
+```bash
+./env/bin/python scripts/browser_control_mcp_smoke.py \
+  --config-file data/config.json \
+  --goal "Abra https://example.com e valide o título da página." \
+  --intent-class automacao_ui \
+  --require-ready
+```
+
 ## Fallback and Rollback
 - Immediate fallback (same deploy):
   - Keep `runtime_backend=playwright`
