@@ -624,15 +624,19 @@ class BrowserControlCapability(CapabilityBase):
         tab_id: Optional[str],
         debug_port: Optional[int],
         cdp_target_id: Optional[str],
+        runtime_backend: str,
         intent_class: str,
         reused: bool,
         policy_decision: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        target_id = cdp_target_id or ""
         return {
             "browser_instance_id": browser_instance_id or "",
             "tab_id": tab_id or "",
             "debug_port": debug_port,
-            "cdp_target_id": cdp_target_id or "",
+            "runtime_backend": str(runtime_backend or "cdp"),
+            "runtime_target_id": target_id,
+            "cdp_target_id": target_id,
             "intent_class": intent_class,
             "reused_instance": bool(reused),
             "policy_decision": policy_decision or {},
@@ -1154,6 +1158,7 @@ class BrowserControlCapability(CapabilityBase):
             tab_id=tab_id,
             debug_port=getattr(self._runtime, "remote_debugging_port", None) if self._runtime else None,
             cdp_target_id=self._current_target_id(),
+            runtime_backend=self._resolve_runtime_backend(),
             intent_class=intent_class,
             reused=reused_instance,
             policy_decision=policy_decision,
@@ -1261,7 +1266,9 @@ class BrowserControlCapability(CapabilityBase):
             final_tab_id = await self._sync_registry_tab()
             if final_tab_id:
                 exec_ctx["tab_id"] = final_tab_id
-            exec_ctx["cdp_target_id"] = self._current_target_id()
+            runtime_target_id = self._current_target_id()
+            exec_ctx["runtime_target_id"] = runtime_target_id
+            exec_ctx["cdp_target_id"] = runtime_target_id
             last_vision = self._get_last_vision_observation()
             if last_vision:
                 exec_ctx["last_vision_observation"] = last_vision
@@ -1378,6 +1385,7 @@ class BrowserControlCapability(CapabilityBase):
             tab_id=tab_id,
             debug_port=getattr(self._runtime, "remote_debugging_port", None) if self._runtime else None,
             cdp_target_id=self._current_target_id(),
+            runtime_backend=self._resolve_runtime_backend(),
             intent_class=intent_class,
             reused=True,
             policy_decision=step_policy_decision,
@@ -1442,7 +1450,9 @@ class BrowserControlCapability(CapabilityBase):
             final_tab_id = await self._sync_registry_tab()
             if final_tab_id:
                 exec_ctx["tab_id"] = final_tab_id
-            exec_ctx["cdp_target_id"] = self._current_target_id()
+            runtime_target_id = self._current_target_id()
+            exec_ctx["runtime_target_id"] = runtime_target_id
+            exec_ctx["cdp_target_id"] = runtime_target_id
             last_vision = self._get_last_vision_observation()
             if last_vision:
                 exec_ctx["last_vision_observation"] = last_vision
@@ -1655,6 +1665,8 @@ class BrowserControlCapability(CapabilityBase):
             "browser_instance_id": instance_id,
             "tab_id": tab_id,
             "debug_port": getattr(self._runtime, "remote_debugging_port", None) if self._runtime else None,
+            "runtime_backend": self._resolve_runtime_backend(),
+            "runtime_target_id": self._current_target_id(),
             "cdp_target_id": self._current_target_id(),
             "registry_snapshot": self._build_registry_snapshot(ctx),
             "last_vision_observation": last_vision if last_vision else {},
@@ -1706,7 +1718,9 @@ class BrowserControlCapability(CapabilityBase):
             current_exec = {}
         if not str(current_exec.get("browser_instance_id", "")).strip():
             issues.append("no_active_browser_instance_bound")
-        if not str(sync_result.get("cdp_target_id", "")).strip():
+        runtime_target = str(sync_result.get("runtime_target_id", "") or sync_result.get("cdp_target_id", "")).strip()
+        if not runtime_target:
+            issues.append("no_active_runtime_target")
             issues.append("no_active_cdp_target")
         if run_gc and not bool(gc_result.get("ok", False)):
             issues.append("gc_execution_failed")
