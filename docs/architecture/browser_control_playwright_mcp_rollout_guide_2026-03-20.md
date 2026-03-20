@@ -21,16 +21,23 @@ Notes:
 
 ## Smoke Flow
 1. Start service with the config above.
-2. Trigger a simple browser action (`browser.control.run` with a basic navigation goal).
-3. Validate `inspect` output:
+2. Run preflight before first traffic:
+
+```bash
+./env/bin/python scripts/browser_control_mcp_preflight.py --config-file data/config.json check-config
+```
+
+If the output has `browser_control.ready=false`, fix config before continuing.
+3. Trigger a simple browser action (`browser.control.run` with a basic navigation goal).
+4. Validate `inspect` output:
    - `current_execution.runtime_backend=playwright`
    - `current_execution.runtime_connection.transport_mode_configured=mcp`
    - `current_execution.runtime_connection.transport_mode_effective=mcp` (or `local` if fallback happened)
-4. Validate `sync_registry` output:
+5. Validate `sync_registry` output:
    - `runtime_backend=playwright`
    - `runtime_target_id` present
    - `mcp_calls_total > 0` after a few actions
-5. Validate `health`:
+6. Validate `health`:
    - no `no_active_runtime_target` issue
 
 ## Fallback and Rollback
