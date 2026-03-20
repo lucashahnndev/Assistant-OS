@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from playwright.async_api import async_playwright
 
+from .playwright_mcp_adapter import PlaywrightMCPAdapter
 from .schemas import ToonResponse
 
 logger = logging.getLogger("aosd.capabilities.browser_control.runtime_playwright")
@@ -83,6 +84,7 @@ class BrowserRuntimePlaywright:
             "channel": "",
         }
         self._transport_mode_effective = "local"
+        self._mcp_adapter: Optional[PlaywrightMCPAdapter] = None
 
     def _resolve_transport_mode(self) -> str:
         mode = str(self.playwright_transport_mode or "local").strip().lower()
@@ -93,13 +95,18 @@ class BrowserRuntimePlaywright:
     async def launch(self) -> None:
         configured_mode = self._resolve_transport_mode()
         if configured_mode == "mcp":
+            if self.playwright_mcp_endpoint:
+                self._mcp_adapter = PlaywrightMCPAdapter(self.playwright_mcp_endpoint)
+                self._transport_mode_effective = "mcp"
+                logger.info("Playwright runtime using MCP transport endpoint: %s", self.playwright_mcp_endpoint)
+                return
             if not self.playwright_mcp_fallback_to_local:
                 raise RuntimeError(
                     "Playwright MCP mode selected but MCP transport adapter is not enabled yet. "
                     "Set playwright_mcp_fallback_to_local=true or use playwright_transport_mode=local."
                 )
             logger.warning(
-                "Playwright MCP transport requested but adapter is not enabled yet; falling back to local transport."
+                "Playwright MCP transport requested but endpoint is missing; falling back to local transport."
             )
             self._transport_mode_effective = "local"
         else:
@@ -132,6 +139,7 @@ class BrowserRuntimePlaywright:
             logger.warning("Playwright launch goto failed (%s): %s", self.launch_url, e)
 
     async def close(self) -> None:
+        self._mcp_adapter = None
         try:
             if self._context:
                 await self._context.close()
@@ -187,6 +195,9 @@ class BrowserRuntimePlaywright:
         }
 
     async def _wait_for_load(self) -> None:
+        if self._transport_mode_effective == "mcp":
+            await asyncio.sleep(0.1)
+            return
         if not self._page:
             return
         try:
@@ -195,11 +206,17 @@ class BrowserRuntimePlaywright:
             pass
 
     async def _get_current_url(self) -> str:
+        if self._transport_mode_effective == "mcp":
+            info = await self.get_page_info()
+            return str(info.get("url", "") or "")
         if not self._page:
             return ""
         return str(self._page.url or "")
 
     async def _get_current_title(self) -> str:
+        if self._transport_mode_effective == "mcp":
+            info = await self.get_page_info()
+            return str(info.get("title", "") or "")
         if not self._page:
             return ""
         try:
@@ -208,6 +225,10 @@ class BrowserRuntimePlaywright:
             return ""
 
     async def get_page_info(self) -> Dict[str, Any]:
+        if self._transport_mode_effective == "mcp":
+            if self._mcp_adapter is None:
+                return {"url": "", "title": "", "viewport": {"w": 0, "h": 0}}
+            return await self._mcp_adapter.get_page_info()
         if not self._page:
             return {"url": "", "title": "", "viewport": {"w": 0, "h": 0}}
         try:
@@ -237,6 +258,18 @@ class BrowserRuntimePlaywright:
             }
 
     async def _call_cdp(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if self._transport_mode_effective == "mcp":
+            if str(method or "") != "Runtime.evaluate":
+                raise RuntimeError(f"Unsupported CDP compatibility method over MCP transport: {method}")
+            if self._mcp_adapter is None:
+                raise RuntimeError("MCP adapter is not initialized")
+            expression = str((params or {}).get("expression") or "")
+            out = await self._mcp_adapter._call_tool_preferred(
+                ["browser_evaluate", "browser_run_code"],
+                {"function": f"() => ({expression})", "code": f"async (page) => page.evaluate({json.dumps(expression)})"},
+            )
+            payload = PlaywrightMCPAdapter._coerce_result_payload(out)
+            return {"result": {"value": payload.get("value", payload)}}
         if not self._page:
             raise RuntimeError("Playwright page is not available")
         if str(method or "") != "Runtime.evaluate":
@@ -261,14 +294,25 @@ class BrowserRuntimePlaywright:
         }
 
     async def attach_to_target(self, target_id: str) -> bool:
+        if self._transport_mode_effective == "mcp":
+            # MCP transport does not expose page-target pinning in this adapter.
+            return bool(target_id)
         return bool(target_id and target_id == self.target_id and self._page is not None)
 
     async def attach_to_any_page(self, preferred_targets: Optional[List[str]] = None) -> str:
+        if self._transport_mode_effective == "mcp":
+            _ = preferred_targets
+            return str(self.target_id or "mcp_target")
         if self._page is None:
             return ""
         return str(self.target_id or "")
 
     async def open_new_tab(self, launch_url: str) -> str:
+        if self._transport_mode_effective == "mcp":
+            if self._mcp_adapter is not None:
+                await self._mcp_adapter.navigate(str(launch_url or "about:blank"))
+            self.target_id = str(self.target_id or "mcp_target")
+            return self.target_id
         if not self._context:
             return ""
         self._page = await self._context.new_page()
@@ -280,6 +324,15 @@ class BrowserRuntimePlaywright:
         return self.target_id
 
     async def get_page_signature(self) -> Dict[str, Any]:
+        if self._transport_mode_effective == "mcp":
+            info = await self.get_page_info()
+            return {
+                "url": str(info.get("url", "") or ""),
+                "title": str(info.get("title", "") or ""),
+                "readyState": "unknown",
+                "domCount": 0,
+                "bodyTextLen": 0,
+            }
         if not self._page:
             return {}
         try:
@@ -296,6 +349,10 @@ class BrowserRuntimePlaywright:
             return {}
 
     async def get_skeletal_dom(self) -> Dict[str, Any]:
+        if self._transport_mode_effective == "mcp":
+            if self._mcp_adapter is None:
+                return {"nodes": [], "markers": [], "focus": {}, "total_count": 0, "viewport_count": 0}
+            return await self._mcp_adapter.get_skeletal_dom()
         if not self._page:
             return {"nodes": [], "markers": [], "focus": {}, "total_count": 0, "viewport_count": 0}
 
@@ -346,6 +403,11 @@ class BrowserRuntimePlaywright:
         return payload if isinstance(payload, dict) else {"nodes": [], "markers": [], "focus": {}, "total_count": 0, "viewport_count": 0}
 
     async def capture_screenshot_to_file(self, image_format: str = "png", quality: int = 80) -> str:
+        if self._transport_mode_effective == "mcp":
+            _ = quality
+            if self._mcp_adapter is None:
+                return ""
+            return await self._mcp_adapter.capture_screenshot_to_file(image_format=image_format)
         if not self._page:
             return ""
         fmt = str(image_format or "png").lower()
@@ -361,11 +423,29 @@ class BrowserRuntimePlaywright:
         return path
 
     async def capture_screenshot_bytes(self) -> bytes:
+        if self._transport_mode_effective == "mcp":
+            if self._mcp_adapter is None:
+                return b""
+            return await self._mcp_adapter.capture_screenshot_bytes()
         if not self._page:
             return b""
         return await self._page.screenshot(type="jpeg", quality=70, full_page=False)
 
     async def navigate(self, url: str) -> ToonResponse:
+        if self._transport_mode_effective == "mcp":
+            if self._mcp_adapter is None:
+                return self._error_response("navigate", f"No MCP adapter for navigate to {url}")
+            t0 = time.time()
+            target = str(url or "").strip() or "about:blank"
+            await self._mcp_adapter.navigate(target)
+            info = await self.get_page_info()
+            self.target_id = str(self.target_id or "mcp_target")
+            return self._success_response(
+                action="navigate",
+                elapsed=time.time() - t0,
+                message=f"Navigated to {target}",
+                result_data={"url": str(info.get("url", target) or target), "kind": "navigate_action_receipt_v1"},
+            )
         if not self._page:
             return self._error_response("navigate", f"No page for navigate to {url}")
         t0 = time.time()
@@ -379,6 +459,16 @@ class BrowserRuntimePlaywright:
         )
 
     async def click(self, x: Optional[float] = None, y: Optional[float] = None, selector: str = "") -> ToonResponse:
+        if self._transport_mode_effective == "mcp":
+            if self._mcp_adapter is None:
+                return self._error_response("click", "No MCP adapter for click")
+            t0 = time.time()
+            await self._mcp_adapter.click(x=x, y=y, selector=selector)
+            return self._success_response(
+                action="click",
+                elapsed=time.time() - t0,
+                result_data={"kind": "click_action_receipt_v1", "delivered": True, "hit_after": {}},
+            )
         if not self._page:
             return self._error_response("click", "No page for click")
         t0 = time.time()
@@ -430,6 +520,20 @@ class BrowserRuntimePlaywright:
         focus_before_type: bool = True,
         clear_existing: bool = True,
     ) -> ToonResponse:
+        if self._transport_mode_effective == "mcp":
+            if self._mcp_adapter is None:
+                return self._error_response("type", "No MCP adapter for type_text")
+            t0 = time.time()
+            await self._mcp_adapter.type_text(text=text, selector=selector, press_enter=press_enter)
+            return self._success_response(
+                action="type",
+                elapsed=time.time() - t0,
+                result_data={
+                    "kind": "type_action_receipt_v1",
+                    "text_len": len(str(text or "")),
+                    "enter_dispatched": bool(press_enter),
+                },
+            )
         if not self._page:
             return self._error_response("type", "No page for type_text")
         t0 = time.time()
@@ -470,6 +574,12 @@ class BrowserRuntimePlaywright:
         )
 
     async def press_key(self, key: str, modifiers: Optional[List[str]] = None) -> Dict[str, Any]:
+        if self._transport_mode_effective == "mcp":
+            if self._mcp_adapter is None:
+                return {"accepted": False, "reason": "no_mcp_adapter"}
+            await self._mcp_adapter.press_key(str(key or "Enter"), modifiers=modifiers)
+            mods = [str(m).strip() for m in (modifiers or []) if str(m).strip()]
+            return {"accepted": True, "key": str(key or "Enter"), "modifiers": mods, "ts": datetime.utcnow().isoformat()}
         if not self._page:
             return {"accepted": False, "reason": "no_page"}
         mods = [str(m).strip() for m in (modifiers or []) if str(m).strip()]
@@ -478,6 +588,13 @@ class BrowserRuntimePlaywright:
         return {"accepted": True, "key": str(key or "Enter"), "modifiers": mods, "ts": datetime.utcnow().isoformat()}
 
     async def scroll_page(self, pixels: int) -> Dict[str, Any]:
+        if self._transport_mode_effective == "mcp":
+            if self._mcp_adapter is None:
+                return {"delivered": False, "delta_y": 0}
+            out = await self._mcp_adapter.scroll_page(int(pixels or 0))
+            payload = PlaywrightMCPAdapter._coerce_result_payload(out)
+            delta = int(payload.get("delta_y", int(pixels or 0)) or int(pixels or 0))
+            return {"kind": "scroll_action_receipt_v1", "delivered": True, "delta_y": delta}
         if not self._page:
             return {"delivered": False, "delta_y": 0}
         delta = int(pixels or 0)
@@ -485,6 +602,10 @@ class BrowserRuntimePlaywright:
         return {"kind": "scroll_action_receipt_v1", "delivered": True, "delta_y": delta}
 
     async def blur_active_editable(self) -> bool:
+        if self._transport_mode_effective == "mcp":
+            if self._mcp_adapter is None:
+                return False
+            return await self._mcp_adapter.blur_active_editable()
         if not self._page:
             return False
         try:
