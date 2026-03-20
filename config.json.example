@@ -60,6 +60,10 @@
                 "default_profile_id": "sandbox-default",
                 "profile_by_tenant": {},
                 "allow_effect_actions": []
+            },
+            "policy_simulation": {
+                "enabled": true,
+                "max_replay_events": 500
             }
         }
     },

@@ -51,6 +51,7 @@ from services.agent_runtime_v2 import (
     ExecutionContextEnvelope,
     GlobalScheduler,
     PolicyLayer,
+    PolicySimulationMode,
     RuntimeCostBudget,
     RuntimeRateLimiter,
     RiskModel,
@@ -153,6 +154,7 @@ class AgentOrchestrator:
         self._observation_metrics_cache: Dict[str, deque] = {}
         self._task_func_registry: Dict[str, Callable] = {}
         self._runtime_v2_policy_layer = PolicyLayer()
+        self._runtime_v2_policy_simulation = PolicySimulationMode(self._runtime_v2_policy_layer)
         self._runtime_v2_risk_model = RiskModel()
         self._runtime_v2_tenant_governance = TenantGovernance()
         self._runtime_v2_rate_limiter = RuntimeRateLimiter()
@@ -1771,6 +1773,43 @@ class AgentOrchestrator:
             "tenant_governance": governance,
             "policy_decision": policy_decision.to_dict(),
             "scheduler": {"selected": queue_profile},
+        }
+
+    def _simulate_runtime_v2_policy(
+        self,
+        *,
+        mode: str,
+        envelope_payload: Dict[str, Any],
+        action_params: Optional[Dict[str, Any]] = None,
+        policy_current: Optional[Dict[str, Any]] = None,
+        policy_candidate: Optional[Dict[str, Any]] = None,
+        historical_events: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        simulation_mode = str(mode or "single_policy_eval").strip().lower()
+        if simulation_mode == "single_policy_eval":
+            return self._runtime_v2_policy_simulation.single_policy_eval(
+                envelope_payload=envelope_payload,
+                action_params=action_params or {},
+                policy_cfg=policy_current or {},
+            )
+        if simulation_mode == "diff_eval":
+            return self._runtime_v2_policy_simulation.diff_eval(
+                envelope_payload=envelope_payload,
+                action_params=action_params or {},
+                policy_current=policy_current or {},
+                policy_candidate=policy_candidate or {},
+            )
+        if simulation_mode == "historical_replay_eval":
+            return self._runtime_v2_policy_simulation.historical_replay_eval(
+                events=historical_events or [],
+                policy_current=policy_current or {},
+                policy_candidate=policy_candidate or {},
+            )
+        return {
+            "mode": simulation_mode,
+            "status": "error",
+            "error_code": "UNKNOWN_POLICY_SIMULATION_MODE",
+            "error_details": f"Unsupported simulation mode: {simulation_mode}",
         }
 
     def _apply_runtime_v2_operational_gate(
