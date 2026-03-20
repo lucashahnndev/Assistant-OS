@@ -55,6 +55,11 @@ def test_policy_layer_security_and_business_baseline_allow():
 def test_orchestrator_runtime_v2_governance_evaluation_returns_policy_and_tenant():
     orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
     orchestrator.capability_registry = None
+    orchestrator.config_manager = type(
+        "_Cfg",
+        (),
+        {"get": staticmethod(lambda key, default=None: {} if key == "runtime" else default)},
+    )()
     orchestrator._runtime_v2_policy_layer = PolicyLayer()
     orchestrator._runtime_v2_risk_model = RiskModel()
     orchestrator._runtime_v2_tenant_governance = TenantGovernance()

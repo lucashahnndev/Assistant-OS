@@ -1685,6 +1685,15 @@ class AgentOrchestrator:
             action_metadata=metadata,
             context=action_data,
         )
+        runtime_cfg = self.config_manager.get("runtime", {})
+        if not isinstance(runtime_cfg, dict):
+            runtime_cfg = {}
+        v2_cfg = runtime_cfg.get("agent_runtime_v2", {})
+        if not isinstance(v2_cfg, dict):
+            v2_cfg = {}
+        policy_cfg = v2_cfg.get("policy", {})
+        if not isinstance(policy_cfg, dict):
+            policy_cfg = {}
         governance = self._runtime_v2_tenant_governance.evaluate(
             TenantGovernanceContext(
                 tenant_id=envelope.tenant_id,
@@ -1692,11 +1701,50 @@ class AgentOrchestrator:
                 qos_class=envelope.qos_class,
             )
         )
-        policy_decision = self._runtime_v2_policy_layer.evaluate(envelope, action_params=action_data)
+        policy_decision = self._runtime_v2_policy_layer.evaluate(
+            envelope,
+            action_params=action_data,
+            policy_cfg=policy_cfg,
+        )
         return {
             "tenant_governance": governance,
             "policy_decision": policy_decision.to_dict(),
         }
+
+    @staticmethod
+    def _apply_runtime_v2_policy_gate(exec_context: Dict[str, Any], action_id: str) -> Optional[Dict[str, Any]]:
+        governance = exec_context.get("runtime_v2_governance") if isinstance(exec_context, dict) else {}
+        governance = governance if isinstance(governance, dict) else {}
+        policy_decision = governance.get("policy_decision") if isinstance(governance.get("policy_decision"), dict) else {}
+        decision = str(policy_decision.get("decision", "allow") or "allow").strip().lower()
+        mode = str(policy_decision.get("policy_mode", "log_only") or "log_only").strip().lower()
+        if mode != "enforce":
+            constraints = policy_decision.get("constraints")
+            if isinstance(constraints, dict) and constraints:
+                exec_context["runtime_v2_constraints"] = dict(constraints)
+            return None
+
+        if decision == "deny":
+            return {
+                "ok": False,
+                "status": "error",
+                "error_code": "POLICY_DENIED",
+                "error_details": f"Action '{action_id}' denied by runtime policy.",
+                "policy_decision_envelope": policy_decision,
+            }
+        if decision == "require_approval":
+            return {
+                "ok": False,
+                "status": "error",
+                "error_code": "POLICY_APPROVAL_REQUIRED",
+                "error_details": f"Action '{action_id}' requires approval by runtime policy.",
+                "policy_decision_envelope": policy_decision,
+            }
+        if decision == "allow_with_constraints":
+            constraints = policy_decision.get("constraints")
+            if isinstance(constraints, dict):
+                exec_context["runtime_v2_constraints"] = dict(constraints)
+        return None
 
     @staticmethod
     def _build_runtime_v2_receipt(
@@ -1709,6 +1757,7 @@ class AgentOrchestrator:
         governance = exec_context.get("runtime_v2_governance") if isinstance(exec_context, dict) else {}
         governance = governance if isinstance(governance, dict) else {}
         policy_decision = governance.get("policy_decision") if isinstance(governance.get("policy_decision"), dict) else {}
+        explanation = policy_decision.get("explanation") if isinstance(policy_decision.get("explanation"), dict) else {}
         return {
             "receipt_version": "2.0",
             "engine": "agent_runtime_v2",
@@ -1717,6 +1766,9 @@ class AgentOrchestrator:
             "risk_level": str(envelope.get("risk_level", "low") or "low"),
             "policy_version": str(envelope.get("policy_version", "policy_v1") or "policy_v1"),
             "policy_decision": str(policy_decision.get("decision", "allow") or "allow"),
+            "policy_mode": str(policy_decision.get("policy_mode", "log_only") or "log_only"),
+            "decision_explanation_id": str(explanation.get("explanation_id", "") or ""),
+            "decision_reason": str(explanation.get("reason", "") or ""),
             "latency_ms": int(latency_ms),
         }
 
@@ -3213,20 +3265,38 @@ class AgentOrchestrator:
                     
                     start_ts = time.time()
                     try:
+                        policy_block = self._apply_runtime_v2_policy_gate(exec_context, plan.action_id)
+                        if policy_block is not None:
+                            result = policy_block
                         if context:
-                            allowed, reason = self.access_controller.pre_dispatch_gate(
-                                context,
-                                plan.action_id,
-                                plan.args,
-                                self.capability_registry,
-                                self.config_manager
-                            )
-                            if not allowed:
-                                result = f"NEGADO: {reason}"
+                            if policy_block is None:
+                                allowed, reason = self.access_controller.pre_dispatch_gate(
+                                    context,
+                                    plan.action_id,
+                                    plan.args,
+                                    self.capability_registry,
+                                    self.config_manager
+                                )
                             else:
-                                result = self.capability_registry.dispatch(plan.action_id, plan.args, exec_context)
+                                allowed, reason = True, ""
+                            if not allowed:
+                                result = {
+                                    "ok": False,
+                                    "status": "error",
+                                    "error_code": "ACCESS_PRE_DISPATCH_DENIED",
+                                    "error_details": str(reason),
+                                    "policy_decision_envelope": (
+                                        (exec_context.get("runtime_v2_governance") or {}).get("policy_decision")
+                                        if isinstance(exec_context.get("runtime_v2_governance"), dict)
+                                        else None
+                                    ),
+                                }
+                            else:
+                                if policy_block is None:
+                                    result = self.capability_registry.dispatch(plan.action_id, plan.args, exec_context)
                         else:
-                            result = self.capability_registry.dispatch(plan.action_id, plan.args, exec_context)
+                            if policy_block is None:
+                                result = self.capability_registry.dispatch(plan.action_id, plan.args, exec_context)
                         
                         latency_ms = int((time.time() - start_ts) * 1000)
                         logger.info(
