@@ -83,6 +83,27 @@
       "type": "boolean",
       "default": false
     },
+    "playwright_mcp_autostart_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "playwright_mcp_server_command": {
+      "type": "string",
+      "default": ""
+    },
+    "playwright_mcp_startup_timeout_s": {
+      "type": "number",
+      "default": 20,
+      "minimum": 3
+    },
+    "playwright_mcp_autorestart": {
+      "type": "boolean",
+      "default": true
+    },
+    "playwright_mcp_autostart_require_healthy": {
+      "type": "boolean",
+      "default": true
+    },
     "max_new_tabs_per_session": {
       "type": "integer",
       "default": 3,

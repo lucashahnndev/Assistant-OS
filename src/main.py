@@ -19,6 +19,7 @@ import json
 import datetime
 from typing import Dict, Any, List, Tuple, Optional
 from utils.logging_config import setup_logging, get_logger
+from services.mcp_runtime_service import MCPRuntimeServiceManager
 
 # Setup Logging
 setup_logging()
@@ -67,6 +68,12 @@ class Kernel:
         from config.manager import ConfigManager
         self.config_manager = ConfigManager()
         self.base_data_dir = self.config_manager.base_data_dir
+        self.logs_dir = os.path.join(self.base_data_dir, 'logs')
+        os.makedirs(self.logs_dir, exist_ok=True)
+        self.mcp_runtime_service = MCPRuntimeServiceManager(logs_dir=self.logs_dir)
+        self.mcp_runtime_service.configure_from_browser_cfg(
+            self.config_manager.get_capability_config("browser_control")
+        )
 
         from capabilities.browser_control.session_registry import BrowserSessionRegistry
         self.browser_session_registry = BrowserSessionRegistry(base_data_dir=self.base_data_dir)
@@ -95,9 +102,6 @@ class Kernel:
         self.principal_context = None # To be set by drivers/commands
         
         # 4. Storage paths used during runtime
-        self.logs_dir = os.path.join(self.base_data_dir, 'logs')
-        os.makedirs(self.logs_dir, exist_ok=True)
-        
         from core.access_controller import IdentityService
         self.identity_service = IdentityService(self.base_data_dir)
         
@@ -800,6 +804,16 @@ class Kernel:
         if hasattr(self, 'scheduler'):
             self.scheduler.start()
 
+        mcp_boot = self.mcp_runtime_service.start()
+        if not bool(mcp_boot.get("ok", False)):
+            logger.error("Failed to start Playwright MCP service: %s", mcp_boot)
+            if self.mcp_runtime_service.is_required():
+                self.running = False
+                remove_pid_file()
+                raise RuntimeError(f"Playwright MCP service startup failed: {mcp_boot.get('reason')}")
+        else:
+            logger.info("Playwright MCP service status: %s", mcp_boot)
+
         for driver in self.drivers:
             try:
                 logger.debug(f"Starting driver {driver}")
@@ -822,6 +836,12 @@ class Kernel:
                     notify_after = int(self.config_manager.get("approval_notifications", {}).get("idle_notify_after_sec", 120))
                     if idle_seconds is None or idle_seconds >= notify_after:
                         self._maybe_send_approval_digest(owner_session_id)
+                mcp_health = self.mcp_runtime_service.ensure_running()
+                if not bool(mcp_health.get("ok", False)):
+                    logger.error("Playwright MCP service unhealthy: %s", mcp_health)
+                    if self.mcp_runtime_service.is_required():
+                        logger.error("Playwright MCP service is required. Stopping kernel.")
+                        self.stop()
                 threading.Event().wait(10.0)
         except KeyboardInterrupt:
             self.stop()
@@ -830,6 +850,10 @@ class Kernel:
         self.running = False
         if hasattr(self, 'scheduler'):
             self.scheduler.stop()
+        try:
+            self.mcp_runtime_service.stop()
+        except Exception as e:
+            logger.warning(f"Failed stopping Playwright MCP service: {e}")
         logger.info("Kernel Stopping...")
         for driver in self.drivers:
             driver.stop()
