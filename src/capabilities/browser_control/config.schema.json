@@ -51,6 +51,10 @@
       "type": "boolean",
       "default": true
     },
+    "require_delegated_executor_for_browser_launch": {
+      "type": "boolean",
+      "default": true
+    },
     "runtime_backend": {
       "type": "string",
       "default": "playwright",

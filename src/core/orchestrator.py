@@ -1695,6 +1695,31 @@ class AgentOrchestrator:
         if not delegation_id:
             delegation_id = str(getattr(context, "delegation_id", "") or "").strip() if context else ""
         if not delegation_id:
+            action_id = str(getattr(plan, "action_id", "") or "").strip().lower() if plan else ""
+            if action_id == "browser.control.run":
+                plan_metadata = plan.metadata if (plan and isinstance(plan.metadata, dict)) else {}
+                parent_agent_id = str(plan_metadata.get("agent_id", "main_orchestrator") or "main_orchestrator").strip()
+                child_agent_id = "browser_subagent_executor"
+                goal = ""
+                if isinstance(getattr(plan, "args", None), dict):
+                    goal = str(
+                        plan.args.get("goal")
+                        or plan.args.get("instruction")
+                        or plan.args.get("query")
+                        or ""
+                    ).strip()
+                session_part = str(getattr(context, "session_id", "") or "session") if context else "session"
+                delegation_id = f"auto_browser_{session_part}"
+                return DelegationContract(
+                    delegation_id=delegation_id,
+                    parent_agent_id=parent_agent_id,
+                    child_agent_id=child_agent_id,
+                    delegated_goal=goal,
+                    allowed_scopes=["browser_control"],
+                    inherited_budget={"max_actions_per_goal": 120, "max_mcp_calls_per_step": 15},
+                    success_criteria=["goal_completed_or_explicit_failure"],
+                    cancellation_criteria=["session_cancelled", "work_cancelled"],
+                )
             return None
 
         return DelegationContract(

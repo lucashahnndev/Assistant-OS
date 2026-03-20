@@ -23,6 +23,9 @@ class BrowserControlCapability(CapabilityBase):
         self._visual_cursor_enabled = self._cfg_bool("visual_cursor_enabled", True)
         self._tab_user_lock_enabled = self._cfg_bool("tab_user_lock_enabled", True)
         self._tab_control_bar_enabled = self._cfg_bool("tab_control_bar_enabled", True)
+        self._require_delegated_executor_for_browser_launch = self._cfg_bool(
+            "require_delegated_executor_for_browser_launch", True
+        )
         self._runtime_backend = self._cfg_str("runtime_backend", "playwright").lower()
         self._playwright_transport_mode = self._cfg_str("playwright_transport_mode", "local").lower()
         self._playwright_mcp_endpoint = self._cfg_str("playwright_mcp_endpoint", "")
@@ -530,34 +533,31 @@ class BrowserControlCapability(CapabilityBase):
         self._owner_session_id = owner_session_id
         self._runtime_intent_class = intent_class
         decision_data: Dict[str, Any] = {**decision.as_dict(), "launch_url": launch_url, "current_url": current_url}
-        if decision.route == "new_tab" and self._runtime and hasattr(self._runtime, "open_new_tab"):
-            current_count = self._get_new_tab_open_count(owner_session_id)
-            max_tabs = int(max(0, self._max_new_tabs_per_session))
-            if max_tabs > 0 and current_count >= max_tabs:
-                decision_data["new_tab_opened"] = False
-                decision_data["new_tab_blocked"] = "max_new_tabs_per_session_exceeded"
-                decision_data["new_tab_opened_count"] = current_count
-                decision_data["max_new_tabs_per_session"] = max_tabs
-                decision_data["route"] = "reuse_tab"
-                decision_data["reason"] = "new_tab_budget_exceeded"
-                if hasattr(self._runtime, "navigate"):
-                    try:
-                        await self._runtime.navigate(launch_url)
-                        decision_data["fallback_navigation"] = "reuse_tab_navigate"
-                    except Exception as e:
-                        decision_data["fallback_navigation_error"] = str(e)
-                return decision_data
-            try:
-                new_target = await self._runtime.open_new_tab(launch_url)
-                decision_data["new_tab_opened"] = bool(new_target)
-                if new_target:
-                    self._tab_id = None
-                    decision_data["new_tab_target_id"] = str(new_target)
-                    decision_data["new_tab_opened_count"] = self._increment_new_tab_open_count(owner_session_id)
-            except Exception as e:
-                decision_data["new_tab_opened"] = False
-                decision_data["new_tab_error"] = str(e)
+        if decision.route == "new_tab":
+            # Side-effects (open tab/window) are deferred to the browser subagent action loop.
+            # Session policy should only decide routing metadata, not execute browser mutations.
+            decision_data["requested_route"] = "new_tab"
+            decision_data["route"] = "reuse_tab"
+            decision_data["reason"] = "new_tab_deferred_to_subagent"
+            decision_data["new_tab_deferred_to_subagent"] = True
         return decision_data
+
+    @staticmethod
+    def _delegation_child_id(context: Dict[str, Any]) -> str:
+        envelope = context.get("execution_context_envelope") if isinstance(context, dict) else None
+        envelope = envelope if isinstance(envelope, dict) else {}
+        delegation = envelope.get("delegation") if isinstance(envelope.get("delegation"), dict) else {}
+        return str(delegation.get("child_agent_id") or "").strip().lower()
+
+    def _is_browser_launch_authorized(self, context: Dict[str, Any]) -> bool:
+        if not self._require_delegated_executor_for_browser_launch:
+            return True
+        envelope = context.get("execution_context_envelope") if isinstance(context, dict) else None
+        if not isinstance(envelope, dict):
+            # Keep direct/local invocations usable (tests/tools). Orchestrator path always has envelope.
+            return True
+        child_id = self._delegation_child_id(context)
+        return bool(child_id.startswith("browser_subagent"))
 
     def _run_sync(self, coro):
         """Helper to run a coroutine from a synchronous context, 
@@ -1159,6 +1159,14 @@ class BrowserControlCapability(CapabilityBase):
     ) -> Dict[str, Any]:
         logger.info(f"Capability executing run_goal with intent: '{goal}'")
         ctx = context or {}
+        if not self._is_browser_launch_authorized(ctx):
+            return {
+                "ok": False,
+                "error": (
+                    "Browser launch denied: only delegated browser subagent executor can initialize browser runtime."
+                ),
+                "error_code": "BROWSER_LAUNCH_NOT_DELEGATED",
+            }
         try:
             intent_class = self._resolve_intent_class(intent_class)
         except ValueError as exc:

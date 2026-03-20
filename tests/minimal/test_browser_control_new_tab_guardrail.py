@@ -25,7 +25,7 @@ class _RuntimeStub:
         return {"ok": True}
 
 
-def test_apply_session_policy_blocks_new_tab_after_session_budget():
+def test_apply_session_policy_defers_new_tab_side_effect_to_subagent():
     with tempfile.TemporaryDirectory() as _tmp:
         capability = BrowserControlCapability(_KernelStub(), {"max_new_tabs_per_session": 1})
         runtime = _RuntimeStub()
@@ -49,10 +49,10 @@ def test_apply_session_policy_blocks_new_tab_after_session_budget():
                 muted=True,
             )
         )
-        assert first.get("route") == "new_tab"
-        assert first.get("new_tab_opened") is True
-        assert first.get("new_tab_opened_count") == 1
-        assert runtime.new_tab_calls == 1
+        assert first.get("requested_route") == "new_tab"
+        assert first.get("route") == "reuse_tab"
+        assert first.get("new_tab_deferred_to_subagent") is True
+        assert runtime.new_tab_calls == 0
 
         second = asyncio.run(
             capability._apply_session_policy(
@@ -64,8 +64,8 @@ def test_apply_session_policy_blocks_new_tab_after_session_budget():
                 muted=True,
             )
         )
+        assert second.get("requested_route") == "new_tab"
         assert second.get("route") == "reuse_tab"
-        assert second.get("new_tab_blocked") == "max_new_tabs_per_session_exceeded"
-        assert second.get("fallback_navigation") == "reuse_tab_navigate"
-        assert runtime.new_tab_calls == 1
-        assert runtime.navigate_calls == 1
+        assert second.get("new_tab_deferred_to_subagent") is True
+        assert runtime.new_tab_calls == 0
+        assert runtime.navigate_calls == 0

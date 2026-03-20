@@ -83,6 +83,25 @@ def test_execution_context_envelope_includes_delegation_contract_and_qos():
     assert envelope["delegation"]["delegation_id"] == "deleg-123"
 
 
+def test_execution_context_envelope_auto_delegates_browser_run_when_missing_contract():
+    orchestrator = _make_orchestrator()
+    plan = ActionPlan(
+        action_id="browser.control.run",
+        args={"goal": "abrir https://example.com"},
+        metadata={"tenant_id": "tenant-p1"},
+    )
+    envelope = orchestrator._build_execution_context_envelope(
+        plan=plan,
+        context=None,
+        session_id="sess-2",
+        work_id="work-2",
+    )
+    delegation = envelope.get("delegation") or {}
+    assert str(delegation.get("delegation_id") or "").startswith("auto_browser_")
+    assert delegation.get("child_agent_id") == "browser_subagent_executor"
+    assert delegation.get("delegated_goal") == "abrir https://example.com"
+
+
 def test_attach_runtime_v2_receipt_enriches_result_and_work_context():
     orchestrator = _make_orchestrator()
     exec_context = {

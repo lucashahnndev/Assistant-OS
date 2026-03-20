@@ -57,8 +57,8 @@ class _FakeResponse:
 
 
 class _FakeSubagent:
-    async def run_to_goal(self, goal, playback_service=None, run_id="default", session_id="default"):
-        _ = (goal, playback_service, run_id, session_id)
+    async def run_to_goal(self, goal, playback_service=None, run_id="default", session_id="default", **kwargs):
+        _ = (goal, playback_service, run_id, session_id, kwargs)
         return _FakeResponse()
 
     def get_last_vision_observation(self):
