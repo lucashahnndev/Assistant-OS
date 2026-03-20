@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import shutil
+import threading
 import time
 from typing import List, Dict, Any, Optional, Union
 from ..base import CapabilityBase
@@ -77,6 +78,8 @@ class BrowserControlCapability(CapabilityBase):
         self._new_tabs_opened_by_session: Dict[str, int] = {}
         self._active_run_by_session: Dict[str, float] = {}
         self._recent_failed_goal_by_session: Dict[str, Dict[str, Any]] = {}
+        self._run_dispatch_lock = threading.Lock()
+        self._runtime_init_lock: Optional[asyncio.Lock] = None
         self._policy = BrowserSessionPolicy({"app_mode_enabled": self._app_mode_enabled})
         self._initialize_global_browser_storage()
 
@@ -357,75 +360,79 @@ class BrowserControlCapability(CapabilityBase):
         from .image_analyzer import ImageAnalyzer
         RuntimeClass = self._resolve_runtime_class()
         current_loop = asyncio.get_running_loop()
-        should_recreate = force_new_instance
-        loop_changed = False
+        if self._runtime_init_lock is None or self._loop != current_loop:
+            self._runtime_init_lock = asyncio.Lock()
 
-        # Re-init if loop changed or launch options differ
-        if self._runtime and self._loop != current_loop:
-            logger.info("Event loop changed, re-initializing runtime")
-            should_recreate = True
-            loop_changed = True
+        async with self._runtime_init_lock:
+            should_recreate = force_new_instance
+            loop_changed = False
 
-        if should_recreate and self._runtime:
-            try:
-                if loop_changed and hasattr(self._runtime, "force_close"):
-                    # Cross-loop teardown must be synchronous to avoid "Future attached to a different loop".
-                    self._runtime.force_close()
-                else:
-                    await self._runtime.close()
-            finally:
-                self._runtime = None
-                self._subagent = None
-                self._tab_id = None
-                self._runtime_intent_class = None
+            # Re-init if loop changed or launch options differ
+            if self._runtime and self._loop != current_loop:
+                logger.info("Event loop changed, re-initializing runtime")
+                should_recreate = True
+                loop_changed = True
 
-        if not self._runtime:
-            if not self.kernel:
-                raise RuntimeError("Kernel not initialized in BrowserControlCapability")
-            self._loop = current_loop
-            resolved_browser_path = self._resolve_browser_path()
-            logger.info("Browser runtime path resolved to %s", resolved_browser_path)
-            runtime_base_profile, runtime_overlay_parent = self._resolve_runtime_profile_paths(resolved_browser_path)
-            self._ensure_runtime_profile_storage(runtime_base_profile, runtime_overlay_parent)
-            logger.info(
-                "Browser runtime profile resolved to base=%s overlay=%s",
-                runtime_base_profile,
-                runtime_overlay_parent,
-            )
-            logger.info("Browser runtime backend selected: %s", self._resolve_runtime_backend())
-            runtime_kwargs = self._build_runtime_kwargs(
-                resolved_browser_path=resolved_browser_path,
-                runtime_base_profile=runtime_base_profile,
-                runtime_overlay_parent=runtime_overlay_parent,
-                headless=headless,
-                muted=muted,
-                use_app_mode=use_app_mode,
-                launch_url=launch_url,
-            )
-            self._runtime = RuntimeClass(**runtime_kwargs)
-            await self._runtime.launch()
-            dom_analyzer = DomAnalyzer()
-            image_analyzer = ImageAnalyzer(self.kernel.llm_manager)
-            perception_merger = PerceptionMerger(
-                dom_analyzer,
-                image_analyzer,
-                dom_weight=self._perception_dom_weight,
-                vision_weight=self._perception_vision_weight,
-                dom_timeout_s=self._perception_dom_timeout_s,
-                vision_timeout_s=self._perception_vision_timeout_s,
-            )
-            self._subagent = BrowserSubagent(
-                self._runtime,
-                self.kernel.llm_manager,
-                perception_merger,
-                dom_max_nodes=self._perception_dom_max_nodes,
-                perception_cache_ttl_s=self._perception_cache_ttl_s,
-                fast_screenshot_format=self._perception_fast_screenshot_format,
-                fast_screenshot_quality=self._perception_fast_screenshot_quality,
-                max_same_action_repeats=self._planner_max_same_action_repeats,
-                max_state_unchanged_loops=self._planner_max_state_unchanged_loops,
-                max_forced_recovery_attempts=self._planner_max_forced_recovery_attempts,
-            )
+            if should_recreate and self._runtime:
+                try:
+                    if loop_changed and hasattr(self._runtime, "force_close"):
+                        # Cross-loop teardown must be synchronous to avoid "Future attached to a different loop".
+                        self._runtime.force_close()
+                    else:
+                        await self._runtime.close()
+                finally:
+                    self._runtime = None
+                    self._subagent = None
+                    self._tab_id = None
+                    self._runtime_intent_class = None
+
+            if not self._runtime:
+                if not self.kernel:
+                    raise RuntimeError("Kernel not initialized in BrowserControlCapability")
+                self._loop = current_loop
+                resolved_browser_path = self._resolve_browser_path()
+                logger.info("Browser runtime path resolved to %s", resolved_browser_path)
+                runtime_base_profile, runtime_overlay_parent = self._resolve_runtime_profile_paths(resolved_browser_path)
+                self._ensure_runtime_profile_storage(runtime_base_profile, runtime_overlay_parent)
+                logger.info(
+                    "Browser runtime profile resolved to base=%s overlay=%s",
+                    runtime_base_profile,
+                    runtime_overlay_parent,
+                )
+                logger.info("Browser runtime backend selected: %s", self._resolve_runtime_backend())
+                runtime_kwargs = self._build_runtime_kwargs(
+                    resolved_browser_path=resolved_browser_path,
+                    runtime_base_profile=runtime_base_profile,
+                    runtime_overlay_parent=runtime_overlay_parent,
+                    headless=headless,
+                    muted=muted,
+                    use_app_mode=use_app_mode,
+                    launch_url=launch_url,
+                )
+                self._runtime = RuntimeClass(**runtime_kwargs)
+                await self._runtime.launch()
+                dom_analyzer = DomAnalyzer()
+                image_analyzer = ImageAnalyzer(self.kernel.llm_manager)
+                perception_merger = PerceptionMerger(
+                    dom_analyzer,
+                    image_analyzer,
+                    dom_weight=self._perception_dom_weight,
+                    vision_weight=self._perception_vision_weight,
+                    dom_timeout_s=self._perception_dom_timeout_s,
+                    vision_timeout_s=self._perception_vision_timeout_s,
+                )
+                self._subagent = BrowserSubagent(
+                    self._runtime,
+                    self.kernel.llm_manager,
+                    perception_merger,
+                    dom_max_nodes=self._perception_dom_max_nodes,
+                    perception_cache_ttl_s=self._perception_cache_ttl_s,
+                    fast_screenshot_format=self._perception_fast_screenshot_format,
+                    fast_screenshot_quality=self._perception_fast_screenshot_quality,
+                    max_same_action_repeats=self._planner_max_same_action_repeats,
+                    max_state_unchanged_loops=self._planner_max_state_unchanged_loops,
+                    max_forced_recovery_attempts=self._planner_max_forced_recovery_attempts,
+                )
 
     @staticmethod
     def _extract_first_url(text: str) -> str:
@@ -557,10 +564,11 @@ class BrowserControlCapability(CapabilityBase):
     def _is_browser_launch_authorized(self, context: Dict[str, Any]) -> bool:
         if not self._require_delegated_executor_for_browser_launch:
             return True
+        if bool(context.get("allow_local_browser_launch", False)):
+            return True
         envelope = context.get("execution_context_envelope") if isinstance(context, dict) else None
         if not isinstance(envelope, dict):
-            # Keep direct/local invocations usable (tests/tools). Orchestrator path always has envelope.
-            return True
+            return False
         child_id = self._delegation_child_id(context)
         return bool(child_id.startswith("browser_subagent"))
 
@@ -650,16 +658,28 @@ class BrowserControlCapability(CapabilityBase):
                 return {"ok": False, "error": str(exc)}
             completion_mode = str(params.get("completion_mode") or "").strip().lower()
             logger.info(f"Resolved goal for 'run': '{goal}' (from params keys: {list(params.keys())})")
-            return self._run_sync(
-                self.run_goal(
-                    goal,
-                    headless=headless,
-                    muted=muted,
-                    intent_class=intent_class,
-                    completion_mode=completion_mode,
-                    context=run_context,
+            if not self._run_dispatch_lock.acquire(blocking=False):
+                return {
+                    "ok": False,
+                    "error": (
+                        "Another browser.control.run dispatch is in progress. "
+                        "Wait for the delegated browser executor to finish."
+                    ),
+                    "error_code": "BROWSER_RUN_DISPATCH_BUSY",
+                }
+            try:
+                return self._run_sync(
+                    self.run_goal(
+                        goal,
+                        headless=headless,
+                        muted=muted,
+                        intent_class=intent_class,
+                        completion_mode=completion_mode,
+                        context=run_context,
+                    )
                 )
-            )
+            finally:
+                self._run_dispatch_lock.release()
         elif action == "step":
             instruction = (
                 params.get("instruction")

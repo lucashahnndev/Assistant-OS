@@ -43,3 +43,13 @@ def test_browser_launch_allows_delegated_browser_executor():
             }
         }
     ) is True
+
+
+def test_browser_launch_denied_without_envelope_when_delegation_required():
+    cap = BrowserControlCapability(_KernelStub(), {"require_delegated_executor_for_browser_launch": True})
+    assert cap._is_browser_launch_authorized({}) is False
+
+
+def test_browser_launch_allows_explicit_local_override():
+    cap = BrowserControlCapability(_KernelStub(), {"require_delegated_executor_for_browser_launch": True})
+    assert cap._is_browser_launch_authorized({"allow_local_browser_launch": True}) is True

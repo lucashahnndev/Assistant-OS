@@ -1714,10 +1714,10 @@ Example:
             goal=meta_goal,
             plan=plan_str,
             current_step=current_step_str,
-            total_nodes=state['total_nodes'],
-            viewport_count=state['viewport_count']
+            total_nodes=int(state.get('total_nodes', 0) or 0),
+            viewport_count=int(state.get('viewport_count', 0) or 0)
         )
-        user_prompt = f"### State:\nURL: {state['url']}\nTitle: {state['title']}\n"
+        user_prompt = f"### State:\nURL: {state.get('url', '')}\nTitle: {state.get('title', '')}\n"
         user_prompt += f"Focus: {json.dumps(state.get('focus') or {}, ensure_ascii=False)[:400]}\n"
         user_prompt += (
             f"\n### Objective Hierarchy:\n"
@@ -1748,7 +1748,7 @@ Example:
             user_prompt += json.dumps(self._last_validation_context, ensure_ascii=False)[:700] + "\n"
         
         user_prompt += "\n### Unified Perception (Candidates):\n"
-        for c in state['candidates']:
+        for c in state.get('candidates', []):
             source = c.get("source", "DOM")
             label = c.get("element_id") or c.get("visual_role") or "unknown"
             text = c.get("reasoning", "")
@@ -1756,9 +1756,11 @@ Example:
 
         if state.get('markers'):
             user_prompt += "\n### Landmarks (Informational):\n"
-            for m in state['markers']:
+            for idx, m in enumerate(state.get('markers', []), start=1):
                 safe_text = str(m.get('text', '')).replace('"', "'")
-                user_prompt += f"[{m['id']}] {m['kind']}: '{safe_text}'\n"
+                marker_id = str(m.get('id') or f"mk_{idx}")
+                marker_kind = str(m.get('kind') or "marker")
+                user_prompt += f"[{marker_id}] {marker_kind}: '{safe_text}'\n"
                 
         if state.get('vision'):
             vis = state['vision']
