@@ -2161,7 +2161,7 @@ class AgentOrchestrator:
         work_id: Optional[str],
     ) -> None:
         telemetry = getattr(self, "_runtime_v2_observability", None)
-        if telemetry is None:
+        if telemetry is None or not bool(getattr(telemetry, "enabled", True)):
             return
         try:
             envelope = exec_context.get("execution_context_envelope") if isinstance(exec_context, dict) else {}

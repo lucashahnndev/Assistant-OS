@@ -72,7 +72,7 @@
             },
             "observability": {
                 "enabled": true,
-                "event_log": "data/runtime_v2/governance_events.jsonl",
+                "event_log": "runtime_v2/governance_events.jsonl",
                 "replay_payload_enabled": true
             }
         }

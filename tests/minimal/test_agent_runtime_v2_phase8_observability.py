@@ -14,10 +14,13 @@ from src.services.agent_runtime_v2 import RuntimeV2Observability
 
 
 class _Cfg:
-    def __init__(self, base_data_dir: str):
+    def __init__(self, base_data_dir: str, runtime_cfg=None):
         self.base_data_dir = base_data_dir
+        self._runtime_cfg = runtime_cfg if isinstance(runtime_cfg, dict) else None
 
     def get(self, key, default=None):
+        if key == "runtime" and self._runtime_cfg is not None:
+            return self._runtime_cfg
         return default
 
 
@@ -51,6 +54,35 @@ def test_runtime_v2_observability_records_snapshot_and_event_file():
         lines = log_path.read_text(encoding="utf-8").strip().splitlines()
         assert len(lines) == 1
         assert "browser.control.run" in lines[0]
+
+
+def test_runtime_v2_observability_disabled_mode_no_event_written():
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = _Cfg(
+            tmp,
+            runtime_cfg={
+                "agent_runtime_v2": {
+                    "observability": {
+                        "enabled": False,
+                        "event_log": "runtime_v2/governance_events.jsonl",
+                    }
+                }
+            },
+        )
+        obs = RuntimeV2Observability(config_manager=cfg)
+        snapshot = obs.record_execution_event(
+            {
+                "session_id": "s1",
+                "work_id": "w1",
+                "action_id": "browser.control.run",
+                "result_status": "success",
+            }
+        )
+        assert snapshot["enabled"] is False
+        assert snapshot["events_total"] == 0
+        log_path = Path(tmp) / "runtime_v2" / "governance_events.jsonl"
+        if log_path.exists():
+            assert log_path.read_text(encoding="utf-8").strip() == ""
 
 
 def test_runtime_v2_observability_builds_structured_replay_payload():
@@ -135,3 +167,50 @@ def test_orchestrator_runtime_v2_observability_helper_records_and_touches_work_c
         assert isinstance(runtime_v2_patch.get("last_replay_payload"), dict)
         assert isinstance(runtime_v2_patch.get("metrics_snapshot"), dict)
         assert runtime_v2_patch["metrics_snapshot"]["events_total"] >= 1
+
+
+def test_orchestrator_runtime_v2_observability_helper_skips_when_disabled():
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = _Cfg(
+            tmp,
+            runtime_cfg={
+                "agent_runtime_v2": {
+                    "observability": {
+                        "enabled": False,
+                    }
+                }
+            },
+        )
+        orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+        orchestrator._runtime_v2_observability = RuntimeV2Observability(config_manager=cfg)
+
+        touched = {}
+
+        def _fake_touch(work_id, patch):
+            touched["work_id"] = work_id
+            touched["patch"] = patch
+
+        orchestrator._touch_work_context = _fake_touch
+
+        orchestrator._record_runtime_v2_observability(
+            exec_context={
+                "session_id": "session-1",
+                "execution_context_envelope": {
+                    "tenant_id": "tenant-a",
+                    "environment_mode": "production",
+                },
+                "runtime_v2_governance": {
+                    "policy_decision": {
+                        "decision": "allow",
+                    }
+                },
+            },
+            action_id="browser.control.run",
+            action_args={},
+            result_status="success",
+            result_reason="ok",
+            latency_ms=10,
+            loop_index=1,
+            work_id="work-1",
+        )
+        assert touched == {}

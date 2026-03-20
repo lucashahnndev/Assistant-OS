@@ -16,14 +16,29 @@ class RuntimeV2Observability:
     def __init__(self, config_manager: Optional[Any] = None) -> None:
         self.config_manager = config_manager or ConfigManager()
         base = getattr(self.config_manager, "base_data_dir", None) or ConfigManager.get_data_dir()
-        root = os.path.join(str(base), "runtime_v2")
-        os.makedirs(root, exist_ok=True)
-        self._events_path = os.path.join(root, "governance_events.jsonl")
+        runtime_cfg = self.config_manager.get("runtime", {}) if hasattr(self.config_manager, "get") else {}
+        runtime_cfg = runtime_cfg if isinstance(runtime_cfg, dict) else {}
+        v2_cfg = runtime_cfg.get("agent_runtime_v2", {}) if isinstance(runtime_cfg.get("agent_runtime_v2"), dict) else {}
+        obs_cfg = v2_cfg.get("observability", {}) if isinstance(v2_cfg.get("observability"), dict) else {}
+        self._enabled = bool(obs_cfg.get("enabled", True))
+
+        event_log_cfg = str(obs_cfg.get("event_log", "runtime_v2/governance_events.jsonl") or "runtime_v2/governance_events.jsonl")
+        if os.path.isabs(event_log_cfg):
+            self._events_path = event_log_cfg
+        else:
+            self._events_path = os.path.join(str(base), event_log_cfg)
+        os.makedirs(os.path.dirname(self._events_path), exist_ok=True)
         self._lock = threading.Lock()
         self._counters = Counter()
         self._last_snapshot: Dict[str, Any] = {}
 
+    @property
+    def enabled(self) -> bool:
+        return bool(self._enabled)
+
     def record_execution_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        if not self._enabled:
+            return self.snapshot_metrics()
         payload = dict(event or {})
         payload.setdefault("ts", time.time())
         payload.setdefault("event", "runtime_v2_execution")
@@ -86,6 +101,7 @@ class RuntimeV2Observability:
         deny = int(self._counters.get("policy_decision:deny", 0))
         require_approval = int(self._counters.get("policy_decision:require_approval", 0))
         return {
+            "enabled": bool(self._enabled),
             "events_total": events_total,
             "success_total": success,
             "failure_total": failure,
