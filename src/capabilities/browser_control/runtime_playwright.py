@@ -77,6 +77,7 @@ class BrowserRuntimePlaywright:
         self.target_id = ""
         self.ws_url = ""
         self.remote_debugging_port = None
+        self._mcp_active_tab_index = 0
 
         self._agent_control_active = False
         self._paused = False
@@ -91,6 +92,25 @@ class BrowserRuntimePlaywright:
         }
         self._transport_mode_effective = "local"
         self._mcp_adapter: Optional[PlaywrightMCPAdapter] = None
+
+    @staticmethod
+    def _mcp_target_from_index(index: int) -> str:
+        idx = int(index or 0)
+        if idx < 0:
+            idx = 0
+        return f"mcp_tab_{idx}"
+
+    @staticmethod
+    def _mcp_index_from_target(target_id: str) -> Optional[int]:
+        raw = str(target_id or "").strip().lower()
+        if not raw.startswith("mcp_tab_"):
+            return None
+        suffix = raw.replace("mcp_tab_", "", 1).strip()
+        try:
+            idx = int(suffix)
+        except Exception:
+            return None
+        return idx if idx >= 0 else None
 
     def _resolve_transport_mode(self) -> str:
         mode = str(self.playwright_transport_mode or "local").strip().lower()
@@ -108,6 +128,19 @@ class BrowserRuntimePlaywright:
                 )
             self._mcp_adapter = PlaywrightMCPAdapter(self.playwright_mcp_endpoint)
             self._transport_mode_effective = "mcp"
+            try:
+                tabs_meta = await self._mcp_adapter.list_tabs()
+                tabs = tabs_meta.get("tabs") if isinstance(tabs_meta.get("tabs"), list) else []
+                active_index = int(tabs_meta.get("active_index", 0) or 0)
+                if tabs:
+                    active_index = max(0, min(active_index, len(tabs) - 1))
+                else:
+                    active_index = 0
+                self._mcp_active_tab_index = active_index
+                self.target_id = self._mcp_target_from_index(active_index)
+            except Exception:
+                self._mcp_active_tab_index = 0
+                self.target_id = self._mcp_target_from_index(0)
             logger.info("Playwright runtime using MCP transport endpoint: %s", self.playwright_mcp_endpoint)
             return
         else:
@@ -293,27 +326,69 @@ class BrowserRuntimePlaywright:
             "mcp_endpoint": self.playwright_mcp_endpoint,
             "mcp_fallback_to_local": bool(self.playwright_mcp_fallback_to_local),
             "mcp_calls_total": int(self._mcp_adapter.calls_total) if self._mcp_adapter is not None else 0,
+            "mcp_tab_index": int(self._mcp_active_tab_index) if self._transport_mode_effective == "mcp" else None,
         }
 
     async def attach_to_target(self, target_id: str) -> bool:
         if self._transport_mode_effective == "mcp":
-            # MCP transport does not expose page-target pinning in this adapter.
-            return bool(target_id)
+            if self._mcp_adapter is None:
+                return False
+            idx = self._mcp_index_from_target(target_id)
+            if idx is None:
+                return False
+            try:
+                await self._mcp_adapter.select_tab(idx)
+                self._mcp_active_tab_index = idx
+                self.target_id = self._mcp_target_from_index(idx)
+                return True
+            except Exception:
+                return False
         return bool(target_id and target_id == self.target_id and self._page is not None)
 
     async def attach_to_any_page(self, preferred_targets: Optional[List[str]] = None) -> str:
         if self._transport_mode_effective == "mcp":
-            _ = preferred_targets
-            return str(self.target_id or "mcp_target")
+            if self._mcp_adapter is None:
+                return ""
+            preferred = preferred_targets or []
+            for wanted in preferred:
+                idx = self._mcp_index_from_target(str(wanted or ""))
+                if idx is None:
+                    continue
+                try:
+                    await self._mcp_adapter.select_tab(idx)
+                    self._mcp_active_tab_index = idx
+                    self.target_id = self._mcp_target_from_index(idx)
+                    return self.target_id
+                except Exception:
+                    continue
+            try:
+                tabs_meta = await self._mcp_adapter.list_tabs()
+                tabs = tabs_meta.get("tabs") if isinstance(tabs_meta.get("tabs"), list) else []
+                active_index = int(tabs_meta.get("active_index", 0) or 0)
+                if tabs:
+                    active_index = max(0, min(active_index, len(tabs) - 1))
+                    await self._mcp_adapter.select_tab(active_index)
+                else:
+                    active_index = 0
+                self._mcp_active_tab_index = active_index
+                self.target_id = self._mcp_target_from_index(active_index)
+                return self.target_id
+            except Exception:
+                return str(self.target_id or "")
         if self._page is None:
             return ""
         return str(self.target_id or "")
 
     async def open_new_tab(self, launch_url: str) -> str:
         if self._transport_mode_effective == "mcp":
-            if self._mcp_adapter is not None:
-                await self._mcp_adapter.navigate(str(launch_url or "about:blank"))
-            self.target_id = str(self.target_id or "mcp_target")
+            if self._mcp_adapter is None:
+                return ""
+            created = await self._mcp_adapter.create_tab(str(launch_url or "about:blank"))
+            idx = int(created.get("index", self._mcp_active_tab_index) or self._mcp_active_tab_index)
+            if idx < 0:
+                idx = 0
+            self._mcp_active_tab_index = idx
+            self.target_id = self._mcp_target_from_index(idx)
             return self.target_id
         if not self._context:
             return ""
@@ -441,7 +516,8 @@ class BrowserRuntimePlaywright:
             target = str(url or "").strip() or "about:blank"
             await self._mcp_adapter.navigate(target)
             info = await self.get_page_info()
-            self.target_id = str(self.target_id or "mcp_target")
+            if not self.target_id:
+                self.target_id = self._mcp_target_from_index(self._mcp_active_tab_index)
             return self._success_response(
                 action="navigate",
                 elapsed=time.time() - t0,

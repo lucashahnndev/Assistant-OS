@@ -152,6 +152,34 @@ class PlaywrightMCPAdapter:
             except Exception:
                 pass
 
+    async def list_tabs(self) -> Dict[str, Any]:
+        out = await self._call_tool_preferred(["browser_tabs"], {"action": "list"})
+        payload = self._coerce_result_payload(out)
+        tabs = self._coerce_tabs_payload(payload)
+        active_index = int(payload.get("active_index", 0) or 0) if isinstance(payload, dict) else 0
+        if active_index < 0:
+            active_index = 0
+        if tabs and active_index >= len(tabs):
+            active_index = len(tabs) - 1
+        return {"tabs": tabs, "active_index": active_index}
+
+    async def select_tab(self, index: int) -> Dict[str, Any]:
+        idx = int(index or 0)
+        out = await self._call_tool_preferred(["browser_tabs"], {"action": "select", "index": idx})
+        payload = self._coerce_result_payload(out)
+        return payload if isinstance(payload, dict) else {}
+
+    async def create_tab(self, url: str = "about:blank") -> Dict[str, Any]:
+        out = await self._call_tool_preferred(["browser_tabs"], {"action": "create"})
+        payload = self._coerce_result_payload(out)
+        idx = int(payload.get("index", 0) or 0) if isinstance(payload, dict) else 0
+        if idx < 0:
+            idx = 0
+        # Ensure the new tab becomes active before navigation.
+        await self.select_tab(idx)
+        await self.navigate(str(url or "about:blank"))
+        return {"index": idx}
+
     async def get_skeletal_dom(self) -> Dict[str, Any]:
         # Primary path: collect a lightweight, planner-compatible DOM slice via MCP run_code/evaluate.
         result = await self._call_tool_preferred(
@@ -293,3 +321,16 @@ class PlaywrightMCPAdapter:
         if isinstance(result.get("output"), dict):
             return dict(result.get("output") or {})
         return dict(result)
+
+    @staticmethod
+    def _coerce_tabs_payload(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return []
+        tabs_raw = payload.get("tabs")
+        if isinstance(tabs_raw, list):
+            return [t for t in tabs_raw if isinstance(t, dict)]
+        if isinstance(payload.get("result"), list):
+            return [t for t in payload.get("result") if isinstance(t, dict)]
+        if isinstance(payload.get("items"), list):
+            return [t for t in payload.get("items") if isinstance(t, dict)]
+        return []

@@ -1,10 +1,27 @@
 import asyncio
+from unittest.mock import patch
 
 from src.capabilities.browser_control.playwright_mcp_adapter import PlaywrightMCPAdapter
 from src.capabilities.browser_control.runtime_playwright import BrowserRuntimePlaywright
 
+_FAKE_TAB_STATE = {"tabs": [{"index": 0, "title": "Tab 0"}], "active_index": 0}
+
 
 async def _fake_invoker(name, args):
+    if name == "browser_tabs":
+        action = str(args.get("action") or "").strip().lower()
+        if action == "list":
+            return {"result": {"tabs": list(_FAKE_TAB_STATE["tabs"]), "active_index": int(_FAKE_TAB_STATE["active_index"])}}
+        if action == "create":
+            idx = len(_FAKE_TAB_STATE["tabs"])
+            _FAKE_TAB_STATE["tabs"].append({"index": idx, "title": f"Tab {idx}"})
+            _FAKE_TAB_STATE["active_index"] = idx
+            return {"result": {"index": idx}}
+        if action == "select":
+            idx = int(args.get("index", 0) or 0)
+            _FAKE_TAB_STATE["active_index"] = idx
+            return {"result": {"ok": True, "index": idx}}
+        return {"result": {"ok": True}}
     if name == "browser_navigate":
         return {"result": {"ok": True, "url": args.get("url")}}
     if name == "browser_run_code":
@@ -49,6 +66,8 @@ async def _fake_invoker(name, args):
 
 
 def test_playwright_mcp_adapter_basic_calls_via_invoker():
+    _FAKE_TAB_STATE["tabs"] = [{"index": 0, "title": "Tab 0"}]
+    _FAKE_TAB_STATE["active_index"] = 0
     adapter = PlaywrightMCPAdapter(endpoint="http://unused", invoker=_fake_invoker)
 
     info = asyncio.run(adapter.get_page_info())
@@ -71,7 +90,29 @@ def test_playwright_mcp_adapter_basic_calls_via_invoker():
     assert adapter.calls_total >= 4
 
 
+def test_playwright_mcp_adapter_tab_lifecycle_via_invoker():
+    _FAKE_TAB_STATE["tabs"] = [{"index": 0, "title": "Tab 0"}]
+    _FAKE_TAB_STATE["active_index"] = 0
+    adapter = PlaywrightMCPAdapter(endpoint="http://unused", invoker=_fake_invoker)
+
+    listed = asyncio.run(adapter.list_tabs())
+    assert listed["active_index"] == 0
+    assert len(listed["tabs"]) == 1
+
+    created = asyncio.run(adapter.create_tab("https://example.com"))
+    assert created["index"] == 1
+    listed2 = asyncio.run(adapter.list_tabs())
+    assert listed2["active_index"] == 1
+    assert len(listed2["tabs"]) == 2
+
+    _ = asyncio.run(adapter.select_tab(0))
+    listed3 = asyncio.run(adapter.list_tabs())
+    assert listed3["active_index"] == 0
+
+
 def test_runtime_playwright_launches_in_mcp_mode_when_endpoint_present():
+    _FAKE_TAB_STATE["tabs"] = [{"index": 0, "title": "Tab 0"}]
+    _FAKE_TAB_STATE["active_index"] = 0
     rt = BrowserRuntimePlaywright(
         chrome_path="",
         base_profile_path="data/browser_data/profile",
@@ -93,11 +134,53 @@ def test_runtime_playwright_launches_in_mcp_mode_when_endpoint_present():
         playwright_mcp_endpoint="http://localhost:8787",
         playwright_mcp_fallback_to_local=False,
     )
-    asyncio.run(rt.launch())
+    with patch(
+        "src.capabilities.browser_control.runtime_playwright.PlaywrightMCPAdapter",
+        side_effect=lambda endpoint: PlaywrightMCPAdapter(endpoint="http://unused", invoker=_fake_invoker),
+    ):
+        asyncio.run(rt.launch())
     meta = rt.get_connection_metadata()
     assert meta["transport_mode_configured"] == "mcp"
     assert meta["transport_mode_effective"] == "mcp"
-    assert meta["mcp_calls_total"] == 0
+    assert int(meta["mcp_calls_total"]) >= 1
+    assert meta["target_id"] == "mcp_tab_0"
+    assert meta["mcp_tab_index"] == 0
+
+
+def test_runtime_playwright_mcp_open_new_tab_and_attach_target():
+    _FAKE_TAB_STATE["tabs"] = [{"index": 0, "title": "Tab 0"}]
+    _FAKE_TAB_STATE["active_index"] = 0
+    rt = BrowserRuntimePlaywright(
+        chrome_path="",
+        base_profile_path="data/browser_data/profile",
+        overlay_profile_parent="data/browser_data/profile/sessions",
+        desktop_cache_dir="data/browser_data/desktop_cache",
+        desktop_launch_enabled=False,
+        extension_install_mode="auto",
+        extension_fallback_enabled=True,
+        headless=True,
+        muted=True,
+        app_mode=False,
+        launch_url="about:blank",
+        humanize_input_enabled=True,
+        visual_cursor_enabled=True,
+        tab_user_lock_enabled=True,
+        tab_control_bar_enabled=True,
+        agent_name="Test",
+        playwright_transport_mode="mcp",
+        playwright_mcp_endpoint="http://localhost:8787",
+        playwright_mcp_fallback_to_local=False,
+    )
+    with patch(
+        "src.capabilities.browser_control.runtime_playwright.PlaywrightMCPAdapter",
+        side_effect=lambda endpoint: PlaywrightMCPAdapter(endpoint="http://unused", invoker=_fake_invoker),
+    ):
+        asyncio.run(rt.launch())
+        target = asyncio.run(rt.open_new_tab("https://example.com"))
+        assert target == "mcp_tab_1"
+        attached = asyncio.run(rt.attach_to_target("mcp_tab_0"))
+        assert attached is True
+        assert rt.target_id == "mcp_tab_0"
 
 
 def test_runtime_playwright_mcp_without_endpoint_and_no_fallback_fails_fast():
