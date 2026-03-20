@@ -1608,10 +1608,18 @@ class AgentOrchestrator:
         policy_version = str(runtime_v2_cfg.get("policy_version", "policy_v1") or "policy_v1").strip() or "policy_v1"
         planner_version = str(runtime_v2_cfg.get("planner_version", "planner_v1") or "planner_v1").strip() or "planner_v1"
         runtime_version = str(runtime_v2_cfg.get("runtime_version", "runtime_v2") or "runtime_v2").strip() or "runtime_v2"
+        environment_mode, sandbox_profile_id = self._resolve_runtime_v2_environment_mode(
+            runtime_v2_cfg=runtime_v2_cfg,
+            tenant_id=tenant_id,
+            context=context,
+            plan_metadata=plan_metadata,
+        )
 
         delegation = self._build_delegation_contract(plan=plan, context=context)
 
         envelope = ExecutionContextEnvelope(
+            environment_mode=environment_mode,
+            sandbox_profile_id=sandbox_profile_id,
             tenant_id=tenant_id,
             agent_id=str(plan_metadata.get("agent_id", "main_orchestrator") or "main_orchestrator"),
             session_id=str(session_id or ""),
@@ -1628,6 +1636,41 @@ class AgentOrchestrator:
             },
         )
         return envelope.to_dict()
+
+    @staticmethod
+    def _resolve_runtime_v2_environment_mode(
+        *,
+        runtime_v2_cfg: Dict[str, Any],
+        tenant_id: str,
+        context: Optional[PrincipalContext],
+        plan_metadata: Dict[str, Any],
+    ) -> tuple[str, str]:
+        cfg = runtime_v2_cfg if isinstance(runtime_v2_cfg, dict) else {}
+        sandbox_cfg = cfg.get("sandbox", {})
+        sandbox_cfg = sandbox_cfg if isinstance(sandbox_cfg, dict) else {}
+
+        explicit_mode = str(plan_metadata.get("environment_mode", "") or "").strip().lower()
+        if not explicit_mode and context is not None:
+            explicit_mode = str(getattr(context, "environment_mode", "") or "").strip().lower()
+        if explicit_mode not in {"sandbox", "production"}:
+            explicit_mode = ""
+
+        mode = "sandbox" if bool(sandbox_cfg.get("force_for_all", False)) else "production"
+        if explicit_mode:
+            mode = explicit_mode
+        else:
+            sandbox_tenants = {
+                str(x).strip()
+                for x in (sandbox_cfg.get("tenant_ids") or [])
+                if str(x).strip()
+            }
+            if str(tenant_id or "").strip() in sandbox_tenants:
+                mode = "sandbox"
+
+        profile_map = sandbox_cfg.get("profile_by_tenant", {})
+        profile_map = profile_map if isinstance(profile_map, dict) else {}
+        sandbox_profile_id = str(profile_map.get(tenant_id, sandbox_cfg.get("default_profile_id", "")) or "").strip()
+        return mode, sandbox_profile_id
 
     def _build_delegation_contract(
         self,
@@ -1670,6 +1713,7 @@ class AgentOrchestrator:
         envelope = ExecutionContextEnvelope(
             envelope_version=str(envelope_payload.get("envelope_version", "1.0")),
             environment_mode=str(envelope_payload.get("environment_mode", "production")),
+            sandbox_profile_id=str(envelope_payload.get("sandbox_profile_id", "")),
             tenant_id=str(envelope_payload.get("tenant_id", "default")),
             agent_id=str(envelope_payload.get("agent_id", "")),
             session_id=str(envelope_payload.get("session_id", "")),
@@ -1844,6 +1888,63 @@ class AgentOrchestrator:
                 exec_context["runtime_v2_constraints"] = dict(constraints)
         return None
 
+    def _apply_runtime_v2_sandbox_gate(
+        self,
+        *,
+        exec_context: Dict[str, Any],
+        action_id: str,
+        action_args: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        envelope = exec_context.get("execution_context_envelope") if isinstance(exec_context, dict) else {}
+        envelope = envelope if isinstance(envelope, dict) else {}
+        mode = str(envelope.get("environment_mode", "production") or "production").strip().lower()
+        if mode != "sandbox":
+            return None
+
+        runtime_cfg = self.config_manager.get("runtime", {})
+        if not isinstance(runtime_cfg, dict):
+            runtime_cfg = {}
+        v2_cfg = runtime_cfg.get("agent_runtime_v2", {})
+        if not isinstance(v2_cfg, dict):
+            v2_cfg = {}
+        sandbox_cfg = v2_cfg.get("sandbox", {})
+        if not isinstance(sandbox_cfg, dict):
+            sandbox_cfg = {}
+
+        allow_actions = {
+            str(a).strip().lower()
+            for a in (sandbox_cfg.get("allow_effect_actions") or [])
+            if str(a).strip()
+        }
+        metadata = {}
+        if self.capability_registry and action_id:
+            metadata = self.capability_registry.get_action_metadata(action_id) or {}
+        side_effect = str(metadata.get("side_effect", "none") or "none").strip().lower()
+        action_id_l = str(action_id or "").strip().lower()
+        if side_effect == "none" or action_id_l in allow_actions:
+            return None
+
+        payload_args = dict(action_args or {}) if isinstance(action_args, dict) else {}
+        return {
+            "ok": True,
+            "status": "success",
+            "provider": "runtime_v2_sandbox",
+            "data": {
+                "simulated": True,
+                "sandbox_blocked_real_effect": True,
+                "action_id": action_id,
+                "side_effect": side_effect,
+                "args": payload_args,
+            },
+            "metadata": {
+                "sandbox": {
+                    "environment_mode": "sandbox",
+                    "sandbox_profile_id": str(envelope.get("sandbox_profile_id", "") or ""),
+                    "reason": "real_side_effect_blocked_in_sandbox",
+                }
+            },
+        }
+
     @staticmethod
     def _build_runtime_v2_receipt(
         *,
@@ -1861,6 +1962,8 @@ class AgentOrchestrator:
         return {
             "receipt_version": "2.0",
             "engine": "agent_runtime_v2",
+            "environment_mode": str(envelope.get("environment_mode", "production") or "production"),
+            "sandbox_profile_id": str(envelope.get("sandbox_profile_id", "") or ""),
             "tenant_id": str(envelope.get("tenant_id", "default") or "default"),
             "qos_class": str(envelope.get("qos_class", "NORMAL") or "NORMAL"),
             "risk_level": str(envelope.get("risk_level", "low") or "low"),
@@ -1891,7 +1994,18 @@ class AgentOrchestrator:
             result["metadata"] = metadata
             result["runtime_v2_receipt"] = receipt
         if work_id:
-            self._touch_work_context(work_id, {"runtime_v2": {"last_receipt": receipt}})
+            self._touch_work_context(
+                work_id,
+                {
+                    "runtime_v2": {
+                        "last_receipt": receipt,
+                        "sandbox": {
+                            "environment_mode": receipt.get("environment_mode", "production"),
+                            "sandbox_profile_id": receipt.get("sandbox_profile_id", ""),
+                        },
+                    }
+                },
+            )
         return result
 
 
@@ -3378,8 +3492,17 @@ class AgentOrchestrator:
                             )
                             if operational_block is not None:
                                 result = operational_block
+                        sandbox_override = None
+                        if policy_block is None and operational_block is None:
+                            sandbox_override = self._apply_runtime_v2_sandbox_gate(
+                                exec_context=exec_context,
+                                action_id=plan.action_id,
+                                action_args=plan.args if isinstance(plan.args, dict) else {},
+                            )
+                            if sandbox_override is not None:
+                                result = sandbox_override
                         if context:
-                            if policy_block is None and operational_block is None:
+                            if policy_block is None and operational_block is None and sandbox_override is None:
                                 allowed, reason = self.access_controller.pre_dispatch_gate(
                                     context,
                                     plan.action_id,
@@ -3402,10 +3525,10 @@ class AgentOrchestrator:
                                     ),
                                 }
                             else:
-                                if policy_block is None and operational_block is None:
+                                if policy_block is None and operational_block is None and sandbox_override is None:
                                     result = self.capability_registry.dispatch(plan.action_id, plan.args, exec_context)
                         else:
-                            if policy_block is None and operational_block is None:
+                            if policy_block is None and operational_block is None and sandbox_override is None:
                                 result = self.capability_registry.dispatch(plan.action_id, plan.args, exec_context)
                         
                         latency_ms = int((time.time() - start_ts) * 1000)

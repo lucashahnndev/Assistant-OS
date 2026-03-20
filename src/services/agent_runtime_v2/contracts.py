@@ -32,6 +32,7 @@ class DelegationContract:
 class ExecutionContextEnvelope:
     envelope_version: str = "1.0"
     environment_mode: str = "production"
+    sandbox_profile_id: str = ""
     tenant_id: str = "default"
     agent_id: str = ""
     session_id: str = ""
@@ -49,6 +50,7 @@ class ExecutionContextEnvelope:
         payload = {
             "envelope_version": self.envelope_version,
             "environment_mode": self.environment_mode,
+            "sandbox_profile_id": self.sandbox_profile_id,
             "tenant_id": self.tenant_id,
             "agent_id": self.agent_id,
             "session_id": self.session_id,

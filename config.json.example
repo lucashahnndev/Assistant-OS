@@ -53,6 +53,13 @@
                     "max_mcp_calls_per_step": 15,
                     "max_actions_per_tenant_window": 1200
                 }
+            },
+            "sandbox": {
+                "force_for_all": false,
+                "tenant_ids": [],
+                "default_profile_id": "sandbox-default",
+                "profile_by_tenant": {},
+                "allow_effect_actions": []
             }
         }
     },
