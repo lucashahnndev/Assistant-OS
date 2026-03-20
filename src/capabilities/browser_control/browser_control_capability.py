@@ -1703,15 +1703,19 @@ class BrowserControlCapability(CapabilityBase):
         instance_id = await self._ensure_registry_instance(ctx, intent_class)
         tab_id = await self._sync_registry_tab()
         last_vision = self._get_last_vision_observation()
+        runtime_meta = self._runtime_connection_meta()
         return {
             "ok": True,
             "browser_instance_id": instance_id,
             "tab_id": tab_id,
             "debug_port": getattr(self._runtime, "remote_debugging_port", None) if self._runtime else None,
             "runtime_backend": self._resolve_runtime_backend(),
+            "transport_mode_configured": str(runtime_meta.get("transport_mode_configured", "") or ""),
+            "transport_mode_effective": str(runtime_meta.get("transport_mode_effective", "") or ""),
+            "mcp_endpoint": str(runtime_meta.get("mcp_endpoint", "") or ""),
             "runtime_target_id": self._current_target_id(),
             "cdp_target_id": self._current_target_id(),
-            "mcp_calls_total": int((self._runtime_connection_meta().get("mcp_calls_total", 0) or 0)),
+            "mcp_calls_total": int((runtime_meta.get("mcp_calls_total", 0) or 0)),
             "registry_snapshot": self._build_registry_snapshot(ctx),
             "last_vision_observation": last_vision if last_vision else {},
         }
@@ -1762,6 +1766,13 @@ class BrowserControlCapability(CapabilityBase):
             current_exec = {}
         if not str(current_exec.get("browser_instance_id", "")).strip():
             issues.append("no_active_browser_instance_bound")
+        transport_mode_configured = str(sync_result.get("transport_mode_configured", "") or "").strip().lower()
+        transport_mode_effective = str(sync_result.get("transport_mode_effective", "") or "").strip().lower()
+        if transport_mode_configured == "mcp":
+            if transport_mode_effective and transport_mode_effective != "mcp":
+                issues.append("mcp_fell_back_to_local")
+            if not str(sync_result.get("mcp_endpoint", "") or "").strip():
+                issues.append("mcp_mode_without_endpoint")
         runtime_target = str(sync_result.get("runtime_target_id", "") or sync_result.get("cdp_target_id", "")).strip()
         if not runtime_target:
             issues.append("no_active_runtime_target")

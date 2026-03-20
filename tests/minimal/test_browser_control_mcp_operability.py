@@ -68,3 +68,42 @@ def test_health_reports_missing_runtime_target_issue_when_sync_has_none():
     assert out["ok"] is True
     issues = (out.get("health") or {}).get("issues") or []
     assert "no_active_runtime_target" in issues
+
+
+def test_health_reports_mcp_fallback_and_missing_endpoint_signals():
+    cap = BrowserControlCapability(_KernelStub(), {"runtime_backend": "playwright"})
+
+    async def _fake_inspect(params=None, context=None):
+        return {
+            "ok": True,
+            "instances": [],
+            "count": 0,
+            "current_execution": {
+                "browser_instance_id": "inst-1",
+                "tab_id": "tab-1",
+                "owner_session_id": "session-1",
+                "runtime_backend": "playwright",
+                "runtime_connection": {},
+            },
+        }
+
+    async def _fake_sync_registry(context=None):
+        return {
+            "ok": True,
+            "runtime_backend": "playwright",
+            "transport_mode_configured": "mcp",
+            "transport_mode_effective": "local",
+            "mcp_endpoint": "",
+            "runtime_target_id": "target-1",
+            "cdp_target_id": "target-1",
+            "mcp_calls_total": 0,
+        }
+
+    cap.inspect = _fake_inspect  # type: ignore[method-assign]
+    cap.sync_registry = _fake_sync_registry  # type: ignore[method-assign]
+
+    out = asyncio.run(cap.health(params={"run_gc": False}, context={}))
+    assert out["ok"] is True
+    issues = (out.get("health") or {}).get("issues") or []
+    assert "mcp_fell_back_to_local" in issues
+    assert "mcp_mode_without_endpoint" in issues
