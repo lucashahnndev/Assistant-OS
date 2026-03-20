@@ -23,7 +23,37 @@
     "runtime": {
         "agent_runtime_v2_enabled": false,
         "agent_runtime_v2": {
-            "policy_mode": "log_only"
+            "policy_mode": "log_only",
+            "runtime_version": "runtime_v2",
+            "planner_version": "planner_v2",
+            "policy_version": "policy_v1",
+            "policy": {
+                "mode": "log_only",
+                "deny_actions": [],
+                "require_approval_risk_levels": [
+                    "critical"
+                ],
+                "allow_with_constraints_risk_levels": [
+                    "high"
+                ],
+                "require_approval_actions": [],
+                "allow_with_constraints_qos": [
+                    "LOW"
+                ]
+            },
+            "governance": {
+                "rate_limit": {
+                    "window_seconds": 60,
+                    "max_actions_per_minute_per_agent": 60,
+                    "max_actions_per_minute_per_tenant": 300,
+                    "max_parallel_actions_per_agent": 2
+                },
+                "cost_budget": {
+                    "max_actions_per_goal": 120,
+                    "max_mcp_calls_per_step": 15,
+                    "max_actions_per_tenant_window": 1200
+                }
+            }
         }
     },
     "interfaces": {

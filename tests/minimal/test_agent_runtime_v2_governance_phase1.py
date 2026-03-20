@@ -10,6 +10,7 @@ for candidate in (ROOT, SRC):
 
 from src.services.agent_runtime_v2 import (
     ExecutionContextEnvelope,
+    GlobalScheduler,
     PolicyLayer,
     RiskModel,
     TenantGovernance,
@@ -63,6 +64,7 @@ def test_orchestrator_runtime_v2_governance_evaluation_returns_policy_and_tenant
     orchestrator._runtime_v2_policy_layer = PolicyLayer()
     orchestrator._runtime_v2_risk_model = RiskModel()
     orchestrator._runtime_v2_tenant_governance = TenantGovernance()
+    orchestrator._runtime_v2_scheduler_global = GlobalScheduler()
 
     result = orchestrator._evaluate_runtime_v2_governance(
         envelope_payload=ExecutionContextEnvelope(

@@ -49,7 +49,10 @@ from services.notifications.dispatcher import NotificationDispatcher
 from services.agent_runtime_v2 import (
     DelegationContract,
     ExecutionContextEnvelope,
+    GlobalScheduler,
     PolicyLayer,
+    RuntimeCostBudget,
+    RuntimeRateLimiter,
     RiskModel,
     TenantGovernance,
     TenantGovernanceContext,
@@ -152,6 +155,9 @@ class AgentOrchestrator:
         self._runtime_v2_policy_layer = PolicyLayer()
         self._runtime_v2_risk_model = RiskModel()
         self._runtime_v2_tenant_governance = TenantGovernance()
+        self._runtime_v2_rate_limiter = RuntimeRateLimiter()
+        self._runtime_v2_cost_budget = RuntimeCostBudget()
+        self._runtime_v2_scheduler_global = GlobalScheduler()
         
         # 0. Calendar Domain
         self.calendar_store = CalendarStore(self.config_manager.base_data_dir)
@@ -1706,10 +1712,102 @@ class AgentOrchestrator:
             action_params=action_data,
             policy_cfg=policy_cfg,
         )
+        queue_profile = self._runtime_v2_scheduler_global.select_fair(
+            jobs=[
+                {
+                    "tenant_id": envelope.tenant_id,
+                    "agent_id": envelope.agent_id,
+                    "qos_class": envelope.qos_class,
+                    "waiting_ms": 0,
+                }
+            ],
+            slots=1,
+        )
         return {
             "tenant_governance": governance,
             "policy_decision": policy_decision.to_dict(),
+            "scheduler": {"selected": queue_profile},
         }
+
+    def _apply_runtime_v2_operational_gate(
+        self,
+        *,
+        exec_context: Dict[str, Any],
+        work_id: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        governance = exec_context.get("runtime_v2_governance") if isinstance(exec_context, dict) else {}
+        governance = governance if isinstance(governance, dict) else {}
+        tenant_eval = governance.get("tenant_governance") if isinstance(governance.get("tenant_governance"), dict) else {}
+        envelope = exec_context.get("execution_context_envelope") if isinstance(exec_context, dict) else {}
+        envelope = envelope if isinstance(envelope, dict) else {}
+        tenant_id = str(envelope.get("tenant_id", "default") or "default")
+        agent_id = str(envelope.get("agent_id", "main_orchestrator") or "main_orchestrator")
+
+        runtime_cfg = self.config_manager.get("runtime", {})
+        if not isinstance(runtime_cfg, dict):
+            runtime_cfg = {}
+        v2_cfg = runtime_cfg.get("agent_runtime_v2", {})
+        if not isinstance(v2_cfg, dict):
+            v2_cfg = {}
+        governance_cfg = v2_cfg.get("governance", {})
+        if not isinstance(governance_cfg, dict):
+            governance_cfg = {}
+
+        tenant_mode = str(tenant_eval.get("mode", "log_only") or "log_only").strip().lower()
+        if tenant_mode == "enforce" and tenant_eval.get("allowed") is False:
+            return {
+                "ok": False,
+                "status": "error",
+                "error_code": "TENANT_GOVERNANCE_DENIED",
+                "error_details": "Tenant governance denied execution.",
+            }
+
+        rl_cfg = governance_cfg.get("rate_limit", {})
+        if not isinstance(rl_cfg, dict):
+            rl_cfg = {}
+        rl_eval = self._runtime_v2_rate_limiter.acquire(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            cfg=rl_cfg,
+        )
+        governance["rate_limit"] = rl_eval
+        exec_context["runtime_v2_governance"] = governance
+        if rl_eval.get("allowed") is not True:
+            return {
+                "ok": False,
+                "status": "error",
+                "error_code": "RUNTIME_RATE_LIMITED",
+                "error_details": str(rl_eval.get("reason", "rate_limited")),
+            }
+        if isinstance(rl_eval.get("lease"), dict):
+            exec_context["_runtime_v2_rate_limit_lease"] = rl_eval.get("lease")
+
+        budget_cfg = governance_cfg.get("cost_budget", {})
+        if not isinstance(budget_cfg, dict):
+            budget_cfg = {}
+        budget_eval = self._runtime_v2_cost_budget.consume(
+            tenant_id=tenant_id,
+            work_id=str(work_id or ""),
+            cfg=budget_cfg,
+            action_units=1,
+            mcp_calls=0,
+        )
+        governance["cost_budget"] = budget_eval
+        exec_context["runtime_v2_governance"] = governance
+        if budget_eval.get("allowed") is not True:
+            return {
+                "ok": False,
+                "status": "error",
+                "error_code": "RUNTIME_COST_BUDGET_EXCEEDED",
+                "error_details": str(budget_eval.get("reason", "budget_exceeded")),
+            }
+        return None
+
+    def _release_runtime_v2_operational_leases(self, exec_context: Dict[str, Any]) -> None:
+        lease = exec_context.get("_runtime_v2_rate_limit_lease") if isinstance(exec_context, dict) else None
+        if isinstance(lease, dict):
+            self._runtime_v2_rate_limiter.release(lease)
+            exec_context.pop("_runtime_v2_rate_limit_lease", None)
 
     @staticmethod
     def _apply_runtime_v2_policy_gate(exec_context: Dict[str, Any], action_id: str) -> Optional[Dict[str, Any]]:
@@ -1758,6 +1856,8 @@ class AgentOrchestrator:
         governance = governance if isinstance(governance, dict) else {}
         policy_decision = governance.get("policy_decision") if isinstance(governance.get("policy_decision"), dict) else {}
         explanation = policy_decision.get("explanation") if isinstance(policy_decision.get("explanation"), dict) else {}
+        rate_limit = governance.get("rate_limit") if isinstance(governance.get("rate_limit"), dict) else {}
+        cost_budget = governance.get("cost_budget") if isinstance(governance.get("cost_budget"), dict) else {}
         return {
             "receipt_version": "2.0",
             "engine": "agent_runtime_v2",
@@ -1769,6 +1869,8 @@ class AgentOrchestrator:
             "policy_mode": str(policy_decision.get("policy_mode", "log_only") or "log_only"),
             "decision_explanation_id": str(explanation.get("explanation_id", "") or ""),
             "decision_reason": str(explanation.get("reason", "") or ""),
+            "rate_limit_allowed": bool(rate_limit.get("allowed", True)),
+            "cost_budget_allowed": bool(cost_budget.get("allowed", True)),
             "latency_ms": int(latency_ms),
         }
 
@@ -3268,8 +3370,16 @@ class AgentOrchestrator:
                         policy_block = self._apply_runtime_v2_policy_gate(exec_context, plan.action_id)
                         if policy_block is not None:
                             result = policy_block
+                        operational_block = None
+                        if policy_block is None:
+                            operational_block = self._apply_runtime_v2_operational_gate(
+                                exec_context=exec_context,
+                                work_id=work_id,
+                            )
+                            if operational_block is not None:
+                                result = operational_block
                         if context:
-                            if policy_block is None:
+                            if policy_block is None and operational_block is None:
                                 allowed, reason = self.access_controller.pre_dispatch_gate(
                                     context,
                                     plan.action_id,
@@ -3292,10 +3402,10 @@ class AgentOrchestrator:
                                     ),
                                 }
                             else:
-                                if policy_block is None:
+                                if policy_block is None and operational_block is None:
                                     result = self.capability_registry.dispatch(plan.action_id, plan.args, exec_context)
                         else:
-                            if policy_block is None:
+                            if policy_block is None and operational_block is None:
                                 result = self.capability_registry.dispatch(plan.action_id, plan.args, exec_context)
                         
                         latency_ms = int((time.time() - start_ts) * 1000)
@@ -3339,6 +3449,7 @@ class AgentOrchestrator:
                         latency_ms=latency_ms,
                         work_id=work_id,
                     )
+                    self._release_runtime_v2_operational_leases(exec_context)
                     
                     # Persistence: Attach playback metadata if returned by capability.
                     # First try a user-visible assistant message for this work_id (e.g. work ack),
