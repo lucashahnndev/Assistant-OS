@@ -131,6 +131,10 @@ class BrowserSubagent:
         self._last_vision_signature_hash: str = ""
         self._last_vision_at: float = 0.0
         self._vision_cache_ttl_s: float = 30.0
+        self._bootstrap_attempts: int = 0
+        self._last_bootstrap_url: str = ""
+        # Hard serialization for browser mutations: one action at a time.
+        self._action_serial_lock = asyncio.Lock()
 
     def _evaluate_loop_guard(
         self,
@@ -513,13 +517,12 @@ Example:
         return copy.deepcopy(self._last_vision_observation)
 
     def _extract_url(self, goal: str) -> str:
-        goal_lower = goal.lower()
-        if "youtube" in goal_lower: return "https://www.youtube.com"
-        if "spotify" in goal_lower: return "https://open.spotify.com"
-        if "github" in goal_lower: return "https://www.github.com"
-        if "google" in goal_lower: return "https://www.google.com"
-        match = re.search(r"https?://[^\s,]+", goal)
-        return match.group(0) if match else "https://www.google.com"
+        raw_goal = str(goal or "")
+        # Prefer explicit URL in the user goal.
+        match = re.search(r"https?://[^\s,]+", raw_goal)
+        if match:
+            return match.group(0)
+        return ""
 
     @staticmethod
     def _normalize_spaces(text: str) -> str:
@@ -683,7 +686,10 @@ Example:
         """Generic fallback to avoid dead loops when planner JSON is persistently invalid."""
         url = str(state.get("url", "")).lower()
         if not url or url == "about:blank":
-            return {"action": "navigate", "args": {"url": self._extract_url(goal)}, "thought": "Fallback navigate from blank page due to parse failures."}
+            explicit_url = self._extract_url(goal)
+            if explicit_url:
+                return {"action": "navigate", "args": {"url": explicit_url}, "thought": "Fallback navigate from blank page due to parse failures."}
+            return {"action": "wait", "args": {"seconds": 2}, "thought": "Fallback wait on blank page; no explicit URL was provided."}
         
         # Safe generic fallback without deterministic semantic hijacking. 
         # Attempt minimal wait to settle, or if on an obvious end state (like a video player open), cautiously check if we are done.
@@ -757,48 +763,17 @@ Example:
         ]
         return any(h in blob for h in hints)
 
-    @staticmethod
-    def _state_indicates_context_drift(goal: str, state: Dict[str, Any]) -> bool:
-        g = str(goal or "").lower()
-        url = str(state.get("url") or "").lower()
-        title = str(state.get("title") or "").lower()
-        if "amazon" in g and ("ps4" in g or "controller" in g or "controle" in g):
-            if "amazon." in url and "/deals" in url:
-                return True
-            if "today's deals" in title or "todays deals" in title:
-                return True
-        return False
-
-    def _build_goal_search_url(self, goal: str, state: Dict[str, Any]) -> str:
-        """Constructs a deterministic search URL as drift-recovery fallback."""
-        g = str(goal or "").lower()
-        current_url = str(state.get("url") or "")
-        if "amazon" in g and ("ps4" in g or "controller" in g or "controle" in g):
-            domain = "www.amazon.com"
-            m = re.search(r"https?://([^/]+)/?", current_url)
-            if m and "amazon." in m.group(1):
-                domain = m.group(1)
-            return f"https://{domain}/s?k=PS4+controller"
-        return self._extract_url(goal)
-
     def _choose_recovery_action(self, trigger: str, goal: str, state: Dict[str, Any]) -> Tuple[str, Dict[str, Any], str]:
         """
         Conflict policy:
         1) Vision says target is out of viewport => reposition.
-        2) Context drift => navigate to deterministic goal URL.
-        3) Otherwise use one vision refresh.
+        2) Otherwise use one vision refresh.
         """
         if self._vision_requests_reposition(self._last_vision_observation):
             return (
                 "scroll",
                 {"direction": "up"},
                 f"{trigger} detected. Vision indicates target outside viewport; forcing scroll up.",
-            )
-        if self._state_indicates_context_drift(goal, state):
-            return (
-                "navigate",
-                {"url": self._build_goal_search_url(goal, state)},
-                f"{trigger} detected with context drift; forcing deterministic goal navigation.",
             )
         return (
             "vision",
@@ -1120,15 +1095,18 @@ Example:
                 await self._record_playback_frame(step_num, "thinking", {"goal": goal})
             
                 if step_num == 1 and state['url'] == "about:blank":
-                    target_url = self._extract_url(goal)
-                    logger.info(f"[{step_id}] 🌐 Bootstrapping -> {target_url}")
-                    await self.runtime.navigate(target_url)
-                    history.append({"step": 1, "thought": "Navigate to start.", "action": "navigate", "args": {"url": target_url}, "status": "success"})
-                    
-                    # Record frame after navigation
-                    await self._record_playback_frame(step_num, "navigate", {"url": target_url})
-                    
-                    continue
+                    bootstrap_url = self._extract_url(goal)
+                    if bootstrap_url:
+                        if bootstrap_url == self._last_bootstrap_url:
+                            self._bootstrap_attempts += 1
+                        else:
+                            self._bootstrap_attempts = 1
+                            self._last_bootstrap_url = bootstrap_url
+                        logger.info(f"[{step_id}] 🌐 Bootstrapping[{self._bootstrap_attempts}] -> {bootstrap_url}")
+                        await self.runtime.navigate(bootstrap_url)
+                        history.append({"step": 1, "thought": "Navigate to explicit URL from goal.", "action": "navigate", "args": {"url": bootstrap_url}, "status": "success"})
+                        await self._record_playback_frame(step_num, "navigate", {"url": bootstrap_url})
+                        continue
 
                 try:
                     # REASONING PHASE
@@ -1152,12 +1130,29 @@ Example:
                             action = "scroll"
                             args = {"direction": "up"}
                             thought = f"{thought} | Vision indicates target outside viewport; executing scroll up instead of another vision call."
-                        elif self._state_indicates_context_drift(goal, state):
-                            action = "navigate"
-                            args = {"url": self._build_goal_search_url(goal, state)}
-                            thought = f"{thought} | Context drift detected; navigating back to deterministic goal URL instead of repeating vision."
                         self._last_action = action
                         self._last_args = args
+
+                    # Deterministic anti-loop: suppress redundant navigate when already on
+                    # the same URL and no state progress is happening.
+                    if action == "navigate":
+                        wanted_url = str(args.get("url", "") or "").strip().rstrip("/")
+                        current_url = str(state.get("url", "") or "").strip().rstrip("/")
+                        if (
+                            wanted_url
+                            and current_url
+                            and wanted_url == current_url
+                            and not state_changed
+                            and self._consecutive_same_state >= 2
+                        ):
+                            thought = (
+                                f"{thought} | Redundant navigate suppressed: target URL already active "
+                                "without progress; forcing wait for explicit next-state signal."
+                            )
+                            action = "wait"
+                            args = {"seconds": 1}
+                            self._last_action = action
+                            self._last_args = args
 
                     # LOOP SIGNALING: Detect repeated state/action patterns, but never hard-override
                     # the planner action. Some tasks legitimately require repeated loops (e.g. infinite
@@ -1300,7 +1295,8 @@ Example:
                         })
                         await self._record_playback_frame(step_num, "resume_context", {"context": resume_context})
                     pre_action_focus = copy.deepcopy(state.get("focus") or {})
-                    resp = await self._execute_action(action, args, step_id, trace_id)
+                    async with self._action_serial_lock:
+                        resp = await self._execute_action(action, args, step_id, trace_id)
 
                     if str(getattr(resp, "status", "")) == "error":
                         err = str(getattr(resp, "error_details", "") or "Unknown planner execution error")

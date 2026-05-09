@@ -77,3 +77,15 @@ def test_click_visual_receipt_accepts_interactive_fallback_click():
     assessment = BrowserSubagent._assess_click_visual_receipt(result_data)
     assert assessment.get("ok") is True
     assert assessment.get("reason") == "interactive_fallback_clicked"
+
+
+def test_extract_url_prefers_explicit_url():
+    agent = BrowserSubagent(_RuntimeStub(), object())
+    got = agent._extract_url("abra https://example.com e pesquise ps4")
+    assert got == "https://example.com"
+
+
+def test_extract_url_maps_amazon_goal():
+    agent = BrowserSubagent(_RuntimeStub(), object())
+    got = agent._extract_url("abre o site da amazon e procura por ps4")
+    assert got == ""

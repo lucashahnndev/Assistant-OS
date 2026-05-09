@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import os
 import tempfile
+import shlex
+import logging
+import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional
+from urllib.parse import urlparse, urlunparse
 
 import httpx
+
+logger = logging.getLogger("aosd.capabilities.browser_control.playwright_mcp_adapter")
 
 
 class PlaywrightMCPAdapter:
@@ -17,11 +24,208 @@ class PlaywrightMCPAdapter:
         *,
         timeout_s: float = 15.0,
         invoker: Optional[Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None,
+        server_command: str = "",
+        server_env: Optional[Dict[str, str]] = None,
     ) -> None:
         self.endpoint = str(endpoint or "").strip()
         self.timeout_s = float(max(1.0, timeout_s))
         self._invoker = invoker
         self.calls_total = 0
+        self._jsonrpc_id = 0
+        self._mcp_session_id: str = ""
+        self._mcp_initialized = False
+        self._client: Optional[httpx.AsyncClient] = None
+        self._server_command = str(server_command or "").strip()
+        self._server_env = dict(server_env or {})
+        self._use_stdio = bool(self.endpoint.lower().startswith("stdio"))
+        self._stdio_proc: Optional[asyncio.subprocess.Process] = None
+        self._stdio_reader_task: Optional[asyncio.Task] = None
+        self._stdio_stderr_task: Optional[asyncio.Task] = None
+        self._stdio_lock: Optional[asyncio.Lock] = None
+        self._pending: Dict[int, asyncio.Future] = {}
+
+    async def aclose(self) -> None:
+        client = self._client
+        self._client = None
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
+        proc = self._stdio_proc
+        self._stdio_proc = None
+        if proc is not None:
+            try:
+                if proc.stdin:
+                    proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=4)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        for task in (self._stdio_reader_task, self._stdio_stderr_task):
+            if task is not None:
+                task.cancel()
+        self._stdio_reader_task = None
+        self._stdio_stderr_task = None
+        self._pending.clear()
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=self.timeout_s, trust_env=False)
+        return self._client
+
+    async def _ensure_stdio_process(self) -> None:
+        if self._stdio_proc is not None:
+            return
+        if not self._server_command:
+            raise RuntimeError("Missing MCP server command for stdio transport")
+        try:
+            args = shlex.split(self._server_command)
+        except Exception as e:
+            raise RuntimeError(f"Invalid MCP server command: {e}") from e
+        if not args:
+            raise RuntimeError("Invalid MCP server command (empty)")
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=self._server_env or None,
+        )
+        self._stdio_proc = proc
+        self._stdio_lock = asyncio.Lock()
+        self._stdio_reader_task = asyncio.create_task(self._stdio_reader())
+        self._stdio_stderr_task = asyncio.create_task(self._stderr_reader())
+
+    async def _stderr_reader(self) -> None:
+        proc = self._stdio_proc
+        if not proc or not proc.stderr:
+            return
+        try:
+            while True:
+                line = await proc.stderr.readline()
+                if not line:
+                    break
+                try:
+                    text = line.decode("utf-8", errors="ignore").rstrip()
+                except Exception:
+                    text = str(line)
+                if text:
+                    logger.debug("MCP stdio stderr | %s", text)
+        except asyncio.CancelledError:
+            pass
+
+    async def _stdio_reader(self) -> None:
+        proc = self._stdio_proc
+        if not proc or not proc.stdout:
+            return
+        try:
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                try:
+                    text = line.decode("utf-8", errors="ignore").strip()
+                except Exception:
+                    text = ""
+                if not text:
+                    continue
+                try:
+                    payload = json.loads(text)
+                except Exception:
+                    logger.debug("MCP stdio invalid JSON: %s", text[:200])
+                    continue
+                if isinstance(payload, dict) and "id" in payload:
+                    msg_id = payload.get("id")
+                    fut = self._pending.pop(msg_id, None)
+                    if fut and not fut.done():
+                        fut.set_result(payload)
+                else:
+                    # Notifications are ignored for now.
+                    continue
+        except asyncio.CancelledError:
+            pass
+        finally:
+            # Fail any pending calls if the server dies.
+            for _id, fut in list(self._pending.items()):
+                if fut and not fut.done():
+                    fut.set_exception(RuntimeError("MCP stdio server closed"))
+            self._pending.clear()
+
+    async def _stdio_send(self, payload: Dict[str, Any]) -> None:
+        await self._ensure_stdio_process()
+        if not self._stdio_proc or not self._stdio_proc.stdin:
+            raise RuntimeError("MCP stdio stdin unavailable")
+        text = json.dumps(payload, separators=(",", ":"))
+        if "\n" in text:
+            text = text.replace("\n", "\\n")
+        data = (text + "\n").encode("utf-8")
+        async with self._stdio_lock:
+            self._stdio_proc.stdin.write(data)
+            await self._stdio_proc.stdin.drain()
+
+    async def _stdio_request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        msg_id = payload.get("id")
+        if msg_id is None:
+            raise RuntimeError("MCP stdio request missing id")
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        self._pending[msg_id] = fut
+        await self._stdio_send(payload)
+        try:
+            return await asyncio.wait_for(fut, timeout=self.timeout_s)
+        finally:
+            self._pending.pop(msg_id, None)
+
+    async def _ensure_stdio_initialized(self) -> None:
+        if self._mcp_initialized:
+            return
+        logger.debug("MCP stdio initialize start")
+        init_payload = {
+            "jsonrpc": "2.0",
+            "id": self._next_jsonrpc_id(),
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "assistant-os", "version": "1.0"},
+            },
+        }
+        init_resp = await self._stdio_request(init_payload)
+        if not isinstance(init_resp, dict):
+            raise RuntimeError("Invalid MCP stdio initialize response payload")
+        if isinstance(init_resp.get("error"), dict):
+            message = str(init_resp["error"].get("message", "MCP initialize error"))
+            raise RuntimeError(message)
+        notify_payload = {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
+        await self._stdio_send(notify_payload)
+        self._mcp_initialized = True
+        logger.debug("MCP stdio initialize ok")
+
+    async def _call_tool_stdio(self, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        await self._ensure_stdio_initialized()
+        payload = {
+            "jsonrpc": "2.0",
+            "id": self._next_jsonrpc_id(),
+            "method": "tools/call",
+            "params": {"name": str(name or ""), "arguments": dict(args or {})},
+        }
+        data = await self._stdio_request(payload)
+        if not isinstance(data, dict):
+            raise RuntimeError("Invalid MCP stdio response payload")
+        if isinstance(data.get("error"), dict):
+            message = str(data["error"].get("message", "MCP stdio error"))
+            raise RuntimeError(message)
+        return {"result": data.get("result")}
 
     async def get_page_info(self) -> Dict[str, Any]:
         # Preferred path for MCP servers exposing an evaluate/run-code tool.
@@ -182,6 +386,13 @@ class PlaywrightMCPAdapter:
         payload = self._coerce_result_payload(out)
         tabs = self._coerce_tabs_payload(payload)
         active_index = int(payload.get("active_index", 0) or 0) if isinstance(payload, dict) else 0
+        if tabs:
+            current_tabs = [t for t in tabs if isinstance(t, dict) and bool(t.get("current"))]
+            if current_tabs:
+                try:
+                    active_index = int(current_tabs[0].get("index", active_index) or active_index)
+                except Exception:
+                    pass
         if active_index < 0:
             active_index = 0
         if tabs and active_index >= len(tabs):
@@ -323,26 +534,244 @@ class PlaywrightMCPAdapter:
             out = await self._invoker(name, dict(args or {}))
             return out if isinstance(out, dict) else {"result": out}
 
+        if self._use_stdio:
+            logger.debug("MCP stdio tool call | tool=%s", name)
+            return await self._call_tool_stdio(name, args)
+
         if not self.endpoint:
             raise RuntimeError("Missing MCP endpoint")
 
-        payload = {"name": str(name or ""), "arguments": dict(args or {})}
-        async with httpx.AsyncClient(timeout=self.timeout_s) as client:
-            resp = await client.post(f"{self.endpoint.rstrip('/')}/tools/call", json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+        # Strict MCP mode: prefer streamable MCP JSON-RPC endpoint (/mcp).
+        # Legacy /tools/call is only used when explicitly configured.
+        last_error: Optional[Exception] = None
+        for endpoint in self._endpoint_candidates():
+            try:
+                logger.debug(
+                    "MCP tool call start | tool=%s endpoint=%s session_id=%s initialized=%s",
+                    name,
+                    endpoint,
+                    self._mcp_session_id or "",
+                    self._mcp_initialized,
+                )
+                if endpoint.endswith("/mcp"):
+                    return await self._call_tool_mcp_jsonrpc(endpoint, name, args)
+                if endpoint.endswith("/tools/call"):
+                    return await self._call_tool_mcp_jsonrpc(endpoint, name, args)
+                return await self._call_tool_legacy(endpoint, name, args)
+            except Exception as e:
+                last_error = e
+                logger.debug("MCP call failed for endpoint=%s tool=%s: %s", endpoint, name, e)
+                continue
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("No valid MCP endpoint candidates")
+
+    def _endpoint_candidates(self) -> List[str]:
+        raw = self._canonicalize_endpoint(str(self.endpoint or "").strip()).rstrip("/")
+        if not raw:
+            return []
+        parsed = urlparse(raw)
+        if parsed.path.endswith("/mcp"):
+            return [raw]
+        if parsed.path.endswith("/tools/call"):
+            return [raw]
+        return [raw + "/mcp"]
+
+    @staticmethod
+    def _canonicalize_endpoint(raw_endpoint: str) -> str:
+        raw = str(raw_endpoint or "").strip()
+        if not raw:
+            return ""
+        parsed = urlparse(raw)
+        host = str(parsed.hostname or "").strip().lower()
+        if host == "127.0.0.1":
+            # playwright-mcp HTTP transport rejects 127.0.0.1 Host and requires localhost.
+            netloc = parsed.netloc
+            if parsed.username:
+                auth = parsed.username
+                if parsed.password:
+                    auth += f":{parsed.password}"
+                auth += "@"
+            else:
+                auth = ""
+            port = f":{parsed.port}" if parsed.port else ""
+            netloc = f"{auth}localhost{port}"
+            parsed = parsed._replace(netloc=netloc)
+            return urlunparse(parsed)
+        return raw
+
+    def _next_jsonrpc_id(self) -> int:
+        self._jsonrpc_id += 1
+        return int(self._jsonrpc_id)
+
+    async def _call_tool_mcp_jsonrpc(self, endpoint: str, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        await self._ensure_mcp_initialized(endpoint)
+        payload = {
+            "jsonrpc": "2.0",
+            "id": self._next_jsonrpc_id(),
+            "method": "tools/call",
+            "params": {
+                "name": str(name or ""),
+                "arguments": dict(args or {}),
+            },
+        }
+        headers = {
+            "content-type": "application/json",
+            "accept": "application/json, text/event-stream",
+        }
+        if self._mcp_session_id:
+            headers["mcp-session-id"] = self._mcp_session_id
+        client = self._get_client()
+        resp = await client.post(endpoint, json=payload, headers=headers)
+        logger.debug(
+            "MCP tool call response | tool=%s status=%s session_id=%s",
+            name,
+            resp.status_code,
+            self._mcp_session_id or "",
+        )
+        if resp.status_code >= 400:
+            snippet = resp.text[:500] if isinstance(resp.text, str) else str(resp.text)
+            logger.debug(
+                "MCP tool call error payload | tool=%s status=%s session_id=%s headers=%s body=%s",
+                name,
+                resp.status_code,
+                self._mcp_session_id or "",
+                dict(resp.headers),
+                snippet,
+            )
+        # Session may expire in server side; retry once with a new initialize handshake.
+        # Some MCP servers can also return 404 for unknown/expired session handles.
+        if resp.status_code in {401, 403, 404, 409}:
+            self._mcp_initialized = False
+            self._mcp_session_id = ""
+            await self._ensure_mcp_initialized(endpoint)
+            if self._mcp_session_id:
+                headers["mcp-session-id"] = self._mcp_session_id
+            resp = await client.post(endpoint, json=payload, headers=headers)
+            logger.debug(
+                "MCP tool call retry | tool=%s status=%s session_id=%s",
+                name,
+                resp.status_code,
+                self._mcp_session_id or "",
+            )
+            if resp.status_code >= 400:
+                snippet = resp.text[:500] if isinstance(resp.text, str) else str(resp.text)
+                logger.debug(
+                    "MCP tool call retry error payload | tool=%s status=%s session_id=%s headers=%s body=%s",
+                    name,
+                    resp.status_code,
+                    self._mcp_session_id or "",
+                    dict(resp.headers),
+                    snippet,
+                )
+        resp.raise_for_status()
+        data = self._decode_mcp_payload(resp.text)
         if not isinstance(data, dict):
-            raise RuntimeError("Invalid MCP response payload")
+            raise RuntimeError("Invalid MCP JSON-RPC response payload")
+        if isinstance(data.get("error"), dict):
+            message = str(data["error"].get("message", "MCP JSON-RPC error"))
+            raise RuntimeError(message)
+        return {"result": data.get("result")}
+
+    async def _ensure_mcp_initialized(self, endpoint: str) -> None:
+        if self._mcp_initialized:
+            return
+        logger.debug("MCP initialize start | endpoint=%s", endpoint)
+        init_payload = {
+            "jsonrpc": "2.0",
+            "id": self._next_jsonrpc_id(),
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "assistant-os", "version": "1.0"},
+            },
+        }
+        headers = {
+            "content-type": "application/json",
+            "accept": "application/json, text/event-stream",
+        }
+        client = self._get_client()
+        resp = await client.post(endpoint, json=init_payload, headers=headers)
+        if resp.status_code in {404, 405}:
+            raise RuntimeError(f"MCP JSON-RPC endpoint unavailable: {endpoint}")
+        resp.raise_for_status()
+        data = self._decode_mcp_payload(resp.text)
+        self._mcp_session_id = (
+            str(resp.headers.get("mcp-session-id", "") or resp.headers.get("Mcp-Session-Id", "") or "").strip()
+        )
+        notify_headers = dict(headers)
+        if self._mcp_session_id:
+            notify_headers["mcp-session-id"] = self._mcp_session_id
+        notify_payload = {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
+        notify_resp = await client.post(endpoint, json=notify_payload, headers=notify_headers)
+        notify_resp.raise_for_status()
+        logger.debug("MCP initialize ok | endpoint=%s session_id=%s", endpoint, self._mcp_session_id or "")
+        if not isinstance(data, dict):
+            raise RuntimeError("Invalid MCP initialize response payload")
+        if isinstance(data.get("error"), dict):
+            message = str(data["error"].get("message", "MCP initialize error"))
+            raise RuntimeError(message)
+        self._mcp_initialized = True
+
+    async def _call_tool_legacy(self, endpoint: str, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        payload = {"name": str(name or ""), "arguments": dict(args or {})}
+        client = self._get_client()
+        resp = await client.post(endpoint, json=payload)
+        resp.raise_for_status()
+        data = self._decode_mcp_payload(resp.text)
+        if not isinstance(data, dict):
+            raise RuntimeError("Invalid MCP legacy response payload")
         if data.get("error"):
             raise RuntimeError(str(data.get("error")))
         return data
+
+    @staticmethod
+    def _decode_mcp_payload(raw_text: str) -> Dict[str, Any]:
+        raw = str(raw_text or "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            pass
+
+        # SSE frame fallback:
+        # event: message
+        # data: {"jsonrpc":"2.0", ...}
+        data_lines: List[str] = []
+        for line in raw.splitlines():
+            item = line.strip()
+            if not item.startswith("data:"):
+                continue
+            data_lines.append(item[len("data:") :].strip())
+        if not data_lines:
+            raise RuntimeError("Invalid MCP response payload (not JSON/SSE)")
+        joined = "\n".join([d for d in data_lines if d])
+        try:
+            parsed = json.loads(joined)
+        except Exception as e:
+            raise RuntimeError(f"Invalid MCP SSE payload: {e}") from e
+        if not isinstance(parsed, dict):
+            raise RuntimeError("Invalid MCP SSE payload object")
+        return parsed
 
     @staticmethod
     def _coerce_result_payload(result: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(result, dict):
             return {}
         if isinstance(result.get("result"), dict):
-            return dict(result.get("result") or {})
+            payload = dict(result.get("result") or {})
+            # MCP servers may wrap structured output in `content[].text` markdown.
+            text_blocks = PlaywrightMCPAdapter._extract_text_blocks(payload)
+            for text in text_blocks:
+                parsed = PlaywrightMCPAdapter._extract_json_from_text(text)
+                if isinstance(parsed, dict):
+                    return parsed
+                if isinstance(parsed, list):
+                    return {"items": parsed}
+            return payload
         if isinstance(result.get("output"), dict):
             return dict(result.get("output") or {})
         return dict(result)
@@ -358,4 +787,57 @@ class PlaywrightMCPAdapter:
             return [t for t in payload.get("result") if isinstance(t, dict)]
         if isinstance(payload.get("items"), list):
             return [t for t in payload.get("items") if isinstance(t, dict)]
+        # Textual MCP payload fallback:
+        # "### Result\n- 0: (current) [Title](url)"
+        tabs: List[Dict[str, Any]] = []
+        for text in PlaywrightMCPAdapter._extract_text_blocks(payload):
+            for line in str(text or "").splitlines():
+                item = line.strip()
+                if not item.startswith("- "):
+                    continue
+                m = re.match(r"^-\s*(\d+)\s*:\s*(\(current\)\s*)?\[(.*?)\]\((.*?)\)\s*$", item)
+                if not m:
+                    continue
+                idx = int(m.group(1))
+                is_current = bool(m.group(2))
+                title = str(m.group(3) or "")
+                url = str(m.group(4) or "")
+                tabs.append({"index": idx, "title": title, "url": url, "current": is_current})
+        if tabs:
+            tabs.sort(key=lambda t: int(t.get("index", 0) or 0))
+            return tabs
         return []
+
+    @staticmethod
+    def _extract_text_blocks(payload: Dict[str, Any]) -> List[str]:
+        if not isinstance(payload, dict):
+            return []
+        content = payload.get("content")
+        if not isinstance(content, list):
+            return []
+        out: List[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type", "")).strip().lower() != "text":
+                continue
+            text = str(item.get("text", "") or "")
+            if text:
+                out.append(text)
+        return out
+
+    @staticmethod
+    def _extract_json_from_text(text: str) -> Any:
+        raw = str(text or "")
+        if not raw:
+            return None
+        decoder = json.JSONDecoder()
+        for i, ch in enumerate(raw):
+            if ch not in "{[":
+                continue
+            try:
+                parsed, _end = decoder.raw_decode(raw[i:])
+                return parsed
+            except Exception:
+                continue
+        return None

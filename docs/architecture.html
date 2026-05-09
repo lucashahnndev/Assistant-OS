@@ -1,104 +1,87 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Arquitetura - Atlas Bot</title>
+    <title>Assistant-OS - Arquitetura</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
     <script type="module">
         import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-        mermaid.initialize({ startOnLoad: true });
+        mermaid.initialize({ startOnLoad: true, theme: 'default' });
     </script>
 </head>
-
 <body>
-    <div class="sidebar">
-        <a href="index.html" class="logo">Atlas Bot</a>
+    <nav class="sidebar">
+        <a href="index.html" class="logo">Assistant-OS</a>
         <ul class="nav-links">
             <li><a href="index.html">Visão Geral</a></li>
-            <li><a href="installation.html">Instalação</a></li>
-            <li><a href="architecture.html" class="active">Arquitetura</a></li>
-            <li><a href="modules.html">Módulos</a></li>
+            <li><a href="architecture.html" class="active">Arquitetura (Core)</a></li>
+            <li><a href="workers.html">Task & Worker Manager</a></li>
+            <li><a href="capabilities.html">Capabilities & Skills</a></li>
+            <li><a href="providers.html">Providers (Multi-Model)</a></li>
+            <li><a href="integrations.html">OAuth & Contas</a></li>
+            <li><a href="governance.html">Governança & ACL</a></li>
+            <li><a href="drivers.html">Drivers (I/O)</a></li>
         </ul>
-    </div>
+    </nav>
 
-    <div class="main-content">
+    <main class="main-content">
         <h1>Arquitetura do Sistema</h1>
-        <p>O Atlas Bot utiliza uma arquitetura híbrida <strong>Kernel-Driver</strong> + <strong>Agentic Cognitive
-                Loop</strong>.
-            Isso separa o controle de hardware (Drivers) do raciocínio complexo (Orchestrator).
-        </p>
+        <p>A arquitetura moderna do Assistant-OS baseia-se na forte dissociação entre o Loop Conversacional e a Execução de Tarefas.</p>
 
-        <h2>Diagrama de Fluxo</h2>
+        <h2>Diagrama de Fluxo (Orchestrator e Workers)</h2>
         <div class="mermaid">
             graph TD
-            subgraph Drivers
-            A[VoiceDriver]
-            B[TelegramDriver]
-            C[BrowserDriver]
-            D[ServerDriver]
+            subgraph Drivers de Interface
+                TD[TelegramDriver]
+                VD[VoiceDriver]
+                SD[ServerDriver]
             end
 
-            subgraph Core
-            K[Kernel (main.py)]
-            O[Agent Orchestrator]
+            subgraph Core System
+                K[Kernel/Main]
+                O[Agent Orchestrator]
+                SCHED[Scheduler]
             end
 
-            subgraph Memory
-            S[Session (Short-Term)]
-            LTM[Vector DB (Long-Term)]
+            subgraph Execution Engine
+                WM[Worker Manager]
+                W1[Worker Process 1]
+                W2[Worker Process 2]
             end
 
-            subgraph Services
-            LLM[LLM Manager]
-            TTS[TTS Manager]
+            subgraph Memory & Context
+                MEM[Session & Global State]
             end
 
-            A & B & C & D -->|Input Event| K
-            K -->|Context + Input| O
-
-            O <-->|Read/Write| S
-                O <-->|Query| LTM
-                    O -->|Inference| LLM
-
-                    O -->|Action| K
-                    K -->|Command| C
-                    K -->|Response| B & A
+            TD & VD & SD -->|Input Event| K
+            K -->|Roteia Intenção| O
+            O -->|Lê/Grava Contexto| MEM
+            O -->|Monta Planos| SCHED
+            
+            SCHED -->|Cria 'Work'| WM
+            WM -->|Spawn & Monitora| W1
+            WM -->|Spawn & Monitora| W2
+            
+            W1 -.->|Eventos de Progresso| SCHED
+            W2 -.->|Eventos de Progresso| SCHED
+            SCHED -.->|Atualiza UI Assincronamente| K
         </div>
 
-        <h2>Componentes Principais</h2>
+        <h2>Os 3 Componentes Chave</h2>
 
-        <h3>Kernel (src/main.py)</h3>
-        <p>O despachante central. Ele não "pensa", apenas roteia. Recebe inputs dos Drivers e os encaminha para o
-            Orchestrator.
-            Recebe ações do Orchestrator e as delega para os Drivers (ex: "Fale isso", "Abra aquilo").</p>
+        <h3>1. O Kernel (src/main.py)</h3>
+        <p>O Kernel é o grande despachante de eventos. Ele escuta as mensagens que chegam dos Drivers (Interfaces) e mantém a conectividade. Ele nunca se bloqueia processando requisições pesadas de LLM. Seu papel é pegar a intenção do usuário e atirar para o Orchestrator.</p>
 
-        <h3>Agent Orchestrator (src/core/orchestrator.py)</h3>
-        <p><strong>O Cérebro.</strong> Substitui o antigo "Router". Utiliza um Loop de Raciocínio (ReAct) para:</p>
-        <ol>
-            <li>Analisar o input (Intenção).</li>
-            <li>Consultar memórias passadas.</li>
-            <li>Planejar passos (Plan).</li>
-            <li>Executar ferramentas (Skills).</li>
-        </ol>
+        <h3>2. O Orchestrator e o Loop Cognitivo (src/core/orchestrator.py)</h3>
+        <p>Este é o "Cérebro". O Orchestrator avalia o contexto, carrega o perfil do usuário, verifica o histórico e submete a intenção à LLM configurada. Se a LLM determina que uma ação complexa deve ser tomada (como pesquisar na Wikipedia ou raspar um site), o Orchestrator converte isso em um <strong>Plano de Execução</strong> e envia para o Scheduler.</p>
 
-        <h3>Drivers (src/drivers/)</h3>
-        <p>Adaptadores de I/O:</p>
-        <ul>
-            <li><strong>VoiceDriver</strong>: Interface PyGame + STT/TTS local.</li>
-            <li><strong>TelegramDriver</strong>: Bot assíncrono para controle remoto.</li>
-            <li><strong>BrowserDriver</strong>: Automação web via Playwright (Headless/Headed).</li>
-            <li><strong>ServerDriver</strong>: (Experimental) API para controle externo.</li>
-        </ul>
+        <h3>3. Scheduler e Workers (src/core/scheduler.py & src/core/worker.py)</h3>
+        <p>O <strong>Scheduler</strong> atua como a fila de tarefas do sistema. Ele converte os planos em <code>Works</code> e aplica políticas de admissão (ex: uma tarefa que toca áudio pode forçar o cancelamento da música atual). 
+        <br><br>
+        O <strong>Worker Manager</strong> pega esses Works e roda cada um deles em um contexto isolado (podendo ser assíncrono ou até em um novo processo via subprocessos/threads dependendo da configuração da capability). Isso garante que, se uma pesquisa no Playwright travar, o bot ainda responda a mensagens de texto imediatamente no Telegram.</p>
 
-        <h3>Memory System (src/services/memory/)</h3>
-        <p>O Atlas possui persistência de contexto:</p>
-        <ul>
-            <li><strong>Session</strong>: Mantém o contexto da conversa atual.</li>
-            <li><strong>Long-Term</strong>: ChromaDB armazena embeddings para lembrar fatos e preferências.</li>
-        </ul>
-    </div>
+    </main>
 </body>
-
 </html>

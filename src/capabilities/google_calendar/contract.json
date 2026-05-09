@@ -53,6 +53,47 @@
             }
         }
     ],
+    "discoverability_profile": {
+        "enabled": true,
+        "roles": [
+            "search",
+            "retrieve",
+            "control"
+        ],
+        "domains": [
+            "calendar",
+            "google_calendar",
+            "sync"
+        ],
+        "entity_types": [
+            "event",
+            "appointment",
+            "agenda",
+            "calendar_account"
+        ],
+        "keywords": [
+            "google calendar",
+            "google agenda",
+            "google account",
+            "account",
+            "conta",
+            "sincronizar",
+            "sync",
+            "linked calendar"
+        ],
+        "routing_hints": {
+            "preferred_intents": [
+                "sync_calendar",
+                "account_lookup",
+                "google_calendar_lookup"
+            ],
+            "avoid_when": [
+                "agenda_lookup",
+                "schedule_lookup",
+                "event_lookup"
+            ]
+        }
+    },
     "auth": {
         "mode": "none"
     }

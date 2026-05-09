@@ -1,726 +1,820 @@
 {
-    "contract_version": "1.0",
-    "capability": {
-        "id": "system_control",
-        "namespace": "system.control",
-        "version": "1.0.0",
-        "title": "System Control",
-        "description": "Opera\u00e7\u00f5es de controle do sistema: status, processos, rede, servi\u00e7os, arquivos, screenshot, teclado e energia.",
-        "assets": {
-            "icon_svg": "assets/icon.svg"
-        }
-    },
-    "runtime": {
-        "module": "capabilities.system_control",
-        "factory": "create_capability",
-        "config_schema": "./config.schema.json"
-    },
-    "actions": [
-        {
-            "id": "system.control.info",
-            "title": "Info",
-            "description": "Informa\u00e7\u00f5es b\u00e1sicas do sistema (SO, data/hora e usu\u00e1rio).",
-            "handler": "info",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "system:control:info"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "system.control.time",
-            "title": "Time",
-            "description": "Hora atual do sistema.",
-            "handler": "time",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "system:control:time"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "system.control.status",
-            "title": "Status",
-            "description": "Status de trabalhos ativos ou de um work_id espec\u00edfico.",
-            "handler": "status",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "system:control:status"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "work_id": {
-                        "type": "string",
-                        "description": "Quando informado, retorna o status apenas desse trabalho."
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "system.control.cancel",
-            "title": "Cancel",
-            "description": "Solicita cancelamento de um trabalho ativo.",
-            "handler": "cancel",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "system:control:cancel"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "work_id": {
-                        "type": "string",
-                        "description": "Identificador do trabalho a cancelar."
-                    }
-                },
-                "required": [
-                    "work_id"
-                ],
-                "additionalProperties": true
-            },
-            "side_effect": "idempotent"
-        },
-        {
-            "id": "system.control.capabilities.list",
-            "title": "Capabilities List",
-            "description": "Lista a\u00e7\u00f5es dispon\u00edveis para este usu\u00e1rio (descoberta sob demanda).",
-            "handler": "capabilities.list",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "system:control:capabilities_list"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Filtro textual opcional por id/namespace/descri\u00e7\u00e3o."
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "M\u00e1ximo de a\u00e7\u00f5es retornadas.",
-                        "default": 40
-                    },
-                    "include_descriptions": {
-                        "type": "boolean",
-                        "description": "Quando true, inclui descri\u00e7\u00e3o das a\u00e7\u00f5es.",
-                        "default": false
-                    },
-                    "format": {
-                        "type": "string",
-                        "description": "Formato de sa\u00edda: toon (padr\u00e3o) ou legacy.",
-                        "default": "toon"
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "system.control.capabilities.list.ai",
-            "title": "Capabilities List Ai",
-            "description": "Lista a\u00e7\u00f5es em formato otimizado para IA (TOON compacto).",
-            "handler": "capabilities.list.ai",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "system:control:capabilities_list_ai"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Filtro textual opcional por id/namespace/descri\u00e7\u00e3o."
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "M\u00e1ximo de a\u00e7\u00f5es retornadas.",
-                        "default": 40
-                    },
-                    "include_descriptions": {
-                        "type": "boolean",
-                        "description": "Quando true, inclui descri\u00e7\u00e3o curta no TOON.",
-                        "default": false
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "system.control.capabilities.list.ui",
-            "title": "Capabilities List Ui",
-            "description": "Lista a\u00e7\u00f5es em formato detalhado para UI.",
-            "handler": "capabilities.list.ui",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "system:control:capabilities_list_ui"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Filtro textual opcional por id/namespace/descri\u00e7\u00e3o."
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "M\u00e1ximo de a\u00e7\u00f5es retornadas.",
-                        "default": 40
-                    },
-                    "include_descriptions": {
-                        "type": "boolean",
-                        "description": "Quando true, inclui descri\u00e7\u00e3o completa das a\u00e7\u00f5es.",
-                        "default": true
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "system.control.capabilities.describe",
-            "title": "Capabilities Describe",
-            "description": "Retorna metadados detalhados de uma ou mais a\u00e7\u00f5es.",
-            "handler": "capabilities.describe",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "system:control:capabilities_describe"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action_id": {
-                        "type": "string",
-                        "description": "ID de a\u00e7\u00e3o \u00fanica."
-                    },
-                    "action_ids": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        },
-                        "description": "Lista de IDs de a\u00e7\u00e3o."
-                    },
-                    "format": {
-                        "type": "string",
-                        "description": "Formato de sa\u00edda: toon (padr\u00e3o) ou legacy.",
-                        "default": "toon"
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "system.control.capabilities.describe.ai",
-            "title": "Capabilities Describe Ai",
-            "description": "Retorna metadados de a\u00e7\u00e3o em formato otimizado para IA (TOON compacto).",
-            "handler": "capabilities.describe.ai",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "system:control:capabilities_describe_ai"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action_id": {
-                        "type": "string",
-                        "description": "ID de a\u00e7\u00e3o \u00fanica."
-                    },
-                    "action_ids": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        },
-                        "description": "Lista de IDs de a\u00e7\u00e3o."
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "system.control.capabilities.describe.ui",
-            "title": "Capabilities Describe Ui",
-            "description": "Retorna metadados detalhados de a\u00e7\u00e3o para UI.",
-            "handler": "capabilities.describe.ui",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "system:control:capabilities_describe_ui"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action_id": {
-                        "type": "string",
-                        "description": "ID de a\u00e7\u00e3o \u00fanica."
-                    },
-                    "action_ids": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        },
-                        "description": "Lista de IDs de a\u00e7\u00e3o."
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "system.control.screenshot",
-            "title": "Screenshot",
-            "description": "Captura screenshot da tela atual.",
-            "handler": "screenshot",
-            "risk_level": "medium",
-            "permissions": {
-                "scopes": [
-                    "system:control:screenshot"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filename": {
-                        "type": "string",
-                        "description": "Nome do arquivo de sa\u00edda. Padr\u00e3o: screenshot.png."
-                    },
-                    "output_file": {
-                        "type": "string",
-                        "description": "Alias de filename."
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "system.control.power",
-            "title": "Power",
-            "description": "Executa a\u00e7\u00e3o de energia (reiniciar ou desligar).",
-            "handler": "power",
-            "risk_level": "high",
-            "permissions": {
-                "scopes": [
-                    "system:control:power"
-                ],
-                "allow_anyone": false,
-                "requires_approval": true
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "description": "A\u00e7\u00e3o de energia: reboot|restart|shutdown|off."
-                    },
-                    "command": {
-                        "type": "string",
-                        "description": "Alias legado de action."
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "destructive"
-        },
-        {
-            "id": "system.control.process.list",
-            "title": "Process List",
-            "description": "Lista processos em execu\u00e7\u00e3o, com filtros.",
-            "handler": "process.list",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "system:control:process_list"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name_contains": {
-                        "type": "string",
-                        "description": "Filtra por trecho no nome do processo."
-                    },
-                    "user": {
-                        "type": "string",
-                        "description": "Filtra pelo usu\u00e1rio dono do processo."
-                    },
-                    "sort": {
-                        "type": "string",
-                        "description": "Ordena\u00e7\u00e3o: cpu ou mem.",
-                        "default": "cpu"
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "system.control.process.kill",
-            "title": "Process Kill",
-            "description": "Finaliza processo pelo PID.",
-            "handler": "process.kill",
-            "risk_level": "high",
-            "permissions": {
-                "scopes": [
-                    "system:control:process_kill"
-                ],
-                "allow_anyone": false,
-                "requires_approval": true
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pid": {
-                        "type": "integer",
-                        "description": "PID do processo alvo."
-                    },
-                    "signal": {
-                        "type": "string",
-                        "description": "Nome do sinal (ex.: TERM).",
-                        "default": "TERM"
-                    }
-                },
-                "required": [
-                    "pid"
-                ],
-                "additionalProperties": true
-            },
-            "side_effect": "destructive"
-        },
-        {
-            "id": "system.control.network.status",
-            "title": "Network Status",
-            "description": "Mostra status das interfaces de rede.",
-            "handler": "network.status",
-            "risk_level": "medium",
-            "permissions": {
-                "scopes": [
-                    "system:control:network_status"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "system.control.network.ping",
-            "title": "Network Ping",
-            "description": "Executa ping em um host/IP.",
-            "handler": "network.ping",
-            "risk_level": "medium",
-            "permissions": {
-                "scopes": [
-                    "system:control:network_ping"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "host": {
-                        "type": "string",
-                        "description": "Host ou IP de destino."
-                    },
-                    "count": {
-                        "type": "integer",
-                        "description": "Quantidade de pacotes.",
-                        "default": 4
-                    }
-                },
-                "required": [
-                    "host"
-                ],
-                "additionalProperties": true
-            },
-            "side_effect": "idempotent"
-        },
-        {
-            "id": "system.control.service.manage",
-            "title": "Service Manage",
-            "description": "Gerencia servi\u00e7os (status/start/stop/restart).",
-            "handler": "service.manage",
-            "risk_level": "high",
-            "permissions": {
-                "scopes": [
-                    "system:control:service_manage"
-                ],
-                "allow_anyone": false,
-                "requires_approval": true
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "unit": {
-                        "type": "string",
-                        "description": "Unidade de servi\u00e7o systemd."
-                    },
-                    "action": {
-                        "type": "string",
-                        "description": "A\u00e7\u00e3o: status|start|stop|restart."
-                    }
-                },
-                "required": [
-                    "unit",
-                    "action"
-                ],
-                "additionalProperties": true
-            },
-            "side_effect": "destructive"
-        },
-        {
-            "id": "system.control.service.logs",
-            "title": "Service Logs",
-            "description": "L\u00ea logs de um servi\u00e7o systemd.",
-            "handler": "service.logs",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "system:control:service_logs"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "unit": {
-                        "type": "string",
-                        "description": "Unidade de servi\u00e7o systemd."
-                    },
-                    "lines": {
-                        "type": "integer",
-                        "description": "Quantidade de linhas de log.",
-                        "default": 50
-                    }
-                },
-                "required": [
-                    "unit"
-                ],
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "system.control.fs.list",
-            "title": "Fs List",
-            "description": "Lista arquivos e pastas de um diret\u00f3rio.",
-            "handler": "fs.list",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "system:control:fs_list"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Caminho do diret\u00f3rio relativo ao workspace.",
-                        "default": "."
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "system.control.fs.read",
-            "title": "Fs Read",
-            "description": "L\u00ea conte\u00fado de arquivo (com intervalo de linhas opcional).",
-            "handler": "fs.read",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "system:control:fs_read"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Caminho do arquivo relativo ao workspace."
-                    },
-                    "start": {
-                        "type": "integer",
-                        "description": "Linha inicial (1-indexado).",
-                        "default": 1
-                    },
-                    "end": {
-                        "type": "integer",
-                        "description": "Linha final (inclusiva)."
-                    }
-                },
-                "required": [
-                    "path"
-                ],
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "system.control.fs.write",
-            "title": "Fs Write",
-            "description": "Escreve conte\u00fado em arquivo no workspace.",
-            "handler": "fs.write",
-            "risk_level": "high",
-            "permissions": {
-                "scopes": [
-                    "system:control:fs_write"
-                ],
-                "allow_anyone": false,
-                "requires_approval": true
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Caminho do arquivo relativo ao workspace."
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Conte\u00fado a ser escrito."
-                    }
-                },
-                "required": [
-                    "path",
-                    "content"
-                ],
-                "additionalProperties": true
-            },
-            "side_effect": "destructive"
-        },
-        {
-            "id": "system.control.fs.delete",
-            "title": "Fs Delete",
-            "description": "Remove arquivo ou diret\u00f3rio no workspace.",
-            "handler": "fs.delete",
-            "risk_level": "high",
-            "permissions": {
-                "scopes": [
-                    "system:control:fs_delete"
-                ],
-                "allow_anyone": false,
-                "requires_approval": true
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Caminho do arquivo/diret\u00f3rio relativo ao workspace."
-                    }
-                },
-                "required": [
-                    "path"
-                ],
-                "additionalProperties": true
-            },
-            "side_effect": "destructive"
-        },
-        {
-            "id": "system.control.keyboard",
-            "title": "Keyboard",
-            "description": "Executa comandos globais de teclado/m\u00eddia.",
-            "handler": "keyboard",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "system:control:keyboard"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "description": "One of: next, prev, pause, volume_up, volume_down, mute, close."
-                    },
-                    "command": {
-                        "type": "string",
-                        "description": "Comando textual legado (compatibilidade)."
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "idempotent"
-        }
-    ],
-    "auth": {
-        "mode": "none",
-        "required": false,
-        "fields": []
+  "contract_version": "1.0",
+  "capability": {
+    "id": "system_control",
+    "namespace": "system.control",
+    "version": "1.0.0",
+    "title": "System Control",
+    "description": "Operações de controle do sistema: status, processos, rede, serviços, arquivos, screenshot, teclado e energia.",
+    "assets": {
+      "icon_svg": "assets/icon.svg"
     }
+  },
+  "runtime": {
+    "module": "capabilities.system_control",
+    "factory": "create_capability",
+    "config_schema": "./config.schema.json"
+  },
+  "actions": [
+    {
+      "id": "system.control.info",
+      "title": "Info",
+      "description": "Informações básicas do sistema (SO, data/hora e usuário).",
+      "handler": "info",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:control:info"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.control.time",
+      "title": "Time",
+      "description": "Hora atual do sistema.",
+      "handler": "time",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:control:time"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.control.status",
+      "title": "Status",
+      "description": "Status de trabalhos ativos ou de um work_id específico.",
+      "handler": "status",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:control:status"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "work_id": {
+            "type": "string",
+            "description": "Quando informado, retorna o status apenas desse trabalho."
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.control.cancel",
+      "title": "Cancel",
+      "description": "Solicita cancelamento de um trabalho ativo.",
+      "handler": "cancel",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:control:cancel"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "work_id": {
+            "type": "string",
+            "description": "Identificador do trabalho a cancelar."
+          }
+        },
+        "required": [
+          "work_id"
+        ],
+        "additionalProperties": true
+      },
+      "side_effect": "idempotent"
+    },
+    {
+      "id": "system.control.consult_tools",
+      "title": "Consult Tools",
+      "description": "Consulta semanticamente ferramentas/capabilities candidatas a partir de uma intenção ou consulta curta.",
+      "handler": "consult_tools",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:control:consult_tools"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Consulta curta, natural ou semântica, para localizar ferramentas candidatas. Se omitida, a capability usa o texto atual do usuário como fallback."
+          },
+          "intent": {
+            "type": "string",
+            "description": "Intenção de alto nível para refinar o ranking semântico."
+          },
+          "domain": {
+            "type": "string",
+            "description": "Domínio opcional a ser priorizado, como weather, browser, memory ou system."
+          },
+          "role": {
+            "type": "string",
+            "description": "Papel desejado na capability, como search, retrieve ou control."
+          },
+          "entity_type": {
+            "type": "string",
+            "description": "Tipo de entidade esperado, como article, video, track, place ou paper."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Máximo de candidatos retornados.",
+            "default": 5
+          },
+          "include_descriptions": {
+            "type": "boolean",
+            "description": "Quando true, inclui descrições curtas e contexto de readiness.",
+            "default": true
+          },
+          "format": {
+            "type": "string",
+            "description": "Formato de saída: toon (padrão) ou legacy.",
+            "default": "toon"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.control.capabilities.list",
+      "title": "Capabilities List",
+      "description": "Lista ações disponíveis para este usuário (descoberta sob demanda).",
+      "handler": "capabilities.list",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:control:capabilities_list"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Filtro textual opcional por id/namespace/descrição."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Máximo de ações retornadas.",
+            "default": 40
+          },
+          "include_descriptions": {
+            "type": "boolean",
+            "description": "Quando true, inclui descrição das ações.",
+            "default": false
+          },
+          "format": {
+            "type": "string",
+            "description": "Formato de saída: toon (padrão) ou legacy.",
+            "default": "toon"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.control.capabilities.list.ai",
+      "title": "Capabilities List Ai",
+      "description": "Lista ações em formato otimizado para IA (TOON compacto).",
+      "handler": "capabilities.list.ai",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:control:capabilities_list_ai"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Filtro textual opcional por id/namespace/descrição."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Máximo de ações retornadas.",
+            "default": 40
+          },
+          "include_descriptions": {
+            "type": "boolean",
+            "description": "Quando true, inclui descrição curta no TOON.",
+            "default": false
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.control.capabilities.list.ui",
+      "title": "Capabilities List Ui",
+      "description": "Lista ações em formato detalhado para UI.",
+      "handler": "capabilities.list.ui",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:control:capabilities_list_ui"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Filtro textual opcional por id/namespace/descrição."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Máximo de ações retornadas.",
+            "default": 40
+          },
+          "include_descriptions": {
+            "type": "boolean",
+            "description": "Quando true, inclui descrição completa das ações.",
+            "default": true
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.control.capabilities.describe",
+      "title": "Capabilities Describe",
+      "description": "Retorna metadados detalhados de uma ou mais ações.",
+      "handler": "capabilities.describe",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:control:capabilities_describe"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "description": "ID de ação única."
+          },
+          "action_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Lista de IDs de ação."
+          },
+          "format": {
+            "type": "string",
+            "description": "Formato de saída: toon (padrão) ou legacy.",
+            "default": "toon"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.control.capabilities.describe.ai",
+      "title": "Capabilities Describe Ai",
+      "description": "Retorna metadados de ação em formato otimizado para IA (TOON compacto).",
+      "handler": "capabilities.describe.ai",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:control:capabilities_describe_ai"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "description": "ID de ação única."
+          },
+          "action_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Lista de IDs de ação."
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.control.capabilities.describe.ui",
+      "title": "Capabilities Describe Ui",
+      "description": "Retorna metadados detalhados de ação para UI.",
+      "handler": "capabilities.describe.ui",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:control:capabilities_describe_ui"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "description": "ID de ação única."
+          },
+          "action_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Lista de IDs de ação."
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.control.screenshot",
+      "title": "Screenshot",
+      "description": "Captura screenshot da tela atual.",
+      "handler": "screenshot",
+      "risk_level": "medium",
+      "permissions": {
+        "scopes": [
+          "system:control:screenshot"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filename": {
+            "type": "string",
+            "description": "Nome do arquivo de saída. Padrão: screenshot.png."
+          },
+          "output_file": {
+            "type": "string",
+            "description": "Alias de filename."
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.control.power",
+      "title": "Power",
+      "description": "Executa ação de energia (reiniciar ou desligar).",
+      "handler": "power",
+      "risk_level": "high",
+      "permissions": {
+        "scopes": [
+          "system:control:power"
+        ],
+        "allow_anyone": false,
+        "requires_approval": true
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "Ação de energia: reboot|restart|shutdown|off."
+          },
+          "command": {
+            "type": "string",
+            "description": "Alias legado de action."
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "destructive"
+    },
+    {
+      "id": "system.control.process.list",
+      "title": "Process List",
+      "description": "Lista processos em execução, com filtros.",
+      "handler": "process.list",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:control:process_list"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name_contains": {
+            "type": "string",
+            "description": "Filtra por trecho no nome do processo."
+          },
+          "user": {
+            "type": "string",
+            "description": "Filtra pelo usuário dono do processo."
+          },
+          "sort": {
+            "type": "string",
+            "description": "Ordenação: cpu ou mem.",
+            "default": "cpu"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.control.process.kill",
+      "title": "Process Kill",
+      "description": "Finaliza processo pelo PID.",
+      "handler": "process.kill",
+      "risk_level": "high",
+      "permissions": {
+        "scopes": [
+          "system:control:process_kill"
+        ],
+        "allow_anyone": false,
+        "requires_approval": true
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "pid": {
+            "type": "integer",
+            "description": "PID do processo alvo."
+          },
+          "signal": {
+            "type": "string",
+            "description": "Nome do sinal (ex.: TERM).",
+            "default": "TERM"
+          }
+        },
+        "required": [
+          "pid"
+        ],
+        "additionalProperties": true
+      },
+      "side_effect": "destructive"
+    },
+    {
+      "id": "system.control.network.status",
+      "title": "Network Status",
+      "description": "Mostra status das interfaces de rede.",
+      "handler": "network.status",
+      "risk_level": "medium",
+      "permissions": {
+        "scopes": [
+          "system:control:network_status"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.control.network.ping",
+      "title": "Network Ping",
+      "description": "Executa ping em um host/IP.",
+      "handler": "network.ping",
+      "risk_level": "medium",
+      "permissions": {
+        "scopes": [
+          "system:control:network_ping"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "description": "Host ou IP de destino."
+          },
+          "count": {
+            "type": "integer",
+            "description": "Quantidade de pacotes.",
+            "default": 4
+          }
+        },
+        "required": [
+          "host"
+        ],
+        "additionalProperties": true
+      },
+      "side_effect": "idempotent"
+    },
+    {
+      "id": "system.control.service.manage",
+      "title": "Service Manage",
+      "description": "Gerencia serviços (status/start/stop/restart).",
+      "handler": "service.manage",
+      "risk_level": "high",
+      "permissions": {
+        "scopes": [
+          "system:control:service_manage"
+        ],
+        "allow_anyone": false,
+        "requires_approval": true
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "unit": {
+            "type": "string",
+            "description": "Unidade de serviço systemd."
+          },
+          "action": {
+            "type": "string",
+            "description": "Ação: status|start|stop|restart."
+          }
+        },
+        "required": [
+          "unit",
+          "action"
+        ],
+        "additionalProperties": true
+      },
+      "side_effect": "destructive"
+    },
+    {
+      "id": "system.control.service.logs",
+      "title": "Service Logs",
+      "description": "Lê logs de um serviço systemd.",
+      "handler": "service.logs",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:control:service_logs"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "unit": {
+            "type": "string",
+            "description": "Unidade de serviço systemd."
+          },
+          "lines": {
+            "type": "integer",
+            "description": "Quantidade de linhas de log.",
+            "default": 50
+          }
+        },
+        "required": [
+          "unit"
+        ],
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.control.fs.list",
+      "title": "Fs List",
+      "description": "Lista arquivos e pastas de um diretório.",
+      "handler": "fs.list",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:control:fs_list"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Caminho do diretório relativo ao workspace.",
+            "default": "."
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.control.fs.read",
+      "title": "Fs Read",
+      "description": "Lê conteúdo de arquivo (com intervalo de linhas opcional).",
+      "handler": "fs.read",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:control:fs_read"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Caminho do arquivo relativo ao workspace."
+          },
+          "start": {
+            "type": "integer",
+            "description": "Linha inicial (1-indexado).",
+            "default": 1
+          },
+          "end": {
+            "type": "integer",
+            "description": "Linha final (inclusiva)."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "system.control.fs.write",
+      "title": "Fs Write",
+      "description": "Escreve conteúdo em arquivo no workspace.",
+      "handler": "fs.write",
+      "risk_level": "high",
+      "permissions": {
+        "scopes": [
+          "system:control:fs_write"
+        ],
+        "allow_anyone": false,
+        "requires_approval": true
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Caminho do arquivo relativo ao workspace."
+          },
+          "content": {
+            "type": "string",
+            "description": "Conteúdo a ser escrito."
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "additionalProperties": true
+      },
+      "side_effect": "destructive"
+    },
+    {
+      "id": "system.control.fs.delete",
+      "title": "Fs Delete",
+      "description": "Remove arquivo ou diretório no workspace.",
+      "handler": "fs.delete",
+      "risk_level": "high",
+      "permissions": {
+        "scopes": [
+          "system:control:fs_delete"
+        ],
+        "allow_anyone": false,
+        "requires_approval": true
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Caminho do arquivo/diretório relativo ao workspace."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": true
+      },
+      "side_effect": "destructive"
+    },
+    {
+      "id": "system.control.keyboard",
+      "title": "Keyboard",
+      "description": "Executa comandos globais de teclado/mídia.",
+      "handler": "keyboard",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "system:control:keyboard"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "One of: next, prev, pause, volume_up, volume_down, mute, close."
+          },
+          "command": {
+            "type": "string",
+            "description": "Comando textual legado (compatibilidade)."
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "idempotent"
+    }
+  ],
+  "auth": {
+    "mode": "none",
+    "required": false,
+    "fields": []
+  },
+  "discoverability_profile": {
+    "enabled": true,
+    "roles": [
+      "control",
+      "search",
+      "retrieve"
+    ],
+    "domains": [
+      "system",
+      "device",
+      "runtime"
+    ],
+    "entity_types": [
+      "status",
+      "work",
+      "tool"
+    ],
+    "keywords": [
+      "system",
+      "status",
+      "time",
+      "hora",
+      "cancel",
+      "consult_tools",
+      "capabilities",
+      "process",
+      "network",
+      "service"
+    ],
+    "routing_hints": {
+      "preferred_intents": [
+        "system_status",
+        "tool_discovery",
+        "system_info"
+      ],
+      "avoid_when": []
+    }
+  }
 }

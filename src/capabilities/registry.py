@@ -1,5 +1,4 @@
 from typing import Any, Dict, List, Optional, Tuple
-import difflib
 import hashlib
 import logging
 import re
@@ -26,6 +25,7 @@ class CapabilityRegistry:
         self.action_models: Dict[str, CapabilityAction] = {}
         self.capability_contracts: Dict[str, CapabilityContractV1] = {}
         self.retrieval_offers: Dict[str, Dict[str, Any]] = {}
+        self.discoverability_offers: Dict[str, Dict[str, Any]] = {}
         self.schemas: Dict[str, dict] = {}  # capability folder -> config schema
 
     def register(self, capability: CapabilityBase, contract: CapabilityContractV1) -> None:
@@ -33,6 +33,7 @@ class CapabilityRegistry:
         self.capabilities[capability_id] = capability
         self.capability_contracts[capability_id] = contract
         self._index_retrieval_offer(capability=capability, contract=contract)
+        self._index_discoverability_offer(capability=capability, contract=contract)
 
         for action in contract.actions:
             if action.id in self.action_map:
@@ -75,9 +76,11 @@ class CapabilityRegistry:
         self.retrieval_offers[capability_id] = {
             "capability_id": capability_id,
             "namespace": contract.capability.namespace,
+            "kind": "retrieval",
             "roles": list(profile.roles),
             "domains": list(profile.domains),
             "entity_types": list(profile.entity_types),
+            "keywords": [],
             "routing_hints": dict(profile.routing_hints or {}),
             "actions": action_ids,
             "quality": profile.quality.model_dump() if profile.quality else {},
@@ -87,6 +90,28 @@ class CapabilityRegistry:
             "setup_ready": setup_ready,
             "missing_required_fields": missing_required_fields,
             "output_contract": profile.output_contract.model_dump() if profile.output_contract else {},
+        }
+
+    def _index_discoverability_offer(self, capability: CapabilityBase, contract: CapabilityContractV1) -> None:
+        profile = contract.discoverability_profile
+        capability_id = contract.capability.id
+        if not profile or not bool(profile.enabled):
+            self.discoverability_offers.pop(capability_id, None)
+            return
+
+        action_ids = [action.id for action in contract.actions]
+        self.discoverability_offers[capability_id] = {
+            "capability_id": capability_id,
+            "namespace": contract.capability.namespace,
+            "kind": "discoverability",
+            "roles": list(profile.roles),
+            "domains": list(profile.domains),
+            "entity_types": list(profile.entity_types),
+            "keywords": list(profile.keywords),
+            "routing_hints": dict(profile.routing_hints or {}),
+            "actions": action_ids,
+            "setup_ready": True,
+            "missing_required_fields": [],
         }
 
     def refresh_retrieval_offer(self, capability_id: str) -> None:
@@ -104,6 +129,21 @@ class CapabilityRegistry:
         for capability_id in list(self.capability_contracts.keys()):
             self.refresh_retrieval_offer(capability_id)
 
+    def refresh_discoverability_offer(self, capability_id: str) -> None:
+        cap_id = str(capability_id or "").strip()
+        if not cap_id:
+            return
+        capability = self.capabilities.get(cap_id)
+        contract = self.capability_contracts.get(cap_id)
+        if not capability or not contract:
+            self.discoverability_offers.pop(cap_id, None)
+            return
+        self._index_discoverability_offer(capability=capability, contract=contract)
+
+    def refresh_discoverability_offers(self) -> None:
+        for capability_id in list(self.capability_contracts.keys()):
+            self.refresh_discoverability_offer(capability_id)
+
     def list_retrieval_offers(
         self,
         *,
@@ -115,6 +155,48 @@ class CapabilityRegistry:
         # Keep runtime retrieval index in sync with live capability config.
         self.refresh_retrieval_offers()
         offers = list(self.retrieval_offers.values())
+        if not offers:
+            return []
+
+        intent_value = str(intent or "").strip().lower()
+        domain_value = str(domain or "").strip().lower()
+        role_value = str(role or "").strip().lower()
+        entity_value = str(entity_type or "").strip().lower()
+
+        filtered: List[Dict[str, Any]] = []
+        for offer in offers:
+            if domain_value and domain_value not in offer.get("domains", []):
+                continue
+            if role_value and role_value not in offer.get("roles", []):
+                continue
+            if entity_value and entity_value not in offer.get("entity_types", []):
+                continue
+            if intent_value:
+                hints = offer.get("routing_hints") if isinstance(offer.get("routing_hints"), dict) else {}
+                preferred = [str(x).strip().lower() for x in (hints.get("preferred_intents") or []) if str(x).strip()]
+                avoid = [str(x).strip().lower() for x in (hints.get("avoid_when") or []) if str(x).strip()]
+                if intent_value in avoid:
+                    continue
+                if preferred and intent_value not in preferred:
+                    continue
+            filtered.append(dict(offer))
+        return sorted(filtered, key=lambda row: str(row.get("capability_id") or ""))
+
+    def list_discovery_offers(
+        self,
+        *,
+        intent: Optional[str] = None,
+        domain: Optional[str] = None,
+        role: Optional[str] = None,
+        entity_type: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        self.refresh_retrieval_offers()
+        self.refresh_discoverability_offers()
+        offers = list(self.discoverability_offers.values()) + [
+            dict(offer)
+            for cap_id, offer in self.retrieval_offers.items()
+            if cap_id not in self.discoverability_offers
+        ]
         if not offers:
             return []
 
@@ -183,34 +265,6 @@ class CapabilityRegistry:
 
     def list_actions(self) -> List[str]:
         return sorted(self.action_map.keys())
-
-    def resolve_action_id(self, action_id: str) -> Optional[str]:
-        if not action_id:
-            return None
-        normalized = action_id.strip().lower().replace(" ", ".")
-        if normalized in self.action_map:
-            return normalized
-        actions = list(self.action_map.keys())
-        if not actions:
-            return None
-
-        local_matches = [aid for aid in actions if aid.split(".")[-1] == normalized]
-        if len(local_matches) == 1:
-            return local_matches[0]
-
-        prefix_matches = [aid for aid in actions if aid.startswith(normalized) or normalized.startswith(aid)]
-        if len(prefix_matches) == 1:
-            return prefix_matches[0]
-
-        close = difflib.get_close_matches(normalized, actions, n=1, cutoff=0.82)
-        return close[0] if close else None
-
-    def suggest_actions(self, action_id: str, limit: int = 3) -> List[str]:
-        if not action_id:
-            return []
-        normalized = action_id.strip().lower().replace(" ", ".")
-        actions = list(self.action_map.keys())
-        return difflib.get_close_matches(normalized, actions, n=max(1, limit), cutoff=0.5)
 
     def get_action_metadata(self, action_id: str) -> Dict[str, Any]:
         action = self.action_models.get(action_id)

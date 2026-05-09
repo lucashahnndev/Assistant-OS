@@ -39,7 +39,6 @@ def test_analyze_readiness_detects_required_mcp_fields():
     not_ready = analyze_browser_control_mcp_readiness({"runtime_backend": "cdp"})
     assert not_ready["ready"] is False
     assert "runtime_backend_not_playwright" in not_ready["issues"]
-    assert "transport_mode_not_mcp" in not_ready["issues"]
     assert "mcp_endpoint_missing" in not_ready["issues"]
 
 

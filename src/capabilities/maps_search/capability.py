@@ -6,6 +6,7 @@ import requests
 from urllib.parse import quote_plus
 
 from ..base import CapabilityBase
+from core.action_gateway import ActionGateway
 from services.location.location_service import LocationService
 
 logger = logging.getLogger("MapsSearchCapability")
@@ -336,7 +337,20 @@ class MapsSearchCapability(CapabilityBase):
             "limit": min(max(3, limit), 8),
         }
         try:
-            web_result = dispatch("web.search.discover", search_params, context)
+            gateway = ActionGateway()
+            web_result = gateway.execute_action(
+                action_id="web.search.discover",
+                params=search_params,
+                allowed_actions=registry.list_actions() if hasattr(registry, "list_actions") else ["web.search.discover"],
+                capability_registry=registry,
+                capability_metadata=(
+                    registry.get_action_metadata("web.search.discover")
+                    if hasattr(registry, "get_action_metadata")
+                    else {}
+                ),
+                context=context,
+                strict_mode=False,
+            )
         except Exception as exc:
             logger.warning(f"Maps fallback dispatch failed: {exc}")
             return None

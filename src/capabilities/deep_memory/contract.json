@@ -1,78 +1,113 @@
 {
-    "contract_version": "1.0",
-    "capability": {
-        "id": "deep_memory",
-        "namespace": "deep.memory",
-        "version": "1.0.0",
-        "title": "Deep Memory",
-        "description": "Compatibility capability to store and recall long-term memory explicitly.",
-        "assets": {
-            "icon_svg": "assets/icon.svg"
-        }
-    },
-    "runtime": {
-        "module": "capabilities.deep_memory",
-        "factory": "create_capability"
-    },
-    "actions": [
-        {
-            "id": "deep.memory.recall_memory",
-            "title": "Recall Memory",
-            "description": "Search long-term memory by semantic query.",
-            "handler": "recall_memory",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "deep:memory:recall_memory"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "properties": {
-                        "type": "string"
-                    },
-                    "required": {
-                        "type": "string"
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "deep.memory.store_memory",
-            "title": "Store Memory",
-            "description": "Store a long-term memory fact.",
-            "handler": "store_memory",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "deep:memory:store_memory"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "properties": {
-                        "type": "string"
-                    },
-                    "required": {
-                        "type": "string"
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "idempotent"
-        }
-    ],
-    "auth": {
-        "mode": "none",
-        "required": false,
-        "fields": []
+  "contract_version": "1.0",
+  "capability": {
+    "id": "deep_memory",
+    "namespace": "deep.memory",
+    "version": "1.0.0",
+    "title": "Deep Memory",
+    "description": "Compatibility capability to store and recall long-term memory explicitly.",
+    "assets": {
+      "icon_svg": "assets/icon.svg"
     }
+  },
+  "runtime": {
+    "module": "capabilities.deep_memory",
+    "factory": "create_capability"
+  },
+  "actions": [
+    {
+      "id": "deep.memory.recall_memory",
+      "title": "Recall Memory",
+      "description": "Search long-term memory by semantic query.",
+      "handler": "recall_memory",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "deep:memory:recall_memory"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "properties": {
+            "type": "string"
+          },
+          "required": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "deep.memory.store_memory",
+      "title": "Store Memory",
+      "description": "Store a long-term memory fact.",
+      "handler": "store_memory",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "deep:memory:store_memory"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "properties": {
+            "type": "string"
+          },
+          "required": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "idempotent"
+    }
+  ],
+  "auth": {
+    "mode": "none",
+    "required": false,
+    "fields": []
+  },
+  "discoverability_profile": {
+    "enabled": true,
+    "roles": [
+      "search",
+      "retrieve",
+      "control"
+    ],
+    "domains": [
+      "memory",
+      "conversation",
+      "user_memory"
+    ],
+    "entity_types": [
+      "fact",
+      "memory",
+      "note"
+    ],
+    "keywords": [
+      "memory",
+      "memoria",
+      "memória",
+      "record",
+      "remember",
+      "recall",
+      "lembrar"
+    ],
+    "routing_hints": {
+      "preferred_intents": [
+        "memory_lookup",
+        "memory_recall",
+        "memory_write"
+      ],
+      "avoid_when": []
+    }
+  }
 }

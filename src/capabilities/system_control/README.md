@@ -4,6 +4,11 @@ Monitor and manage high-level system states and information.
 
 ## Actions
 
+### `consult_tools`
+Performs semantic discovery of candidate tools/capabilities from the current user input or an explicit query.
+- **Parameters**: `query` (optional; falls back to the current user input when omitted), `intent`, `domain`, `role`, `entity_type`, `limit`, `include_descriptions`, `format`.
+- **Behavior**: Returns a ranked candidate set plus a primary action suggestion for the next planner step.
+
 ### `system_status`
 Returns CPU usage, RAM/swap, disk usage, uptime, top 5 processes, and temperature (if available).
 - **Parameters**: None.

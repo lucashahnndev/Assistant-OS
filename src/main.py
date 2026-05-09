@@ -3,6 +3,8 @@ import os
 import time
 import asyncio
 import signal
+import socket
+import shlex
 import threading
 import re
 from dotenv import load_dotenv
@@ -47,11 +49,60 @@ def remove_pid_file():
     if os.path.exists(PID_FILE):
         os.remove(PID_FILE)
 
+
+def evaluate_mcp_health_streak(
+    *,
+    healthy: bool,
+    required: bool,
+    streak: int,
+    stop_threshold: int = 3,
+) -> tuple[int, bool]:
+    """
+    Convert transient MCP health failures into a consecutive-failure streak.
+
+    This prevents a single probe glitch from tearing down the whole kernel and
+    causing the browser runtime to flap open/closed under an external supervisor.
+    """
+    if healthy:
+        return 0, False
+    next_streak = max(1, int(streak or 0) + 1)
+    should_stop = bool(required and next_streak >= max(1, int(stop_threshold or 3)))
+    return next_streak, should_stop
+
 # Add src to path if needed (though running from src/main.py usually accounts for this)
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_dir)
 
 class Kernel:
+    def _pick_free_port(self) -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            return int(sock.getsockname()[1])
+
+    def _assign_random_mcp_endpoint(self) -> str:
+        port = self._pick_free_port()
+        return f"http://localhost:{port}"
+
+    def _apply_mcp_port_to_command(self, command: str, port: int) -> str:
+        if not command:
+            return command
+        try:
+            parts = shlex.split(command)
+        except Exception:
+            return command
+        if "--port" in parts:
+            idx = parts.index("--port")
+            if idx + 1 < len(parts):
+                parts[idx + 1] = str(port)
+            else:
+                parts.append(str(port))
+        else:
+            parts.extend(["--port", str(port)])
+        try:
+            return shlex.join(parts)
+        except Exception:
+            return " ".join(shlex.quote(p) for p in parts)
+
     def __init__(self):
         check_single_instance()
         self.running = False
@@ -70,10 +121,37 @@ class Kernel:
         self.base_data_dir = self.config_manager.base_data_dir
         self.logs_dir = os.path.join(self.base_data_dir, 'logs')
         os.makedirs(self.logs_dir, exist_ok=True)
+        browser_cfg = self.config_manager.get_capability_config("browser_control")
+        transport_mode = str(browser_cfg.get("playwright_transport_mode", "mcp") or "mcp").strip().lower()
+        mcp_endpoint = str(browser_cfg.get("playwright_mcp_endpoint", "") or "").strip()
+        if transport_mode == "mcp":
+            use_stdio = str(mcp_endpoint or "").strip().lower().startswith("stdio")
+            if not mcp_endpoint:
+                if use_stdio:
+                    mcp_endpoint = "stdio"
+                else:
+                    mcp_endpoint = self._assign_random_mcp_endpoint()
+            if not isinstance(self.config_manager.get("capabilities", {}), dict):
+                self.config_manager.config_data["capabilities"] = {}
+            capabilities_cfg = self.config_manager.get("capabilities", {})
+            browser_cfg = capabilities_cfg.get("browser_control")
+            if not isinstance(browser_cfg, dict):
+                browser_cfg = {}
+                capabilities_cfg["browser_control"] = browser_cfg
+            browser_cfg["playwright_mcp_endpoint"] = mcp_endpoint
+            if not use_stdio and mcp_endpoint.startswith("http"):
+                try:
+                    mcp_port = int(str(mcp_endpoint).rsplit(":", 1)[-1])
+                except Exception:
+                    mcp_port = 0
+                if mcp_port > 0:
+                    command = str(browser_cfg.get("playwright_mcp_server_command", "") or "")
+                    browser_cfg["playwright_mcp_server_command"] = self._apply_mcp_port_to_command(
+                        command,
+                        mcp_port,
+                    )
         self.mcp_runtime_service = MCPRuntimeServiceManager(logs_dir=self.logs_dir)
-        self.mcp_runtime_service.configure_from_browser_cfg(
-            self.config_manager.get_capability_config("browser_control")
-        )
+        self.mcp_runtime_service.configure_from_browser_cfg(browser_cfg)
 
         from capabilities.browser_control.session_registry import BrowserSessionRegistry
         self.browser_session_registry = BrowserSessionRegistry(base_data_dir=self.base_data_dir)
@@ -100,6 +178,8 @@ class Kernel:
         self.llm_manager = self.orchestrator.llm_manager # Expose for easier capability access
         self.capability_registry = self.orchestrator.capability_registry
         self.principal_context = None # To be set by drivers/commands
+        self._mcp_health_failure_streak = 0
+        self._mcp_health_stop_threshold = 3
         
         # 4. Storage paths used during runtime
         from core.access_controller import IdentityService
@@ -837,10 +917,25 @@ class Kernel:
                     if idle_seconds is None or idle_seconds >= notify_after:
                         self._maybe_send_approval_digest(owner_session_id)
                 mcp_health = self.mcp_runtime_service.ensure_running()
-                if not bool(mcp_health.get("ok", False)):
-                    logger.error("Playwright MCP service unhealthy: %s", mcp_health)
-                    if self.mcp_runtime_service.is_required():
-                        logger.error("Playwright MCP service is required. Stopping kernel.")
+                health_ok = bool(mcp_health.get("ok", False))
+                self._mcp_health_failure_streak, should_stop_for_mcp = evaluate_mcp_health_streak(
+                    healthy=health_ok,
+                    required=self.mcp_runtime_service.is_required(),
+                    streak=self._mcp_health_failure_streak,
+                    stop_threshold=self._mcp_health_stop_threshold,
+                )
+                if not health_ok:
+                    logger.error(
+                        "Playwright MCP service unhealthy: %s | consecutive_failures=%d/%d",
+                        mcp_health,
+                        self._mcp_health_failure_streak,
+                        self._mcp_health_stop_threshold,
+                    )
+                    if should_stop_for_mcp:
+                        logger.error(
+                            "Playwright MCP service remained unhealthy for %d consecutive checks. Stopping kernel.",
+                            self._mcp_health_failure_streak,
+                        )
                         self.stop()
                 threading.Event().wait(10.0)
         except KeyboardInterrupt:
@@ -848,6 +943,7 @@ class Kernel:
 
     def stop(self):
         self.running = False
+        self._mcp_health_failure_streak = 0
         if hasattr(self, 'scheduler'):
             self.scheduler.stop()
         try:

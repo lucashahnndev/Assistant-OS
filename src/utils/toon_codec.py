@@ -91,6 +91,12 @@ def encode_capabilities_describe(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def encode_state_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
     src = summary if isinstance(summary, dict) else {}
+    tool_discovery = src.get("last_tool_discovery") if isinstance(src.get("last_tool_discovery"), dict) else {}
+    candidate_ids = [
+        str(x).strip()
+        for x in (src.get("tool_candidates") or [])
+        if str(x).strip()
+    ][:6]
     payload = {
         "v": "toon.v1",
         "t": "state",
@@ -101,6 +107,21 @@ def encode_state_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
         "e": _short_text(src.get("last_error"), 80),
         "r": int(src.get("retry_count", 0) or 0),
     }
+    if tool_discovery or candidate_ids:
+        payload["td"] = _clean_obj(
+            {
+                "q": _short_text(tool_discovery.get("query"), 64),
+                "i": _short_text(tool_discovery.get("intent"), 32),
+                "d": _short_text(tool_discovery.get("domain"), 32),
+                "r": _short_text(tool_discovery.get("role"), 24),
+                "e": _short_text(tool_discovery.get("entity_type"), 24),
+                "n": int(tool_discovery.get("count", 0) or len(candidate_ids)),
+                "a": candidate_ids,
+            }
+        )
+        primary_action = _short_text(tool_discovery.get("primary_action_id"), 80)
+        if primary_action:
+            payload["td"]["p"] = primary_action
     return _clean_obj(payload)
 
 

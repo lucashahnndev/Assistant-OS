@@ -23,20 +23,39 @@
       "handler": "query",
       "risk_level": "low",
       "permissions": {
-        "scopes": ["searxng:search:query"],
+        "scopes": [
+          "searxng:search:query"
+        ],
         "allow_anyone": true,
         "requires_approval": false
       },
       "parameters": {
         "type": "object",
         "properties": {
-          "query": { "type": "string" },
-          "limit": { "type": "integer", "default": 6 },
-          "recency_days": { "type": "integer", "default": 0 },
-          "language": { "type": "string", "default": "en" },
-          "domains_allow": { "type": "array" },
-          "domains_deny": { "type": "array" },
-          "location": { "type": "object" }
+          "query": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "default": 6
+          },
+          "recency_days": {
+            "type": "integer",
+            "default": 0
+          },
+          "language": {
+            "type": "string",
+            "default": "en"
+          },
+          "domains_allow": {
+            "type": "array"
+          },
+          "domains_deny": {
+            "type": "array"
+          },
+          "location": {
+            "type": "object"
+          }
         },
         "additionalProperties": true
       },
@@ -45,10 +64,21 @@
   ],
   "retrieval_profile": {
     "enabled": true,
-    "roles": ["search"],
-    "domains": ["web", "news"],
-    "entity_types": ["article", "snippet"],
-    "freshness": { "type": "live", "sla_hours": 24 },
+    "roles": [
+      "search"
+    ],
+    "domains": [
+      "web",
+      "news"
+    ],
+    "entity_types": [
+      "article",
+      "snippet"
+    ],
+    "freshness": {
+      "type": "live",
+      "sla_hours": 24
+    },
     "quality": {
       "default_confidence": 0.7,
       "trust_tier": "community",
@@ -67,7 +97,11 @@
       "evidence_schema": "external.evidence.v1"
     },
     "routing_hints": {
-      "preferred_intents": ["general_knowledge", "latest_update", "structured_fact"],
+      "preferred_intents": [
+        "general_knowledge",
+        "latest_update",
+        "structured_fact"
+      ],
       "avoid_when": []
     }
   },
@@ -75,5 +109,49 @@
     "mode": "none",
     "required": false,
     "fields": []
+  },
+  "discoverability_profile": {
+    "enabled": true,
+    "roles": [
+      "search"
+    ],
+    "domains": [
+      "web",
+      "news"
+    ],
+    "entity_types": [
+      "article",
+      "snippet"
+    ],
+    "keywords": [
+      "searxng_search",
+      "searxng",
+      "search",
+      "busca",
+      "web",
+      "via",
+      "instancias",
+      "retorna",
+      "resultados",
+      "estruturados",
+      "para",
+      "rag",
+      "externo",
+      "discover",
+      "consult",
+      "discoverability",
+      "retrieve",
+      "control",
+      "interact",
+      "manage"
+    ],
+    "routing_hints": {
+      "preferred_intents": [
+        "general_knowledge",
+        "latest_update",
+        "structured_fact"
+      ],
+      "avoid_when": []
+    }
   }
 }

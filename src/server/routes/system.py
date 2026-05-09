@@ -9,6 +9,7 @@ import os
 import asyncio
 import logging
 import requests
+from core.health import health_monitor
 
 # Logger for this module
 logger = logging.getLogger("SystemRoutes")
@@ -88,6 +89,23 @@ def get_status(request: Request):
         }
     except HTTPException:
         return {"status": "starting", "message": "Kernel initializing"}
+
+@router.get("/providers/health")
+def get_providers_health(user: User = Depends(get_current_user)):
+    """
+    Returns the current health status of all LLM providers.
+    """
+    return health_monitor.get_all_health()
+
+@router.post("/providers/{provider_id}/reset")
+def reset_provider_health(provider_id: str, user: User = Depends(get_current_user)):
+    """
+    Manually resets a provider to healthy state.
+    """
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can reset provider health")
+    health_monitor.reset_provider(provider_id)
+    return {"success": True, "provider_id": provider_id, "status": "healthy"}
 
 @router.get("/deezer/track/{track_id}")
 def get_deezer_track(track_id: str, user: User = Depends(get_current_user)):

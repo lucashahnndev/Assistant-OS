@@ -43,9 +43,8 @@ def _compose(response_persona: str) -> str:
 
 def test_response_persona_section_is_scoped_to_response_text():
     prompt = _compose("Use a formal butler tone and address the user as sir.")
-    assert "[RESPONSE PERSONA]" in prompt
-    assert "Apply only to `response_text`" in prompt
-    assert "never to `thought/plan/action/params/state_summary`." in prompt
+    assert "[RESPONSE PERSONA]" not in prompt
+    assert "response_text" not in prompt.lower()
 
 
 def test_response_persona_section_absent_when_empty():

@@ -75,6 +75,13 @@ class CapabilityLoader:
     def _resolve_config(folder_name: str, config_manager: Any) -> Dict[str, Any]:
         if not config_manager:
             return {}
+        if hasattr(config_manager, "get_capability_config"):
+            try:
+                in_memory = config_manager.get_capability_config(folder_name) or {}
+                if isinstance(in_memory, dict):
+                    return dict(in_memory)
+            except Exception:
+                pass
         raw_config: Dict[str, Any] = {}
         config_file = getattr(config_manager, "config_file", None)
         if config_file and os.path.exists(config_file):

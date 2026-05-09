@@ -2,6 +2,7 @@ from typing import List, Dict, Any, Optional
 import requests
 import json
 from core.intent import AgentIntent
+from core.errors import SyntaxError as AgentSyntaxError, ErrorCode
 from drivers.llm.base import ILLMProvider
 import requests
 from utils.logging_config import get_logger
@@ -50,20 +51,28 @@ class OllamaProvider(ILLMProvider):
                 attachments = data.get("attachments")
                 if not attachments and isinstance(data.get("params"), dict):
                     attachments = data.get("params", {}).get("attachments")
+                normalized_attachments: Optional[List[str]] = None
+                if isinstance(attachments, str) and attachments.strip():
+                    normalized_attachments = [attachments.strip()]
+                elif isinstance(attachments, list):
+                    cleaned = [str(x).strip() for x in attachments if str(x).strip()]
+                    normalized_attachments = cleaned or None
 
+                logger.info(
+                    "Ollama parsed intent | syntax_valid=true action_candidate=%s",
+                    str(data.get("action", "") or "").strip(),
+                )
                 return AgentIntent(
-                    thought=data.get("thought", ""),
-                    action=data.get("action", "unknown"),
-                    params=data.get("params", {}),
-                    response_text=data.get("response_text", ""),
-                    attachments=attachments
+                    thought=str(data.get("thought", "") or ""),
+                    action=str(data.get("action", "") or "").strip(),
+                    params=data.get("params", {}) if isinstance(data.get("params", {}), dict) else {},
+                    response_text=str(data.get("response_text", "") or ""),
+                    attachments=normalized_attachments
                 )
             except json.JSONDecodeError:
-                return AgentIntent(
-                     thought="Model failed to return JSON",
-                     action="unknown",
-                     params={},
-                     response_text="" # Trigger Orchestrator recovery
+                raise AgentSyntaxError(
+                    "Ollama structured output is not valid JSON.",
+                    code=ErrorCode.PLANNER_INVALID_JSON,
                 )
 
         except Exception as e:

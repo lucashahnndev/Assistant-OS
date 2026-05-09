@@ -77,6 +77,9 @@ from core.worker_runtime import WorkerRuntime
 from core.events import TaskOrigin, TaskSpawnReason
 from core.policy import SupervisorPolicy, SupervisorOutcome, ExecutionRecommendation
 from core.plan_validator import PlanValidator
+from core.action_gateway import ActionGateway
+from core.output_governor import OutputGovernor
+from services.agent_runtime_v2.flags import is_paranoid_mode_enabled, is_strict_mode_enabled
 
 # Configure logging
 logger = get_logger("AgentOrchestrator")
@@ -164,6 +167,7 @@ class AgentOrchestrator:
         self._runtime_v2_cost_budget = RuntimeCostBudget()
         self._runtime_v2_scheduler_global = GlobalScheduler()
         self._runtime_v2_observability = RuntimeV2Observability(self.config_manager)
+        self.action_gateway = ActionGateway()
         
         # 0. Calendar Domain
         self.calendar_store = CalendarStore(self.config_manager.base_data_dir)
@@ -225,6 +229,9 @@ class AgentOrchestrator:
         Initializes Google Calendar sync for a user if they have a linked account.
         Registration is guaranteed; the initial pull is attempted separately.
         """
+        if hasattr(self.calendar_service, "has_sync_service") and self.calendar_service.has_sync_service(user_id):
+            return
+
         try:
             provider = GoogleCalendarProvider(self.kernel, user_id)
             sync_service = CalendarSyncService(self.kernel, self.calendar_store, provider)
@@ -2209,6 +2216,17 @@ class AgentOrchestrator:
                     "session_id": str(exec_context.get("session_id", "") or ""),
                     "work_id": str(work_id or ""),
                     "action_id": str(action_id or ""),
+                    "trace_id": str(exec_context.get("trace_id", "") or ""),
+                    "turn_id": str(exec_context.get("turn_id", envelope.get("turn_id", "")) or ""),
+                    "attempt_id": int(exec_context.get("attempt_id", loop_index) or loop_index),
+                    "provider_used": str(exec_context.get("provider_used", exec_context.get("llm_provider", "")) or ""),
+                    "raw_llm_output": str(exec_context.get("raw_llm_output", "") or ""),
+                    "parsed_output": exec_context.get("parsed_output", {}) if isinstance(exec_context.get("parsed_output"), dict) else {},
+                    "syntax_valid": bool(exec_context.get("syntax_valid", True)),
+                    "action_candidate": str(exec_context.get("action_candidate", action_id) or ""),
+                    "action_valid": bool(exec_context.get("action_valid", result_status == "success")),
+                    "final_action": str(exec_context.get("final_action", action_id) or action_id),
+                    "error_type": str(exec_context.get("error_type", result_reason or "") or ""),
                     "result_status": str(result_status or "unknown"),
                     "result_reason": str(result_reason or ""),
                     "latency_ms": int(latency_ms),
@@ -2629,6 +2647,7 @@ class AgentOrchestrator:
             final_response_persisted = False
             final_response_streamed = False
             stream_completed = False
+            exec_context: Dict[str, Any] = {}
             paused = False
             actions_used: List[str] = []
             capabilities_used: List[str] = []
@@ -2985,57 +3004,44 @@ class AgentOrchestrator:
                         },
                     )
     
-                    # Normalize/repair action IDs to reduce "unknown action" loops.
+                    # Centralized action gateway: explicit canonicalization only.
                     if plan.action_id not in ("reply", "error"):
-                        resolved_action = self.capability_registry.resolve_action_id(plan.action_id)
-                        if resolved_action and resolved_action != plan.action_id:
-                            logger.info(f"Resolved action alias: {plan.action_id} -> {resolved_action}")
-                            plan.action_id = resolved_action
-                        elif not self.capability_registry.get_capability_for_action(plan.action_id):
-                            parts = str(plan.action_id or "").strip().lower().split(".")
-                            legacy_removed = len(parts) >= 3 and parts[0] == "browser" and parts[1] in {"automator", "controller"}
-                            if legacy_removed:
-                                final_response = "Capability removed."
-                                logger.warning(
-                                    "Removed browser capability requested: %s | returning SKILL_REMOVED_USE_BROWSER_CONTROL",
-                                    plan.action_id,
-                                )
-                                session.add_message(
-                                    "system",
-                                    "ERROR_CODE: SKILL_REMOVED_USE_BROWSER_CONTROL",
-                                    msg_type="reasoning",
-                                )
-                                plan = ActionPlan(
-                                    action_id="error",
-                                    args={"error_code": "SKILL_REMOVED_USE_BROWSER_CONTROL"},
-                                    response_text=final_response,
-                                    source="internal",
-                                )
-                                continue
-                            suggestions = self.capability_registry.suggest_actions(plan.action_id, limit=3)
-                            suggestion_text = ", ".join(suggestions) if suggestions else "no suggestions"
+                        gateway_allowed_actions = self.capability_registry.list_actions() if self.capability_registry else []
+                        gateway_strict = bool(
+                            is_strict_mode_enabled(self.config_manager) or is_paranoid_mode_enabled(self.config_manager)
+                        )
+                        gateway_result = self.action_gateway.resolve(
+                            action_id=plan.action_id,
+                            params=plan.args if isinstance(plan.args, dict) else {},
+                            allowed_actions=gateway_allowed_actions,
+                            capability_registry=self.capability_registry,
+                            capability_metadata=(
+                                self.capability_registry.get_action_metadata(plan.action_id)
+                                if self.capability_registry
+                                else {}
+                            ),
+                            strict_mode=gateway_strict,
+                        )
+                        if gateway_result.outcome != "EXECUTE":
                             logger.warning(
-                                f"Unknown action from resolver: {plan.action_id} | suggestions: {suggestion_text}"
+                                "Action gateway rejected action=%s details=%s",
+                                plan.action_id,
+                                gateway_result.details,
                             )
-                            final_response = (
-                                self._t(
-                                    session,
-                                    "reply.unknown_action_template",
-                                    action_id=plan.action_id,
-                                    suggestions=suggestion_text,
-                                )
+                            validation_error_msg = (
+                                f"ACTION_GATEWAY_REJECTED: {plan.action_id}\nDETAILS: {json.dumps(gateway_result.details)}"
                             )
-                            # Ensure final_response doesn't contain raw signals
-                            if "SYSTEM_SIGNAL:" in str(final_response):
-                                final_response = self._t(session, "reply.technical_issue")
-
-                            plan = ActionPlan(
-                                action_id="reply",
-                                args={},
-                                response_text=final_response,
-                                source="internal",
-                            )
+                            session.add_message("system", validation_error_msg, msg_type="reasoning", work_id=work_id)
+                            self._release_if_owned(lock)
+                            try:
+                                time.sleep(0.01)
+                            finally:
+                                self._reacquire_lock(lock)
+                                if cancel_check and cancel_check():
+                                    break
+                            plan = None
                             continue
+                        plan.action_id = gateway_result.action_id or plan.action_id
 
                     # --- Phase 9: Plan Validation ---
                     validation_context = {
@@ -3403,6 +3409,13 @@ class AgentOrchestrator:
                             final_response,
                             language=self._session_locale(session),
                         )
+                        final_response = self._govern_final_user_response(
+                            session=session,
+                            user_input=user_input,
+                            response_text=final_response,
+                            work_id=work_id,
+                            exec_context=exec_context,
+                        )
                         
                         # Process attachments
                         attachment_inputs = plan.attachments or last_generated_attachment_paths
@@ -3760,10 +3773,38 @@ class AgentOrchestrator:
                                 }
                             else:
                                 if policy_block is None and operational_block is None and sandbox_override is None:
-                                    result = self.capability_registry.dispatch(plan.action_id, plan.args, exec_context)
+                                    result = self.action_gateway.execute_action(
+                                        action_id=plan.action_id,
+                                        params=plan.args if isinstance(plan.args, dict) else {},
+                                        allowed_actions=self.capability_registry.list_actions() if self.capability_registry else [],
+                                        capability_registry=self.capability_registry,
+                                        capability_metadata=(
+                                            self.capability_registry.get_action_metadata(plan.action_id)
+                                            if self.capability_registry
+                                            else {}
+                                        ),
+                                        context=exec_context,
+                                        strict_mode=bool(
+                                            is_strict_mode_enabled(self.config_manager) or is_paranoid_mode_enabled(self.config_manager)
+                                        ),
+                                    )
                         else:
                             if policy_block is None and operational_block is None and sandbox_override is None:
-                                result = self.capability_registry.dispatch(plan.action_id, plan.args, exec_context)
+                                result = self.action_gateway.execute_action(
+                                    action_id=plan.action_id,
+                                    params=plan.args if isinstance(plan.args, dict) else {},
+                                    allowed_actions=self.capability_registry.list_actions() if self.capability_registry else [],
+                                    capability_registry=self.capability_registry,
+                                    capability_metadata=(
+                                        self.capability_registry.get_action_metadata(plan.action_id)
+                                        if self.capability_registry
+                                        else {}
+                                    ),
+                                    context=exec_context,
+                                    strict_mode=bool(
+                                        is_strict_mode_enabled(self.config_manager) or is_paranoid_mode_enabled(self.config_manager)
+                                    ),
+                                )
                         
                         latency_ms = int((time.time() - start_ts) * 1000)
                         logger.info(
@@ -3869,6 +3910,35 @@ class AgentOrchestrator:
                     )
                     result_status, result_reason = self._assess_action_result(result, raw_result)
                     structured_result = self._extract_structured_result(result, raw_result)
+                    if plan.action_id == "system.control.consult_tools" and result_status == "success":
+                        discovery_payload = structured_result if isinstance(structured_result, dict) else {}
+                        toon_payload: Dict[str, Any] = {}
+                        discovery_items = discovery_payload.get("items")
+                        if not isinstance(discovery_items, list):
+                            toon_payload = discovery_payload.get("toon") if isinstance(discovery_payload.get("toon"), dict) else {}
+                            discovery_items = toon_payload.get("i") if isinstance(toon_payload.get("i"), list) else []
+                        candidate_ids = [
+                            str(item.get("action_id") or item.get("a") or "").strip()
+                            for item in discovery_items
+                            if isinstance(item, dict) and str(item.get("action_id") or item.get("a") or "").strip()
+                        ]
+                        primary_action_id = str(discovery_payload.get("primary_action_id") or toon_payload.get("p") or (candidate_ids[0] if candidate_ids else "")).strip()
+                        tool_discovery = {
+                            "query": str(discovery_payload.get("query") or plan.args.get("query") or "").strip() if isinstance(plan.args, dict) else str(discovery_payload.get("query") or "").strip(),
+                            "intent": str(discovery_payload.get("intent") or plan.args.get("intent") or "").strip() if isinstance(plan.args, dict) else str(discovery_payload.get("intent") or "").strip(),
+                            "domain": str(discovery_payload.get("domain") or plan.args.get("domain") or "").strip() if isinstance(plan.args, dict) else str(discovery_payload.get("domain") or "").strip(),
+                            "role": str(discovery_payload.get("role") or plan.args.get("role") or "").strip() if isinstance(plan.args, dict) else str(discovery_payload.get("role") or "").strip(),
+                            "entity_type": str(discovery_payload.get("entity_type") or plan.args.get("entity_type") or "").strip() if isinstance(plan.args, dict) else str(discovery_payload.get("entity_type") or "").strip(),
+                            "count": int(discovery_payload.get("count") or len(candidate_ids) or 0),
+                            "candidate_ids": candidate_ids[:8],
+                            "primary_action_id": primary_action_id,
+                            "ts": time.time(),
+                        }
+                        if isinstance(session.context, dict):
+                            session.context["last_tool_discovery"] = tool_discovery
+                        if isinstance(session.state_summary, dict):
+                            session.state_summary["last_tool_discovery"] = tool_discovery
+                            session.state_summary["tool_candidates"] = candidate_ids[:8]
                     self._record_runtime_v2_observability(
                         exec_context=exec_context,
                         action_id=str(plan.action_id or ""),
@@ -4316,6 +4386,14 @@ class AgentOrchestrator:
                     final_response,
                     language=self._session_locale(session),
                 )
+                if not exec_context.get("output_governance_checked"):
+                    final_response = self._govern_final_user_response(
+                        session=session,
+                        user_input=user_input,
+                        response_text=final_response,
+                        work_id=work_id,
+                        exec_context=exec_context,
+                    )
 
             if final_response and not final_response_persisted and not session.pending_action:
                 session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id)
@@ -5757,6 +5835,177 @@ class AgentOrchestrator:
 
         return text
 
+    def _retry_final_user_response(
+        self,
+        *,
+        session: Session,
+        user_input: str,
+        draft_text: str,
+        retry_instruction: str,
+    ) -> str:
+        system_prompt, prompt = OutputGovernor.minimal_retry_prompt(
+            user_input=user_input,
+            draft_text=draft_text,
+            retry_instruction=retry_instruction,
+        )
+        try:
+            response = self.llm_manager.generate_text(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                max_tokens=256,
+                temperature=0.2,
+            )
+            return str(response or "").strip()
+        except Exception as e:
+            logger.warning("Final output retry failed for session %s: %s", session.session_id, e)
+            return ""
+
+    def _govern_final_user_response(
+        self,
+        *,
+        session: Session,
+        user_input: str,
+        response_text: str,
+        work_id: str = "",
+        exec_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        exec_context = exec_context if isinstance(exec_context, dict) else {}
+        trace_id = str(exec_context.get("trace_id") or "")
+        turn_id = str(exec_context.get("turn_id") or getattr(session, "turn_id", 0) or 0)
+        attempt_id = int(exec_context.get("attempt_id") or 0)
+        provider_used = str(exec_context.get("provider_used") or exec_context.get("llm_provider") or "")
+        raw_llm_output = str(exec_context.get("raw_llm_output") or response_text or "")
+        parsed_output = exec_context.get("parsed_output") if isinstance(exec_context.get("parsed_output"), dict) else {}
+        action_candidate = str(exec_context.get("action_candidate") or "reply")
+        action_valid = bool(exec_context.get("action_valid", True))
+        final_action = str(exec_context.get("final_action") or "reply")
+        error_type = str(exec_context.get("error_type") or "")
+        session_language = self._session_locale(session, fallback=self._detect_user_language(user_input))
+
+        result = OutputGovernor.classify_final_user_response(
+            user_input=user_input,
+            response_text=response_text,
+            session_language=session_language,
+        )
+        output_rejected = not result.accepted
+        rejection_reason = result.rejection_reason
+        retry_triggered = False
+        retry_success = False
+        final_text = result.text
+        result_status = "success"
+        telemetry = getattr(self, "_runtime_v2_observability", None)
+
+        def _emit_output_event(*, current_text: str, current_result_status: str, current_result_reason: str, current_output_rejected: bool, current_retry_triggered: bool, current_retry_success: bool, current_error_type: str, current_attempt_count: int) -> None:
+            if telemetry is None or not bool(getattr(telemetry, "enabled", True)):
+                return
+            try:
+                telemetry.record_execution_event(
+                    {
+                        "session_id": str(getattr(session, "session_id", "") or ""),
+                        "work_id": str(work_id or ""),
+                        "trace_id": trace_id,
+                        "turn_id": turn_id,
+                        "attempt_id": attempt_id,
+                        "provider_used": provider_used,
+                        "attempt_count": int(current_attempt_count),
+                        "raw_llm_output": str(current_text or ""),
+                        "parsed_output": {
+                            "kind": "classified_error" if current_output_rejected else "final_user_response",
+                            "text": str(current_text or ""),
+                        },
+                        "syntax_valid": True,
+                        "action_candidate": action_candidate,
+                        "action_valid": action_valid,
+                        "final_action": final_action,
+                        "error_type": current_error_type,
+                        "result_status": current_result_status,
+                        "result_reason": current_result_reason,
+                        "output_rejected": bool(current_output_rejected),
+                        "rejection_reason": current_result_reason,
+                        "retry_triggered": bool(current_retry_triggered),
+                        "retry_success": bool(current_retry_success),
+                    }
+                )
+            except Exception as e:
+                logger.warning("Failed to record output governance telemetry: %s", e)
+
+        if output_rejected:
+            retry_triggered = True
+            result_status = "failure"
+            logger.warning(
+                "Output contract rejected | session=%s reason=%s expected=%s detected=%s",
+                session.session_id,
+                rejection_reason,
+                result.expected_language,
+                result.detected_language,
+            )
+            _emit_output_event(
+                current_text=response_text,
+                current_result_status="failure",
+                current_result_reason=rejection_reason,
+                current_output_rejected=True,
+                current_retry_triggered=True,
+                current_retry_success=False,
+                current_error_type="AgentSemanticError",
+                current_attempt_count=1,
+            )
+            retry_text = self._retry_final_user_response(
+                session=session,
+                user_input=user_input,
+                draft_text=response_text,
+                retry_instruction=result.retry_instruction,
+            )
+            retry_result = OutputGovernor.classify_final_user_response(
+                user_input=user_input,
+                response_text=retry_text,
+                session_language=session_language,
+            )
+            if retry_result.accepted:
+                final_text = retry_result.text
+                retry_success = True
+                output_rejected = False
+                rejection_reason = ""
+                result_status = "success"
+            else:
+                logger.error(
+                    "Final output retry rejected | session=%s reason=%s expected=%s detected=%s",
+                    session.session_id,
+                    retry_result.rejection_reason,
+                    retry_result.expected_language,
+                    retry_result.detected_language,
+                )
+                final_text = self._t(session, "reply.technical_issue", details="output contract violation")
+                _emit_output_event(
+                    current_text=final_text,
+                    current_result_status="failure",
+                    current_result_reason=retry_result.rejection_reason,
+                    current_output_rejected=True,
+                    current_retry_triggered=True,
+                    current_retry_success=False,
+                    current_error_type="AgentSemanticError",
+                    current_attempt_count=2,
+                )
+
+        if not output_rejected:
+            _emit_output_event(
+                current_text=final_text,
+                current_result_status=result_status,
+                current_result_reason=rejection_reason or "output_ok",
+                current_output_rejected=False,
+                current_retry_triggered=bool(retry_triggered),
+                current_retry_success=bool(retry_success),
+                current_error_type=str(error_type or ""),
+                current_attempt_count=1 + int(retry_triggered),
+            )
+
+        exec_context["output_governance_checked"] = True
+        exec_context["output_rejected"] = bool(output_rejected)
+        exec_context["rejection_reason"] = rejection_reason
+        exec_context["retry_triggered"] = bool(retry_triggered)
+        exec_context["retry_success"] = bool(retry_success)
+        exec_context["final_user_response"] = final_text
+        return final_text
+
     @staticmethod
     def _clip_text(value: Any, limit: int) -> str:
         text = str(value or "").strip()
@@ -5817,6 +6066,7 @@ class AgentOrchestrator:
             "read_before_write",
             "grounded_failures",
             "reply_when_done_or_blocked",
+            "consult_tools_first",
             "progress_ack_for_non_reply",
             "stop_after_3_same_failures",
         ]
@@ -6793,7 +7043,7 @@ class AgentOrchestrator:
 
     def _build_prompt_actions_block(self, user_input: str, allowed_actions: Optional[List[str]]) -> str:
         """
-        Builds a compact, low-token action catalog for prompt injection.
+        Builds a minimal discovery bootstrap for prompt injection.
         """
         prompt_cfg = self.config_manager.get("prompt_context", {}) or {}
         mode = str(prompt_cfg.get("actions_mode", "on_demand")).strip().lower()
@@ -6804,91 +7054,24 @@ class AgentOrchestrator:
                 return header
             return header + "\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
-        # Legacy compatibility mode
+        # Legacy compatibility mode only.
         if mode == "full":
             return self.capability_registry.get_summary(allowed_actions)
 
-        if mode in {"on_demand", "catalog_on_demand"}:
-            allowed_set = set(allowed_actions) if allowed_actions is not None else set(self.capability_registry.list_actions())
-            bootstrap = [
-                action_id
-                for action_id in (
-                    "system.control.capabilities.list.ai",
-                    "system.control.capabilities.describe.ai",
-                    "system.control.capabilities.list",
-                    "system.control.capabilities.describe",
-                )
-                if action_id in allowed_set
-            ]
-            if not bootstrap:
-                # Fallback safely when discovery actions are unavailable.
-                mode = "compact_hybrid"
-            else:
-                base_payload = {
-                    "v": "ac.v4",
-                    "m": "od",
-                    "d": bootstrap,
-                    "r": ["discover", "prefer_ai", "catalog_only"],
-                }
-                if self._is_conversational_turn(user_input):
-                    return _pack(
-                        {
-                            **base_payload,
-                            "m": "od_chat",
-                            "pr": True,
-                        },
-                        "m=od_chat",
-                    )
-                return _pack(base_payload, "m=od")
-
-        manifest = self.capability_registry.get_compact_manifest(allowed_actions)
-        focus_limit = int(prompt_cfg.get("focus_limit", 8))
-        dense_threshold = int(prompt_cfg.get("dense_catalog_threshold", 24) or 24)
-        focus = self.capability_registry.get_focus_actions(
-            user_input=user_input or "",
-            allowed_actions=allowed_actions,
-            limit=focus_limit,
-        )
-
-        if self._is_conversational_turn(user_input):
-            short_focus_ids = [str(row.get("id") or "") for row in focus[:4] if str(row.get("id") or "").strip()]
-            return _pack(
-                {
-                    "v": "ac.v4",
-                    "m": "chat",
-                    "pr": True,
-                    "f": short_focus_ids,
-                },
-                "m=chat",
-            )
-
-        focus_ids = [str(row.get("id") or "") for row in focus if str(row.get("id") or "").strip()]
-        action_ids = [str(item) for item in list(manifest.get("actions", []))]
-        total_actions = int(manifest.get("count", 0) or len(action_ids))
-        if total_actions > dense_threshold:
-            dense_seed = focus_ids[:10] or action_ids[:12]
-            payload = {
-                "v": "ac.v4",
-                "m": "dense_hybrid" if mode == "compact_hybrid" else "dense",
-                "c": total_actions,
-                "h": str(manifest.get("hash", "none") or "none"),
-                "ns": list(manifest.get("namespaces", [])[:8]),
-                "a": dense_seed,
-                "f": focus_ids[:10],
-                "more": max(0, total_actions - len(dense_seed)),
-            }
-            return _pack(payload, f"m={payload['m']}")
+        allowed_set = set(allowed_actions) if allowed_actions is not None else set(self.capability_registry.list_actions())
+        bootstrap = [action_id for action_id in ("system.control.consult_tools",) if action_id in allowed_set]
+        if not bootstrap:
+            return "m=discover_only"
 
         payload = {
             "v": "ac.v4",
-            "m": mode,
-            "c": total_actions,
-            "h": str(manifest.get("hash", "none") or "none"),
-            "ns": list(manifest.get("namespaces", [])[:10]),
-            "a": action_ids,
-            "f": focus_ids,
+            "m": "od_chat" if self._is_conversational_turn(user_input) else "od",
+            "d": bootstrap,
+            "r": ["discover", "consult_first", "semantic_index"],
         }
-        return _pack(payload, f"m={mode}")
+        if self._is_conversational_turn(user_input):
+            payload["pr"] = True
+        return _pack(payload, f"m={payload['m']}")
 
 
     @staticmethod

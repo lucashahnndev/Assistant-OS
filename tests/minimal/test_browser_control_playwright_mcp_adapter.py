@@ -1,4 +1,5 @@
 import asyncio
+import json
 from unittest.mock import patch
 
 from src.capabilities.browser_control.playwright_mcp_adapter import PlaywrightMCPAdapter
@@ -258,3 +259,340 @@ def test_runtime_playwright_mcp_without_endpoint_and_no_fallback_fails_fast():
     except RuntimeError:
         raised = True
     assert raised is True
+
+
+def test_playwright_mcp_adapter_uses_mcp_jsonrpc_endpoint():
+    calls = []
+
+    class _Resp:
+        def __init__(self, status_code=200, data=None, headers=None):
+            self.status_code = status_code
+            self._data = data if data is not None else {}
+            self.headers = headers if headers is not None else {}
+            self.text = json.dumps(self._data)
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"http_status_{self.status_code}")
+
+        def json(self):
+            return self._data
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            calls.append({"url": str(url), "json": dict(json or {}), "headers": dict(headers or {})})
+            method = str((json or {}).get("method", "")).strip()
+            if method == "initialize":
+                return _Resp(
+                    status_code=200,
+                    data={"jsonrpc": "2.0", "id": (json or {}).get("id"), "result": {"capabilities": {}}},
+                    headers={"mcp-session-id": "sess_123"},
+                )
+            if method == "notifications/initialized":
+                return _Resp(status_code=200, data={})
+            if method == "tools/call":
+                return _Resp(
+                    status_code=200,
+                    data={
+                        "jsonrpc": "2.0",
+                        "id": (json or {}).get("id"),
+                        "result": {"tabs": [{"index": 0}], "active_index": 0},
+                    },
+                )
+            return _Resp(status_code=400, data={"error": {"message": "unexpected_method"}})
+
+    adapter = PlaywrightMCPAdapter(endpoint="http://127.0.0.1:8787")
+    with patch("src.capabilities.browser_control.playwright_mcp_adapter.httpx.AsyncClient", return_value=_Client()):
+        listed = asyncio.run(adapter.list_tabs())
+
+    assert listed["active_index"] == 0
+    assert len(listed["tabs"]) == 1
+    assert any(c["url"].startswith("http://localhost:8787/") and c["url"].endswith("/mcp") for c in calls)
+    assert any(c["json"].get("method") == "initialize" for c in calls)
+    assert any(c["json"].get("method") == "tools/call" for c in calls)
+
+
+def test_playwright_mcp_adapter_supports_explicit_legacy_tools_call_endpoint():
+    calls = []
+
+    class _Resp:
+        def __init__(self, status_code=200, data=None):
+            self.status_code = status_code
+            self._data = data if data is not None else {}
+            self.headers = {}
+            self.text = json.dumps(self._data)
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"http_status_{self.status_code}")
+
+        def json(self):
+            return self._data
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            calls.append({"url": str(url), "json": dict(json or {})})
+            return _Resp(status_code=200, data={"result": {"ok": True}})
+
+    adapter = PlaywrightMCPAdapter(endpoint="http://127.0.0.1:8787/tools/call")
+    with patch("src.capabilities.browser_control.playwright_mcp_adapter.httpx.AsyncClient", return_value=_Client()):
+        out = asyncio.run(adapter.navigate("https://example.com"))
+    assert isinstance(out, dict)
+    assert any(c["url"].endswith("/tools/call") for c in calls)
+
+
+def test_playwright_mcp_adapter_decodes_sse_payloads():
+    calls = []
+
+    class _Resp:
+        def __init__(self, status_code=200, text="", headers=None):
+            self.status_code = status_code
+            self.text = text
+            self.headers = headers if headers is not None else {}
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"http_status_{self.status_code}")
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            calls.append({"url": str(url), "json": dict(json or {}), "headers": dict(headers or {})})
+            method = str((json or {}).get("method", "")).strip()
+            if method == "initialize":
+                return _Resp(
+                    status_code=200,
+                    text=(
+                        "event: message\n"
+                        'data: {"jsonrpc":"2.0","id":1,"result":{"capabilities":{"tools":{}}}}\n'
+                    ),
+                    headers={"mcp-session-id": "sess_sse"},
+                )
+            if method == "notifications/initialized":
+                return _Resp(status_code=200, text='{"jsonrpc":"2.0","result":{}}')
+            if method == "tools/call":
+                return _Resp(
+                    status_code=200,
+                    text=(
+                        "event: message\n"
+                        'data: {"jsonrpc":"2.0","id":2,"result":{"tabs":[{"index":0}],"active_index":0}}\n'
+                    ),
+                )
+            return _Resp(status_code=400, text='{"error":{"message":"unexpected_method"}}')
+
+    adapter = PlaywrightMCPAdapter(endpoint="http://localhost:8787")
+    with patch("src.capabilities.browser_control.playwright_mcp_adapter.httpx.AsyncClient", return_value=_Client()):
+        listed = asyncio.run(adapter.list_tabs())
+
+    assert listed["active_index"] == 0
+    assert len(listed["tabs"]) == 1
+    assert any(c["json"].get("method") == "initialize" for c in calls)
+    assert any(c["json"].get("method") == "tools/call" for c in calls)
+
+
+def test_playwright_mcp_adapter_does_not_fallback_to_tools_call_when_mcp_404():
+    calls = []
+
+    class _Resp:
+        def __init__(self, status_code=200, text="", headers=None):
+            self.status_code = status_code
+            self.text = text
+            self.headers = headers if headers is not None else {}
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"http_status_{self.status_code}")
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            url_s = str(url)
+            calls.append({"url": url_s, "json": dict(json or {}), "headers": dict(headers or {})})
+            method = str((json or {}).get("method", "")).strip()
+            if url_s.endswith("/mcp"):
+                return _Resp(status_code=404, text="Not Found")
+            return _Resp(status_code=400, text='{"error":{"message":"unexpected"}}')
+
+    adapter = PlaywrightMCPAdapter(endpoint="http://localhost:8787")
+    with patch("src.capabilities.browser_control.playwright_mcp_adapter.httpx.AsyncClient", return_value=_Client()):
+        raised = None
+        try:
+            _ = asyncio.run(adapter.list_tabs())
+        except Exception as e:
+            raised = e
+
+    assert raised is not None
+    assert any(c["url"].endswith("/mcp") for c in calls)
+    assert not any(c["url"].endswith("/tools/call") for c in calls)
+
+
+def test_playwright_mcp_adapter_reinitializes_and_retries_on_404_session_loss():
+    calls = []
+    state = {"tool_calls": 0, "init_calls": 0}
+
+    class _Resp:
+        def __init__(self, status_code=200, text="", headers=None):
+            self.status_code = status_code
+            self.text = text
+            self.headers = headers if headers is not None else {}
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"http_status_{self.status_code}")
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            calls.append({"url": str(url), "json": dict(json or {}), "headers": dict(headers or {})})
+            method = str((json or {}).get("method", "")).strip()
+            if method == "initialize":
+                state["init_calls"] += 1
+                sid = f"sess_{state['init_calls']}"
+                return _Resp(
+                    status_code=200,
+                    text='event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{"capabilities":{"tools":{}}}}\n',
+                    headers={"mcp-session-id": sid},
+                )
+            if method == "notifications/initialized":
+                return _Resp(status_code=202, text="")
+            if method == "tools/call":
+                state["tool_calls"] += 1
+                if state["tool_calls"] == 1:
+                    return _Resp(status_code=404, text='{"error":{"message":"session_not_found"}}')
+                return _Resp(
+                    status_code=200,
+                    text='event: message\ndata: {"jsonrpc":"2.0","id":2,"result":{"tabs":[{"index":0}],"active_index":0}}\n',
+                )
+            return _Resp(status_code=400, text='{"error":{"message":"unexpected"}}')
+
+    adapter = PlaywrightMCPAdapter(endpoint="http://localhost:8787")
+    with patch("src.capabilities.browser_control.playwright_mcp_adapter.httpx.AsyncClient", return_value=_Client()):
+        listed = asyncio.run(adapter.list_tabs())
+
+    assert listed["active_index"] == 0
+    assert len(listed["tabs"]) == 1
+    assert state["init_calls"] >= 2
+    assert state["tool_calls"] == 2
+
+
+def test_playwright_mcp_adapter_parses_json_from_content_text():
+    payload = {
+        "result": {
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "### Result\n"
+                        '{"url":"https://example.com","title":"Example Domain","viewport":{"w":1280,"h":720}}\n'
+                        "### Ran Playwright code"
+                    ),
+                }
+            ]
+        }
+    }
+    out = PlaywrightMCPAdapter._coerce_result_payload(payload)
+    assert out.get("url") == "https://example.com"
+    assert out.get("title") == "Example Domain"
+    assert isinstance(out.get("viewport"), dict)
+
+
+def test_playwright_mcp_adapter_parses_tabs_from_content_text():
+    payload = {
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    "### Result\n"
+                    "- 0: (current) [Example](https://example.com)\n"
+                    "- 1: [Amazon](https://www.amazon.com.br)\n"
+                ),
+            }
+        ]
+    }
+    tabs = PlaywrightMCPAdapter._coerce_tabs_payload(payload)
+    assert len(tabs) == 2
+    assert tabs[0]["index"] == 0
+    assert tabs[0]["current"] is True
+    assert "example.com" in tabs[0]["url"]
+
+
+def test_runtime_playwright_mcp_navigate_retries_when_info_stays_blank():
+    class _FlakyAdapter:
+        def __init__(self):
+            self.navigate_calls = []
+            self.info_calls = 0
+
+        async def list_tabs(self):
+            return {"tabs": [{"index": 0, "title": "Tab 0"}], "active_index": 0}
+
+        async def get_page_info(self):
+            self.info_calls += 1
+            if self.info_calls < 3:
+                return {"url": "about:blank", "title": "", "viewport": {"w": 1280, "h": 720}}
+            return {"url": "https://example.com/", "title": "Example Domain", "viewport": {"w": 1280, "h": 720}}
+
+        async def navigate(self, url):
+            self.navigate_calls.append(str(url))
+            return {"result": {"ok": True}}
+
+    flaky = _FlakyAdapter()
+    rt = BrowserRuntimePlaywright(
+        chrome_path="",
+        base_profile_path="data/browser_data/profile",
+        overlay_profile_parent="data/browser_data/profile/sessions",
+        desktop_cache_dir="data/browser_data/desktop_cache",
+        desktop_launch_enabled=False,
+        extension_install_mode="auto",
+        extension_fallback_enabled=True,
+        headless=True,
+        muted=True,
+        app_mode=False,
+        launch_url="about:blank",
+        humanize_input_enabled=True,
+        visual_cursor_enabled=True,
+        tab_user_lock_enabled=True,
+        tab_control_bar_enabled=True,
+        agent_name="Test",
+        playwright_transport_mode="mcp",
+        playwright_mcp_endpoint="http://localhost:8787",
+        playwright_mcp_fallback_to_local=False,
+    )
+    with patch(
+        "src.capabilities.browser_control.runtime_playwright.PlaywrightMCPAdapter",
+        side_effect=lambda endpoint: flaky,
+    ):
+        asyncio.run(rt.launch())
+        resp = asyncio.run(rt.navigate("https://example.com"))
+
+    assert resp.status == "success"
+    assert len(flaky.navigate_calls) == 2
+    assert all(u == "https://example.com" for u in flaky.navigate_calls)
+    assert isinstance(resp.result_data, dict)
+    assert "recovered_after_blank" in resp.result_data

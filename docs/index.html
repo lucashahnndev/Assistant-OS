@@ -1,74 +1,59 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Atlas Bot - Documentação</title>
+    <title>Assistant-OS - Visão Geral</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
-
 <body>
-    <div class="sidebar">
-        <a href="index.html" class="logo">Atlas Bot</a>
+    <nav class="sidebar">
+        <a href="index.html" class="logo">Assistant-OS</a>
         <ul class="nav-links">
             <li><a href="index.html" class="active">Visão Geral</a></li>
-            <li><a href="installation.html">Instalação</a></li>
-            <li><a href="architecture.html">Arquitetura</a></li>
-            <li><a href="modules.html">Módulos</a></li>
-            <li><a href="agent_refactor_plan.html">Plano Núcleo Agêntico</a></li>
-            <li><a href="permission_groups_planner.html">Planner Permissões</a></li>
-            <li><a href="skills_audit_planner.html">Planner Skills</a></li>
+            <li><a href="architecture.html">Arquitetura (Core)</a></li>
+            <li><a href="workers.html">Task & Worker Manager</a></li>
+            <li><a href="capabilities.html">Capabilities & Skills</a></li>
+            <li><a href="providers.html">Providers (Multi-Model)</a></li>
+            <li><a href="integrations.html">OAuth & Contas</a></li>
+            <li><a href="governance.html">Governança & ACL</a></li>
+            <li><a href="drivers.html">Drivers (I/O)</a></li>
         </ul>
-    </div>
+    </nav>
 
-    <div class="main-content">
-        <h1>Bem-vindo ao Atlas Bot</h1>
-        <p>Atlas Bot (anteriormente Assistant-OS) é um <strong>Agente de Sistema Proativo</strong> projetado para Linux.
-            Diferente de assistentes tradicionais, o Atlas utiliza um <strong>Cérebro Agêntico (LLM)</strong> para
-            raciocinar,
-            planejar e executar tarefas complexas através de múltiplos canais (Voz, Texto, Navegador).
+    <main class="main-content">
+        <h1>Assistant-OS</h1>
+        <p>
+            O <strong>Assistant-OS</strong> é uma plataforma open-source para a criação de agentes de IA operacionais e seguros, voltados para ambientes Linux e além.
+            Ele foi projetado para atuar não apenas como um chatbot, mas como um <strong>Sistema Operacional Agêntico</strong>, com separação estrita entre raciocínio e execução.
         </p>
 
-        <div class="alert alert-info">
-            <strong>Status:</strong> O projeto está em fase de Estabilização do Core e Expansão de Habilidades.
+        <div class="alert">
+            <strong>Nota Arquitetural Crítica:</strong> Neste sistema, Modelos de Linguagem (LLMs) <strong>NÃO</strong> executam ações diretamente. Eles apenas geram intenções. Toda a execução ocorre em um ambiente assíncrono rigorosamente controlado através de Drivers e Capabilities.
         </div>
 
-        <h2>Funcionalidades Principais</h2>
-        <div class="card-grid">
-            <div class="card">
-                <h3>🧠 Cérebro Agêntico</h3>
-                <p>Loop de Raciocínio (ReAct) que permite ao Atlas entender intenções complexas e planejar múltiplos
-                    passos.</p>
-            </div>
-            <div class="card">
-                <h3>💬 Integração Telegram</h3>
-                <p>Controle total via chat: envie comandos de texto, receba respostas e troque arquivos (imagens/docs).
-                </p>
-            </div>
-            <div class="card">
-                <h3>🌐 Navegação Autônoma</h3>
-                <p>Controle de navegador via Playwright para pesquisar na web, tocar música e interagir com sites.</p>
-            </div>
-            <div class="card">
-                <h3>💾 Memória Persistente</h3>
-                <p>Sistema de memória de curto e longo prazo (Vector DB) para lembrar de preferências e conversas
-                    passadas.</p>
-            </div>
-        </div>
+        <h2>Filosofia e Princípios Fundamentais</h2>
+        <p>A arquitetura do Assistant-OS se baseia nos seguintes pilares operacionais:</p>
+        <ul>
+            <li><strong>A Interface Nunca Bloqueia:</strong> O loop principal de conversação (`Main`) apenas roteia mensagens e reage a eventos. Tarefas demoradas jamais congelam a interação com o usuário.</li>
+            <li><strong>Execução Isolada (Workers):</strong> Cada nova tarefa pesada (uma *Work*) roda em seu próprio processo ou *thread* isolada via um `WorkerManager`.</li>
+            <li><strong>Semântica > Coordenadas:</strong> Ferramentas como o controle de navegador utilizam árvores de acessibilidade e extração estruturada de DOM em vez de cliques cegos baseados em pixels.</li>
+            <li><strong>Contratos Explícitos:</strong> As habilidades (*Capabilities*) do agente não são meros scripts improvisados; elas operam sobre contratos de dados tipados (`contract_v1.py`) com políticas de acesso vinculadas (ACL).</li>
+            <li><strong>Model Context Protocol (MCP):</strong> A plataforma abraça padrões de mercado como MCP para injetar dinamicamente ferramentas de contexto, isolando ambientes de execução externos (como o Playwright).</li>
+        </ul>
 
-        <h2>Arquitetura Modular</h2>
-        <p>
-            O sistema é construído sobre uma arquitetura <strong>Kernel-Driver</strong>, permitindo que novas interfaces
-            (como Discord ou Home Assistant) sejam adicionadas como plugins sem alterar o código principal.
-        </p>
+        <h2>Visão Alto-Nível dos Componentes</h2>
+        <p>Para entender o sistema como um todo, é preciso separar logicamente os componentes em três camadas:</p>
+        <ol>
+            <li><strong>Core Cognitivo e de Agendamento:</strong> Onde residem o `Agent Orchestrator` e o `Scheduler`. Responsáveis por interpretar a fala do usuário, quebrar em planos lógicos e enfileirar as tarefas.</li>
+            <li><strong>Camada de Execução de Tarefas (Capabilities):</strong> O conjunto massivo de habilidades (`wikipedia_search`, `browser_control`, `calendar`) que cumprem contratos bem definidos.</li>
+            <li><strong>Camada de Interface (Drivers):</strong> Os adaptadores que conectam o cérebro agêntico ao mundo físico (Telegram, Voice, System, Server).</li>
+        </ol>
 
-        <h2>Contribuição</h2>
         <p>
-            O projeto é Open Source. Consulte <a href="architecture.html">Arquitetura</a> para entender como criar novos
-            Drivers ou Skills.
+            Para aprofundar, comece entendendo a <a href="architecture.html">Arquitetura de Workers e Agendamento</a>.
         </p>
-    </div>
+    </main>
 </body>
-
 </html>

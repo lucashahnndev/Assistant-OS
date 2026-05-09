@@ -5,6 +5,8 @@ import shlex
 import socket
 import subprocess
 import time
+import signal
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
@@ -22,6 +24,8 @@ class MCPServiceConfig:
     startup_timeout_s: float
     autorestart: bool
     require_healthy: bool
+    takeover_existing: bool
+    env: Dict[str, str]
 
 
 class MCPRuntimeServiceManager:
@@ -34,6 +38,8 @@ class MCPRuntimeServiceManager:
             startup_timeout_s=20.0,
             autorestart=True,
             require_healthy=True,
+            takeover_existing=False,
+            env={},
         )
         self._proc: Optional[subprocess.Popen] = None
         self._log_handle = None
@@ -72,8 +78,9 @@ class MCPRuntimeServiceManager:
 
     def configure_from_browser_cfg(self, browser_cfg: Dict[str, Any]) -> None:
         cfg = browser_cfg if isinstance(browser_cfg, dict) else {}
-        mode = str(cfg.get("playwright_transport_mode", "local") or "local").strip().lower()
+        mode = str(cfg.get("playwright_transport_mode", "mcp") or "mcp").strip().lower()
         endpoint = str(cfg.get("playwright_mcp_endpoint", "") or "").strip()
+        endpoint_is_stdio = bool(str(endpoint or "").strip().lower().startswith("stdio"))
         autostart_enabled = self._to_bool(cfg.get("playwright_mcp_autostart_enabled", True), True)
         command = str(
             cfg.get("playwright_mcp_server_command")
@@ -82,15 +89,76 @@ class MCPRuntimeServiceManager:
         startup_timeout_s = float(cfg.get("playwright_mcp_startup_timeout_s", 20.0) or 20.0)
         autorestart = self._to_bool(cfg.get("playwright_mcp_autorestart", True), True)
         require_healthy = self._to_bool(cfg.get("playwright_mcp_autostart_require_healthy", True), True)
+        takeover_existing = self._to_bool(cfg.get("playwright_mcp_takeover_existing", False), False)
+        debug_enabled = self._to_bool(cfg.get("playwright_mcp_debug", False), False)
+        env_cfg = cfg.get("playwright_mcp_env") if isinstance(cfg, dict) else None
+        env: Dict[str, str] = {}
+        if isinstance(env_cfg, dict):
+            for k, v in env_cfg.items():
+                key = str(k).strip()
+                if not key:
+                    continue
+                env[key] = str(v) if v is not None else ""
+        if debug_enabled and "DEBUG" not in env:
+            # Playwright debug namespaces; keep it focused but useful.
+            env["DEBUG"] = "pw:api,pw:browser*"
 
         self._cfg = MCPServiceConfig(
-            enabled=bool(autostart_enabled and mode == "mcp" and endpoint),
+            enabled=bool(autostart_enabled and mode == "mcp" and endpoint and not endpoint_is_stdio),
             endpoint=endpoint,
             command=command,
             startup_timeout_s=max(3.0, startup_timeout_s),
             autorestart=bool(autorestart),
             require_healthy=bool(require_healthy),
+            takeover_existing=bool(takeover_existing),
+            env=env,
         )
+
+    @staticmethod
+    def _list_listener_pids_for_port(port: int) -> list[int]:
+        try:
+            out = subprocess.check_output(["ss", "-ltnp"], text=True, stderr=subprocess.DEVNULL)
+        except Exception:
+            return []
+        pids: list[int] = []
+        pattern = re.compile(r"pid=(\d+)")
+        for line in out.splitlines():
+            if f":{int(port)}" not in line:
+                continue
+            for m in pattern.findall(line):
+                try:
+                    pid = int(m)
+                except Exception:
+                    continue
+                if pid > 0 and pid not in pids:
+                    pids.append(pid)
+        return pids
+
+    def _terminate_existing_listener(self, endpoint: str) -> bool:
+        host, port = self._parse_endpoint_host_port(endpoint)
+        if not self._is_local_host(host) or int(port) <= 0:
+            return False
+        pids = self._list_listener_pids_for_port(int(port))
+        if not pids:
+            return False
+        changed = False
+        for pid in pids:
+            # Do not kill ourselves.
+            if pid == os.getpid():
+                continue
+            try:
+                os.kill(pid, signal.SIGTERM)
+                changed = True
+            except Exception:
+                continue
+        if not changed:
+            return False
+        deadline = time.time() + 6.0
+        while time.time() < deadline:
+            if not self._is_endpoint_reachable(endpoint, timeout_s=0.2):
+                return True
+            time.sleep(0.15)
+        return not self._is_endpoint_reachable(endpoint, timeout_s=0.2)
 
     def is_required(self) -> bool:
         return bool(self._cfg.enabled and self._cfg.require_healthy)
@@ -100,7 +168,15 @@ class MCPRuntimeServiceManager:
             return {"ok": True, "managed": False, "reason": "autostart_disabled_or_not_mcp"}
 
         if self._is_endpoint_reachable(self._cfg.endpoint):
-            return {"ok": True, "managed": False, "reason": "endpoint_already_reachable"}
+            if not self._cfg.takeover_existing:
+                return {"ok": True, "managed": False, "reason": "endpoint_already_reachable"}
+            logger.warning(
+                "MCP takeover_existing enabled; attempting to terminate existing listener at %s",
+                self._cfg.endpoint,
+            )
+            terminated = self._terminate_existing_listener(self._cfg.endpoint)
+            if not terminated and self._is_endpoint_reachable(self._cfg.endpoint):
+                return {"ok": False, "managed": False, "reason": "endpoint_in_use"}
 
         host, _port = self._parse_endpoint_host_port(self._cfg.endpoint)
         if not self._is_local_host(host):
@@ -120,12 +196,15 @@ class MCPRuntimeServiceManager:
             args = shlex.split(self._cfg.command)
             if not args:
                 return {"ok": False, "managed": False, "reason": "invalid_server_command"}
+            proc_env = dict(os.environ)
+            if isinstance(self._cfg.env, dict) and self._cfg.env:
+                proc_env.update(self._cfg.env)
             self._proc = subprocess.Popen(
                 args,
                 stdout=self._log_handle,
                 stderr=self._log_handle,
                 cwd=os.getcwd(),
-                env=dict(os.environ),
+                env=proc_env,
                 start_new_session=True,
             )
             self._managed_by_kernel = True
@@ -175,4 +254,3 @@ class MCPRuntimeServiceManager:
                 pass
             self._log_handle = None
         return {"ok": True}
-

@@ -185,6 +185,44 @@
             }
         }
     ],
+    "discoverability_profile": {
+        "enabled": true,
+        "roles": [
+            "search",
+            "retrieve",
+            "control"
+        ],
+        "domains": [
+            "calendar",
+            "agenda",
+            "schedule"
+        ],
+        "entity_types": [
+            "event",
+            "appointment",
+            "agenda"
+        ],
+        "keywords": [
+            "agenda",
+            "calendario",
+            "calendário",
+            "compromisso",
+            "compromissos",
+            "evento",
+            "eventos",
+            "schedule",
+            "appointment"
+        ],
+        "routing_hints": {
+            "preferred_intents": [
+                "calendar_lookup",
+                "schedule_lookup",
+                "agenda_lookup",
+                "event_lookup"
+            ],
+            "avoid_when": []
+        }
+    },
     "auth": {
         "mode": "none"
     }

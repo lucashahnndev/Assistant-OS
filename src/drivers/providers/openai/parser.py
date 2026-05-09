@@ -1,49 +1,38 @@
 import json
-import re
 import logging
-from typing import Dict, Any, Optional
+import re
+from typing import Any, Dict
+
+from core.errors import SyntaxError as AgentSyntaxError, ErrorCode
 
 logger = logging.getLogger("OpenAIParser")
 
-def extract_and_parse_json(content: str) -> Dict[str, Any]:
+def extract_and_parse_json(content: str, *, strict: bool = False) -> Dict[str, Any]:
     """
     Standardized JSON extraction for OpenAI responses.
+    Only fence stripping and direct JSON parsing are allowed.
     """
     if not isinstance(content, str):
-        return {}
+        raise AgentSyntaxError("OpenAI structured output must be a string.", code=ErrorCode.PLANNER_INVALID_JSON)
     text = content.strip()
     if not text:
-        return {}
+        raise AgentSyntaxError("OpenAI structured output is empty.", code=ErrorCode.PLANNER_INVALID_JSON)
 
     if text.startswith("```"):
         fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL)
         if fence_match:
             text = fence_match.group(1).strip()
+        else:
+            text = re.sub(r"^```(?:json)?\s*", "", text).strip()
 
     try:
         parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as exc:
+        raise AgentSyntaxError(
+            f"OpenAI structured output is not valid JSON: {exc.msg}",
+            code=ErrorCode.PLANNER_INVALID_JSON,
+        ) from exc
 
-    # Brace counting fallback
-    for idx, ch in enumerate(text):
-        if ch != "{":
-            continue
-        try:
-            # Try to parse from this brace onwards
-            rem = text[idx:]
-            obj = json.loads(rem)
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            # If loads fails, it might still have extra data, 
-            # but we'll try a more manual approach if raw_decode is problematic
-            try:
-                obj, _ = json.JSONDecoder().raw_decode(text[idx:])
-                if isinstance(obj, dict):
-                    return obj
-            except:
-                continue
-    return {}
+    if not isinstance(parsed, dict):
+        raise AgentSyntaxError("OpenAI structured output must be a JSON object.", code=ErrorCode.PLANNER_INVALID_JSON)
+    return parsed

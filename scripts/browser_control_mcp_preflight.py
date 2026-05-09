@@ -33,8 +33,8 @@ def _extract_browser_control_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def analyze_browser_control_mcp_readiness(browser_cfg: Dict[str, Any]) -> Dict[str, Any]:
-    runtime_backend = str(browser_cfg.get("runtime_backend", "cdp") or "cdp").strip().lower()
-    transport_mode = str(browser_cfg.get("playwright_transport_mode", "local") or "local").strip().lower()
+    runtime_backend = str(browser_cfg.get("runtime_backend", "playwright") or "playwright").strip().lower()
+    transport_mode = str(browser_cfg.get("playwright_transport_mode", "mcp") or "mcp").strip().lower()
     endpoint = str(browser_cfg.get("playwright_mcp_endpoint", "") or "").strip()
 
     issues = []

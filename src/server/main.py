@@ -85,6 +85,11 @@ def create_app(kernel=None) -> FastAPI:
     os.makedirs(static_dir, exist_ok=True)
     app.mount("/api/static", StaticFiles(directory=static_dir), name="static")
 
+    # Documentation files
+    docs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "docs")
+    if os.path.exists(docs_dir):
+        app.mount("/documentation", StaticFiles(directory=docs_dir, html=True), name="documentation")
+
     @app.get("/")
     def read_root():
         return {"app": "AOSD Portal", "status": "running"}

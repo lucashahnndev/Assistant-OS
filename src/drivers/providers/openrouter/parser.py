@@ -1,57 +1,23 @@
 import json
-import re
 import logging
-from typing import Dict, Any, Optional
+import re
+from typing import Any, Dict
+
+from core.errors import SyntaxError as AgentSyntaxError, ErrorCode
 
 logger = logging.getLogger("OpenRouterParser")
 
-def repair_json(s: str) -> str:
+def extract_and_parse_json(content: str, *, strict: bool = False) -> Dict[str, Any]:
     """
-    Repair heuristic: aggressive bracket balancing for truncated outputs.
-    """
-    stack = []
-    in_string = False
-    escape = False
-    for char in s:
-        if escape:
-            escape = False
-            continue
-        if char == '\\':
-            escape = True
-            continue
-        if char == '"':
-            in_string = not in_string
-            continue
-        if not in_string:
-            if char in '{[':
-                stack.append(char)
-            elif char == '}':
-                if stack and stack[-1] == '{':
-                    stack.pop()
-            elif char == ']':
-                if stack and stack[-1] == '[':
-                    stack.pop()
-    
-    repaired = s
-    if in_string:
-        repaired += '"'
-    
-    while stack:
-        opener = stack.pop()
-        repaired += '}' if opener == '{' else ']'
-        
-    return repaired
-
-def extract_and_parse_json(content: str) -> Dict[str, Any]:
-    """
-    Extracts and parses the first JSON object found in model output, with repair heuristic.
+    Extracts and parses JSON from model output.
+    Only fence stripping and direct parsing are allowed.
     """
     if not isinstance(content, str):
-        return {}
+        raise AgentSyntaxError("OpenRouter structured output must be a string.", code=ErrorCode.PLANNER_INVALID_JSON)
 
     text = content.strip()
     if not text:
-        return {}
+        raise AgentSyntaxError("OpenRouter structured output is empty.", code=ErrorCode.PLANNER_INVALID_JSON)
 
     # Common model pattern: fenced JSON block
     if text.startswith("```"):
@@ -59,49 +25,16 @@ def extract_and_parse_json(content: str) -> Dict[str, Any]:
         if fence_match:
             text = fence_match.group(1).strip()
         else:
-            # Truncated fence
             text = re.sub(r"^```(?:json)?\s*", "", text).strip()
 
-    # Fast path: try pure JSON
     try:
         parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        # Try repairing first
-        repaired_text = repair_json(text)
-        try:
-            parsed = json.loads(repaired_text)
-            if isinstance(parsed, dict):
-                logger.warning("Auto-repaired truncated JSON response successfully.")
-                return parsed
-        except json.JSONDecodeError as e:
-            logger.debug(f"JSON Parse Error (even after repair): {e.msg}")
+    except json.JSONDecodeError as exc:
+        raise AgentSyntaxError(
+            f"OpenRouter structured output is not valid JSON: {exc.msg}",
+            code=ErrorCode.PLANNER_INVALID_JSON,
+        ) from exc
 
-    # Robust path: scan for the first decodable object in mixed text
-    for idx, ch in enumerate(text):
-        if ch != "{":
-            continue
-        try:
-            # Try to parse from this brace onwards
-            rem = text[idx:]
-            obj = json.loads(rem)
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            # Fallback to potentially more complex extraction or repair
-            try:
-                # If absolute raw_decode is needed, use it directly to satisfy linter
-                obj, _ = json.JSONDecoder().raw_decode(text[idx:])
-                if isinstance(obj, dict):
-                    return obj
-            except:
-                # Try repairing this specific substring
-                try:
-                    repaired_sub = repair_json(text[idx:])
-                    obj = json.loads(repaired_sub)
-                    if isinstance(obj, dict):
-                        return obj
-                except:
-                    continue
-    return {}
+    if not isinstance(parsed, dict):
+        raise AgentSyntaxError("OpenRouter structured output must be a JSON object.", code=ErrorCode.PLANNER_INVALID_JSON)
+    return parsed

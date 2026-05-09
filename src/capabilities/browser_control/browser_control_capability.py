@@ -83,6 +83,16 @@ class BrowserControlCapability(CapabilityBase):
         self._policy = BrowserSessionPolicy({"app_mode_enabled": self._app_mode_enabled})
         self._initialize_global_browser_storage()
 
+    def _supports_cross_loop_runtime_reuse(self) -> bool:
+        """
+        MCP transport is process/external-server based and does not bind browser state to
+        the local asyncio loop. In this mode we must preserve runtime across loop changes
+        to avoid open/close thrashing on every dispatch.
+        """
+        backend = self._resolve_runtime_backend()
+        transport = str(self._playwright_transport_mode or "").strip().lower()
+        return backend == "playwright" and transport == "mcp"
+
     def _get_new_tab_open_count(self, owner_session_id: str) -> int:
         key = str(owner_session_id or "default")
         return int(self._new_tabs_opened_by_session.get(key, 0))
@@ -139,6 +149,9 @@ class BrowserControlCapability(CapabilityBase):
         kwargs["playwright_transport_mode"] = self._playwright_transport_mode
         kwargs["playwright_mcp_endpoint"] = self._playwright_mcp_endpoint
         kwargs["playwright_mcp_fallback_to_local"] = self._playwright_mcp_fallback_to_local
+        kwargs["playwright_mcp_server_command"] = self._cfg_str("playwright_mcp_server_command", "")
+        env_cfg = self._config.get("playwright_mcp_env") if isinstance(self._config, dict) else None
+        kwargs["playwright_mcp_env"] = env_cfg if isinstance(env_cfg, dict) else {}
         return kwargs
 
     def _cfg_bool(self, key: str, default: bool) -> bool:
@@ -367,24 +380,21 @@ class BrowserControlCapability(CapabilityBase):
             should_recreate = force_new_instance
             loop_changed = False
 
-            # Re-init if loop changed or launch options differ
+            # Re-init if loop changed or launch options differ.
+            # In Playwright+MCP mode, keep runtime alive across loop changes to guarantee
+            # serial continuation in the same browser session and avoid tab/window churn.
             if self._runtime and self._loop != current_loop:
-                logger.info("Event loop changed, re-initializing runtime")
-                should_recreate = True
-                loop_changed = True
+                if self._supports_cross_loop_runtime_reuse():
+                    logger.info("Event loop changed, preserving runtime (cross-loop reuse enabled for Playwright MCP)")
+                    self._loop = current_loop
+                else:
+                    logger.info("Event loop changed, preserving runtime to avoid automatic browser closure")
+                    self._loop = current_loop
+                    should_recreate = False
 
             if should_recreate and self._runtime:
-                try:
-                    if loop_changed and hasattr(self._runtime, "force_close"):
-                        # Cross-loop teardown must be synchronous to avoid "Future attached to a different loop".
-                        self._runtime.force_close()
-                    else:
-                        await self._runtime.close()
-                finally:
-                    self._runtime = None
-                    self._subagent = None
-                    self._tab_id = None
-                    self._runtime_intent_class = None
+                logger.info("Auto-close suppressed for browser runtime; retaining existing instance")
+                should_recreate = False
 
             if not self._runtime:
                 if not self.kernel:
@@ -477,11 +487,9 @@ class BrowserControlCapability(CapabilityBase):
         return "about:blank"
 
     async def _close_registered_instance(self, reason: str = "replaced") -> None:
-        if self._registry_enabled and self._browser_instance_id and self.kernel and hasattr(self.kernel, "browser_session_registry"):
-            try:
-                self.kernel.browser_session_registry.close_instance(self._browser_instance_id, reason=reason)
-            except Exception:
-                pass
+        # Automatic instance closure is intentionally disabled.
+        # Lifecycle cleanup should happen only through explicit user/admin actions.
+        _ = reason
         self._browser_instance_id = None
         self._tab_id = None
 
@@ -531,9 +539,6 @@ class BrowserControlCapability(CapabilityBase):
             launch_url=launch_url,
             current_url=current_url,
         )
-
-        if decision.force_new_instance and self._runtime:
-            await self._close_registered_instance(reason=f"policy:{decision.reason}")
 
         await self._ensure_runtime(
             headless=headless,
@@ -754,6 +759,21 @@ class BrowserControlCapability(CapabilityBase):
         }
 
     @staticmethod
+    def _resolve_browser_owner_id(context: Optional[Dict[str, Any]] = None) -> str:
+        ctx = context or {}
+        work_id = str(ctx.get("work_id") or "").strip()
+        if work_id:
+            return work_id
+        worker_ctx = ctx.get("worker_context") if isinstance(ctx.get("worker_context"), dict) else {}
+        work_id = str(worker_ctx.get("work_id") or "").strip()
+        if work_id:
+            return work_id
+        session_id = str(ctx.get("session_id") or "").strip()
+        if session_id:
+            return session_id
+        return "default"
+
+    @staticmethod
     def _emit_status(callbacks: Dict[str, Any], payload: Dict[str, Any]) -> None:
         try:
             if callbacks and "send_status" in callbacks:
@@ -793,20 +813,27 @@ class BrowserControlCapability(CapabilityBase):
         if not registry:
             return None
         try:
-            session_id = str((context or {}).get("session_id", "default"))
-            work_id = str((context or {}).get("work_id", ""))
+            browser_owner_id = self._resolve_browser_owner_id(context)
             meta = self._runtime.get_connection_metadata() if hasattr(self._runtime, "get_connection_metadata") else {}
+            mcp_endpoint = str(meta.get("mcp_endpoint") or self._playwright_mcp_endpoint or "")
+            try:
+                mcp_port = int(str(mcp_endpoint).rsplit(":", 1)[-1]) if mcp_endpoint else None
+            except Exception:
+                mcp_port = None
             self._browser_instance_id = registry.register_instance(
-                owner_session_id=session_id,
-                work_id=work_id,
+                owner_session_id=browser_owner_id,
+                work_id=browser_owner_id,
                 intent_class=intent_class,
                 debug_port=meta.get("debug_port") or getattr(self._runtime, "remote_debugging_port", None),
                 cdp_ws_url=meta.get("ws_url") or getattr(self._runtime, "ws_url", None),
+                mcp_endpoint=mcp_endpoint,
+                mcp_port=mcp_port,
                 metadata={
                     "headless": bool(getattr(self._runtime, "headless", False)),
                     "muted": bool(getattr(self._runtime, "muted", False)),
                     "app_mode": bool(meta.get("app_mode", False)),
                     "launch_url": str(meta.get("launch_url") or ""),
+                    "browser_owner_id": browser_owner_id,
                 },
             )
             return self._browser_instance_id
@@ -823,6 +850,11 @@ class BrowserControlCapability(CapabilityBase):
         if not registry:
             return None
         meta = self._runtime.get_connection_metadata() if hasattr(self._runtime, "get_connection_metadata") else {}
+        mcp_endpoint = str(meta.get("mcp_endpoint") or self._playwright_mcp_endpoint or "")
+        try:
+            mcp_port = int(str(mcp_endpoint).rsplit(":", 1)[-1]) if mcp_endpoint else None
+        except Exception:
+            mcp_port = None
         target_id = str(meta.get("target_id") or "")
         if not target_id:
             return None
@@ -830,6 +862,15 @@ class BrowserControlCapability(CapabilityBase):
             url = await self._runtime._get_current_url()
             title = await self._runtime._get_current_title()
             role = "media" if self._runtime_intent_class == "controlar_midia" else "generic"
+            existing_instance = registry.get_instance(self._browser_instance_id) if hasattr(registry, "get_instance") else None
+            browser_owner_id = str(
+                (existing_instance or {}).get("work_id")
+                or (existing_instance or {}).get("owner_session_id")
+                or self._owner_session_id
+                or ""
+            ).strip()
+            if not browser_owner_id:
+                browser_owner_id = self._resolve_browser_owner_id({"session_id": self._owner_session_id})
             self._tab_id = registry.register_tab(
                 instance_id=self._browser_instance_id,
                 target_id=target_id,
@@ -842,8 +883,11 @@ class BrowserControlCapability(CapabilityBase):
                 self._browser_instance_id,
                 cdp_ws_url=str(meta.get("ws_url") or ""),
                 debug_port=meta.get("debug_port"),
+                mcp_endpoint=mcp_endpoint,
+                mcp_port=mcp_port,
                 intent_class=self._runtime_intent_class,
-                owner_session_id=self._owner_session_id,
+                owner_session_id=browser_owner_id,
+                work_id=browser_owner_id,
             )
             return self._tab_id
         except Exception as e:
@@ -1000,13 +1044,13 @@ class BrowserControlCapability(CapabilityBase):
         if not registry:
             return {"enabled": True, "instances": [], "open_tabs": [], "count_instances": 0, "count_tabs": 0}
         ctx = context or {}
-        session_id = str(ctx.get("session_id", "") or "")
+        browser_owner_id = self._resolve_browser_owner_id(ctx)
         instances = []
         open_tabs = []
         for inst in registry.list_instances():
             if not isinstance(inst, dict):
                 continue
-            if session_id and str(inst.get("owner_session_id", "")) != session_id:
+            if browser_owner_id and str(inst.get("owner_session_id", "")) != browser_owner_id:
                 continue
             tabs_obj = inst.get("tabs", {})
             tabs = list(tabs_obj.values()) if isinstance(tabs_obj, dict) else []
@@ -1040,7 +1084,7 @@ class BrowserControlCapability(CapabilityBase):
                 )
         return {
             "enabled": True,
-            "session_id": session_id,
+            "session_id": browser_owner_id,
             "instances": instances,
             "open_tabs": open_tabs,
             "count_instances": len(instances),
@@ -1076,12 +1120,8 @@ class BrowserControlCapability(CapabilityBase):
 
     @staticmethod
     def _lock_owner_from_context(context: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
-        ctx = context or {}
-        session_id = str(ctx.get("session_id", "default") or "default")
-        work_id = str(ctx.get("work_id", "") or "").strip()
-        if not work_id:
-            work_id = f"inline_{session_id}"
-        return {"owner_session_id": session_id, "work_id": work_id}
+        browser_owner_id = BrowserControlCapability._resolve_browser_owner_id(context)
+        return {"owner_session_id": browser_owner_id, "work_id": browser_owner_id}
 
     async def _acquire_instance_execution_lock(self, instance_id: Optional[str], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not self._registry_enabled:
@@ -1222,7 +1262,7 @@ class BrowserControlCapability(CapabilityBase):
                 ),
                 "error_code": "BROWSER_LAUNCH_NOT_DELEGATED",
             }
-        session_key = str(ctx.get("session_id", "default") or "default")
+        session_key = self._resolve_browser_owner_id(ctx)
         now_ts = float(time.time())
         if session_key in self._active_run_by_session:
             return {
@@ -1241,9 +1281,9 @@ class BrowserControlCapability(CapabilityBase):
         self._active_run_by_session[session_key] = now_ts
         callbacks = ctx.get("callbacks") if isinstance(ctx.get("callbacks"), dict) else {}
         planner_callbacks = self._build_planner_callbacks(ctx, callbacks)
-        gc_info = self._maybe_run_registry_gc(ctx)
+        gc_info = {"enabled": False, "ok": True, "reason": "automatic_gc_disabled"}
         reused_instance = self._runtime is not None
-        owner_session_id = str(ctx.get("session_id", "default"))
+        owner_session_id = session_key
         user_request = str(ctx.get("original_user_input") or ctx.get("user_input") or "").strip()
         policy_decision = await self._apply_session_policy(
             goal=goal,
@@ -1253,6 +1293,8 @@ class BrowserControlCapability(CapabilityBase):
             headless=headless,
             muted=muted,
         )
+        self._owner_session_id = owner_session_id
+        self._runtime_intent_class = intent_class
         if not policy_decision.get("force_new_instance"):
             try:
                 attached = await self._ensure_attached_to_registered_tab()
@@ -1272,27 +1314,13 @@ class BrowserControlCapability(CapabilityBase):
             and self.kernel
             and hasattr(self.kernel, "browser_session_registry")
         ):
-            try:
-                registry = self.kernel.browser_session_registry
-                if hasattr(registry, "close_other_media_instances_detailed"):
-                    close_result = registry.close_other_media_instances_detailed(
-                        owner_session_id=owner_session_id,
-                        keep_instance_id=browser_instance_id,
-                    )
-                    policy_decision["media_singleton_closed"] = int(close_result.get("closed", 0))
-                    remote = await self._close_replaced_media_instances(
-                        close_result.get("instances") if isinstance(close_result.get("instances"), list) else []
-                    )
-                    policy_decision["media_singleton_remote_close"] = remote
-                else:
-                    closed_media = registry.close_other_media_instances(
-                        owner_session_id=owner_session_id,
-                        keep_instance_id=browser_instance_id,
-                    )
-                    policy_decision["media_singleton_closed"] = int(closed_media)
-            except Exception as e:
-                logger.warning(f"Failed to enforce media singleton: {e}")
-                policy_decision["media_singleton_closed"] = 0
+            # Automatic media-instance closure is disabled.
+            # Session policy may still mark the mode, but lifecycle changes must be explicit.
+            policy_decision["media_singleton_cleanup"] = {
+                "enabled": False,
+                "reason": "automatic_media_close_disabled",
+                "keep_instance_id": browser_instance_id,
+            }
         tab_id = await self._sync_registry_tab()
         exec_ctx = self._build_execution_context(
             browser_instance_id=browser_instance_id,
@@ -1306,24 +1334,21 @@ class BrowserControlCapability(CapabilityBase):
         )
         if user_request:
             exec_ctx["original_user_input"] = user_request[:500]
-        if isinstance(policy_decision.get("media_singleton_remote_close"), dict):
+        if isinstance(policy_decision.get("media_singleton_cleanup"), dict):
             self._emit_status(
                 callbacks,
                 {
                     "action": "browser.control.run",
-                    "code": "media_singleton_cleanup",
-                    "label": "Media singleton cleanup applied.",
-                    "media_cleanup": {
-                        "closed": int(policy_decision.get("media_singleton_closed", 0) or 0),
-                        "remote_close": policy_decision.get("media_singleton_remote_close"),
-                    },
+                    "code": "media_singleton_cleanup_disabled",
+                    "label": "Media singleton cleanup disabled.",
+                    "media_cleanup": policy_decision.get("media_singleton_cleanup"),
                     "browser": exec_ctx,
                 },
             )
 
         # Playback integration
         playback_service = ctx.get("playback_service")
-        session_id = ctx.get("session_id", "default")
+        session_id = session_key
         run_id = f"browser_{int(asyncio.get_running_loop().time() * 1000)}"
         run_status = "completed"
         
@@ -1509,7 +1534,7 @@ class BrowserControlCapability(CapabilityBase):
         ctx = context or {}
         callbacks = ctx.get("callbacks") if isinstance(ctx.get("callbacks"), dict) else {}
         planner_callbacks = self._build_planner_callbacks(ctx, callbacks)
-        gc_info = self._maybe_run_registry_gc(ctx)
+        gc_info = {"enabled": False, "ok": True, "reason": "automatic_gc_disabled"}
         if not self._runtime or not self._subagent:
             return {"ok": False, "error": "No active browser runtime. Run browser.control.run first."}
         if not str(instruction or "").strip():
@@ -1867,7 +1892,6 @@ class BrowserControlCapability(CapabilityBase):
     async def health(self, params: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         p = params or {}
         ctx = context or {}
-        run_gc = bool(p.get("run_gc", False))
         include_tabs = bool(p.get("include_tabs", True))
         include_last_vision = bool(p.get("include_last_vision", True))
         only_current_session = bool(p.get("only_current_session", True))
@@ -1881,9 +1905,11 @@ class BrowserControlCapability(CapabilityBase):
             context=ctx,
         )
         sync_result = await self.sync_registry(context=ctx)
-        gc_result: Dict[str, Any] = {"enabled": False, "ok": False}
-        if run_gc:
-            gc_result = (await self.gc(params=p.get("gc_params") if isinstance(p.get("gc_params"), dict) else {}, context=ctx)).get("gc", {})
+        gc_result: Dict[str, Any] = {
+            "enabled": False,
+            "ok": True,
+            "reason": "health_does_not_run_gc",
+        }
 
         snapshot = self._build_registry_snapshot(ctx)
         issues: List[str] = []
@@ -1903,8 +1929,6 @@ class BrowserControlCapability(CapabilityBase):
         if not runtime_target:
             issues.append("no_active_runtime_target")
             issues.append("no_active_cdp_target")
-        if run_gc and not bool(gc_result.get("ok", False)):
-            issues.append("gc_execution_failed")
         if isinstance(snapshot, dict) and int(snapshot.get("count_instances", 0) or 0) == 0:
             issues.append("no_registry_instances_for_scope")
 

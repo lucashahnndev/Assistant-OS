@@ -40,6 +40,8 @@ class BrowserRuntimePlaywright:
         playwright_transport_mode: str = "local",
         playwright_mcp_endpoint: str = "",
         playwright_mcp_fallback_to_local: bool = True,
+        playwright_mcp_server_command: str = "",
+        playwright_mcp_env: Optional[Dict[str, str]] = None,
     ):
         self.chrome_path = str(chrome_path or "")
         self.base_profile_path = str(base_profile_path or "")
@@ -59,6 +61,8 @@ class BrowserRuntimePlaywright:
         self.agent_name = str(agent_name or "Agent")
         self.playwright_transport_mode = str(playwright_transport_mode or "local").strip().lower()
         self.playwright_mcp_endpoint = str(playwright_mcp_endpoint or "").strip()
+        self.playwright_mcp_server_command = str(playwright_mcp_server_command or "").strip()
+        self.playwright_mcp_env = dict(playwright_mcp_env or {})
         # Legacy compatibility flag kept for config/API stability only.
         # Local fallback is intentionally disabled in MCP mode (fail-fast).
         self.playwright_mcp_fallback_to_local = False
@@ -126,7 +130,11 @@ class BrowserRuntimePlaywright:
                     "Playwright MCP mode selected but playwright_mcp_endpoint is missing. "
                     "Set a valid endpoint or switch explicitly to playwright_transport_mode=local."
                 )
-            self._mcp_adapter = PlaywrightMCPAdapter(self.playwright_mcp_endpoint)
+            self._mcp_adapter = PlaywrightMCPAdapter(
+                self.playwright_mcp_endpoint,
+                server_command=self.playwright_mcp_server_command,
+                server_env=self.playwright_mcp_env,
+            )
             self._transport_mode_effective = "mcp"
             try:
                 tabs_meta = await self._mcp_adapter.list_tabs()
@@ -173,6 +181,11 @@ class BrowserRuntimePlaywright:
             logger.warning("Playwright launch goto failed (%s): %s", self.launch_url, e)
 
     async def close(self) -> None:
+        if self._mcp_adapter is not None:
+            try:
+                await self._mcp_adapter.aclose()
+            except Exception:
+                pass
         self._mcp_adapter = None
         try:
             if self._context:
@@ -516,13 +529,29 @@ class BrowserRuntimePlaywright:
             target = str(url or "").strip() or "about:blank"
             await self._mcp_adapter.navigate(target)
             info = await self.get_page_info()
+            recovered = False
+            final_url = str(info.get("url", "") or "").strip()
+            # Self-heal for transient MCP/browser desyncs where navigation reports success
+            # but page info remains blank/about:blank. Retry once in the same tab.
+            if target != "about:blank" and final_url in {"", "about:blank"}:
+                try:
+                    await self._mcp_adapter.navigate(target)
+                    info = await self.get_page_info()
+                    final_url = str(info.get("url", "") or "").strip()
+                    recovered = final_url not in {"", "about:blank"}
+                except Exception:
+                    pass
             if not self.target_id:
                 self.target_id = self._mcp_target_from_index(self._mcp_active_tab_index)
             return self._success_response(
                 action="navigate",
                 elapsed=time.time() - t0,
                 message=f"Navigated to {target}",
-                result_data={"url": str(info.get("url", target) or target), "kind": "navigate_action_receipt_v1"},
+                result_data={
+                    "url": str(info.get("url", target) or target),
+                    "kind": "navigate_action_receipt_v1",
+                    "recovered_after_blank": bool(recovered),
+                },
             )
         if not self._page:
             return self._error_response("navigate", f"No page for navigate to {url}")

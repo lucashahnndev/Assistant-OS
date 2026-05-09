@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from core.intent import AgentIntent
+from core.errors import SyntaxError as AgentSyntaxError, ErrorCode
 from drivers.llm.base import ILLMProvider
 from server.core.secret_manager import resolve_secret_ref
 from utils.logging_config import get_logger
@@ -127,14 +128,11 @@ class HuggingFaceProvider(ILLMProvider):
             content = self._chat_completion(messages)
             data = self._extract_json(content)
             if not data:
-                return AgentIntent(
-                    thought="Model returned non-JSON output.",
-                    action="reply",
-                    params={},
-                    response_text="", # Trigger Orchestrator recovery
+                raise AgentSyntaxError(
+                    "HuggingFace structured output is not valid JSON.",
+                    code=ErrorCode.PLANNER_INVALID_JSON,
                 )
 
-            action = str(data.get("action") or "reply").strip() or "reply"
             params = data.get("params", {})
             if not isinstance(params, dict):
                 params = {}
@@ -142,16 +140,26 @@ class HuggingFaceProvider(ILLMProvider):
             out_attachments = data.get("attachments")
             if not out_attachments and isinstance(params, dict):
                 out_attachments = params.get("attachments")
+            normalized_attachments: Optional[List[str]] = None
+            if isinstance(out_attachments, str) and out_attachments.strip():
+                normalized_attachments = [out_attachments.strip()]
+            elif isinstance(out_attachments, list):
+                cleaned = [str(x).strip() for x in out_attachments if str(x).strip()]
+                normalized_attachments = cleaned or None
 
+            logger.info(
+                "HuggingFace parsed intent | syntax_valid=true action_candidate=%s",
+                str(data.get("action", "") or "").strip(),
+            )
             return AgentIntent(
                 thought=str(data.get("thought", "") or ""),
-                plan=data.get("plan", []),
+                plan=data.get("plan", []) if isinstance(data.get("plan", []), list) else [],
                 state_summary=data.get("state_summary", {}),
-                action=action,
+                action=str(data.get("action", "") or "").strip(),
                 params=params,
                 task_label=data.get("task_label"),
                 response_text=str(data.get("response_text", "") or ""),
-                attachments=out_attachments,
+                attachments=normalized_attachments,
             )
         except Exception as e:
             logger.error(f"HuggingFace generate_intent error: {e}")

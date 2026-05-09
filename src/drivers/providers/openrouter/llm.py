@@ -8,8 +8,10 @@ from core.intent import AgentIntent
 from drivers.llm.base import ILLMProvider, ProviderContractError
 from server.core.secret_manager import resolve_secret_ref
 from utils.logging_config import get_logger
-from .parser import extract_and_parse_json, repair_json
-
+from utils.contract_artifacts import write_contract_violation
+from .parser import extract_and_parse_json
+from core.errors import SyntaxError as AgentSyntaxError, ErrorCode, ProviderQuotaError, ProviderAuthError, ProviderRateLimitError
+import openai
 logger = get_logger("OpenRouterDriver")
 
 class OpenRouterProvider(ILLMProvider):
@@ -36,11 +38,19 @@ class OpenRouterProvider(ILLMProvider):
         # Keep a conservative default and allow override per provider config.
         vision_tokens = cfg.get("vision_max_tokens") or cfg.get("max_tokens") or 512
         self.vision_max_tokens = int(vision_tokens)
+        self.intent_repair_attempts = int(cfg.get("intent_repair_attempts", 1) or 1)
 
     def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] | None = None, **kwargs) -> AgentIntent:
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history)
         messages.append({"role": "user", "content": user_input})
+        allowed_actions_kw = kwargs.get("allowed_actions")
+        allowed_actions = (
+            set(str(x).strip() for x in allowed_actions_kw if str(x or "").strip())
+            if isinstance(allowed_actions_kw, (list, set, tuple))
+            else set()
+        )
+        capability_registry = kwargs.get("capability_registry")
 
         req_id = uuid.uuid4().hex[:8]
         max_tokens = int(kwargs.get("max_tokens", self.vision_max_tokens))
@@ -63,7 +73,7 @@ class OpenRouterProvider(ILLMProvider):
         )
 
         try:
-            # We remove 'tools' and 'tool_choice' to support generic models
+            # Core is responsible for system prompt instructions
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
@@ -116,42 +126,33 @@ class OpenRouterProvider(ILLMProvider):
             )
             
             # Use specialized parser
-            data = extract_and_parse_json(content)
+            data = extract_and_parse_json(content, strict=True)
             if not data:
                 logger.warning("Could not parse JSON intent from OpenRouter.")
+                try:
+                    prompt_snapshot = "\n".join(
+                        [f"{m.get('role')}: {m.get('content')}" for m in messages if isinstance(m, dict)]
+                    )
+                    write_contract_violation(
+                        provider="openrouter",
+                        model=self.model,
+                        contract_name="agent_intent_v1",
+                        prompt=prompt_snapshot,
+                        raw_response={"content": content},
+                        error_text="Failed to fulfill AgentIntent contract: Invalid JSON.",
+                        attempt=1,
+                        max_attempts=1,
+                    )
+                except Exception:
+                    pass
                 raise ProviderContractError("Failed to fulfill AgentIntent contract: Invalid JSON.")
 
-            # VALIDATION & EXTRACTION
-            thought = str(data.get("thought", "") or "").strip() or "Reasoning omitted by model."
-            action = str(data.get("action", "") or "").strip()
-            params = data.get("params", {})
-            response_text_raw = data.get("response_text", "")
-            if isinstance(response_text_raw, str):
-                response_text = response_text_raw
-            elif response_text_raw is None:
-                response_text = ""
-            elif isinstance(response_text_raw, dict):
-                candidate = (
-                    response_text_raw.get("text")
-                    or response_text_raw.get("response")
-                    or response_text_raw.get("message")
-                )
-                response_text = str(candidate) if candidate is not None else json.dumps(response_text_raw, ensure_ascii=False)
-            elif isinstance(response_text_raw, list):
-                response_text = json.dumps(response_text_raw, ensure_ascii=False)
-            else:
-                response_text = str(response_text_raw)
-
-            if not action:
-                action = "reply"
-            if action == "reply" and not response_text:
-                response_text = thought
-            
             normalized_plan = self._normalize_plan_field(data.get("plan", []))
             state_summary = data.get("state_summary", {})
             if not isinstance(state_summary, dict):
                 state_summary = {}
 
+            params = data.get("params")
             attachments = data.get("attachments")
             if not attachments and isinstance(params, dict):
                 attachments = params.get("attachments")
@@ -166,17 +167,37 @@ class OpenRouterProvider(ILLMProvider):
             if task_label is not None:
                 task_label = str(task_label)
 
+            logger.info(
+                "OpenRouter parsed intent | syntax_valid=true action_candidate=%s",
+                str(data.get("action", "") or "").strip(),
+            )
             return AgentIntent(
-                thought=thought,
+                thought=str(data.get("thought", "") or ""),
                 plan=normalized_plan,
                 state_summary=state_summary,
-                action=action,
+                action=str(data.get("action", "") or "").strip(),
                 params=params if isinstance(params, dict) else {},
                 task_label=task_label,
-                response_text=response_text,
+                response_text=str(data.get("response_text", data.get("reply", "")) or ""),
                 attachments=normalized_attachments
             )
 
+        except openai.AuthenticationError as e:
+            duration_ms = int((time.perf_counter() - request_started_at) * 1000)
+            logger.error("OpenRouter Auth Error | ReqId: %s | DurationMs: %d | Error: %s", req_id, duration_ms, e)
+            raise ProviderAuthError(str(e), provider="openrouter")
+        except openai.RateLimitError as e:
+            duration_ms = int((time.perf_counter() - request_started_at) * 1000)
+            # OpenRouter often returns 402 as a generic exception but sometimes rate limit
+            logger.warning("OpenRouter Rate Limit | ReqId: %s | DurationMs: %d | Error: %s", req_id, duration_ms, e)
+            raise ProviderRateLimitError(str(e), provider="openrouter")
+        except openai.APIStatusError as e:
+            duration_ms = int((time.perf_counter() - request_started_at) * 1000)
+            if e.status_code == 402 or "can only afford" in str(e).lower():
+                logger.error("OpenRouter Quota Exceeded | ReqId: %s | DurationMs: %d | Error: %s", req_id, duration_ms, e)
+                raise ProviderQuotaError(str(e), provider="openrouter")
+            logger.error("OpenRouter API Error | ReqId: %s | DurationMs: %d | Status: %s | Error: %s", req_id, duration_ms, e.status_code, e)
+            raise e
         except Exception as e:
             duration_ms = int((time.perf_counter() - request_started_at) * 1000)
             logger.error("OpenRouter Error | ReqId: %s | DurationMs: %d | Error: %s", req_id, duration_ms, e)
@@ -247,35 +268,12 @@ class OpenRouterProvider(ILLMProvider):
                 }
             ]
 
-            def _request_with_tokens(max_tokens: int):
-                return self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    timeout=60.0
-                )
-
-            try:
-                response = _request_with_tokens(self.vision_max_tokens)
-            except Exception as first_exc:
-                # Credit-aware retry for OpenRouter 402 messages:
-                # "...requested up to X tokens, but can only afford Y..."
-                err_text = str(first_exc)
-                affordable_match = re.search(r"can only afford\s+(\d+)", err_text, flags=re.IGNORECASE)
-                if affordable_match:
-                    affordable = max(64, int(affordable_match.group(1)))
-                    retry_tokens = min(self.vision_max_tokens, affordable)
-                    if retry_tokens < self.vision_max_tokens:
-                        logger.warning(
-                            "Vision request exceeded credits. Retrying with lower max_tokens=%s (affordable=%s).",
-                            retry_tokens,
-                            affordable,
-                        )
-                        response = _request_with_tokens(retry_tokens)
-                    else:
-                        raise
-                else:
-                    raise
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=self.vision_max_tokens,
+                timeout=60.0
+            )
 
             if response.choices and response.choices[0].message.content:
                 return response.choices[0].message.content.strip()

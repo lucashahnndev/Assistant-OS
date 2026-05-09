@@ -1,0 +1,79 @@
+{
+    "session_id": "system.calendar",
+    "source": "system",
+    "session_type": "system",
+    "domain": "calendar",
+    "name": "",
+    "name_generated": false,
+    "profile_picture": "",
+    "created_at": 1774233721.7884834,
+    "last_interaction": 1774233721.7884836,
+    "last_opened_at": 1774233721.7884839,
+    "history": [],
+    "context": {
+        "active_specialist": "calendar"
+    },
+    "summary": "",
+    "scratchpad": "",
+    "plan": [],
+    "state_summary": {
+        "goal": "Standby",
+        "cursor": "0/0 (step: init)",
+        "done_steps": [],
+        "last_outcome": "None",
+        "last_error": "None",
+        "retry_count": 0,
+        "backoff_strategy": "None",
+        "memory_notes": "None"
+    },
+    "pending_action": null,
+    "drivers_state": {},
+    "task_registry": {},
+    "event_history": [],
+    "turn_id": 0,
+    "active_focus_task_id": null,
+    "active_focus_group": null,
+    "memory": [],
+    "candidate_store": [],
+    "decision_traces": [],
+    "event_timeline": [],
+    "rejected_memory": [],
+    "audit_trail": [],
+    "tool_health": {},
+    "tool_failure_counts": {},
+    "cognitive_state": {
+        "version": "cognitive.v1",
+        "updated_at": 1774233721,
+        "turn_id": 0,
+        "mission": {
+            "objective": "",
+            "status": "active"
+        },
+        "focus": {
+            "primary_task_id": null,
+            "primary_summary": "",
+            "reasoning_mode": "standard",
+            "attention_mode": "foreground"
+        },
+        "agenda": [],
+        "open_loops": [],
+        "blockers": [],
+        "constraints": [],
+        "assumptions": [],
+        "decisions": [],
+        "working_set": [],
+        "checkpoints": [],
+        "recent_progress": [],
+        "watchpoints": [],
+        "provenance": {
+            "sources": [],
+            "broker_evidence_used": false
+        }
+    },
+    "last_cognitive_projection": null,
+    "cognitive_diagnostics": null,
+    "last_cognitive_frame_snapshot": null,
+    "intent_agenda": {
+        "intents": {}
+    }
+}

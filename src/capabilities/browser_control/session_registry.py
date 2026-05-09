@@ -112,6 +112,7 @@ class BrowserSessionRegistry:
             self._save_state(self._state)
             return {"stale_instances": stale_instances, "stale_tabs": stale_tabs}
 
+
     def register_instance(
         self,
         *,
@@ -120,6 +121,8 @@ class BrowserSessionRegistry:
         intent_class: str,
         debug_port: Optional[int],
         cdp_ws_url: Optional[str],
+        mcp_endpoint: Optional[str] = None,
+        mcp_port: Optional[int] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         with self._lock:
@@ -131,6 +134,8 @@ class BrowserSessionRegistry:
                 "intent_class": intent_class,
                 "debug_port": debug_port,
                 "cdp_ws_url": cdp_ws_url or "",
+                "mcp_endpoint": str(mcp_endpoint or ""),
+                "mcp_port": int(mcp_port) if isinstance(mcp_port, int) else None,
                 "status": "active",
                 "in_use": True,
                 "created_at": _utc_now(),

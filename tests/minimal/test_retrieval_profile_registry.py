@@ -44,6 +44,23 @@ def test_contract_v1_parses_retrieval_profile_fields():
     assert "web" in (contract.retrieval_profile.domains or [])
 
 
+def test_contract_v1_parses_discoverability_profile_fields():
+    contract = _load_contract("calendar")
+    assert contract.discoverability_profile is not None
+    assert contract.discoverability_profile.enabled is True
+    assert "agenda" in (contract.discoverability_profile.domains or [])
+    assert "agenda" in (contract.discoverability_profile.keywords or [])
+
+
+def test_all_capability_contracts_expose_discoverability_profiles():
+    contracts = sorted((ROOT / "src" / "capabilities").glob("*/contract.json"))
+    assert contracts, "expected capability contracts to exist"
+    for contract_path in contracts:
+        contract = load_contract_v1(str(contract_path))
+        assert contract.discoverability_profile is not None, contract_path.name
+        assert contract.discoverability_profile.enabled is True, contract_path.name
+
+
 def test_capability_registry_indexes_and_filters_retrieval_offers():
     registry = CapabilityRegistry()
 
@@ -106,6 +123,31 @@ def test_capability_registry_indexes_location_retrieval_offers():
     rows = registry.list_retrieval_offers(intent="location_lookup", domain="location")
     ids = {row.get("capability_id") for row in rows}
     assert "maps_search" in ids
+
+
+def test_capability_registry_indexes_discoverability_offers_for_calendar_capabilities():
+    registry = CapabilityRegistry()
+    for folder in ("calendar", "google_calendar"):
+        contract = _load_contract(folder)
+        cap = _DummyCapability(contract.capability.id, [action.id for action in contract.actions])
+        registry.register(cap, contract)
+
+    rows = registry.list_discovery_offers(domain="agenda")
+    ids = {row.get("capability_id") for row in rows}
+    assert "calendar" in ids
+    assert "google_calendar" not in ids
+
+
+def test_capability_registry_indexes_google_calendar_for_sync_related_discovery():
+    registry = CapabilityRegistry()
+    for folder in ("calendar", "google_calendar"):
+        contract = _load_contract(folder)
+        cap = _DummyCapability(contract.capability.id, [action.id for action in contract.actions])
+        registry.register(cap, contract)
+
+    rows = registry.list_discovery_offers(domain="sync")
+    ids = {row.get("capability_id") for row in rows}
+    assert "google_calendar" in ids
 
 
 def test_retrieval_offer_excludes_disabled_capability():

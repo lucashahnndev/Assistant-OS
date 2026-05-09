@@ -104,6 +104,21 @@
       "type": "boolean",
       "default": true
     },
+    "playwright_mcp_debug": {
+      "type": "boolean",
+      "default": false
+    },
+    "playwright_mcp_env": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
+    "playwright_mcp_takeover_existing": {
+      "type": "boolean",
+      "default": false
+    },
     "max_new_tabs_per_session": {
       "type": "integer",
       "default": 3,

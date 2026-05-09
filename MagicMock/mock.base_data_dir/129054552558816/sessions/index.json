@@ -1,0 +1,32 @@
+{
+    "system.attention": {
+        "session_id": "system.attention",
+        "interface": "system",
+        "session_type": "system",
+        "domain": "attention",
+        "name": "",
+        "name_generated": false,
+        "profile_picture": "",
+        "title": "Session system.a",
+        "created_at": "2026-03-22T22:33:15.215467",
+        "updated_at": "2026-03-22T22:33:15.215468",
+        "last_opened_at": "2026-03-22T22:33:15.215468",
+        "unread_count": 0,
+        "path": "MagicMock/mock.base_data_dir/129054552558816/sessions/system.attention/session.json"
+    },
+    "system.calendar": {
+        "session_id": "system.calendar",
+        "interface": "system",
+        "session_type": "system",
+        "domain": "calendar",
+        "name": "",
+        "name_generated": false,
+        "profile_picture": "",
+        "title": "Session system.c",
+        "created_at": "2026-03-22T22:33:15.219929",
+        "updated_at": "2026-03-22T22:33:15.219929",
+        "last_opened_at": "2026-03-22T22:33:15.219929",
+        "unread_count": 0,
+        "path": "MagicMock/mock.base_data_dir/129054552558816/sessions/system.calendar/session.json"
+    }
+}

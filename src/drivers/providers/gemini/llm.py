@@ -4,8 +4,12 @@ import logging
 import re
 import hashlib
 from typing import List, Dict, Any, Optional
-from google import genai
-from google.genai import types
+try:
+    from google import genai
+    from google.genai import types
+except Exception:  # pragma: no cover - optional dependency in test/runtime isolation
+    genai = None
+    types = None
 from core.intent import AgentIntent
 from drivers.llm.base import ILLMProvider, ProviderContractError
 from server.core.secret_manager import resolve_secret_ref
@@ -27,27 +31,7 @@ class GeminiProvider(ILLMProvider):
         # Note: http_options['timeout'] expects MILLISECONDS.
         timeout_sec = int(config.get("timeout", 60))
         self.client = genai.Client(api_key=self.api_key, http_options={'timeout': timeout_sec * 1000})
-
-    @staticmethod
-    def _normalize_response_text(value: Any, fallback: str = "") -> str:
-        if isinstance(value, str):
-            return value
-        if value is None:
-            return fallback
-        if isinstance(value, dict):
-            candidate = value.get("text") or value.get("response") or value.get("message")
-            if candidate is not None:
-                return str(candidate)
-            try:
-                return json.dumps(value, ensure_ascii=False)
-            except Exception:
-                return str(value)
-        if isinstance(value, list):
-            try:
-                return json.dumps(value, ensure_ascii=False)
-            except Exception:
-                return str(value)
-        return str(value)
+        self.intent_repair_attempts = int(config.get("intent_repair_attempts", 1) or 1)
 
     @staticmethod
     def _preview(value: Any, limit: int = 800) -> str:
@@ -167,7 +151,7 @@ class GeminiProvider(ILLMProvider):
             content = response.text.strip()
             
             # Use specialized parser
-            data = extract_and_parse_json(content)
+            data = extract_and_parse_json(content, strict=True)
             
             if not data:
                 logger.error("Failed to extract valid JSON from Gemini response.")
@@ -176,25 +160,26 @@ class GeminiProvider(ILLMProvider):
             attachments = data.get("attachments")
             if not attachments and isinstance(data.get("params"), dict):
                 attachments = data.get("params", {}).get("attachments")
-                
-            response_text = self._normalize_response_text(
-                data.get("response_text", data.get("reply", "")),
-                fallback="",
+            normalized_attachments: Optional[List[str]] = None
+            if isinstance(attachments, str) and attachments.strip():
+                normalized_attachments = [attachments.strip()]
+            elif isinstance(attachments, list):
+                cleaned = [str(x).strip() for x in attachments if str(x).strip()]
+                normalized_attachments = cleaned or None
+            response_text = str(data.get("response_text", data.get("reply", "")) or "")
+
+            logger.info(
+                "Gemini parsed intent | syntax_valid=true action_candidate=%s",
+                str(data.get("action", "") or "").strip(),
             )
-
-            # Ensure 'thought' is never truly empty to satisfy validation
-            thought = str(data.get("thought", "")).strip()
-            if not thought:
-                thought = "Gemini processing turn."
-
             return AgentIntent(
-                thought=thought,
-                plan=data.get("plan", []),
-                action=data.get("action", "reply"), # Default to reply
-                params=data.get("params", {}),
+                thought=str(data.get("thought", "") or ""),
+                plan=data.get("plan", []) if isinstance(data.get("plan", []), list) else [],
+                action=str(data.get("action", "") or "").strip(),
+                params=data.get("params", {}) if isinstance(data.get("params", {}), dict) else {},
                 state_summary=data.get("state_summary", {}),
                 response_text=response_text,
-                attachments=attachments
+                attachments=normalized_attachments
             )
 
         except Exception as e:
@@ -373,7 +358,7 @@ class GeminiProvider(ILLMProvider):
                 len(raw_text),
                 self._preview(raw_text),
             )
-            payload = extract_and_parse_json(raw_text)
+            payload = extract_and_parse_json(raw_text, strict=True)
             if not isinstance(payload, dict) or not payload:
                 err = ProviderContractError(
                     f"Gemini vision structured output invalid. raw_preview={self._preview(raw_text)}"
@@ -392,13 +377,6 @@ class GeminiProvider(ILLMProvider):
                 artifact_emitted = True
                 raise err
 
-            contract = str(kwargs.get("contract", "") or "").strip().lower()
-            if contract == "vision_locator_v1":
-                return self._normalize_vision_locator_contract(
-                    payload, fallback_label=str(kwargs.get("label") or "")
-                )
-            if contract == "vision_analysis_v1":
-                return self._normalize_vision_analysis_contract(payload)
             return payload
         except Exception as e:
             if not locals().get("artifact_emitted", False):

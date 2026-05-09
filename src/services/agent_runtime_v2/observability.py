@@ -42,6 +42,22 @@ class RuntimeV2Observability:
         payload = dict(event or {})
         payload.setdefault("ts", time.time())
         payload.setdefault("event", "runtime_v2_execution")
+        payload.setdefault("trace_id", "")
+        payload.setdefault("turn_id", "")
+        payload.setdefault("attempt_id", 0)
+        payload.setdefault("provider_used", "")
+        payload.setdefault("attempt_count", 0)
+        payload.setdefault("raw_llm_output", "")
+        payload.setdefault("parsed_output", {})
+        payload.setdefault("syntax_valid", False)
+        payload.setdefault("action_candidate", "")
+        payload.setdefault("action_valid", False)
+        payload.setdefault("final_action", "")
+        payload.setdefault("error_type", "")
+        payload.setdefault("output_rejected", False)
+        payload.setdefault("rejection_reason", "")
+        payload.setdefault("retry_triggered", False)
+        payload.setdefault("retry_success", False)
         status = str(payload.get("result_status", "unknown") or "unknown")
         decision = str(payload.get("policy_decision", "allow") or "allow")
 
@@ -70,6 +86,22 @@ class RuntimeV2Observability:
         result_reason: str,
         latency_ms: int,
         loop_index: int,
+        trace_id: str = "",
+        turn_id: str = "",
+        attempt_id: int = 0,
+        provider_used: str = "",
+        attempt_count: int = 0,
+        raw_llm_output: str = "",
+        parsed_output: Optional[Dict[str, Any]] = None,
+        syntax_valid: bool = False,
+        action_candidate: str = "",
+        action_valid: bool = False,
+        final_action: str = "",
+        error_type: str = "",
+        output_rejected: bool = False,
+        rejection_reason: str = "",
+        retry_triggered: bool = False,
+        retry_success: bool = False,
     ) -> Dict[str, Any]:
         policy_decision = governance.get("policy_decision") if isinstance(governance.get("policy_decision"), dict) else {}
         explanation = policy_decision.get("explanation") if isinstance(policy_decision.get("explanation"), dict) else {}
@@ -81,6 +113,22 @@ class RuntimeV2Observability:
             "result_status": str(result_status or "unknown"),
             "result_reason": str(result_reason or ""),
             "latency_ms": int(latency_ms),
+            "trace_id": str(trace_id or ""),
+            "turn_id": str(turn_id or ""),
+            "attempt_id": int(attempt_id or 0),
+            "provider_used": str(provider_used or ""),
+            "attempt_count": int(attempt_count or 0),
+            "raw_llm_output": str(raw_llm_output or ""),
+            "parsed_output": dict(parsed_output or {}),
+            "syntax_valid": bool(syntax_valid),
+            "action_candidate": str(action_candidate or ""),
+            "action_valid": bool(action_valid),
+            "final_action": str(final_action or ""),
+            "error_type": str(error_type or ""),
+            "output_rejected": bool(output_rejected),
+            "rejection_reason": str(rejection_reason or ""),
+            "retry_triggered": bool(retry_triggered),
+            "retry_success": bool(retry_success),
             "execution_context_envelope": dict(envelope or {}),
             "policy_decision": {
                 "decision": str(policy_decision.get("decision", "allow") or "allow"),

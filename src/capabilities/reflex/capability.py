@@ -1,6 +1,7 @@
 import logging
 from typing import Any, Dict, List, Optional
 
+from core.action_gateway import ActionGateway
 from ..base import CapabilityBase
 
 logger = logging.getLogger("ReflexCapability")
@@ -51,7 +52,20 @@ class ReflexCapability(CapabilityBase):
             return None
         if not registry.get_capability_for_action(target_action):
             return None
-        return registry.dispatch(target_action, params, context)
+        gateway = ActionGateway()
+        return gateway.execute_action(
+            action_id=target_action,
+            params=params,
+            allowed_actions=registry.list_actions() if hasattr(registry, "list_actions") else [target_action],
+            capability_registry=registry,
+            capability_metadata=(
+                registry.get_action_metadata(target_action)
+                if hasattr(registry, "get_action_metadata")
+                else {}
+            ),
+            context=context,
+            strict_mode=False,
+        )
 
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         delegated = self._delegate_to_system_control(action_id, params, context)

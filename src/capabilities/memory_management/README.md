@@ -1,25 +1,17 @@
-# Capability: Memory Management
+# Memory Management Discoverability
 
-Manage long-term facts and conversation context.
+Use this capability for short-term and user preference memory operations.
 
-## Actions
+## When to use
+- Store a preference or fact about the user
+- Recall a previously stored user fact
+- Update, clear, or inspect remembered preferences
 
-### `memory.recall`
-Search for historical facts or user preferences stored in deep memory.
-- **Parameters**:
-    - `query` (string): Keyword or phrase to search for.
+## When not to use
+- Calendar events
+- Task scheduling
+- Browser navigation
+- External knowledge lookup
 
-### `memory.store`
-Save an important piece of information for future sessions.
-- **Parameters**:
-    - `category` (string, optional): e.g., "preference", "user_info".
-    - `content` (string): The fact to remember.
-
-## Usage Example
-```json
-{
-  "action": "memory.recall",
-  "params": {"query": "cor favorita"},
-  "response_text": "Deixe-me ver se lembro disso..."
-}
-```
+## Discovery clues
+- memory, memoria, memória, remember, recall, store, preference, user fact, contexto

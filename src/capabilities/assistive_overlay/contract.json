@@ -1,531 +1,567 @@
 {
-    "contract_version": "1.0",
-    "capability": {
-        "id": "assistive_overlay",
-        "namespace": "overlay.assist",
-        "version": "1.0.0",
-        "title": "overlay.assist",
-        "description": "Overlay assistivo global para destacar elementos na tela sem bloquear mouse/teclado.",
-        "assets": {
-            "icon_svg": "assets/icon.svg"
-        }
-    },
-    "runtime": {
-        "module": "capabilities.assistive_overlay",
-        "factory": "create_capability",
-        "config_schema": "./config.schema.json"
-    },
-    "actions": [
-        {
-            "id": "overlay.assist.highlight_target",
-            "title": "Highlight Target",
-            "description": "Localiza um elemento na tela via vis\u00e3o e desenha marca\u00e7\u00e3o tempor\u00e1ria.",
-            "handler": "highlight_target",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "overlay:assist:highlight_target"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "label": {
-                        "type": "string",
-                        "description": "Descri\u00e7\u00e3o do alvo na tela."
-                    },
-                    "target": {
-                        "type": "string",
-                        "description": "Alias de label."
-                    },
-                    "query": {
-                        "type": "string",
-                        "description": "Alias de label."
-                    },
-                    "hint": {
-                        "type": "string",
-                        "description": "Dica extra para o locator."
-                    },
-                    "mark_type": {
-                        "type": "string",
-                        "enum": [
-                            "focus_corners",
-                            "circle",
-                            "rect",
-                            "arrow",
-                            "line",
-                            "text",
-                            "path",
-                            "draw_focus_corners",
-                            "draw_circle",
-                            "draw_rect",
-                            "draw_arrow",
-                            "draw_line",
-                            "draw_text",
-                            "draw_path"
-                        ],
-                        "default": "focus_corners"
-                    },
-                    "color": {
-                        "type": "string",
-                        "default": "#00E5FF"
-                    },
-                    "stroke_width": {
-                        "type": "integer",
-                        "default": 3
-                    },
-                    "opacity": {
-                        "type": "number",
-                        "default": 0.95
-                    },
-                    "ttl_ms": {
-                        "type": "integer",
-                        "default": 2200
-                    },
-                    "pulse": {
-                        "type": "boolean",
-                        "default": true
-                    },
-                    "screen_id": {
-                        "type": "integer"
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "overlay.assist.draw_circle",
-            "title": "Draw Circle",
-            "description": "Desenha um circulo sobre coordenadas.",
-            "handler": "draw_circle",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "overlay:assist:draw_circle"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string"
-                    },
-                    "x": {
-                        "type": "number"
-                    },
-                    "y": {
-                        "type": "number"
-                    },
-                    "radius": {
-                        "type": "number"
-                    },
-                    "width": {
-                        "type": "number"
-                    },
-                    "height": {
-                        "type": "number"
-                    },
-                    "color": {
-                        "type": "string"
-                    },
-                    "stroke_width": {
-                        "type": "number"
-                    },
-                    "opacity": {
-                        "type": "number"
-                    },
-                    "ttl_ms": {
-                        "type": "integer"
-                    },
-                    "pulse": {
-                        "type": "boolean"
-                    },
-                    "screen_id": {
-                        "type": "integer"
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "idempotent"
-        },
-        {
-            "id": "overlay.assist.draw_rect",
-            "title": "Draw Rect",
-            "description": "Desenha um retangulo sobre coordenadas.",
-            "handler": "draw_rect",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "overlay:assist:draw_rect"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string"
-                    },
-                    "x": {
-                        "type": "number"
-                    },
-                    "y": {
-                        "type": "number"
-                    },
-                    "width": {
-                        "type": "number"
-                    },
-                    "height": {
-                        "type": "number"
-                    },
-                    "color": {
-                        "type": "string"
-                    },
-                    "stroke_width": {
-                        "type": "number"
-                    },
-                    "opacity": {
-                        "type": "number"
-                    },
-                    "ttl_ms": {
-                        "type": "integer"
-                    },
-                    "pulse": {
-                        "type": "boolean"
-                    },
-                    "screen_id": {
-                        "type": "integer"
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "idempotent"
-        },
-        {
-            "id": "overlay.assist.draw_focus_corners",
-            "title": "Draw Focus Corners",
-            "description": "Desenha foco por 4 cantos com pulse opcional.",
-            "handler": "draw_focus_corners",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "overlay:assist:draw_focus_corners"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string"
-                    },
-                    "x": {
-                        "type": "number"
-                    },
-                    "y": {
-                        "type": "number"
-                    },
-                    "width": {
-                        "type": "number"
-                    },
-                    "height": {
-                        "type": "number"
-                    },
-                    "color": {
-                        "type": "string"
-                    },
-                    "stroke_width": {
-                        "type": "number"
-                    },
-                    "opacity": {
-                        "type": "number"
-                    },
-                    "ttl_ms": {
-                        "type": "integer"
-                    },
-                    "pulse": {
-                        "type": "boolean",
-                        "default": true
-                    },
-                    "screen_id": {
-                        "type": "integer"
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "idempotent"
-        },
-        {
-            "id": "overlay.assist.draw_arrow",
-            "title": "Draw Arrow",
-            "description": "Desenha seta entre dois pontos.",
-            "handler": "draw_arrow",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "overlay:assist:draw_arrow"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string"
-                    },
-                    "x": {
-                        "type": "number"
-                    },
-                    "y": {
-                        "type": "number"
-                    },
-                    "x2": {
-                        "type": "number"
-                    },
-                    "y2": {
-                        "type": "number"
-                    },
-                    "color": {
-                        "type": "string"
-                    },
-                    "stroke_width": {
-                        "type": "number"
-                    },
-                    "opacity": {
-                        "type": "number"
-                    },
-                    "ttl_ms": {
-                        "type": "integer"
-                    },
-                    "pulse": {
-                        "type": "boolean"
-                    },
-                    "screen_id": {
-                        "type": "integer"
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "idempotent"
-        },
-        {
-            "id": "overlay.assist.draw_line",
-            "title": "Draw Line",
-            "description": "Desenha linha entre dois pontos.",
-            "handler": "draw_line",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "overlay:assist:draw_line"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string"
-                    },
-                    "x": {
-                        "type": "number"
-                    },
-                    "y": {
-                        "type": "number"
-                    },
-                    "x2": {
-                        "type": "number"
-                    },
-                    "y2": {
-                        "type": "number"
-                    },
-                    "color": {
-                        "type": "string"
-                    },
-                    "stroke_width": {
-                        "type": "number"
-                    },
-                    "opacity": {
-                        "type": "number"
-                    },
-                    "ttl_ms": {
-                        "type": "integer"
-                    },
-                    "pulse": {
-                        "type": "boolean"
-                    },
-                    "screen_id": {
-                        "type": "integer"
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "idempotent"
-        },
-        {
-            "id": "overlay.assist.draw_text",
-            "title": "Draw Text",
-            "description": "Desenha texto em coordenadas.",
-            "handler": "draw_text",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "overlay:assist:draw_text"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string"
-                    },
-                    "x": {
-                        "type": "number"
-                    },
-                    "y": {
-                        "type": "number"
-                    },
-                    "text": {
-                        "type": "string"
-                    },
-                    "font_size": {
-                        "type": "integer",
-                        "default": 20
-                    },
-                    "color": {
-                        "type": "string"
-                    },
-                    "stroke_width": {
-                        "type": "number"
-                    },
-                    "opacity": {
-                        "type": "number"
-                    },
-                    "ttl_ms": {
-                        "type": "integer"
-                    },
-                    "screen_id": {
-                        "type": "integer"
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "idempotent"
-        },
-        {
-            "id": "overlay.assist.draw_path",
-            "title": "Draw Path",
-            "description": "Desenha path livre baseado em pontos.",
-            "handler": "draw_path",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "overlay:assist:draw_path"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string"
-                    },
-                    "points": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "x": {
-                                    "type": "number"
-                                },
-                                "y": {
-                                    "type": "number"
-                                }
-                            }
-                        }
-                    },
-                    "color": {
-                        "type": "string"
-                    },
-                    "stroke_width": {
-                        "type": "number"
-                    },
-                    "opacity": {
-                        "type": "number"
-                    },
-                    "ttl_ms": {
-                        "type": "integer"
-                    },
-                    "screen_id": {
-                        "type": "integer"
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "idempotent"
-        },
-        {
-            "id": "overlay.assist.clear_by_id",
-            "title": "Clear By Id",
-            "description": "Remove um desenho pelo id.",
-            "handler": "clear_by_id",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "overlay:assist:clear_by_id"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string"
-                    },
-                    "command_id": {
-                        "type": "string"
-                    }
-                },
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        },
-        {
-            "id": "overlay.assist.clear_all",
-            "title": "Clear All",
-            "description": "Remove todos os desenhos ativos do overlay.",
-            "handler": "clear_all",
-            "risk_level": "low",
-            "permissions": {
-                "scopes": [
-                    "overlay:assist:clear_all"
-                ],
-                "allow_anyone": true,
-                "requires_approval": false
-            },
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": true
-            },
-            "side_effect": "none"
-        }
-    ],
-    "auth": {
-        "mode": "none",
-        "required": false,
-        "fields": []
+  "contract_version": "1.0",
+  "capability": {
+    "id": "assistive_overlay",
+    "namespace": "overlay.assist",
+    "version": "1.0.0",
+    "title": "overlay.assist",
+    "description": "Overlay assistivo global para destacar elementos na tela sem bloquear mouse/teclado.",
+    "assets": {
+      "icon_svg": "assets/icon.svg"
     }
+  },
+  "runtime": {
+    "module": "capabilities.assistive_overlay",
+    "factory": "create_capability",
+    "config_schema": "./config.schema.json"
+  },
+  "actions": [
+    {
+      "id": "overlay.assist.highlight_target",
+      "title": "Highlight Target",
+      "description": "Localiza um elemento na tela via visão e desenha marcação temporária.",
+      "handler": "highlight_target",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "overlay:assist:highlight_target"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Descrição do alvo na tela."
+          },
+          "target": {
+            "type": "string",
+            "description": "Alias de label."
+          },
+          "query": {
+            "type": "string",
+            "description": "Alias de label."
+          },
+          "hint": {
+            "type": "string",
+            "description": "Dica extra para o locator."
+          },
+          "mark_type": {
+            "type": "string",
+            "enum": [
+              "focus_corners",
+              "circle",
+              "rect",
+              "arrow",
+              "line",
+              "text",
+              "path",
+              "draw_focus_corners",
+              "draw_circle",
+              "draw_rect",
+              "draw_arrow",
+              "draw_line",
+              "draw_text",
+              "draw_path"
+            ],
+            "default": "focus_corners"
+          },
+          "color": {
+            "type": "string",
+            "default": "#00E5FF"
+          },
+          "stroke_width": {
+            "type": "integer",
+            "default": 3
+          },
+          "opacity": {
+            "type": "number",
+            "default": 0.95
+          },
+          "ttl_ms": {
+            "type": "integer",
+            "default": 2200
+          },
+          "pulse": {
+            "type": "boolean",
+            "default": true
+          },
+          "screen_id": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "overlay.assist.draw_circle",
+      "title": "Draw Circle",
+      "description": "Desenha um circulo sobre coordenadas.",
+      "handler": "draw_circle",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "overlay:assist:draw_circle"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "radius": {
+            "type": "number"
+          },
+          "width": {
+            "type": "number"
+          },
+          "height": {
+            "type": "number"
+          },
+          "color": {
+            "type": "string"
+          },
+          "stroke_width": {
+            "type": "number"
+          },
+          "opacity": {
+            "type": "number"
+          },
+          "ttl_ms": {
+            "type": "integer"
+          },
+          "pulse": {
+            "type": "boolean"
+          },
+          "screen_id": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "idempotent"
+    },
+    {
+      "id": "overlay.assist.draw_rect",
+      "title": "Draw Rect",
+      "description": "Desenha um retangulo sobre coordenadas.",
+      "handler": "draw_rect",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "overlay:assist:draw_rect"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "width": {
+            "type": "number"
+          },
+          "height": {
+            "type": "number"
+          },
+          "color": {
+            "type": "string"
+          },
+          "stroke_width": {
+            "type": "number"
+          },
+          "opacity": {
+            "type": "number"
+          },
+          "ttl_ms": {
+            "type": "integer"
+          },
+          "pulse": {
+            "type": "boolean"
+          },
+          "screen_id": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "idempotent"
+    },
+    {
+      "id": "overlay.assist.draw_focus_corners",
+      "title": "Draw Focus Corners",
+      "description": "Desenha foco por 4 cantos com pulse opcional.",
+      "handler": "draw_focus_corners",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "overlay:assist:draw_focus_corners"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "width": {
+            "type": "number"
+          },
+          "height": {
+            "type": "number"
+          },
+          "color": {
+            "type": "string"
+          },
+          "stroke_width": {
+            "type": "number"
+          },
+          "opacity": {
+            "type": "number"
+          },
+          "ttl_ms": {
+            "type": "integer"
+          },
+          "pulse": {
+            "type": "boolean",
+            "default": true
+          },
+          "screen_id": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "idempotent"
+    },
+    {
+      "id": "overlay.assist.draw_arrow",
+      "title": "Draw Arrow",
+      "description": "Desenha seta entre dois pontos.",
+      "handler": "draw_arrow",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "overlay:assist:draw_arrow"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "x2": {
+            "type": "number"
+          },
+          "y2": {
+            "type": "number"
+          },
+          "color": {
+            "type": "string"
+          },
+          "stroke_width": {
+            "type": "number"
+          },
+          "opacity": {
+            "type": "number"
+          },
+          "ttl_ms": {
+            "type": "integer"
+          },
+          "pulse": {
+            "type": "boolean"
+          },
+          "screen_id": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "idempotent"
+    },
+    {
+      "id": "overlay.assist.draw_line",
+      "title": "Draw Line",
+      "description": "Desenha linha entre dois pontos.",
+      "handler": "draw_line",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "overlay:assist:draw_line"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "x2": {
+            "type": "number"
+          },
+          "y2": {
+            "type": "number"
+          },
+          "color": {
+            "type": "string"
+          },
+          "stroke_width": {
+            "type": "number"
+          },
+          "opacity": {
+            "type": "number"
+          },
+          "ttl_ms": {
+            "type": "integer"
+          },
+          "pulse": {
+            "type": "boolean"
+          },
+          "screen_id": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "idempotent"
+    },
+    {
+      "id": "overlay.assist.draw_text",
+      "title": "Draw Text",
+      "description": "Desenha texto em coordenadas.",
+      "handler": "draw_text",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "overlay:assist:draw_text"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "text": {
+            "type": "string"
+          },
+          "font_size": {
+            "type": "integer",
+            "default": 20
+          },
+          "color": {
+            "type": "string"
+          },
+          "stroke_width": {
+            "type": "number"
+          },
+          "opacity": {
+            "type": "number"
+          },
+          "ttl_ms": {
+            "type": "integer"
+          },
+          "screen_id": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "idempotent"
+    },
+    {
+      "id": "overlay.assist.draw_path",
+      "title": "Draw Path",
+      "description": "Desenha path livre baseado em pontos.",
+      "handler": "draw_path",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "overlay:assist:draw_path"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "number"
+                },
+                "y": {
+                  "type": "number"
+                }
+              }
+            }
+          },
+          "color": {
+            "type": "string"
+          },
+          "stroke_width": {
+            "type": "number"
+          },
+          "opacity": {
+            "type": "number"
+          },
+          "ttl_ms": {
+            "type": "integer"
+          },
+          "screen_id": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "idempotent"
+    },
+    {
+      "id": "overlay.assist.clear_by_id",
+      "title": "Clear By Id",
+      "description": "Remove um desenho pelo id.",
+      "handler": "clear_by_id",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "overlay:assist:clear_by_id"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "command_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    },
+    {
+      "id": "overlay.assist.clear_all",
+      "title": "Clear All",
+      "description": "Remove todos os desenhos ativos do overlay.",
+      "handler": "clear_all",
+      "risk_level": "low",
+      "permissions": {
+        "scopes": [
+          "overlay:assist:clear_all"
+        ],
+        "allow_anyone": true,
+        "requires_approval": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      },
+      "side_effect": "none"
+    }
+  ],
+  "auth": {
+    "mode": "none",
+    "required": false,
+    "fields": []
+  },
+  "discoverability_profile": {
+    "enabled": true,
+    "roles": [
+      "control",
+      "search"
+    ],
+    "domains": [
+      "assistive",
+      "overlay",
+      "ui",
+      "accessibility"
+    ],
+    "entity_types": [
+      "overlay",
+      "ui_element",
+      "highlight"
+    ],
+    "keywords": [
+      "overlay",
+      "assistive",
+      "highlight",
+      "accessibility",
+      "ui",
+      "screen",
+      "tela",
+      "foco"
+    ],
+    "routing_hints": {
+      "preferred_intents": [
+        "assistive_overlay",
+        "ui_assist",
+        "visual_assist"
+      ],
+      "avoid_when": []
+    }
+  }
 }

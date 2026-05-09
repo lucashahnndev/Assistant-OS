@@ -5,6 +5,7 @@ from time import perf_counter
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..base import CapabilityBase
+from core.action_gateway import ActionGateway
 from ..shared.chunking import normalize_whitespace
 from ..shared.error_contract import error_envelope, success_envelope
 from services.external_rag.planner import ExternalRAGPlanner
@@ -47,9 +48,35 @@ class RegistryWrapper:
                 warnings=[],
             )
 
-        # Hard-isolated context: no chat history, no global memory, no browser state.
-        isolated_context = {"research_envelope": dict(self.envelope)}
-        result = self._dispatch_fn(action_id, params, isolated_context)
+        class _ProxyRegistry:
+            def __init__(self, dispatch_fn: Any, allowlist: set[str]):
+                self._dispatch_fn = dispatch_fn
+                self._allowlist = set(allowlist)
+
+            def get_capability_for_action(self, candidate: str):
+                return object() if candidate in self._allowlist else None
+
+            def get_action_metadata(self, candidate: str) -> Dict[str, Any]:
+                return {}
+
+            def dispatch(self, candidate: str, candidate_params: Dict[str, Any], candidate_context: Dict[str, Any]) -> Any:
+                isolated_context = {"research_envelope": dict(candidate_context.get("research_envelope") or {})}
+                return self._dispatch_fn(candidate, candidate_params, isolated_context)
+
+            def list_actions(self) -> List[str]:
+                return sorted(self._allowlist)
+
+        gateway = ActionGateway()
+        proxy_registry = _ProxyRegistry(self._dispatch_fn, self._allowlist)
+        result = gateway.execute_action(
+            action_id=action_id,
+            params=params,
+            allowed_actions=sorted(self._allowlist),
+            capability_registry=proxy_registry,
+            capability_metadata={},
+            context={"research_envelope": dict(self.envelope)},
+            strict_mode=False,
+        )
         if isinstance(result, dict):
             return result
         return error_envelope(

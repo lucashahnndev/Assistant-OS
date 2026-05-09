@@ -309,6 +309,30 @@ class CapabilityRetrievalProfile(BaseModel):
         return out
 
 
+class CapabilityDiscoverabilityProfile(BaseModel):
+    model_config = ConfigDict(extra='ignore')
+
+    enabled: bool = False
+    roles: List[str] = Field(default_factory=list)
+    domains: List[str] = Field(default_factory=list)
+    entity_types: List[str] = Field(default_factory=list)
+    keywords: List[str] = Field(default_factory=list)
+    routing_hints: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("roles", "domains", "entity_types", "keywords")
+    @classmethod
+    def _clean_string_lists(cls, v: List[str]) -> List[str]:
+        seen: set[str] = set()
+        out: List[str] = []
+        for raw in v or []:
+            value = str(raw or "").strip().lower()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            out.append(value)
+        return out
+
+
 class CapabilityContractV1(BaseModel):
     model_config = ConfigDict(extra='ignore')
     
@@ -318,6 +342,7 @@ class CapabilityContractV1(BaseModel):
     auth: CapabilityAuth
     actions: List[CapabilityAction]
     retrieval_profile: Optional[CapabilityRetrievalProfile] = None
+    discoverability_profile: Optional[CapabilityDiscoverabilityProfile] = None
     policy_hints: Optional[Dict[str, Any]] = None
 
     def model_post_init(self, __context: Any) -> None:

@@ -160,5 +160,53 @@
     "mode": "none",
     "required": false,
     "fields": []
+  },
+  "discoverability_profile": {
+    "enabled": true,
+    "roles": [
+      "search",
+      "retrieve"
+    ],
+    "domains": [
+      "web",
+      "academic",
+      "location"
+    ],
+    "entity_types": [
+      "article",
+      "snippet",
+      "document"
+    ],
+    "keywords": [
+      "web",
+      "dominio",
+      "unificado",
+      "descoberta",
+      "retrieval",
+      "estruturado",
+      "para",
+      "rag",
+      "externo",
+      "discover",
+      "consult",
+      "discoverability",
+      "search",
+      "retrieve",
+      "control",
+      "interact",
+      "manage",
+      "open",
+      "close",
+      "read"
+    ],
+    "routing_hints": {
+      "preferred_intents": [
+        "general_knowledge",
+        "latest_update",
+        "structured_fact",
+        "academic_lookup"
+      ],
+      "avoid_when": []
+    }
   }
 }
