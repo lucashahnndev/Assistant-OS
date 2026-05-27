@@ -1,169 +1,133 @@
 {
-  "contract_version": "1.0",
-  "capability": {
-    "id": "vision",
-    "namespace": "vision",
-    "version": "1.0.0",
-    "title": "vision",
-    "description": "Permite análise semântica de imagens locais e da tela atual (screenshot).",
-    "assets": {
-      "icon_svg": "assets/icon.svg"
-    }
-  },
-  "runtime": {
-    "module": "capabilities.vision",
-    "factory": "create_capability",
-    "config_schema": "./config.schema.json"
-  },
-  "actions": [
-    {
-      "id": "vision.analyze",
-      "title": "Analyze",
-      "description": "Analisa uma imagem local com prompt contextual (OCR, leitura visual e interpretação).",
-      "handler": "analyze",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "capability:vision:analyze"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "image_path": {
-            "type": "string",
-            "description": "Caminho absoluto ou relativo (media/image/) para o arquivo de imagem."
-          },
-          "file_path": {
-            "type": "string",
-            "description": "Alias de image_path para compatibilidade retroativa."
-          },
-          "filename": {
-            "type": "string",
-            "description": "Alias adicional para compatibilidade com payloads de anexos."
-          },
-          "attachment_path": {
-            "type": "string",
-            "description": "Alias adicional para caminhos de anexos em contexto."
-          },
-          "prompt": {
-            "type": "string",
-            "description": "Contexto específico para a análise. Se omitido, fará uma descrição geral.",
-            "default": "Descreva esta imagem em detalhes."
-          }
-        },
-        "additionalProperties": true
-      },
-      "side_effect": "none"
+    "contract_version": "1.0",
+    "capability": {
+        "id": "vision",
+        "namespace": "vision",
+        "version": "1.0.0",
+        "title": "vision",
+        "description": "Permite an\u00e1lise sem\u00e2ntica de imagens locais e da tela atual (screenshot).",
+        "assets": {
+            "icon_svg": "assets/icon.svg"
+        }
     },
-    {
-      "id": "vision.search_screen",
-      "title": "Search Screen",
-      "description": "Captura a tela atual e descreve/procura elementos conforme consulta.",
-      "handler": "search_screen",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "capability:vision:search_screen"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "query": {
-            "type": "string",
-            "description": "O que procurar ou o que descrever na tela."
-          }
-        },
-        "additionalProperties": true
-      },
-      "side_effect": "none"
+    "runtime": {
+        "module": "capabilities.vision",
+        "factory": "create_capability",
+        "config_schema": "./config.schema.json"
     },
-    {
-      "id": "vision.locate_screen",
-      "title": "Locate Screen",
-      "description": "Captura a tela e localiza um elemento retornando bounding box estruturado.",
-      "handler": "locate_screen",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "capability:vision:locate_screen"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "label": {
-            "type": "string",
-            "description": "Descricao do elemento alvo a ser localizado na tela."
-          },
-          "query": {
-            "type": "string",
-            "description": "Alias de label para compatibilidade."
-          },
-          "target": {
-            "type": "string",
-            "description": "Alias adicional de label para planners legados."
-          },
-          "target_description": {
-            "type": "string",
-            "description": "Descricao longa do alvo (alias de label)."
-          },
-          "hint": {
-            "type": "string",
-            "description": "Dica opcional para ajudar na localizacao."
-          }
+    "actions": [
+        {
+            "id": "vision.analyze",
+            "title": "Analyze",
+            "description": "Analisa uma imagem local com prompt contextual (OCR, leitura visual e interpreta\u00e7\u00e3o).",
+            "handler": "analyze",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "capability:vision:analyze"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "image_path": {
+                        "type": "string",
+                        "description": "Caminho absoluto ou relativo (media/image/) para o arquivo de imagem."
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Alias de image_path para compatibilidade retroativa."
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "Alias adicional para compatibilidade com payloads de anexos."
+                    },
+                    "attachment_path": {
+                        "type": "string",
+                        "description": "Alias adicional para caminhos de anexos em contexto."
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Contexto espec\u00edfico para a an\u00e1lise. Se omitido, far\u00e1 uma descri\u00e7\u00e3o geral.",
+                        "default": "Descreva esta imagem em detalhes."
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "none"
         },
-        "additionalProperties": true
-      },
-      "side_effect": "none"
+        {
+            "id": "vision.search_screen",
+            "title": "Search Screen",
+            "description": "Captura a tela atual e descreve/procura elementos conforme consulta.",
+            "handler": "search_screen",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "capability:vision:search_screen"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "O que procurar ou o que descrever na tela."
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "none"
+        },
+        {
+            "id": "vision.locate_screen",
+            "title": "Locate Screen",
+            "description": "Captura a tela e localiza um elemento retornando bounding box estruturado.",
+            "handler": "locate_screen",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "capability:vision:locate_screen"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "label": {
+                        "type": "string",
+                        "description": "Descricao do elemento alvo a ser localizado na tela."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Alias de label para compatibilidade."
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Alias adicional de label para planners legados."
+                    },
+                    "target_description": {
+                        "type": "string",
+                        "description": "Descricao longa do alvo (alias de label)."
+                    },
+                    "hint": {
+                        "type": "string",
+                        "description": "Dica opcional para ajudar na localizacao."
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "none"
+        }
+    ],
+    "auth": {
+        "mode": "none",
+        "required": false,
+        "fields": []
     }
-  ],
-  "auth": {
-    "mode": "none",
-    "required": false,
-    "fields": []
-  },
-  "discoverability_profile": {
-    "enabled": true,
-    "roles": [
-      "search",
-      "retrieve",
-      "control"
-    ],
-    "domains": [
-      "vision",
-      "image",
-      "screen"
-    ],
-    "entity_types": [
-      "image",
-      "screenshot",
-      "region"
-    ],
-    "keywords": [
-      "vision",
-      "image",
-      "screen",
-      "screenshot",
-      "visual",
-      "ocr",
-      "tela",
-      "imagem"
-    ],
-    "routing_hints": {
-      "preferred_intents": [
-        "vision_analysis",
-        "screen_inspection",
-        "image_extraction"
-      ],
-      "avoid_when": []
-    }
-  }
 }

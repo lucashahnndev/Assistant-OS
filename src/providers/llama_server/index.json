@@ -1,0 +1,62 @@
+{
+  "provider": "llama_server",
+  "display_name": "Llama Server (llama.cpp)",
+  "supports": [
+    "chat",
+    "vision"
+  ],
+  "defaults": {
+    "base_url": "http://127.0.0.1:8081/v1",
+    "model": "qwen2.5-7b",
+    "timeout": 130,
+    "max_tokens": 3000
+  },
+  "models": [],
+  "auth": {
+    "mode": "api_key",
+    "fields": [
+      {
+        "key": "secret_ref",
+        "type": "secret_ref",
+        "title": "API Key (optional)",
+        "required": false,
+        "description": "",
+        "placeholder": ""
+      }
+    ]
+  },
+  "settings_fields": [
+    {
+      "key": "base_url",
+      "type": "string",
+      "title": "Base URL",
+      "required": true,
+      "description": "",
+      "placeholder": ""
+    },
+    {
+      "key": "model",
+      "type": "string",
+      "title": "Model Name",
+      "required": true,
+      "description": "",
+      "placeholder": ""
+    },
+    {
+      "key": "timeout",
+      "type": "number",
+      "title": "Timeout (s)",
+      "required": false,
+      "description": "",
+      "placeholder": ""
+    },
+    {
+      "key": "max_tokens",
+      "type": "number",
+      "title": "Max Tokens",
+      "required": false,
+      "description": "",
+      "placeholder": ""
+    }
+  ]
+}

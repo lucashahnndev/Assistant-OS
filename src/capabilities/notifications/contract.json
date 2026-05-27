@@ -1,602 +1,569 @@
 {
-  "contract_version": "1.0",
-  "capability": {
-    "id": "notifications",
-    "namespace": "notifications",
-    "version": "1.0.0",
-    "title": "Notification System",
-    "description": "Allows the agent to send formal notifications to the user.",
-    "icon": "bell",
-    "assets": {
-      "icon_svg": "assets/icon.svg"
+    "contract_version": "1.0",
+    "capability": {
+        "id": "notifications",
+        "namespace": "notifications",
+        "version": "1.0.0",
+        "title": "Notification System",
+        "description": "Allows the agent to send formal notifications to the user.",
+        "icon": "bell",
+        "assets": {
+            "icon_svg": "assets/icon.svg"
+        }
+    },
+    "runtime": {
+        "module": "capabilities.notifications",
+        "factory": "create_capability"
+    },
+    "actions": [
+        {
+            "id": "notifications.send",
+            "title": "Send Notification",
+            "description": "Sends a formal notification to the user. Use this for reminders, alerts, or important updates.",
+            "handler": "handle_send",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "notifications:send"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The notification message content."
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional title for the notification."
+                    },
+                    "priority": {
+                        "type": "string",
+                        "enum": [
+                            "low",
+                            "medium",
+                            "high",
+                            "critical"
+                        ],
+                        "default": "medium"
+                    },
+                    "domain": {
+                        "type": "string",
+                        "description": "The domain originating the notification (e.g., calendar)."
+                    },
+                    "target_id": {
+                        "type": "string",
+                        "description": "Optional target session ID or channel to send to exclusively."
+                    },
+                    "delivery_mode": {
+                        "type": "string",
+                        "enum": [
+                            "active_session_preferred",
+                            "push_allowed",
+                            "session_only"
+                        ],
+                        "default": "active_session_preferred"
+                    }
+                },
+                "required": [
+                    "message"
+                ]
+            }
+        },
+        {
+            "id": "notifications.list_targets",
+            "title": "List Delivery Targets",
+            "description": "Lists available delivery targets for the user, such as active web sessions or push (Telegram) channels.",
+            "handler": "handle_list_targets",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "notifications:read"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "id": "notifications.set_preference",
+            "title": "Set User Preference",
+            "description": "Registers an explicit user notification preference (timing/channel/style/interruptibility).",
+            "handler": "handle_set_preference",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "notifications:write_preferences"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "preference_text": {
+                        "type": "string",
+                        "description": "Natural language preference command."
+                    },
+                    "dimension": {
+                        "type": "string",
+                        "enum": [
+                            "timing",
+                            "channel",
+                            "style",
+                            "interruptibility"
+                        ]
+                    },
+                    "key": {
+                        "type": "string"
+                    },
+                    "value": {},
+                    "scope": {
+                        "description": "Scope object or shorthand (global/domain/event_type/context)."
+                    },
+                    "priority": {
+                        "type": "string",
+                        "enum": [
+                            "hard",
+                            "soft"
+                        ],
+                        "default": "hard"
+                    },
+                    "impact_level": {
+                        "type": "string",
+                        "enum": [
+                            "low",
+                            "medium",
+                            "high"
+                        ],
+                        "default": "low"
+                    },
+                    "confirmed": {
+                        "type": "boolean",
+                        "description": "Required for medium/high impact preference changes."
+                    },
+                    "target_user_id": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "id": "notifications.list_preferences",
+            "title": "List User Preferences",
+            "description": "Lists explicit notification preferences currently active for a user.",
+            "handler": "handle_list_preferences",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "notifications:read_preferences"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_user_id": {
+                        "type": "string"
+                    },
+                    "dimension": {
+                        "type": "string",
+                        "enum": [
+                            "timing",
+                            "channel",
+                            "style",
+                            "interruptibility"
+                        ]
+                    },
+                    "active_only": {
+                        "type": "boolean",
+                        "default": true
+                    }
+                }
+            }
+        },
+        {
+            "id": "notifications.record_feedback",
+            "title": "Record Notification Feedback",
+            "description": "Records explicit/implicit notification feedback signal for learning confidence assessment (observe-only).",
+            "handler": "handle_record_feedback",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "notifications:write_feedback"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "signal_name": {
+                        "type": "string",
+                        "description": "Signal identifier (e.g., delivery_success, dismissed, too_loud)."
+                    },
+                    "signal_type": {
+                        "type": "string",
+                        "enum": [
+                            "explicit",
+                            "implicit",
+                            "behavioral",
+                            "contextual"
+                        ],
+                        "default": "explicit"
+                    },
+                    "value": {},
+                    "intent_id": {
+                        "type": "string"
+                    },
+                    "context": {
+                        "type": "object"
+                    },
+                    "target_user_id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "signal_name"
+                ]
+            }
+        },
+        {
+            "id": "notifications.list_signal_assessments",
+            "title": "List Signal Assessments",
+            "description": "Lists confidence assessments computed for stored learning signals.",
+            "handler": "handle_list_signal_assessments",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "notifications:read_feedback"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_user_id": {
+                        "type": "string"
+                    },
+                    "signal_name": {
+                        "type": "string"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 50
+                    }
+                }
+            }
+        },
+        {
+            "id": "notifications.list_policy_suggestions",
+            "title": "List Policy Suggestions",
+            "description": "Lists pending/approved/rejected policy suggestions produced from high-confidence learning signals.",
+            "handler": "handle_list_policy_suggestions",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "notifications:read_policy_suggestions"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_user_id": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "pending",
+                            "approved",
+                            "rejected"
+                        ]
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 50
+                    }
+                }
+            }
+        },
+        {
+            "id": "notifications.review_policy_suggestion",
+            "title": "Review Policy Suggestion",
+            "description": "Approves or rejects a policy suggestion (audit only, no auto-apply).",
+            "handler": "handle_review_policy_suggestion",
+            "risk_level": "medium",
+            "permissions": {
+                "scopes": [
+                    "notifications:review_policy_suggestions"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "suggestion_id": {
+                        "type": "string"
+                    },
+                    "decision": {
+                        "type": "string",
+                        "enum": [
+                            "approved",
+                            "rejected"
+                        ]
+                    },
+                    "reason": {
+                        "type": "string"
+                    },
+                    "reviewed_by": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "suggestion_id",
+                    "decision"
+                ]
+            }
+        },
+        {
+            "id": "notifications.list_policy_patch_queue",
+            "title": "List Policy Patch Queue",
+            "description": "Lists manual-only policy patch candidates created from approved suggestions.",
+            "handler": "handle_list_policy_patch_queue",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "notifications:read_policy_patch_queue"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_user_id": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "pending",
+                            "approved_for_apply",
+                            "rejected",
+                            "applied_manual"
+                        ]
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 50
+                    }
+                }
+            }
+        },
+        {
+            "id": "notifications.set_policy_patch_status",
+            "title": "Set Policy Patch Status",
+            "description": "Updates status of a manual-only policy patch candidate.",
+            "handler": "handle_set_policy_patch_status",
+            "risk_level": "medium",
+            "permissions": {
+                "scopes": [
+                    "notifications:review_policy_patch_queue"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patch_id": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "pending",
+                            "approved_for_apply",
+                            "rejected",
+                            "applied_manual"
+                        ]
+                    },
+                    "reason": {
+                        "type": "string"
+                    },
+                    "reviewed_by": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "patch_id",
+                    "status"
+                ]
+            }
+        },
+        {
+            "id": "notifications.explain_policy_decision",
+            "title": "Explain Policy Decision",
+            "description": "Explains why a policy suggestion/patch candidate was created using decision trace + signals + confidence artifacts.",
+            "handler": "handle_explain_policy_decision",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "notifications:read_policy_explanations"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_user_id": {
+                        "type": "string"
+                    },
+                    "decision_id": {
+                        "type": "string"
+                    },
+                    "signal_id": {
+                        "type": "string"
+                    },
+                    "assessment_id": {
+                        "type": "string"
+                    },
+                    "suggestion_id": {
+                        "type": "string"
+                    },
+                    "patch_id": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "id": "notifications.apply_policy_patch_candidate",
+            "title": "Apply Policy Patch Candidate",
+            "description": "Applies an approved_for_apply patch candidate with dual-gate confirmation.",
+            "handler": "handle_apply_policy_patch_candidate",
+            "risk_level": "high",
+            "permissions": {
+                "scopes": [
+                    "notifications:apply_policy_patch"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patch_id": {
+                        "type": "string"
+                    },
+                    "confirmed": {
+                        "type": "boolean"
+                    },
+                    "applied_by": {
+                        "type": "string"
+                    },
+                    "reason": {
+                        "type": "string"
+                    },
+                    "canary_enabled": {
+                        "type": "boolean",
+                        "description": "When true, applies patch in canary mode before full promotion."
+                    },
+                    "canary_required_observations": {
+                        "type": "integer",
+                        "description": "Number of delivery observations required before canary promotion/rollback decision."
+                    },
+                    "canary_max_failure_rate": {
+                        "type": "number",
+                        "description": "Maximum failure ratio tolerated during canary window (0.0-1.0)."
+                    }
+                },
+                "required": [
+                    "patch_id",
+                    "confirmed"
+                ]
+            }
+        },
+        {
+            "id": "notifications.list_applied_policy_patches",
+            "title": "List Applied Policy Patches",
+            "description": "Lists applied policy patches and their health/rollback status.",
+            "handler": "handle_list_applied_policy_patches",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "notifications:read_applied_policy_patches"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_user_id": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "active_canary",
+                            "active",
+                            "rolled_back"
+                        ]
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 50
+                    }
+                }
+            }
+        },
+        {
+            "id": "notifications.rollback_applied_policy_patch",
+            "title": "Rollback Applied Policy Patch",
+            "description": "Rolls back an active applied policy patch manually.",
+            "handler": "handle_rollback_applied_policy_patch",
+            "risk_level": "high",
+            "permissions": {
+                "scopes": [
+                    "notifications:rollback_policy_patch"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "applied_id": {
+                        "type": "string"
+                    },
+                    "reason": {
+                        "type": "string"
+                    },
+                    "reviewed_by": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "applied_id"
+                ]
+            }
+        }
+    ],
+    "auth": {
+        "mode": "none"
     }
-  },
-  "runtime": {
-    "module": "capabilities.notifications",
-    "factory": "create_capability"
-  },
-  "actions": [
-    {
-      "id": "notifications.send",
-      "title": "Send Notification",
-      "description": "Sends a formal notification to the user. Use this for reminders, alerts, or important updates.",
-      "handler": "handle_send",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "notifications:send"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "message": {
-            "type": "string",
-            "description": "The notification message content."
-          },
-          "title": {
-            "type": "string",
-            "description": "Optional title for the notification."
-          },
-          "priority": {
-            "type": "string",
-            "enum": [
-              "low",
-              "medium",
-              "high",
-              "critical"
-            ],
-            "default": "medium"
-          },
-          "domain": {
-            "type": "string",
-            "description": "The domain originating the notification (e.g., calendar)."
-          },
-          "target_id": {
-            "type": "string",
-            "description": "Optional target session ID or channel to send to exclusively."
-          },
-          "delivery_mode": {
-            "type": "string",
-            "enum": [
-              "active_session_preferred",
-              "push_allowed",
-              "session_only"
-            ],
-            "default": "active_session_preferred"
-          }
-        },
-        "required": [
-          "message"
-        ]
-      }
-    },
-    {
-      "id": "notifications.list_targets",
-      "title": "List Delivery Targets",
-      "description": "Lists available delivery targets for the user, such as active web sessions or push (Telegram) channels.",
-      "handler": "handle_list_targets",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "notifications:read"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {}
-      }
-    },
-    {
-      "id": "notifications.set_preference",
-      "title": "Set User Preference",
-      "description": "Registers an explicit user notification preference (timing/channel/style/interruptibility).",
-      "handler": "handle_set_preference",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "notifications:write_preferences"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "preference_text": {
-            "type": "string",
-            "description": "Natural language preference command."
-          },
-          "dimension": {
-            "type": "string",
-            "enum": [
-              "timing",
-              "channel",
-              "style",
-              "interruptibility"
-            ]
-          },
-          "key": {
-            "type": "string"
-          },
-          "value": {},
-          "scope": {
-            "description": "Scope object or shorthand (global/domain/event_type/context)."
-          },
-          "priority": {
-            "type": "string",
-            "enum": [
-              "hard",
-              "soft"
-            ],
-            "default": "hard"
-          },
-          "impact_level": {
-            "type": "string",
-            "enum": [
-              "low",
-              "medium",
-              "high"
-            ],
-            "default": "low"
-          },
-          "confirmed": {
-            "type": "boolean",
-            "description": "Required for medium/high impact preference changes."
-          },
-          "target_user_id": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    {
-      "id": "notifications.list_preferences",
-      "title": "List User Preferences",
-      "description": "Lists explicit notification preferences currently active for a user.",
-      "handler": "handle_list_preferences",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "notifications:read_preferences"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "target_user_id": {
-            "type": "string"
-          },
-          "dimension": {
-            "type": "string",
-            "enum": [
-              "timing",
-              "channel",
-              "style",
-              "interruptibility"
-            ]
-          },
-          "active_only": {
-            "type": "boolean",
-            "default": true
-          }
-        }
-      }
-    },
-    {
-      "id": "notifications.record_feedback",
-      "title": "Record Notification Feedback",
-      "description": "Records explicit/implicit notification feedback signal for learning confidence assessment (observe-only).",
-      "handler": "handle_record_feedback",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "notifications:write_feedback"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "signal_name": {
-            "type": "string",
-            "description": "Signal identifier (e.g., delivery_success, dismissed, too_loud)."
-          },
-          "signal_type": {
-            "type": "string",
-            "enum": [
-              "explicit",
-              "implicit",
-              "behavioral",
-              "contextual"
-            ],
-            "default": "explicit"
-          },
-          "value": {},
-          "intent_id": {
-            "type": "string"
-          },
-          "context": {
-            "type": "object"
-          },
-          "target_user_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "signal_name"
-        ]
-      }
-    },
-    {
-      "id": "notifications.list_signal_assessments",
-      "title": "List Signal Assessments",
-      "description": "Lists confidence assessments computed for stored learning signals.",
-      "handler": "handle_list_signal_assessments",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "notifications:read_feedback"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "target_user_id": {
-            "type": "string"
-          },
-          "signal_name": {
-            "type": "string"
-          },
-          "limit": {
-            "type": "integer",
-            "default": 50
-          }
-        }
-      }
-    },
-    {
-      "id": "notifications.list_policy_suggestions",
-      "title": "List Policy Suggestions",
-      "description": "Lists pending/approved/rejected policy suggestions produced from high-confidence learning signals.",
-      "handler": "handle_list_policy_suggestions",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "notifications:read_policy_suggestions"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "target_user_id": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "approved",
-              "rejected"
-            ]
-          },
-          "limit": {
-            "type": "integer",
-            "default": 50
-          }
-        }
-      }
-    },
-    {
-      "id": "notifications.review_policy_suggestion",
-      "title": "Review Policy Suggestion",
-      "description": "Approves or rejects a policy suggestion (audit only, no auto-apply).",
-      "handler": "handle_review_policy_suggestion",
-      "risk_level": "medium",
-      "permissions": {
-        "scopes": [
-          "notifications:review_policy_suggestions"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "suggestion_id": {
-            "type": "string"
-          },
-          "decision": {
-            "type": "string",
-            "enum": [
-              "approved",
-              "rejected"
-            ]
-          },
-          "reason": {
-            "type": "string"
-          },
-          "reviewed_by": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "suggestion_id",
-          "decision"
-        ]
-      }
-    },
-    {
-      "id": "notifications.list_policy_patch_queue",
-      "title": "List Policy Patch Queue",
-      "description": "Lists manual-only policy patch candidates created from approved suggestions.",
-      "handler": "handle_list_policy_patch_queue",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "notifications:read_policy_patch_queue"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "target_user_id": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "approved_for_apply",
-              "rejected",
-              "applied_manual"
-            ]
-          },
-          "limit": {
-            "type": "integer",
-            "default": 50
-          }
-        }
-      }
-    },
-    {
-      "id": "notifications.set_policy_patch_status",
-      "title": "Set Policy Patch Status",
-      "description": "Updates status of a manual-only policy patch candidate.",
-      "handler": "handle_set_policy_patch_status",
-      "risk_level": "medium",
-      "permissions": {
-        "scopes": [
-          "notifications:review_policy_patch_queue"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "patch_id": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "approved_for_apply",
-              "rejected",
-              "applied_manual"
-            ]
-          },
-          "reason": {
-            "type": "string"
-          },
-          "reviewed_by": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "patch_id",
-          "status"
-        ]
-      }
-    },
-    {
-      "id": "notifications.explain_policy_decision",
-      "title": "Explain Policy Decision",
-      "description": "Explains why a policy suggestion/patch candidate was created using decision trace + signals + confidence artifacts.",
-      "handler": "handle_explain_policy_decision",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "notifications:read_policy_explanations"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "target_user_id": {
-            "type": "string"
-          },
-          "decision_id": {
-            "type": "string"
-          },
-          "signal_id": {
-            "type": "string"
-          },
-          "assessment_id": {
-            "type": "string"
-          },
-          "suggestion_id": {
-            "type": "string"
-          },
-          "patch_id": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    {
-      "id": "notifications.apply_policy_patch_candidate",
-      "title": "Apply Policy Patch Candidate",
-      "description": "Applies an approved_for_apply patch candidate with dual-gate confirmation.",
-      "handler": "handle_apply_policy_patch_candidate",
-      "risk_level": "high",
-      "permissions": {
-        "scopes": [
-          "notifications:apply_policy_patch"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "patch_id": {
-            "type": "string"
-          },
-          "confirmed": {
-            "type": "boolean"
-          },
-          "applied_by": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string"
-          },
-          "canary_enabled": {
-            "type": "boolean",
-            "description": "When true, applies patch in canary mode before full promotion."
-          },
-          "canary_required_observations": {
-            "type": "integer",
-            "description": "Number of delivery observations required before canary promotion/rollback decision."
-          },
-          "canary_max_failure_rate": {
-            "type": "number",
-            "description": "Maximum failure ratio tolerated during canary window (0.0-1.0)."
-          }
-        },
-        "required": [
-          "patch_id",
-          "confirmed"
-        ]
-      }
-    },
-    {
-      "id": "notifications.list_applied_policy_patches",
-      "title": "List Applied Policy Patches",
-      "description": "Lists applied policy patches and their health/rollback status.",
-      "handler": "handle_list_applied_policy_patches",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "notifications:read_applied_policy_patches"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "target_user_id": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "active_canary",
-              "active",
-              "rolled_back"
-            ]
-          },
-          "limit": {
-            "type": "integer",
-            "default": 50
-          }
-        }
-      }
-    },
-    {
-      "id": "notifications.rollback_applied_policy_patch",
-      "title": "Rollback Applied Policy Patch",
-      "description": "Rolls back an active applied policy patch manually.",
-      "handler": "handle_rollback_applied_policy_patch",
-      "risk_level": "high",
-      "permissions": {
-        "scopes": [
-          "notifications:rollback_policy_patch"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "applied_id": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string"
-          },
-          "reviewed_by": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "applied_id"
-        ]
-      }
-    }
-  ],
-  "auth": {
-    "mode": "none"
-  },
-  "discoverability_profile": {
-    "enabled": true,
-    "roles": [
-      "control",
-      "notify"
-    ],
-    "domains": [
-      "notifications",
-      "alerts",
-      "reminders"
-    ],
-    "entity_types": [
-      "alert",
-      "reminder",
-      "notification"
-    ],
-    "keywords": [
-      "notification",
-      "alert",
-      "reminder",
-      "lembrete",
-      "notificacao",
-      "notificação",
-      "aviso"
-    ],
-    "routing_hints": {
-      "preferred_intents": [
-        "notify_user",
-        "reminder_management"
-      ],
-      "avoid_when": []
-    }
-  }
 }

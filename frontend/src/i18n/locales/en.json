@@ -1,6 +1,7 @@
 {
   "nav.dashboard": "Dashboard",
   "nav.console": "Console",
+  "nav.live_panel": "Live Panel",
   "nav.tasks": "Tasks",
   "nav.capabilities": "Capabilities",
   "nav.memory": "Memory",

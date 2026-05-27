@@ -406,15 +406,28 @@ class PlaywrightMCPAdapter:
         return payload if isinstance(payload, dict) else {}
 
     async def create_tab(self, url: str = "about:blank") -> Dict[str, Any]:
-        out = await self._call_tool_preferred(["browser_tabs"], {"action": "create"})
-        payload = self._coerce_result_payload(out)
-        idx = int(payload.get("index", 0) or 0) if isinstance(payload, dict) else 0
-        if idx < 0:
-            idx = 0
-        # Ensure the new tab becomes active before navigation.
-        await self.select_tab(idx)
-        await self.navigate(str(url or "about:blank"))
-        return {"index": idx}
+        target_url = str(url or "about:blank")
+        try:
+            out = await self._call_tool("browser_tabs", {"action": "new", "url": target_url})
+            payload = self._coerce_result_payload(out)
+            idx = int(payload.get("index", -1) or -1) if isinstance(payload, dict) else -1
+            if idx < 0:
+                tabs_meta = await self.list_tabs()
+                idx = int(tabs_meta.get("active_index", 0) or 0)
+            if idx < 0:
+                idx = 0
+            return {"index": idx}
+        except Exception:
+            # Legacy compatibility path for older adapters/servers that still expose
+            # a create-then-navigate flow instead of browser_tabs action=new.
+            out = await self._call_tool("browser_tabs", {"action": "create"})
+            payload = self._coerce_result_payload(out)
+            idx = int(payload.get("index", 0) or 0) if isinstance(payload, dict) else 0
+            if idx < 0:
+                idx = 0
+            await self.select_tab(idx)
+            await self.navigate(target_url)
+            return {"index": idx}
 
     async def get_skeletal_dom(self) -> Dict[str, Any]:
         # Primary path: collect a lightweight, planner-compatible DOM slice via MCP run_code/evaluate.

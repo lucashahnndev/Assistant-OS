@@ -51,79 +51,6 @@
       "type": "boolean",
       "default": true
     },
-    "require_delegated_executor_for_browser_launch": {
-      "type": "boolean",
-      "default": true
-    },
-    "run_failure_cooldown_seconds": {
-      "type": "integer",
-      "default": 45,
-      "minimum": 0
-    },
-    "runtime_backend": {
-      "type": "string",
-      "default": "playwright",
-      "enum": [
-        "playwright"
-      ]
-    },
-    "playwright_transport_mode": {
-      "type": "string",
-      "default": "mcp",
-      "enum": [
-        "local",
-        "mcp"
-      ]
-    },
-    "playwright_mcp_endpoint": {
-      "type": "string",
-      "default": ""
-    },
-    "playwright_mcp_fallback_to_local": {
-      "type": "boolean",
-      "default": false
-    },
-    "playwright_mcp_autostart_enabled": {
-      "type": "boolean",
-      "default": true
-    },
-    "playwright_mcp_server_command": {
-      "type": "string",
-      "default": ""
-    },
-    "playwright_mcp_startup_timeout_s": {
-      "type": "number",
-      "default": 20,
-      "minimum": 3
-    },
-    "playwright_mcp_autorestart": {
-      "type": "boolean",
-      "default": true
-    },
-    "playwright_mcp_autostart_require_healthy": {
-      "type": "boolean",
-      "default": true
-    },
-    "playwright_mcp_debug": {
-      "type": "boolean",
-      "default": false
-    },
-    "playwright_mcp_env": {
-      "type": "object",
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {}
-    },
-    "playwright_mcp_takeover_existing": {
-      "type": "boolean",
-      "default": false
-    },
-    "max_new_tabs_per_session": {
-      "type": "integer",
-      "default": 3,
-      "minimum": 0
-    },
     "browser_engine_preference": {
       "type": "string",
       "default": "managed_chromium",
@@ -200,21 +127,6 @@
       "default": 60,
       "minimum": 25,
       "maximum": 95
-    },
-    "planner_max_same_action_repeats": {
-      "type": "integer",
-      "default": 3,
-      "minimum": 2
-    },
-    "planner_max_state_unchanged_loops": {
-      "type": "integer",
-      "default": 5,
-      "minimum": 3
-    },
-    "planner_max_forced_recovery_attempts": {
-      "type": "integer",
-      "default": 2,
-      "minimum": 1
     }
   }
 }

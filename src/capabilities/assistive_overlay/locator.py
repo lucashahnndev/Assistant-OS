@@ -7,7 +7,6 @@ from typing import Any, Dict, Optional
 
 from PIL import Image
 
-from core.action_gateway import ActionGateway
 from ..shared.ephemeral_artifacts import build_temp_media_filename, prune_temp_artifacts_from_path
 
 
@@ -126,19 +125,10 @@ class VisionLocator:
             if kernel_system is not None:
                 call_context.setdefault("system_driver", kernel_system)
         try:
-            gateway = ActionGateway()
-            result = gateway.execute_action(
-                action_id="vision.locate_screen",
-                params={"label": label, "hint": enriched_hint},
-                allowed_actions=capability_registry.list_actions() if hasattr(capability_registry, "list_actions") else ["vision.locate_screen"],
-                capability_registry=capability_registry,
-                capability_metadata=(
-                    capability_registry.get_action_metadata("vision.locate_screen")
-                    if hasattr(capability_registry, "get_action_metadata")
-                    else {}
-                ),
-                context=call_context,
-                strict_mode=False,
+            result = capability_registry.dispatch(
+                "vision.locate_screen",
+                {"label": label, "hint": enriched_hint},
+                call_context,
             )
         except Exception as exc:
             return {

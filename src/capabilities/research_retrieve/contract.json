@@ -1,333 +1,281 @@
 {
-  "contract_version": "1.0",
-  "capability": {
-    "id": "research_retrieve",
-    "namespace": "research.retrieve",
-    "version": "1.0.0",
-    "title": "research.retrieve",
-    "description": "Subagente de pesquisa web semi-isolado para busca, leitura e síntese com evidências.",
-    "assets": {
-      "icon_svg": "assets/icon.svg"
-    }
-  },
-  "runtime": {
-    "module": "capabilities.research_retrieve",
-    "factory": "create_capability",
-    "config_schema": "./config.schema.json"
-  },
-  "actions": [
-    {
-      "id": "research.retrieve.run",
-      "title": "Run",
-      "description": "Executa pipeline de pesquisa web com budget rígido e retorno mitigado para o planner global.",
-      "handler": "run",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "research:retrieve:run"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "query": {
-            "type": "string",
-            "description": "Consulta principal de pesquisa."
-          },
-          "goal": {
-            "type": "string",
-            "description": "Objetivo da tarefa (alias de query)."
-          },
-          "constraints": {
-            "type": "object",
-            "description": "Restrições de budget, roteamento, fallback e controle operacional do External RAG.",
-            "properties": {
-              "lang": {
-                "type": "string",
-                "description": "Idioma preferencial da resposta/síntese."
-              },
-              "recency_days": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 3650
-              },
-              "domains_allow": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "domains_deny": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "max_links_to_open": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 8
-              },
-              "max_docs": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 8
-              },
-              "max_total_chars": {
-                "type": "integer",
-                "minimum": 1000,
-                "maximum": 90000
-              },
-              "max_steps": {
-                "type": "integer",
-                "minimum": 3,
-                "maximum": 20
-              },
-              "extract_schema": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "latency_budget_ms": {
-                "type": "integer",
-                "minimum": 500,
-                "maximum": 120000
-              },
-              "cost_budget": {
-                "type": "number",
-                "minimum": 0
-              },
-              "max_providers": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 3
-              },
-              "max_fallback_depth": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 4
-              },
-              "max_retries": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 2
-              },
-              "allow_replan": {
-                "type": "boolean",
-                "description": "Permite replanejamento explícito cross-domain quando não houver evidência inicial."
-              },
-              "replan_mode": {
-                "type": "string",
-                "enum": [
-                  "broad_recovery"
-                ],
-                "description": "Modo interno de replan (geralmente definido automaticamente pelo runtime)."
-              },
-              "max_provider_attempts_per_step": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 3
-              },
-              "max_provider_attempts_global": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 8
-              },
-              "prefer_modular_providers": {
-                "type": "boolean",
-                "description": "Quando true, prioriza providers externos separados (brave/ddg/searxng/openalex) sobre o provider unificado de domínio web, quando disponíveis."
-              },
-              "retry_backoff_base_ms": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 2000
-              },
-              "retry_backoff_max_ms": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 10000
-              },
-              "retry_backoff_jitter_ms": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 500
-              },
-              "provider_runtime_overrides": {
-                "type": "object",
-                "description": "Override operacional por provider (disabled, degraded, force_fallback, quota_exceeded, error_previous, setup_ready).",
-                "additionalProperties": {
-                  "type": "object"
-                }
-              },
-              "provider_runtime_scorecard": {
-                "type": "object",
-                "description": "Scorecard dinâmico por provider (runtime_health, success_rate, latency_ms, cost, user_context_boost, historical_performance).",
-                "additionalProperties": {
-                  "type": "object"
-                }
-              },
-              "internal_knowledge_fallback": {
-                "type": "array",
-                "description": "Fallback interno local quando nenhum provider externo retornar evidência.",
-                "items": {
-                  "type": "object"
-                }
-              }
-            },
-            "additionalProperties": true
-          },
-          "use_external_rag_runtime": {
-            "type": "boolean",
-            "default": true,
-            "description": "Ativa runtime novo do External RAG; quando false, usa pipeline legado."
-          },
-          "allow_legacy_fallback": {
-            "type": "boolean",
-            "default": false,
-            "description": "Quando true, permite fallback para pipeline legado apenas em falha do runtime novo."
-          },
-          "output_format": {
-            "type": "string",
-            "enum": [
-              "md",
-              "toon"
-            ],
-            "default": "md"
-          }
-        },
-        "additionalProperties": true
-      },
-      "examples": [
-        {
-          "input": {
-            "query": "Compare top open-source vector databases for RAG in 2026",
-            "constraints": {
-              "lang": "en",
-              "max_links_to_open": 3,
-              "max_docs": 3,
-              "max_total_chars": 10000,
-              "max_steps": 7,
-              "max_retries": 1,
-              "allow_replan": true
-            },
-            "use_external_rag_runtime": true,
-            "output_format": "md"
-          }
+    "contract_version": "1.0",
+    "capability": {
+        "id": "research_retrieve",
+        "namespace": "research.retrieve",
+        "version": "1.0.0",
+        "title": "research.retrieve",
+        "description": "Subagente de pesquisa web semi-isolado para busca, leitura e s\u00edntese com evid\u00eancias.",
+        "assets": {
+            "icon_svg": "assets/icon.svg"
         }
-      ],
-      "side_effect": "none"
+    },
+    "runtime": {
+        "module": "capabilities.research_retrieve",
+        "factory": "create_capability",
+        "config_schema": "./config.schema.json"
+    },
+    "actions": [
+        {
+            "id": "research.retrieve.run",
+            "title": "Run",
+            "description": "Executa pipeline de pesquisa web com budget r\u00edgido e retorno mitigado para o planner global.",
+            "handler": "run",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "research:retrieve:run"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Consulta principal de pesquisa."
+                    },
+                    "goal": {
+                        "type": "string",
+                        "description": "Objetivo da tarefa (alias de query)."
+                    },
+                    "constraints": {
+                        "type": "object",
+                        "description": "Restri\u00e7\u00f5es de budget, roteamento, fallback e controle operacional do External RAG.",
+                        "properties": {
+                            "lang": {
+                                "type": "string",
+                                "description": "Idioma preferencial da resposta/s\u00edntese."
+                            },
+                            "recency_days": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 3650
+                            },
+                            "domains_allow": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                }
+                            },
+                            "domains_deny": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                }
+                            },
+                            "max_links_to_open": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 8
+                            },
+                            "max_docs": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 8
+                            },
+                            "max_total_chars": {
+                                "type": "integer",
+                                "minimum": 1000,
+                                "maximum": 90000
+                            },
+                            "max_steps": {
+                                "type": "integer",
+                                "minimum": 3,
+                                "maximum": 20
+                            },
+                            "extract_schema": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                }
+                            },
+                            "latency_budget_ms": {
+                                "type": "integer",
+                                "minimum": 500,
+                                "maximum": 120000
+                            },
+                            "cost_budget": {
+                                "type": "number",
+                                "minimum": 0
+                            },
+                            "max_providers": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 3
+                            },
+                            "max_fallback_depth": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 4
+                            },
+                            "max_retries": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 2
+                            },
+                            "allow_replan": {
+                                "type": "boolean",
+                                "description": "Permite replanejamento expl\u00edcito cross-domain quando n\u00e3o houver evid\u00eancia inicial."
+                            },
+                            "replan_mode": {
+                                "type": "string",
+                                "enum": [
+                                    "broad_recovery"
+                                ],
+                                "description": "Modo interno de replan (geralmente definido automaticamente pelo runtime)."
+                            },
+                            "max_provider_attempts_per_step": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 3
+                            },
+                            "max_provider_attempts_global": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 8
+                            },
+                            "prefer_modular_providers": {
+                                "type": "boolean",
+                                "description": "Quando true, prioriza providers externos separados (brave/ddg/searxng/openalex) sobre o provider unificado de domínio web, quando disponíveis."
+                            },
+                            "retry_backoff_base_ms": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 2000
+                            },
+                            "retry_backoff_max_ms": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 10000
+                            },
+                            "retry_backoff_jitter_ms": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 500
+                            },
+                            "provider_runtime_overrides": {
+                                "type": "object",
+                                "description": "Override operacional por provider (disabled, degraded, force_fallback, quota_exceeded, error_previous, setup_ready).",
+                                "additionalProperties": {
+                                    "type": "object"
+                                }
+                            },
+                            "provider_runtime_scorecard": {
+                                "type": "object",
+                                "description": "Scorecard din\u00e2mico por provider (runtime_health, success_rate, latency_ms, cost, user_context_boost, historical_performance).",
+                                "additionalProperties": {
+                                    "type": "object"
+                                }
+                            },
+                            "internal_knowledge_fallback": {
+                                "type": "array",
+                                "description": "Fallback interno local quando nenhum provider externo retornar evid\u00eancia.",
+                                "items": {
+                                    "type": "object"
+                                }
+                            }
+                        },
+                        "additionalProperties": true
+                    },
+                    "use_external_rag_runtime": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Ativa runtime novo do External RAG; quando false, usa pipeline legado."
+                    },
+                    "allow_legacy_fallback": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Quando true, permite fallback para pipeline legado apenas em falha do runtime novo."
+                    },
+                    "output_format": {
+                        "type": "string",
+                        "enum": [
+                            "md",
+                            "toon"
+                        ],
+                        "default": "md"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "examples": [
+                {
+                    "input": {
+                        "query": "Compare top open-source vector databases for RAG in 2026",
+                        "constraints": {
+                            "lang": "en",
+                            "max_links_to_open": 3,
+                            "max_docs": 3,
+                            "max_total_chars": 10000,
+                            "max_steps": 7,
+                            "max_retries": 1,
+                            "allow_replan": true
+                        },
+                        "use_external_rag_runtime": true,
+                        "output_format": "md"
+                    }
+                }
+            ],
+            "side_effect": "none"
+        }
+    ],
+    "retrieval_profile": {
+        "enabled": true,
+        "roles": [
+            "orchestrator",
+            "search",
+            "retrieve",
+            "synthesis"
+        ],
+        "domains": [
+            "web",
+            "encyclopedia",
+            "media"
+        ],
+        "entity_types": [
+            "article",
+            "entity",
+            "video"
+        ],
+        "freshness": {
+            "type": "live",
+            "sla_hours": 24
+        },
+        "quality": {
+            "default_confidence": 0.72,
+            "trust_tier": "curated",
+            "citation_mode": "url_required"
+        },
+        "cost": {
+            "latency_class": "medium",
+            "quota_class": "free"
+        },
+        "setup": {
+            "requires_auth": false,
+            "required_fields": [],
+            "healthcheck_action": "research.retrieve.run"
+        },
+        "output_contract": {
+            "evidence_schema": "external.evidence.v1",
+            "entity_schema": "external.entity.v1"
+        },
+        "routing_hints": {
+            "preferred_intents": [
+                "general_knowledge",
+                "latest_update",
+                "structured_fact",
+                "entity_lookup"
+            ],
+            "avoid_when": [
+                "policy_lookup"
+            ]
+        }
+    },
+    "auth": {
+        "mode": "none",
+        "required": false,
+        "fields": []
     }
-  ],
-  "retrieval_profile": {
-    "enabled": true,
-    "roles": [
-      "orchestrator",
-      "search",
-      "retrieve",
-      "synthesis"
-    ],
-    "domains": [
-      "web",
-      "encyclopedia",
-      "media"
-    ],
-    "entity_types": [
-      "article",
-      "entity",
-      "video"
-    ],
-    "freshness": {
-      "type": "live",
-      "sla_hours": 24
-    },
-    "quality": {
-      "default_confidence": 0.72,
-      "trust_tier": "curated",
-      "citation_mode": "url_required"
-    },
-    "cost": {
-      "latency_class": "medium",
-      "quota_class": "free"
-    },
-    "setup": {
-      "requires_auth": false,
-      "required_fields": [],
-      "healthcheck_action": "research.retrieve.run"
-    },
-    "output_contract": {
-      "evidence_schema": "external.evidence.v1",
-      "entity_schema": "external.entity.v1"
-    },
-    "routing_hints": {
-      "preferred_intents": [
-        "general_knowledge",
-        "latest_update",
-        "structured_fact",
-        "entity_lookup"
-      ],
-      "avoid_when": [
-        "policy_lookup"
-      ]
-    }
-  },
-  "auth": {
-    "mode": "none",
-    "required": false,
-    "fields": []
-  },
-  "discoverability_profile": {
-    "enabled": true,
-    "roles": [
-      "orchestrator",
-      "search",
-      "retrieve",
-      "synthesis"
-    ],
-    "domains": [
-      "web",
-      "encyclopedia",
-      "media"
-    ],
-    "entity_types": [
-      "article",
-      "entity",
-      "video"
-    ],
-    "keywords": [
-      "research_retrieve",
-      "research",
-      "retrieve",
-      "subagente",
-      "pesquisa",
-      "web",
-      "semi",
-      "isolado",
-      "para",
-      "busca",
-      "leitura",
-      "sintese",
-      "com",
-      "evidencias",
-      "discover",
-      "consult",
-      "discoverability",
-      "search",
-      "control",
-      "interact"
-    ],
-    "routing_hints": {
-      "preferred_intents": [
-        "general_knowledge",
-        "latest_update",
-        "structured_fact",
-        "entity_lookup"
-      ],
-      "avoid_when": [
-        "policy_lookup"
-      ]
-    }
-  }
 }

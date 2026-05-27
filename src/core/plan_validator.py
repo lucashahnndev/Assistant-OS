@@ -42,14 +42,6 @@ class PlanValidator:
         if plan.action_id in {"reply", "error"}:
             return ValidationResult(is_valid=True)
 
-        if not isinstance(plan.args, dict):
-            return ValidationResult(
-                is_valid=False,
-                error_code=ErrorCode.TOOL_INVALID_INPUT,
-                message=f"Plan args for '{plan.action_id}' must be an object.",
-                diagnostics={"action_id": plan.action_id, "field": "args"},
-            )
-
         # 1. Action Existence & Registry Integrity
         capability = capability_registry.get_capability_for_action(plan.action_id)
         if not capability:
@@ -58,7 +50,8 @@ class PlanValidator:
                 error_code=ErrorCode.TOOL_NOT_FOUND,
                 message=f"Action '{plan.action_id}' not registered.",
                 diagnostics={
-                    "action_id": plan.action_id,
+                    "action_id": plan.action_id, 
+                    "suggestions": capability_registry.suggest_actions(plan.action_id)
                 }
             )
 

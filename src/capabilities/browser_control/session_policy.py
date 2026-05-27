@@ -30,11 +30,6 @@ class BrowserSessionPolicy:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         cfg = config or {}
         self.app_mode_enabled = bool(cfg.get("app_mode_enabled", True))
-        # In production chat flows, session identifiers may rotate/reconnect while the
-        # same user/browser task is still active. Enforcing hard instance recreation on
-        # session switch causes open/close thrashing and token-wasting loops.
-        # Keep strict isolation as an opt-in.
-        self.strict_session_isolation = bool(cfg.get("strict_session_isolation", False))
 
     @staticmethod
     def _domain(value: str) -> str:
@@ -74,18 +69,18 @@ class BrowserSessionPolicy:
 
         if current_owner_session_id and str(current_owner_session_id) != str(owner_session_id):
             return PolicyDecision(
-                route="reuse_tab",
-                reason="session_switch_reuse_without_close",
+                route="new_instance",
+                reason="session_switch",
                 use_app_mode=use_app_mode,
-                force_new_instance=False,
+                force_new_instance=True,
             )
 
         if media_intent and str(current_intent_class or "").strip().lower() != self._MEDIA_INTENT:
             return PolicyDecision(
-                route="reuse_tab",
-                reason="media_mode_reuse_without_close",
+                route="new_app_window",
+                reason="media_mode_upgrade",
                 use_app_mode=use_app_mode,
-                force_new_instance=False,
+                force_new_instance=True,
             )
 
         requested_domain = self._domain(launch_url)

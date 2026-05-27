@@ -1,105 +1,75 @@
 {
-  "contract_version": "1.0",
-  "capability": {
-    "id": "reflex",
-    "namespace": "reflex",
-    "version": "1.0.0",
-    "title": "Reflex",
-    "description": "Reflex control commands for status and cancellation operations.",
-    "assets": {
-      "icon_svg": "assets/icon.svg"
-    }
-  },
-  "runtime": {
-    "module": "capabilities.reflex",
-    "factory": "create_capability"
-  },
-  "actions": [
-    {
-      "id": "reflex.status",
-      "title": "Status",
-      "description": "Return current execution status for active work context.",
-      "handler": "handle_status",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "reflex:action:status"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "properties": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": true
-      },
-      "side_effect": "none"
+    "contract_version": "1.0",
+    "capability": {
+        "id": "reflex",
+        "namespace": "reflex",
+        "version": "1.0.0",
+        "title": "Reflex",
+        "description": "Reflex control commands for status and cancellation operations.",
+        "assets": {
+            "icon_svg": "assets/icon.svg"
+        }
     },
-    {
-      "id": "reflex.cancel",
-      "title": "Cancel",
-      "description": "Cancel active execution context.",
-      "handler": "handle_cancel",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "reflex:action:cancel"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "properties": {
-            "type": "string"
-          },
-          "required": {
-            "type": "string"
-          }
+    "runtime": {
+        "module": "capabilities.reflex",
+        "factory": "create_capability"
+    },
+    "actions": [
+        {
+            "id": "reflex.status",
+            "title": "Status",
+            "description": "Return current execution status for active work context.",
+            "handler": "handle_status",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "reflex:action:status"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "properties": {
+                        "type": "string"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "none"
         },
-        "additionalProperties": true
-      },
-      "side_effect": "idempotent"
+        {
+            "id": "reflex.cancel",
+            "title": "Cancel",
+            "description": "Cancel active execution context.",
+            "handler": "handle_cancel",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "reflex:action:cancel"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "properties": {
+                        "type": "string"
+                    },
+                    "required": {
+                        "type": "string"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "idempotent"
+        }
+    ],
+    "auth": {
+        "mode": "none",
+        "required": false,
+        "fields": []
     }
-  ],
-  "auth": {
-    "mode": "none",
-    "required": false,
-    "fields": []
-  },
-  "discoverability_profile": {
-    "enabled": true,
-    "roles": [
-      "notify",
-      "control"
-    ],
-    "domains": [
-      "calendar",
-      "notifications",
-      "reflex"
-    ],
-    "entity_types": [
-      "event",
-      "notification"
-    ],
-    "keywords": [
-      "reflex",
-      "event",
-      "calendar",
-      "notification",
-      "lembrete"
-    ],
-    "routing_hints": {
-      "preferred_intents": [
-        "notification_reflex",
-        "calendar_event_alert"
-      ],
-      "avoid_when": []
-    }
-  }
 }

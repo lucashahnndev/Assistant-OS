@@ -1,91 +1,58 @@
 {
-  "contract_version": "1.0",
-  "capability": {
-    "id": "shell_control",
-    "namespace": "shell.control",
-    "version": "1.0.0",
-    "title": "Shell Control",
-    "description": "Executa comandos no shell do sistema com timeout e retorno estruturado de stdout/stderr.",
-    "assets": {
-      "icon_svg": "assets/icon.svg"
+    "contract_version": "1.0",
+    "capability": {
+        "id": "shell_control",
+        "namespace": "shell.control",
+        "version": "1.0.0",
+        "title": "Shell Control",
+        "description": "Executa comandos no shell do sistema com timeout e retorno estruturado de stdout/stderr.",
+        "assets": {
+            "icon_svg": "assets/icon.svg"
+        }
+    },
+    "runtime": {
+        "module": "capabilities.shell_control",
+        "factory": "create_capability",
+        "config_schema": "./config.schema.json"
+    },
+    "actions": [
+        {
+            "id": "shell.control.execute",
+            "title": "Execute",
+            "description": "Executa comando no terminal (alto risco) e devolve sa\u00edda completa para diagn\u00f3stico/automa\u00e7\u00e3o.",
+            "handler": "execute",
+            "risk_level": "high",
+            "permissions": {
+                "scopes": [
+                    "shell:control:execute"
+                ],
+                "allow_anyone": false,
+                "requires_approval": true
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "O comando bash/shell a ser executado"
+                    },
+                    "timeout_sec": {
+                        "type": "integer",
+                        "description": "Timeout em segundos para o comando (5-10800).",
+                        "default": 600
+                    }
+                },
+                "required": [
+                    "command"
+                ],
+                "additionalProperties": true
+            },
+            "side_effect": "destructive"
+        }
+    ],
+    "auth": {
+        "mode": "none",
+        "required": false,
+        "fields": []
     }
-  },
-  "runtime": {
-    "module": "capabilities.shell_control",
-    "factory": "create_capability",
-    "config_schema": "./config.schema.json"
-  },
-  "actions": [
-    {
-      "id": "shell.control.execute",
-      "title": "Execute",
-      "description": "Executa comando no terminal (alto risco) e devolve saída completa para diagnóstico/automação.",
-      "handler": "execute",
-      "risk_level": "high",
-      "permissions": {
-        "scopes": [
-          "shell:control:execute"
-        ],
-        "allow_anyone": false,
-        "requires_approval": true
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "command": {
-            "type": "string",
-            "description": "O comando bash/shell a ser executado"
-          },
-          "timeout_sec": {
-            "type": "integer",
-            "description": "Timeout em segundos para o comando (5-10800).",
-            "default": 600
-          }
-        },
-        "required": [
-          "command"
-        ],
-        "additionalProperties": true
-      },
-      "side_effect": "destructive"
-    }
-  ],
-  "auth": {
-    "mode": "none",
-    "required": false,
-    "fields": []
-  },
-  "discoverability_profile": {
-    "enabled": true,
-    "roles": [
-      "control",
-      "execute"
-    ],
-    "domains": [
-      "shell",
-      "terminal",
-      "system"
-    ],
-    "entity_types": [
-      "command",
-      "process",
-      "script"
-    ],
-    "keywords": [
-      "shell",
-      "terminal",
-      "bash",
-      "command",
-      "comando",
-      "executar",
-      "script"
-    ],
-    "routing_hints": {
-      "preferred_intents": [
-        "shell_execute",
-        "terminal_command"
-      ],
-      "avoid_when": []
-    }
-  }
 }

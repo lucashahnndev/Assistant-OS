@@ -12,10 +12,10 @@ class CalendarCapability:
         self.orchestrator = kernel.orchestrator
         self.calendar_service = self.orchestrator.calendar_service
         self.actions = [
-            "calendar.list_events",
-            "calendar.get_event",
-            "calendar.create_event",
-            "calendar.delete_event",
+            "calendar.event.list",
+            "calendar.event.get",
+            "calendar.event.create",
+            "calendar.event.delete",
             "calendar.sync"
         ]
 
@@ -69,13 +69,13 @@ class CalendarCapability:
             }
 
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
-        if action_id == "calendar.list_events":
+        if action_id == "calendar.event.list":
             return self.handle_list(context, **params)
-        if action_id == "calendar.get_event":
+        if action_id == "calendar.event.get":
             return self.handle_get(context, **params)
-        if action_id == "calendar.create_event":
+        if action_id == "calendar.event.create":
             return self.handle_create(context, **params)
-        if action_id == "calendar.delete_event":
+        if action_id == "calendar.event.delete":
             return self.handle_delete(context, **params)
         if action_id == "calendar.sync":
             return self.handle_sync(context, **params)
@@ -173,7 +173,7 @@ class CalendarCapability:
                 "events": [
                     self._event_summary(e, expose_internal_id=expose_internal_id) for e in events
                 ],
-                "note": "Listagem resumida por design. Use calendar.get_event com short_id para detalhes completos."
+                "note": "Listagem resumida por design. Use calendar.event.get com short_id para detalhes completos."
             }
         }
 

@@ -1,192 +1,142 @@
 {
-  "contract_version": "1.0",
-  "capability": {
-    "id": "spotify_search",
-    "namespace": "spotify.search",
-    "version": "1.0.0",
-    "title": "spotify.search",
-    "description": "Busca conteúdo no Spotify (música, artista, álbum, playlist), com fallback quando credenciais não estiverem disponíveis.",
-    "assets": {
-      "icon_svg": "assets/icon.svg"
-    }
-  },
-  "runtime": {
-    "module": "capabilities.spotify_search",
-    "factory": "create_capability",
-    "config_schema": "./config.schema.json"
-  },
-  "actions": [
-    {
-      "id": "spotify.search.search",
-      "title": "Search",
-      "description": "Pesquisa o catálogo do Spotify e retorna melhor resultado + lista estruturada.",
-      "handler": "search",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "spotify:search:search"
+    "contract_version": "1.0",
+    "capability": {
+        "id": "spotify_search",
+        "namespace": "spotify.search",
+        "version": "1.0.0",
+        "title": "spotify.search",
+        "description": "Busca conte\u00fado no Spotify (m\u00fasica, artista, \u00e1lbum, playlist), com fallback quando credenciais n\u00e3o estiverem dispon\u00edveis.",
+        "assets": {
+            "icon_svg": "assets/icon.svg"
+        }
+    },
+    "runtime": {
+        "module": "capabilities.spotify_search",
+        "factory": "create_capability",
+        "config_schema": "./config.schema.json"
+    },
+    "actions": [
+        {
+            "id": "spotify.search.search",
+            "title": "Search",
+            "description": "Pesquisa o cat\u00e1logo do Spotify e retorna melhor resultado + lista estruturada.",
+            "handler": "search",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "spotify:search:search"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Termo de busca"
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "track",
+                            "artist",
+                            "album",
+                            "playlist"
+                        ],
+                        "default": "track"
+                    },
+                    "market": {
+                        "type": "string",
+                        "description": "C\u00f3digo ISO do mercado (ex: BR)",
+                        "default": "BR"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 5
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "none"
+        }
+    ],
+    "retrieval_profile": {
+        "enabled": true,
+        "roles": [
+            "search",
+            "structured_entity",
+            "metadata_only"
         ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "query": {
-            "type": "string",
-            "description": "Termo de busca"
-          },
-          "type": {
-            "type": "string",
-            "enum": [
-              "track",
-              "artist",
-              "album",
-              "playlist"
-            ],
-            "default": "track"
-          },
-          "market": {
-            "type": "string",
-            "description": "Código ISO do mercado (ex: BR)",
-            "default": "BR"
-          },
-          "limit": {
-            "type": "integer",
-            "default": 5
-          }
+        "domains": [
+            "music",
+            "media"
+        ],
+        "entity_types": [
+            "track",
+            "artist",
+            "album",
+            "playlist"
+        ],
+        "freshness": {
+            "type": "live",
+            "sla_hours": 24
         },
-        "additionalProperties": true
-      },
-      "side_effect": "none"
-    }
-  ],
-  "retrieval_profile": {
-    "enabled": true,
-    "roles": [
-      "search",
-      "structured_entity",
-      "metadata_only"
-    ],
-    "domains": [
-      "music",
-      "media"
-    ],
-    "entity_types": [
-      "track",
-      "artist",
-      "album",
-      "playlist"
-    ],
-    "freshness": {
-      "type": "live",
-      "sla_hours": 24
-    },
-    "quality": {
-      "default_confidence": 0.75,
-      "trust_tier": "public_api",
-      "citation_mode": "url_required"
-    },
-    "cost": {
-      "latency_class": "medium",
-      "quota_class": "metered"
-    },
-    "setup": {
-      "requires_auth": false,
-      "required_fields": [],
-      "healthcheck_action": "spotify.search.search"
-    },
-    "output_contract": {
-      "evidence_schema": "external.evidence.v1",
-      "entity_schema": "external.entity.v1"
-    },
-    "routing_hints": {
-      "preferred_intents": [
-        "music_lookup",
-        "media_lookup"
-      ],
-      "avoid_when": [
-        "policy_lookup",
-        "location_lookup"
-      ]
-    }
-  },
-  "auth": {
-    "mode": "client_credentials",
-    "required": false,
-    "fields": [
-      {
-        "id": "auth_clientid",
-        "type": "secret_ref",
-        "config_path": "auth.clientId",
-        "required": false,
-        "title": "Client ID",
-        "secret_policy": {
-          "allow_create": true,
-          "allow_select": true
+        "quality": {
+            "default_confidence": 0.75,
+            "trust_tier": "public_api",
+            "citation_mode": "url_required"
+        },
+        "cost": {
+            "latency_class": "medium",
+            "quota_class": "metered"
+        },
+        "setup": {
+            "requires_auth": false,
+            "required_fields": [],
+            "healthcheck_action": "spotify.search.search"
+        },
+        "output_contract": {
+            "evidence_schema": "external.evidence.v1",
+            "entity_schema": "external.entity.v1"
+        },
+        "routing_hints": {
+            "preferred_intents": [
+                "music_lookup",
+                "media_lookup"
+            ],
+            "avoid_when": [
+                "policy_lookup",
+                "location_lookup"
+            ]
         }
-      },
-      {
-        "id": "auth_clientsecret",
-        "type": "secret_ref",
-        "config_path": "auth.clientSecret",
+    },
+    "auth": {
+        "mode": "client_credentials",
         "required": false,
-        "title": "Client Secret",
-        "secret_policy": {
-          "allow_create": true,
-          "allow_select": true
-        }
-      }
-    ]
-  },
-  "discoverability_profile": {
-    "enabled": true,
-    "roles": [
-      "search",
-      "structured_entity",
-      "metadata_only"
-    ],
-    "domains": [
-      "music",
-      "media"
-    ],
-    "entity_types": [
-      "track",
-      "artist",
-      "album",
-      "playlist"
-    ],
-    "keywords": [
-      "spotify_search",
-      "spotify",
-      "search",
-      "busca",
-      "conteudo",
-      "musica",
-      "artista",
-      "album",
-      "playlist",
-      "com",
-      "fallback",
-      "quando",
-      "credenciais",
-      "nao",
-      "estiverem",
-      "disponiveis",
-      "discover",
-      "consult",
-      "discoverability",
-      "retrieve"
-    ],
-    "routing_hints": {
-      "preferred_intents": [
-        "music_lookup",
-        "media_lookup"
-      ],
-      "avoid_when": [
-        "policy_lookup",
-        "location_lookup"
-      ]
+        "fields": [
+            {
+                "id": "auth_clientid",
+                "type": "secret_ref",
+                "config_path": "auth.clientId",
+                "required": false,
+                "title": "Client ID",
+                "secret_policy": {
+                    "allow_create": true,
+                    "allow_select": true
+                }
+            },
+            {
+                "id": "auth_clientsecret",
+                "type": "secret_ref",
+                "config_path": "auth.clientSecret",
+                "required": false,
+                "title": "Client Secret",
+                "secret_policy": {
+                    "allow_create": true,
+                    "allow_select": true
+                }
+            }
+        ]
     }
-  }
 }

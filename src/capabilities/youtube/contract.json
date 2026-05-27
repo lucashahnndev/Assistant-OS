@@ -174,54 +174,5 @@
         }
       }
     ]
-  },
-  "discoverability_profile": {
-    "enabled": true,
-    "roles": [
-      "search",
-      "retrieve",
-      "metadata_only"
-    ],
-    "domains": [
-      "music",
-      "media",
-      "web"
-    ],
-    "entity_types": [
-      "video",
-      "playlist",
-      "channel"
-    ],
-    "keywords": [
-      "youtube",
-      "dominio",
-      "unificado",
-      "busca",
-      "metadados",
-      "transcript",
-      "opcional",
-      "para",
-      "rag",
-      "externo",
-      "discover",
-      "consult",
-      "discoverability",
-      "search",
-      "retrieve",
-      "control",
-      "interact",
-      "manage",
-      "open",
-      "close"
-    ],
-    "routing_hints": {
-      "preferred_intents": [
-        "music_lookup",
-        "media_lookup"
-      ],
-      "avoid_when": [
-        "policy_lookup"
-      ]
-    }
   }
 }

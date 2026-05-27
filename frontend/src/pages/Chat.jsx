@@ -1,2478 +1,31 @@
-import { useState, useEffect, useRef, useMemo, memo } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import {
-    WeatherAssistCard,
-    SystemHealthAssistCard,
-    DataChartAssistCard,
-    WikiAssistCard,
-    MapAssistCard,
-} from '../components/AssistCards';
-import { useAssistCards } from '../hooks/useAssistCards';
-
 import { api } from '../hooks/api';
 import PlaybackCard from '../components/PlaybackCard';
-import LinkPreviewCard from '../components/LinkPreviewCard';
 import ConfirmDialog from '../components/ConfirmDialog';
-import CapabilityIcon from '../components/CapabilityIcon';
 import toast from 'react-hot-toast';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeRaw from 'rehype-raw';
-import remarkBreaks from 'remark-breaks';
 import {
-    Send,
-    Terminal,
     Plus,
-    MessageSquare,
-    Hash,
-    Bot,
     Trash2,
     Globe,
-    Cpu,
-    Smartphone,
-    Paperclip,
-    File as FileIcon,
     X,
-    CheckCircle2,
-    Copy as CopyIcon,
-    Files as FilesIcon,
-    Check,
-    Video,
-    Music,
-    FileText,
-    MoreHorizontal,
     ChevronLeft,
     ChevronRight,
     ChevronDown,
-    ChevronUp,
     RefreshCw,
     Edit,
-    SendHorizontal,
-    MessageCircle,
-    Mic,
-    FileCode,
-    Archive,
-    Table,
-    Download,
     Monitor,
-    Maximize2,
-    ArrowUpRight,
-    Square,
-    CloudSun,
-    HeartPulse,
-    BarChart3,
-    BookOpen,
-    Brain,
-    Wrench,
-    Link2,
-    Zap,
-    AlertTriangle
+    Download,
+    Bot,
+    Zap
 } from 'lucide-react';
 
-const SessionIcon = ({ source, size = 16 }) => {
-    let icon = <Hash size={size} color="var(--text-muted)" />;
-    let bgColor = 'rgba(255,255,255,0.1)';
-
-    switch (source) {
-        case 'telegram':
-            icon = <SendHorizontal size={size} color="#fff" style={{ transform: 'rotate(-45deg)', marginTop: '-1px' }} />;
-            bgColor = '#229ED9';
-            break;
-        case 'web':
-        case 'portal':
-            icon = <MessageCircle size={size} color="#fff" />;
-            bgColor = 'var(--accent-color)';
-            break;
-        case 'console':
-        case 'terminal':
-            icon = <Terminal size={size} color="#fff" />;
-            bgColor = '#1e293b';
-            break;
-        case 'voice':
-            icon = <Mic size={size} color="#fff" />;
-            bgColor = 'var(--success)';
-            break;
-    }
-
-    return (
-        <div style={{
-            width: '100%',
-            height: '100%',
-            borderRadius: '50%',
-            background: bgColor,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-        }}>
-            {icon}
-        </div>
-    );
-};
-
-const SessionAvatar = ({ session, size = 40, showBadge = true, onClick }) => {
-    const sessId = session?.session_id || session?.id;
-    const initial = (session?.name || sessId || '?').charAt(0).toUpperCase();
-    const colors = ['#ec4899', '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4', '#84cc16'];
-    const colorIndex = sessId ? sessId.charCodeAt(sessId.length - 1) % colors.length : 0;
-    const bgColor = colors[colorIndex];
-    const avatarUrl = session?.profile_picture ? `/api/sessions/${sessId}/files/${session.profile_picture}` : null;
-
-    return (
-        <div
-            onClick={onClick}
-            style={{
-                position: 'relative',
-                width: `${size}px`,
-                height: `${size}px`,
-                borderRadius: '50%',
-                background: avatarUrl ? 'transparent' : bgColor,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#fff',
-                fontWeight: 'bold',
-                fontSize: `${size * 0.45}px`,
-                flexShrink: 0,
-                cursor: onClick ? 'pointer' : 'default',
-                boxShadow: '0 4px 10px rgba(0,0,0,0.15)',
-                border: '1px solid rgba(255,255,255,0.05)',
-                transition: 'var(--transition)'
-            }}
-            className={onClick ? "hover:ring-2 hover:ring-[var(--accent-color)]" : ""}
-            title={onClick ? "Change Profile Picture" : ""}
-        >
-            {avatarUrl ? (
-                <img
-                    src={avatarUrl}
-                    alt="Avatar"
-                    style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }}
-                    onError={(e) => {
-                        e.target.style.display = 'none';
-                        if (e.target.nextSibling) e.target.nextSibling.style.display = 'block';
-                    }}
-                />
-            ) : null}
-            <span style={{ display: avatarUrl ? 'none' : 'block' }}>{initial}</span>
-
-            {showBadge && (
-                <div style={{
-                    position: 'absolute',
-                    bottom: '-2px',
-                    right: '-2px',
-                    width: `${size * 0.38}px`,
-                    height: `${size * 0.38}px`,
-                    background: 'var(--card-bg)',
-                    borderRadius: '50%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-                }}>
-                    <SessionIcon source={session?.interface || session?.source} size={Math.max(8, size * 0.25)} />
-                </div>
-            )}
-        </div>
-    );
-};
-
-const CodeBlock = ({ node, inline, className, children, ...props }) => {
-    const [copied, setCopied] = useState(false);
-    const codeRef = useRef(null);
-    const match = /language-(\w+)/.exec(className || '');
-    const language = match ? match[1] : '';
-
-    // Force block rendering if the content has newlines, even if parsed as inline markdown
-    const hasNewlines = String(children).includes('\n');
-    const isInline = (inline || !className) && !hasNewlines;
-
-    const handleCopy = () => {
-        const text = codeRef.current?.innerText || children.toString();
-        navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-        toast.success("Code copied!");
-    };
-
-    if (isInline) {
-        return <code style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 4px', borderRadius: '4px', fontFamily: 'monospace', fontSize: '13px' }} {...props}>{children}</code>;
-    }
-
-    return (
-        <div style={{
-            position: 'relative',
-            margin: '16px 0',
-            borderRadius: '12px',
-            overflow: 'hidden',
-            border: '1px solid rgba(255,255,255,0.1)',
-            background: 'rgba(0,0,0,0.3)'
-        }}>
-            {/* Header / Toolbar */}
-            <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: '8px 16px',
-                background: 'rgba(255,255,255,0.05)',
-                borderBottom: '1px solid rgba(255,255,255,0.05)'
-            }}>
-                <span style={{
-                    fontSize: '11px',
-                    fontWeight: '800',
-                    textTransform: 'uppercase',
-                    opacity: 0.5,
-                    letterSpacing: '0.05em'
-                }}>
-                    {language || 'code'}
-                </span>
-                <button
-                    onClick={handleCopy}
-                    className="btn-ghost"
-                    style={{
-                        padding: '4px 10px',
-                        height: 'auto',
-                        minWidth: '60px',
-                        background: 'rgba(255,255,255,0.08)',
-                        borderRadius: '6px',
-                        fontSize: '10px',
-                        fontWeight: '800',
-                        color: copied ? 'var(--success)' : 'var(--text-main)',
-                        transition: 'var(--transition)',
-                        border: '1px solid rgba(255,255,255,0.1)'
-                    }}
-                >
-                    {copied ? 'COPIED' : 'COPY'}
-                </button>
-            </div>
-            <pre style={{
-                margin: 0,
-                padding: '16px',
-                overflow: 'auto',
-                background: 'transparent'
-            }}>
-                <code className={className} {...props} ref={codeRef} style={{ fontSize: '13px', lineHeight: '1.6' }}>
-                    {children}
-                </code>
-            </pre>
-        </div>
-    );
-};
-
-const getFileUrl = (item, sessionId) => {
-    if (!item) return null;
-    if (item.url) return item.url;
-    if (!sessionId) return null;
-
-    const rawPath = item.path || item.file_path || item.filename || item.name;
-    if (!rawPath) return null;
-    const normalizedPath = String(rawPath).replace(/\\/g, '/');
-
-    // If the path already carries a session id on disk (e.g. .../data/sessions/{sid}/media/...),
-    // preserve that source session instead of forcing the currently opened one.
-    const diskSessionMatch = normalizedPath.match(/\/sessions\/([^/]+)\/(media|uploads)\/(.+)$/);
-    if (diskSessionMatch) {
-        const [, sourceSessionId, bucket, rest] = diskSessionMatch;
-        return `/api/sessions/${sourceSessionId}/files/${bucket}/${rest}`;
-    }
-
-    if (normalizedPath.startsWith('/api/sessions/') && normalizedPath.includes('/files/')) {
-        return normalizedPath;
-    }
-
-    if (normalizedPath.includes('/media/')) {
-        const parts = normalizedPath.split('/media/');
-        return `/api/sessions/${sessionId}/files/media/${parts[parts.length - 1]}`;
-    }
-    if (normalizedPath.startsWith('media/')) {
-        return `/api/sessions/${sessionId}/files/${normalizedPath}`;
-    }
-
-    if (normalizedPath.includes('/uploads/')) {
-        const parts = normalizedPath.split('/uploads/');
-        return `/api/sessions/${sessionId}/files/uploads/${parts[parts.length - 1]}`;
-    }
-    if (normalizedPath.startsWith('uploads/')) {
-        return `/api/sessions/${sessionId}/files/${normalizedPath}`;
-    }
-
-    if (normalizedPath.includes('data/')) {
-        return `/api/static/${normalizedPath.split('data/')[1]}`;
-    }
-
-    return `/api/sessions/${sessionId}/files/${normalizedPath.replace(/^\/+/, '')}`;
-};
-
-const formatTime = (ts) => {
-    if (!ts) return '';
-    try {
-        const date = new Date(typeof ts === 'number' && ts < 10000000000 ? ts * 1000 : ts);
-        return isNaN(date.getTime()) ? '' : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } catch (e) {
-        return '';
-    }
-};
-
-const formatDate = (ts) => {
-    if (!ts) return '';
-    try {
-        const date = new Date(typeof ts === 'number' && ts < 10000000000 ? ts * 1000 : ts);
-        if (isNaN(date.getTime())) return '';
-
-        const today = new Date();
-        const yesterday = new Date(today);
-        yesterday.setDate(yesterday.getDate() - 1);
-
-        if (date.toDateString() === today.toDateString()) return 'Today';
-        if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
-        return date.toLocaleDateString();
-    } catch (e) {
-        return '';
-    }
-};
-
-const tryParseIntentPayload = (content) => {
-    if (typeof content !== 'string') return null;
-    const text = content.trim();
-    if (!text.startsWith('{') || !text.endsWith('}')) return null;
-
-    try {
-        const parsed = JSON.parse(text);
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-        const keys = ['thought', 'plan', 'action', 'params'];
-        const hasIntentKey = keys.some((k) => Object.prototype.hasOwnProperty.call(parsed, k));
-        return hasIntentKey ? parsed : null;
-    } catch {
-        return null;
-    }
-};
-
-const looksLikeInternalMonologue = (content) => {
-    if (typeof content !== 'string') return false;
-    const text = content.trim().toLowerCase();
-    if (!text) return false;
-
-    // High-confidence monologue starts only.
-    if (
-        text.startsWith('o usuário') ||
-        text.startsWith('o usuario') ||
-        text.startsWith('the user') ||
-        text.startsWith('vou usar') ||
-        text.startsWith('i will use')
-    ) {
-        return true;
-    }
-
-    // Avoid false positives on long, user-facing answers (e.g. vision descriptions with logs/markdown).
-    if (text.length > 420) return false;
-
-    // Strict planning cues: require clear action-planning language, not generic words.
-    const strictCues = [
-        'vou usar a ação',
-        'vou usar a acao',
-        'i will use the action',
-        'my plan is',
-        'plan:',
-        '"action":',
-        '"params":',
-        'returning results'
-    ];
-    return strictCues.some((cue) => text.includes(cue));
-};
-
-const normalizeHistoryMessageType = (msg) => {
-    const explicitType = String(msg?.type || msg?.msg_type || 'default').toLowerCase();
-    if (explicitType !== 'default') return explicitType;
-    if (msg?.role === 'assistant') {
-        const payload = tryParseIntentPayload(msg?.content);
-        if (payload && (payload.thought || payload.action)) return 'reasoning';
-        if (looksLikeInternalMonologue(msg?.content)) return 'reasoning';
-    }
-    return explicitType;
-};
-
-const extractReasoningLine = (msg) => {
-    const payload = tryParseIntentPayload(msg?.content);
-    if (payload) {
-        const thought = typeof payload.thought === 'string' ? payload.thought.trim() : '';
-        if (thought) return thought;
-        const action = typeof payload.action === 'string' ? payload.action.trim() : '';
-        if (action && action !== 'reply' && action !== 'none') return `Planned action: ${action}`;
-        if (action === 'reply' && payload.thought) return payload.thought;
-    }
-    if (looksLikeInternalMonologue(msg?.content)) {
-        return String(msg.content || '').trim();
-    }
-    return null;
-};
-
-const toReasoningEntry = (line, ts = null) => {
-    const text = String(line || '').trim();
-    if (!text) return null;
-    return { text, ts: ts || null };
-};
-
-const normalizeReasoningTimeline = (msg) => {
-    if (Array.isArray(msg?.reasoningTimeline) && msg.reasoningTimeline.length > 0) {
-        return msg.reasoningTimeline
-            .map((entry) => {
-                if (typeof entry === 'string') return toReasoningEntry(entry, msg?.timestamp);
-                if (entry && typeof entry === 'object') return toReasoningEntry(entry.text || entry.line || entry.content, entry.ts || entry.timestamp || msg?.timestamp);
-                return null;
-            })
-            .filter(Boolean);
-    }
-    if (Array.isArray(msg?.reasoningLines) && msg.reasoningLines.length > 0) {
-        return msg.reasoningLines.map((line) => toReasoningEntry(line, msg?.timestamp)).filter(Boolean);
-    }
-    return [];
-};
-
-const groupHistoryWithReasoning = (rawHistory = []) => {
-    const mergeUniqueStrings = (base = [], incoming = []) => {
-        const out = [];
-        const seen = new Set();
-        [...(Array.isArray(base) ? base : []), ...(Array.isArray(incoming) ? incoming : [])].forEach((value) => {
-            const s = String(value || '').trim();
-            if (!s) return;
-            const key = s.toLowerCase();
-            if (seen.has(key)) return;
-            seen.add(key);
-            out.push(s);
-        });
-        return out;
-    };
-    // Infer missing work_id for assistant/system messages that are immediately
-    // followed by a same-turn assistant message that does carry work_id.
-    const history = rawHistory.map((msg) => ({ ...msg }));
-    for (let i = 0; i < history.length; i += 1) {
-        const current = history[i];
-        if (!current || current.work_id || current.role === 'user') continue;
-        if (current.role !== 'assistant' && current.role !== 'system') continue;
-        for (let j = i + 1; j < history.length; j += 1) {
-            const next = history[j];
-            if (!next) break;
-            if (next.role === 'user') break;
-            if ((next.role === 'assistant' || next.role === 'system') && next.work_id) {
-                current.work_id = next.work_id;
-                break;
-            }
-        }
-    }
-
-    // Pass 1: collect all work units preserving insertion order
-    const workUnitMap = new Map(); // work_id -> unit object
-    const orderedKeys = [];        // work_ids in first-seen order (to preserve timeline)
-
-    history.forEach((msg, rawIdx) => {
-        const workId = msg.work_id;
-        const role = msg.role;
-        const type = normalizeHistoryMessageType(msg);
-
-        // User messages always get their own bubble
-        if (role === 'user') {
-            const key = `__user_${rawIdx}`;
-            orderedKeys.push(key);
-            workUnitMap.set(key, msg);
-            return;
-        }
-
-        // Assistant / system messages with a work_id → merge into Work Unit
-        if (workId) {
-            if (!workUnitMap.has(workId)) {
-                // New work unit
-                const unit = {
-                    ...msg,
-                    reasoningLines: [],
-                    reasoningTimeline: [],
-                    contentSegments: []
-                };
-                if (type === 'reasoning') {
-                    const line = extractReasoningLine(msg);
-                    if (line) {
-                        unit.reasoningLines.push(line);
-                        const entry = toReasoningEntry(line, msg.timestamp);
-                        if (entry) unit.reasoningTimeline.push(entry);
-                    }
-                } else {
-                    unit.contentSegments.push({
-                        content: msg.content || '',
-                        playback: msg.playback,
-                        attachments: msg.attachments,
-                        type
-                    });
-                }
-                orderedKeys.push(workId);
-                workUnitMap.set(workId, unit);
-            } else {
-                // Enrich existing unit
-                const unit = workUnitMap.get(workId);
-                if (type === 'reasoning') {
-                    const line = extractReasoningLine(msg);
-                    if (line && !unit.reasoningLines.includes(line)) {
-                        unit.reasoningLines.push(line);
-                        const entry = toReasoningEntry(line, msg.timestamp);
-                        if (entry) unit.reasoningTimeline.push(entry);
-                    }
-                } else {
-                    const segContent = msg.content || '';
-                    if (segContent || msg.playback || (msg.attachments && msg.attachments.length > 0)) {
-                        unit.contentSegments.push({
-                            content: segContent,
-                            playback: msg.playback,
-                            attachments: msg.attachments,
-                            type
-                        });
-                    }
-                }
-                // Keep latest timestamp / status
-                if (msg.timestamp) unit.timestamp = msg.timestamp;
-                if (msg.statusPhase) unit.statusPhase = msg.statusPhase;
-                if (msg.statusMessage) unit.statusMessage = msg.statusMessage;
-                if (msg.approvalRequest) unit.approvalRequest = msg.approvalRequest;
-                if (msg.playback && !unit.playback) unit.playback = msg.playback;
-                if (msg.isStreaming !== undefined) unit.isStreaming = msg.isStreaming;
-                unit.capabilities_used = mergeUniqueStrings(unit.capabilities_used, msg.capabilities_used);
-                unit.actions_used = mergeUniqueStrings(unit.actions_used, msg.actions_used);
-            }
-            return;
-        }
-
-        // Standalone assistant message (no work_id)
-        const key = `__standalone_${rawIdx}`;
-        orderedKeys.push(key);
-        workUnitMap.set(key, { ...msg, reasoningLines: [], reasoningTimeline: [], contentSegments: [] });
-    });
-
-    // Pass 2: build output in timeline order (deduplicated)
-    const seen = new Set();
-    return orderedKeys.filter(k => {
-        if (seen.has(k)) return false;
-        seen.add(k);
-        return true;
-    }).map(k => workUnitMap.get(k));
-};
-
-const SegmentDivider = () => (
-    <div style={{
-        padding: '12px 0',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '12px',
-        opacity: 0.15
-    }}>
-        <div style={{ flex: 1, height: '1px', background: 'var(--card-border)' }} />
-        <span style={{ fontSize: '8px', fontWeight: '900', letterSpacing: '0.4em', color: 'var(--text-muted)', textTransform: 'uppercase' }}>_____</span>
-        <div style={{ flex: 1, height: '1px', background: 'var(--card-border)' }} />
-    </div>
-);
-
-const TypewriterMarkdown = ({ text, isStreaming, isComplete, isUser }) => {
-    const [displayedText, setDisplayedText] = useState(text);
-
-    useEffect(() => {
-        if (!isStreaming || isComplete) {
-            setDisplayedText(text);
-            return;
-        }
-        if (text.length < displayedText.length) {
-            setDisplayedText(text);
-            return;
-        }
-        if (displayedText.length === text.length) return;
-
-        const timeout = setTimeout(() => {
-            setDisplayedText(prev => text.slice(0, prev.length + 2)); // Slightly faster reveal
-        }, 8);
-
-        return () => clearTimeout(timeout);
-    }, [text, isStreaming, isComplete, displayedText]);
-
-    return (
-        <div className="markdown-content" style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
-            <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkBreaks]}
-                rehypePlugins={[rehypeRaw]}
-                components={{
-                    code: CodeBlock,
-                    p: ({ node, children, ...props }) => <div style={{ marginBottom: '12px' }} {...props}>{children}</div>,
-                    ul: ({ node, ...props }) => <ul style={{ paddingLeft: '24px', marginBottom: '16px' }} {...props} />,
-                    ol: ({ node, ...props }) => <ol style={{ paddingLeft: '24px', marginBottom: '16px', listStyleType: 'decimal' }} {...props} />,
-                    li: ({ node, ...props }) => <li style={{ marginBottom: '8px' }} {...props} />,
-                    strong: ({ node, ...props }) => <strong style={{ color: isUser ? '#fff' : 'var(--accent-color)', fontWeight: '800' }} {...props} />,
-                    a: ({ node, ...props }) => <a style={{ color: isUser ? '#fff' : 'var(--accent-color)', textDecoration: 'underline', fontWeight: 'bold' }} target="_blank" rel="noreferrer" {...props} />
-                }}
-            >
-                {displayedText}
-            </ReactMarkdown>
-            {isStreaming && !isComplete && displayedText.length > 0 && (
-                <span style={{
-                    display: 'inline-block',
-                    width: '6px',
-                    height: '14px',
-                    background: 'var(--accent-color)',
-                    marginLeft: '4px',
-                    verticalAlign: 'middle',
-                    animation: 'pulse 1s infinite'
-                }} />
-            )}
-        </div>
-    );
-};
-
-// ─── Work Unit Inspector ──────────────────────────────────────────────────────
-const INSPECTOR_TABS = [
-    { id: 'plan', label: 'Plan', icon: FileText },
-    { id: 'thought', label: 'Thought', icon: Brain },
-    { id: 'logs', label: 'Logs', icon: AlertTriangle },
-    { id: 'terminal', label: 'Terminal', icon: Terminal },
-    { id: 'capabilities', label: 'Capabilities', icon: Wrench },
-    { id: 'media', label: 'Media', icon: Archive },
-    { id: 'sources', label: 'Sources', icon: Link2 },
-];
-
-const stepStatusIcon = (status) => {
-    switch (status) {
-        case 'done': return { icon: '✓', color: '#10b981' };
-        case 'in_progress': return { icon: '◉', color: 'var(--accent-color)' };
-        case 'blocked': return { icon: '✕', color: '#ef4444' };
-        default: return { icon: '○', color: 'var(--text-muted)' };
-    }
-};
-
-const normalizeInspectorList = (value) => {
-    if (!Array.isArray(value)) return [];
-    return value
-        .map((item) => {
-            if (typeof item === 'string') return item;
-            if (item && typeof item === 'object') {
-                return item.name || item.id || item.key || item.path || item.file || JSON.stringify(item);
-            }
-            return String(item || '');
-        })
-        .map((entry) => String(entry || '').trim())
-        .filter(Boolean);
-};
-
-const URL_EXTRACT_RE = /https?:\/\/[^\s<>)"'\]]+/gi;
-
-const extractUrlsFromAny = (value) => {
-    const text = typeof value === 'string' ? value : JSON.stringify(value || {});
-    return [...new Set((String(text).match(URL_EXTRACT_RE) || []).map((u) => u.replace(/[.,;!?]+$/, '')))];
-};
-
-const isInspectorErrorEvent = (event) => {
-    const name = String(event?.event || '').toLowerCase();
-    const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
-    const status = String(payload?.status || '').toLowerCase();
-    const errorCode = String(payload?.error_code || payload?.code || payload?.result_reason || '').toLowerCase();
-    const reason = String(payload?.reason || '').toLowerCase();
-    const summary = String(payload?.summary || payload?.failure_summary || '').toLowerCase();
-    const blob = `${name} ${status} ${errorCode} ${reason} ${summary}`;
-    return [
-        'fail',
-        'error',
-        'exception',
-        'recovery_needed',
-        'replan',
-        'replanning',
-        'validation',
-        'schema',
-        'llm_error',
-        'planner',
-        'refusal',
-        'timeout',
-    ].some((token) => blob.includes(token));
-};
-
-const extractInspectorErrorMessage = (payload = {}) => {
-    const raw = payload?.error || payload?.message || payload?.details || payload?.reason || payload?.exception || '';
-    if (typeof raw === 'string') return raw.trim();
-    try {
-        return JSON.stringify(raw || {});
-    } catch {
-        return String(raw || '').trim();
-    }
-};
-
-const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false, open: controlledOpen, onToggle, hideButton = false, hidePanel = false }) => {
-    const [open, setOpen] = useState(false);
-    const [activeTab, setActiveTab] = useState('plan');
-    const [context, setContext] = useState(null);
-    const [overwatch, setOverwatch] = useState(null);
-    const [sessionPlaybackRuns, setSessionPlaybackRuns] = useState([]);
-    const [expandedPlaybackRunId, setExpandedPlaybackRunId] = useState(null);
-    const [fullscreenTerminalId, setFullscreenTerminalId] = useState(null);
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState(null);
-    const hasLoadedOnceRef = useRef(false);
-    const fullscreenTerminalBodyRef = useRef(null);
-
-    const uniqueStrings = (items = []) => {
-        const seen = new Set();
-        const out = [];
-        for (const item of items) {
-            const value = String(item || '').trim();
-            if (!value || seen.has(value)) continue;
-            seen.add(value);
-            out.push(value);
-        }
-        return out;
-    };
-
-    const isEqualObject = (a, b) => {
-        if (a === b) return true;
-        try {
-            return JSON.stringify(a) === JSON.stringify(b);
-        } catch {
-            return false;
-        }
-    };
-
-    const mergeContextIncremental = (prev, next) => {
-        if (!next || typeof next !== 'object') return prev || null;
-        if (!prev || typeof prev !== 'object') return next;
-
-        const prevPlanner = prev.planner && typeof prev.planner === 'object' ? prev.planner : {};
-        const nextPlanner = next.planner && typeof next.planner === 'object' ? next.planner : {};
-        const prevData = prev.data && typeof prev.data === 'object' ? prev.data : {};
-        const nextData = next.data && typeof next.data === 'object' ? next.data : {};
-
-        const mergedPlanLines = uniqueStrings([
-            ...(Array.isArray(prevPlanner.plan) ? prevPlanner.plan : []),
-            ...(Array.isArray(nextPlanner.plan) ? nextPlanner.plan : []),
-        ]);
-        const prevSteps = Array.isArray(prevPlanner.steps) ? prevPlanner.steps : [];
-        const nextSteps = Array.isArray(nextPlanner.steps) ? nextPlanner.steps : [];
-        const stepMap = new Map();
-        prevSteps.forEach((s, i) => {
-            const key = String(s?.id || `prev-${i}`);
-            stepMap.set(key, s);
-        });
-        nextSteps.forEach((s, i) => {
-            const key = String(s?.id || `next-${i}`);
-            if (!stepMap.has(key)) {
-                stepMap.set(key, s);
-            }
-        });
-        const mergedSteps = [...stepMap.values()];
-
-        const mergedData = {
-            ...prevData,
-            ...nextData,
-            actions_used: uniqueStrings([
-                ...(Array.isArray(prevData.actions_used) ? prevData.actions_used : []),
-                ...(Array.isArray(nextData.actions_used) ? nextData.actions_used : []),
-            ]),
-            capabilities_used: uniqueStrings([
-                ...(Array.isArray(prevData.capabilities_used) ? prevData.capabilities_used : []),
-                ...(Array.isArray(nextData.capabilities_used) ? nextData.capabilities_used : []),
-            ]),
-            media_used: uniqueStrings([
-                ...(Array.isArray(prevData.media_used) ? prevData.media_used : []),
-                ...(Array.isArray(nextData.media_used) ? nextData.media_used : []),
-            ]),
-            sources_used: (() => {
-                const all = [
-                    ...(Array.isArray(prevData.sources_used) ? prevData.sources_used : []),
-                    ...(Array.isArray(nextData.sources_used) ? nextData.sources_used : []),
-                ];
-                const seen = new Set();
-                const out = [];
-                for (const src of all) {
-                    const url = String(src?.url || '').trim();
-                    if (!url || seen.has(url)) continue;
-                    seen.add(url);
-                    out.push(src);
-                }
-                return out;
-            })(),
-        };
-
-        const merged = {
-            ...prev,
-            ...next,
-            planner: {
-                ...prevPlanner,
-                ...nextPlanner,
-                plan: mergedPlanLines,
-                steps: mergedSteps,
-            },
-            data: mergedData,
-        };
-
-        return isEqualObject(prev, merged) ? prev : merged;
-    };
-
-    const mergeOverwatchIncremental = (prev, next) => {
-        if (!next || typeof next !== 'object') return prev || null;
-        if (!prev || typeof prev !== 'object') return next;
-
-        const prevEvents = Array.isArray(prev.events) ? prev.events : [];
-        const nextEvents = Array.isArray(next.events) ? next.events : [];
-        const seen = new Set(prevEvents.map((e) => `${e?.ts || ''}|${e?.event || ''}|${JSON.stringify(e?.payload || {})}`));
-        const mergedEvents = [...prevEvents];
-        for (const event of nextEvents) {
-            const fp = `${event?.ts || ''}|${event?.event || ''}|${JSON.stringify(event?.payload || {})}`;
-            if (seen.has(fp)) continue;
-            seen.add(fp);
-            mergedEvents.push(event);
-        }
-
-        const merged = {
-            ...prev,
-            ...next,
-            events: mergedEvents,
-            capabilities_assets: {
-                ...(prev.capabilities_assets || {}),
-                ...(next.capabilities_assets || {}),
-            },
-        };
-        return isEqualObject(prev, merged) ? prev : merged;
-    };
-
-    const load = async (force = false, silent = false) => {
-        if (!force && (context || loading)) return;
-        if (!silent) {
-            if (!hasLoadedOnceRef.current) setLoading(true);
-            setError(null);
-        }
-        try {
-            const [ctxRes, owRes] = await Promise.allSettled([
-                api.get(`/system/works/${workId}/context`),
-                api.get(`/tasks/works/${workId}/overwatch?events_limit=400`),
-            ]);
-            if (ctxRes.status === 'fulfilled') {
-                const nextContext = ctxRes.value?.context || ctxRes.value || {};
-                setContext(prev => mergeContextIncremental(prev, nextContext));
-                hasLoadedOnceRef.current = true;
-            }
-            if (owRes.status === 'fulfilled') {
-                const nextOw = owRes.value || null;
-                setOverwatch(prev => mergeOverwatchIncremental(prev, nextOw));
-            }
-            if (ctxRes.status !== 'fulfilled' && owRes.status !== 'fulfilled') {
-                throw new Error('both context and overwatch failed');
-            }
-        } catch (e) {
-            if (!silent) setError('Could not load work details.');
-        } finally {
-            if (!silent) setLoading(false);
-        }
-    };
-
-    const isOpen = typeof controlledOpen === 'boolean' ? controlledOpen : open;
-
-    const toggle = () => {
-        if (!isOpen && !hidePanel) load(true);
-        if (onToggle) onToggle(!isOpen);
-        else setOpen(v => !v);
-    };
-
-    useEffect(() => {
-        if (!isOpen || !workId || hidePanel) return undefined;
-
-        load(true, false);
-        const interval = setInterval(() => {
-            load(true, true);
-        }, 1000);
-
-        return () => clearInterval(interval);
-    }, [isOpen, workId]);
-
-    useEffect(() => {
-        if (!isOpen || !sessionId || hidePanel) return undefined;
-        let cancelled = false;
-        const fetchSessionPlaybackRuns = async () => {
-            try {
-                const response = await api.get(`/sessions/${sessionId}/playback`);
-                if (cancelled) return;
-                setSessionPlaybackRuns(Array.isArray(response?.runs) ? response.runs : []);
-            } catch {
-                if (!cancelled) setSessionPlaybackRuns([]);
-            }
-        };
-        fetchSessionPlaybackRuns();
-        return () => {
-            cancelled = true;
-        };
-    }, [isOpen, sessionId, hidePanel]);
-
-    const planner = context?.planner || {};
-    const data = context?.data || {};
-    const browserPlanner = data?.browser_planner && typeof data.browser_planner === 'object' ? data.browser_planner : {};
-    const summary = context?.summary || {};
-    const events = Array.isArray(overwatch?.events) ? overwatch.events : [];
-    const steps = Array.isArray(planner.steps) ? planner.steps : [];
-    const plan = Array.isArray(planner.plan) ? planner.plan : [];
-    const capabilities = normalizeInspectorList(data.capabilities_used);
-    const actions = normalizeInspectorList(data.actions_used);
-    const media = normalizeInspectorList(data.media_used);
-    const playbackRunIds = (() => {
-        const ids = new Set();
-        const fromContext = Array.isArray(data?.playback_runs) ? data.playback_runs : [];
-        fromContext.forEach((id) => {
-            const value = String(id || '').trim();
-            if (value) ids.add(value);
-        });
-        const lastRun = String(data?.last_playback_run_id || '').trim();
-        if (lastRun) ids.add(lastRun);
-        return [...ids];
-    })();
-    const relatedPlaybackRuns = (() => {
-        if (!Array.isArray(sessionPlaybackRuns) || sessionPlaybackRuns.length === 0) return [];
-        if (playbackRunIds.length === 0) return [];
-        const wanted = new Set(playbackRunIds);
-        return sessionPlaybackRuns.filter((run) => wanted.has(String(run?.run_id || '').trim()));
-    })();
-    const thoughtTimeline = (() => {
-        const entries = [];
-        events.forEach((event) => {
-            const payload = event?.payload || {};
-            const thought = payload?.summary?.last_thought || payload?.thought || payload?.details;
-            if (typeof thought === 'string' && thought.trim()) {
-                entries.push({ text: thought.trim(), ts: event?.ts || null });
-            }
-        });
-        if (entries.length === 0 && typeof summary?.last_thought === 'string' && summary.last_thought.trim()) {
-            entries.push({ text: summary.last_thought.trim(), ts: context?.updated_at || null });
-        }
-        if (typeof browserPlanner?.thought === 'string' && browserPlanner.thought.trim()) {
-            entries.push({ text: browserPlanner.thought.trim(), ts: browserPlanner?.ts || context?.updated_at || null });
-        }
-        const dedup = [];
-        entries.forEach((entry) => {
-            if (!dedup.some((d) => d.text === entry.text)) dedup.push(entry);
-        });
-        return dedup;
-    })();
-    const sources = (() => {
-        const set = new Set();
-        extractUrlsFromAny(plan).forEach((u) => set.add(u));
-        extractUrlsFromAny(data).forEach((u) => set.add(u));
-        events.forEach((event) => extractUrlsFromAny(event?.payload || {}).forEach((u) => set.add(u)));
-        return [...set];
-    })();
-    const shellTerminals = (() => {
-        const terminalsMap = data?.shell?.terminals;
-        if (!terminalsMap || typeof terminalsMap !== 'object') return [];
-        return Object.values(terminalsMap)
-            .filter((item) => item && typeof item === 'object')
-            .sort((a, b) => {
-                const ta = Number(a?.started_at || 0);
-                const tb = Number(b?.started_at || 0);
-                return tb - ta;
-            });
-    })();
-    const workerErrors = (() => {
-        const fromApi = Array.isArray(overwatch?.worker_errors) ? overwatch.worker_errors : [];
-        if (fromApi.length > 0) return fromApi;
-        return events
-            .filter((event) => isInspectorErrorEvent(event))
-            .map((event) => ({
-                ts: event?.ts || null,
-                event: String(event?.event || 'worker_event'),
-                message: extractInspectorErrorMessage(event?.payload || {}),
-                payload: event?.payload || {},
-                component: null,
-                severity: 'error',
-                error_code: String(event?.payload?.error_code || event?.payload?.code || event?.payload?.result_reason || '') || null,
-            }));
-    })();
-    const executionLogs = overwatch?.latest_execution_logs && typeof overwatch.latest_execution_logs === 'object'
-        ? overwatch.latest_execution_logs
-        : { available: false, execution_id: null, tail: '', error_lines: [] };
-    const fullscreenTerminal = shellTerminals.find((term) => String(term?.id || '') === String(fullscreenTerminalId || '')) || null;
-
-    useEffect(() => {
-        if (!fullscreenTerminalBodyRef.current || !fullscreenTerminalId) return;
-        fullscreenTerminalBodyRef.current.scrollTop = fullscreenTerminalBodyRef.current.scrollHeight;
-    }, [fullscreenTerminalId, shellTerminals]);
-
-    const renderPlan = () => (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            {steps.length > 0 ? steps.map((s, i) => {
-                const { icon, color } = stepStatusIcon(s.status);
-                return (
-                    <div key={s.id || i} style={{ display: 'flex', gap: '9px', alignItems: 'flex-start', padding: '6px 8px', border: '1px solid var(--card-border)', borderRadius: '7px', background: 'rgba(2,6,23,0.02)' }}>
-                        <span style={{ color, fontWeight: '900', fontSize: '11px', flexShrink: 0, minWidth: '11px', marginTop: '1px' }}>{icon}</span>
-                        <span style={{ fontSize: '12px', color: s.status === 'done' ? 'var(--text-muted)' : 'var(--text-primary)', textDecoration: s.status === 'done' ? 'line-through' : 'none', opacity: s.status === 'done' ? 0.72 : 1 }}>
-                            {s.title}
-                        </span>
-                    </div>
-                );
-            }) : plan.length > 0 ? plan.map((line, i) => (
-                <div key={i} style={{ display: 'flex', gap: '9px', alignItems: 'flex-start', padding: '6px 8px', border: '1px solid var(--card-border)', borderRadius: '7px', background: 'rgba(2,6,23,0.02)' }}>
-                    <span style={{ color: 'var(--text-muted)', fontSize: '11px', flexShrink: 0 }}>{'›'}</span>
-                    <span style={{ fontSize: '12px', color: 'var(--text-primary)' }}>{String(line).replace(/^\[.\]\s*/, '')}</span>
-                </div>
-            )) : <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No plan recorded.</span>}
-        </div>
-    );
-
-    const renderCapabilities = () => (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {capabilities.length > 0 && (
-                <div>
-                    <p style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '6px' }}>Capabilities</p>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                        {capabilities.map((s, i) => (
-                            <span key={i} style={{ padding: '3px 8px', background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.35)', borderRadius: '8px', fontSize: '11px', color: 'var(--text-primary)', fontWeight: '700', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                                <CapabilityIcon
-                                    variant="inline"
-                                    capabilityId={s}
-                                    assets={overwatch?.capabilities_assets?.[s]}
-                                />
-                                {s}
-                            </span>
-                        ))}
-                    </div>
-                </div>
-            )}
-            {actions.length > 0 && (
-                <div>
-                    <p style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '6px' }}>Actions performed</p>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                        {[...new Set(actions)].map((a, i) => (
-                            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: 'var(--text-muted)', flexShrink: 0 }} />
-                                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{a}</span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-            {capabilities.length === 0 && actions.length === 0 && (
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No capabilities recorded.</span>
-            )}
-        </div>
-    );
-
-    const renderThought = () => (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {browserPlanner?.phase && (
-                <div style={{ border: '1px solid var(--card-border)', borderRadius: '7px', background: 'rgba(2,6,23,0.02)', padding: '8px 9px' }}>
-                    <p style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '800', marginBottom: '4px' }}>
-                        Browser Planner
-                    </p>
-                    <p style={{ fontSize: '11px', color: 'var(--text-primary)', fontFamily: 'monospace' }}>
-                        {String(browserPlanner.phase || 'unknown')}
-                        {browserPlanner.step_id ? ` · ${String(browserPlanner.step_id)}` : ''}
-                    </p>
-                    {browserPlanner.action && (
-                        <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px', fontFamily: 'monospace' }}>
-                            action: {String(browserPlanner.action)}
-                        </p>
-                    )}
-                    {typeof browserPlanner.parse_failures !== 'undefined' && (
-                        <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px', fontFamily: 'monospace' }}>
-                            parse_failures: {String(browserPlanner.parse_failures)}
-                        </p>
-                    )}
-                    {browserPlanner.reason && (
-                        <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                            reason: {String(browserPlanner.reason)}
-                        </p>
-                    )}
-                    {browserPlanner.error && (
-                        <p style={{ fontSize: '11px', color: 'var(--error)', marginTop: '4px', whiteSpace: 'pre-wrap' }}>
-                            {String(browserPlanner.error)}
-                        </p>
-                    )}
-                </div>
-            )}
-            {thoughtTimeline.length > 0 ? thoughtTimeline.map((entry, i) => (
-                <div key={i} style={{ display: 'flex', gap: '9px', alignItems: 'flex-start', padding: '8px 9px', border: '1px solid var(--card-border)', borderRadius: '7px', background: 'rgba(2,6,23,0.02)' }}>
-                    <Brain size={14} color="var(--text-muted)" style={{ flexShrink: 0, marginTop: '1px' }} />
-                    <div style={{ minWidth: 0 }}>
-                        <p style={{ fontSize: '12px', color: 'var(--text-primary)', lineHeight: 1.5 }}>{entry.text}</p>
-                        {entry.ts && <p style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px', fontFamily: 'monospace' }}>{formatTime(entry.ts)}</p>}
-                    </div>
-                </div>
-            )) : <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No thought timeline recorded.</span>}
-        </div>
-    );
-
-    const renderTerminal = () => (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {shellTerminals.length > 0 ? shellTerminals.map((term, i) => {
-                const status = String(term?.status || '').toLowerCase();
-                const termId = String(term?.id || `terminal-${i}`);
-                const cmd = String(term?.command || '').trim();
-                const lines = Number(term?.line_count || 0);
-                const description = cmd || termId;
-                const statusLabel = status === 'running'
-                    ? 'running'
-                    : (status === 'success' ? 'completed' : (status || 'error'));
-                const statusColor = status === 'running' ? '#10b981' : status === 'success' ? '#22c55e' : status === 'timeout' ? '#f59e0b' : '#ef4444';
-                return (
-                    <div key={termId} style={{ border: '1px solid var(--card-border)', borderRadius: '7px', background: 'rgba(2,6,23,0.02)' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '7px 9px' }}>
-                            <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace', minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={description}>
-                                {description}
-                            </span>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                                <span style={{ fontSize: '9px', fontWeight: 800, color: statusColor, textTransform: 'lowercase', letterSpacing: '0.01em' }}>
-                                    {statusLabel}
-                                </span>
-                                <button
-                                    className="btn-ghost"
-                                    style={{ padding: '2px', borderRadius: '6px' }}
-                                    title="Open terminal fullscreen"
-                                    onClick={() => setFullscreenTerminalId(termId)}
-                                >
-                                    <ArrowUpRight size={12} />
-                                </button>
-                            </div>
-                        </div>
-                        <div style={{ padding: '0 9px 7px', fontSize: '9px', color: 'var(--text-muted)' }}>
-                            {lines} lines
-                        </div>
-                    </div>
-                );
-            }) : <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No terminal activity recorded.</span>}
-        </div>
-    );
-
-    const renderLogs = () => (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
-                <div style={{ border: '1px solid var(--card-border)', borderRadius: '7px', padding: '8px' }}>
-                    <p style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '800' }}>Worker errors</p>
-                    <p style={{ fontSize: '14px', fontWeight: '800', color: workerErrors.length > 0 ? 'var(--error)' : 'var(--success)' }}>{workerErrors.length}</p>
-                </div>
-                <div style={{ border: '1px solid var(--card-border)', borderRadius: '7px', padding: '8px' }}>
-                    <p style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '800' }}>Execution log</p>
-                    <p style={{ fontSize: '11px', color: executionLogs.available ? 'var(--text-primary)' : 'var(--text-muted)', fontFamily: 'monospace' }}>
-                        {executionLogs.execution_id || 'not available'}
-                    </p>
-                </div>
-            </div>
-            {workerErrors.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
-                    {workerErrors.slice(-10).reverse().map((entry, idx) => (
-                        <div key={`worker-error-${idx}`} style={{ border: '1px solid rgba(239,68,68,0.35)', borderRadius: '7px', background: 'rgba(239,68,68,0.06)', padding: '8px' }}>
-                            <p style={{ fontSize: '11px', fontWeight: '700', color: 'var(--text-primary)' }}>{entry.event || 'worker_error'}</p>
-                            <div style={{ marginTop: '2px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                                {entry.component && <span style={{ fontSize: '10px', color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '1px 6px' }}>{String(entry.component)}</span>}
-                                {entry.error_code && <span style={{ fontSize: '10px', color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '1px 6px', fontFamily: 'monospace' }}>{String(entry.error_code)}</span>}
-                                {entry.severity && <span style={{ fontSize: '10px', color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '1px 6px' }}>{String(entry.severity)}</span>}
-                            </div>
-                            {entry.ts && <p style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{formatTime(entry.ts)}</p>}
-                            <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px', whiteSpace: 'pre-wrap' }}>{entry.message || 'No message'}</p>
-                        </div>
-                    ))}
-                </div>
-            ) : (
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No worker errors detected.</span>
-            )}
-            {executionLogs.available && executionLogs.tail ? (
-                <details style={{ border: '1px solid var(--card-border)', borderRadius: '7px', padding: '8px', background: 'rgba(2,6,23,0.02)' }}>
-                    <summary style={{ cursor: 'pointer', fontSize: '11px', fontWeight: '700' }}>Execution log tail</summary>
-                    <pre className="custom-scrollbar" style={{ marginTop: '8px', maxHeight: '180px', overflow: 'auto', fontSize: '10px', border: '1px solid var(--card-border)', borderRadius: '6px', padding: '8px', whiteSpace: 'pre-wrap' }}>
-                        {executionLogs.tail}
-                    </pre>
-                </details>
-            ) : (
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No execution logs available for this worker yet.</span>
-            )}
-        </div>
-    );
-
-    const renderMedia = () => (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {relatedPlaybackRuns.length > 0 && (
-                <div style={{ marginBottom: '6px' }}>
-                    <p style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '6px' }}>Playback</p>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        {relatedPlaybackRuns.map((run) => (
-                            <div key={run.run_id} style={{ border: '1px solid var(--card-border)', borderRadius: '7px', background: 'rgba(2,6,23,0.02)' }}>
-                                {expandedPlaybackRunId === run.run_id ? (
-                                    <div style={{ padding: '8px' }}>
-                                        <button
-                                            className="btn-ghost"
-                                            style={{ marginBottom: '8px', padding: '4px 8px', fontSize: '10px', fontWeight: '700', color: 'var(--accent-color)' }}
-                                            onClick={() => setExpandedPlaybackRunId(null)}
-                                        >
-                                            ← Back
-                                        </button>
-                                        <PlaybackCard runId={run.run_id} sessionId={sessionId} />
-                                    </div>
-                                ) : (
-                                    <button
-                                        onClick={() => setExpandedPlaybackRunId(run.run_id)}
-                                        style={{
-                                            width: '100%',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '10px',
-                                            padding: '8px',
-                                            background: 'transparent',
-                                            border: 'none',
-                                            textAlign: 'left',
-                                            cursor: 'pointer',
-                                        }}
-                                    >
-                                        {run.thumbnail ? (
-                                            <img
-                                                src={run.thumbnail}
-                                                alt=""
-                                                style={{
-                                                    width: '48px',
-                                                    height: '34px',
-                                                    borderRadius: '6px',
-                                                    objectFit: 'cover',
-                                                    border: '1px solid rgba(255,255,255,0.06)',
-                                                    flexShrink: 0,
-                                                }}
-                                            />
-                                        ) : (
-                                            <div style={{
-                                                width: '48px',
-                                                height: '34px',
-                                                borderRadius: '6px',
-                                                border: '1px solid rgba(255,255,255,0.06)',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                flexShrink: 0,
-                                            }}>
-                                                <Monitor size={12} color="var(--text-muted)" />
-                                            </div>
-                                        )}
-                                        <div style={{ minWidth: 0, flex: 1 }}>
-                                            <p style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                {run.title || 'Browser Session'}
-                                            </p>
-                                            <p style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                                                {run.total_steps || 0} frames · {run.status === 'running' ? 'LIVE' : run.status === 'completed' || run.status === 'success' ? '✓' : '—'}
-                                            </p>
-                                        </div>
-                                        <ChevronRight size={12} className="text-muted" />
-                                    </button>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-            {media.length > 0 ? media.map((m, i) => {
-                const name = String(m).split('/').pop();
-                const ext = name.split('.').pop()?.toLowerCase();
-                const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext);
-                const url = getFileUrl({ path: m, name, type: isImg ? 'image' : 'file' }, sessionId);
-                return (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px', background: 'rgba(2,6,23,0.02)', borderRadius: '7px', border: '1px solid var(--card-border)' }}>
-                        <div style={{ width: '42px', height: '42px', borderRadius: '5px', overflow: 'hidden', border: '1px solid var(--card-border)', background: 'rgba(2,6,23,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                            {isImg ? (
-                                <img src={url} alt={name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                            ) : (
-                                ext === 'mp4' ? <Video size={18} color="#f87171" /> :
-                                    ext === 'mp3' ? <Music size={18} color="#a78bfa" /> :
-                                        ext === 'pdf' ? <FileText size={18} color="#cbd5e1" /> :
-                                            <Paperclip size={18} color="var(--text-muted)" />
-                            )}
-                        </div>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                            <p style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</p>
-                            <p style={{ fontSize: '10px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m}</p>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
-                            {isImg && (
-                                <button
-                                    className="btn-ghost"
-                                    style={{ padding: '6px', borderRadius: '8px' }}
-                                    title="Expand"
-                                    onClick={() => onExpand?.({ type: 'image', name, previewUrl: url, path: m })}
-                                >
-                                    <Maximize2 size={12} />
-                                </button>
-                            )}
-                            <a
-                                href={url}
-                                download={name}
-                                className="btn-ghost"
-                                style={{ padding: '6px', borderRadius: '8px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-                                title="Download"
-                            >
-                                <Download size={12} />
-                            </a>
-                        </div>
-                    </div>
-                );
-            }) : <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No media recorded.</span>}
-        </div>
-    );
-
-    const renderSources = () => (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {sources.length > 0 ? sources.map((url, i) => (
-                <a
-                    key={i}
-                    href={url}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        padding: '8px',
-                        borderRadius: '7px',
-                        border: '1px solid var(--card-border)',
-                        background: 'rgba(2,6,23,0.02)',
-                        fontSize: '11px',
-                        color: 'var(--text-primary)',
-                        textDecoration: 'underline',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap'
-                    }}
-                    title={url}
-                >
-                    <span
-                        style={{
-                            position: 'relative',
-                            width: '14px',
-                            height: '14px',
-                            borderRadius: '4px',
-                            overflow: 'hidden',
-                            flexShrink: 0,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            background: 'rgba(255,255,255,0.08)',
-                        }}
-                    >
-                        <Globe size={9} color="var(--text-muted)" style={{ opacity: 0.75 }} />
-                        <img
-                            src={`/api/favicon?url=${encodeURIComponent(url)}`}
-                            alt=""
-                            loading="lazy"
-                            style={{
-                                position: 'absolute',
-                                inset: 0,
-                                width: '100%',
-                                height: '100%',
-                                objectFit: 'cover',
-                            }}
-                            onError={(e) => {
-                                e.currentTarget.style.display = 'none';
-                            }}
-                        />
-                    </span>
-                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {url}
-                    </span>
-                    <ArrowUpRight size={11} color="var(--text-muted)" style={{ flexShrink: 0 }} />
-                </a>
-            )) : <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No sources recorded.</span>}
-        </div>
-    );
-
-    const tabRenderers = { plan: renderPlan, thought: renderThought, logs: renderLogs, terminal: renderTerminal, capabilities: renderCapabilities, media: renderMedia, sources: renderSources };
-
-    return (
-        <>
-        <div style={{ marginTop: (inline || hideButton) ? '0' : '12px', position: 'relative', display: inline ? 'inline-flex' : 'block' }}>
-            {!hideButton && (
-                <button
-                    onClick={toggle}
-                    title="Work Unit Details"
-                    style={{
-                        display: 'inline-flex', alignItems: 'center', gap: '6px',
-                        padding: '2px 2px',
-                        background: 'transparent',
-                        border: 'none',
-                        borderRadius: '0',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s ease',
-                    }}
-                >
-                    <Zap size={12} color={isOpen ? 'var(--accent-color)' : 'var(--text-muted)'} />
-                    <span style={{ fontSize: '9px', fontWeight: '800', color: isOpen ? 'var(--accent-color)' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                        {isOpen ? 'Hide Details' : 'Work Details'}
-                    </span>
-                </button>
-            )}
-
-            {/* Panel */}
-            {isOpen && !hidePanel && (
-                <div style={{
-                    marginTop: inline ? '0' : '10px',
-                    position: inline ? 'absolute' : 'relative',
-                    top: inline ? 'calc(100% + 8px)' : 'auto',
-                    left: 0,
-                    zIndex: inline ? 40 : 'auto',
-                    minWidth: inline ? '320px' : 'auto',
-                    border: '1px solid var(--card-border)',
-                    borderRadius: '8px',
-                    overflow: 'hidden',
-                    background: 'rgba(2,6,23,0.02)',
-                    animation: 'fadeIn 0.2s ease'
-                }}>
-                    {/* Tab Bar */}
-                    <div style={{ display: 'flex', borderBottom: '1px solid var(--card-border)', background: 'rgba(2,6,23,0.03)' }}>
-                        {INSPECTOR_TABS.map(tab => {
-                            const TabIcon = tab.icon;
-                            return (
-                            <button
-                                key={tab.id}
-                                onClick={() => setActiveTab(tab.id)}
-                                style={{
-                                    flex: 1, padding: '7px 4px',
-                                    background: 'transparent', border: 'none', cursor: 'pointer',
-                                    borderBottom: activeTab === tab.id ? '2px solid rgba(99,102,241,0.85)' : '2px solid transparent',
-                                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px',
-                                    transition: 'background 0.15s',
-                                }}
-                            >
-                                <TabIcon size={13} color={activeTab === tab.id ? 'var(--accent-color)' : 'var(--text-muted)'} />
-                                <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.05em', color: activeTab === tab.id ? 'var(--accent-color)' : 'var(--text-muted)' }}>
-                                    {tab.label}
-                                </span>
-                            </button>
-                            );
-                        })}
-                    </div>
-
-                    {/* Tab Content */}
-                    <div style={{ padding: '14px', maxHeight: '260px', minHeight: '130px', overflowY: 'auto' }}>
-                        {loading && !context && <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px', padding: '12px' }}>Loading…</div>}
-                        {error && <div style={{ color: '#ef4444', fontSize: '12px' }}>{error}</div>}
-                        {!loading && !error && (context || overwatch) && tabRenderers[activeTab]?.()}
-                    </div>
-                </div>
-            )}
-        </div>
-        {fullscreenTerminal && createPortal((
-            <div
-                style={{
-                    position: 'fixed',
-                    inset: 0,
-                    zIndex: 1200,
-                    background: 'rgba(15,23,42,0.08)',
-                    backdropFilter: 'blur(5px)',
-                    WebkitBackdropFilter: 'blur(5px)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: '10px',
-                }}
-                onClick={() => setFullscreenTerminalId(null)}
-            >
-                <div
-                    style={{
-                        width: 'min(1100px, 96vw)',
-                        maxHeight: '78vh',
-                        border: '1px solid var(--card-border)',
-                        borderRadius: '8px',
-                        overflow: 'hidden',
-                        background: 'var(--card-bg)',
-                        boxShadow: '0 10px 26px rgba(2,6,23,0.14)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '7px 10px', borderBottom: '1px solid var(--card-border)', background: 'rgba(255,255,255,0.03)' }}>
-                        <div style={{ minWidth: 0 }}>
-                            <p style={{ fontSize: '11px', color: 'var(--text-primary)', fontFamily: 'monospace', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {String(fullscreenTerminal?.command || fullscreenTerminal?.id || 'terminal')}
-                            </p>
-                            <p style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {String(fullscreenTerminal?.cwd || '')}
-                            </p>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{Number(fullscreenTerminal?.line_count || 0)} lines</span>
-                            <button className="btn-ghost" style={{ padding: '4px', borderRadius: '6px', color: 'var(--text-primary)' }} onClick={() => setFullscreenTerminalId(null)} title="Close">
-                                <X size={13} />
-                            </button>
-                        </div>
-                    </div>
-                    <div
-                        ref={fullscreenTerminalBodyRef}
-                        className="custom-scrollbar"
-                        style={{
-                            flex: 1,
-                            minHeight: '220px',
-                            overflowY: 'auto',
-                            padding: '10px',
-                            background: 'var(--bg-color)',
-                        }}
-                    >
-                        <div
-                            style={{
-                                border: '1px solid var(--card-border)',
-                                borderRadius: '6px',
-                                background: 'var(--card-bg)',
-                                padding: '10px',
-                            }}
-                        >
-                        <pre
-                            style={{
-                                margin: 0,
-                                padding: 0,
-                                background: 'transparent',
-                                border: 'none',
-                                boxShadow: 'none',
-                                borderRadius: 0,
-                                whiteSpace: 'pre-wrap',
-                                wordBreak: 'break-word',
-                                fontSize: '11px',
-                                lineHeight: 1.42,
-                                color: 'var(--text-primary)',
-                                fontFamily: '"JetBrains Mono","Fira Code",monospace',
-                            }}
-                        >
-                            {String(fullscreenTerminal?.transcript || fullscreenTerminal?.output_full || fullscreenTerminal?.output_tail || `$ ${String(fullscreenTerminal?.command || 'shell command')}\n(waiting for output...)`)}
-                        </pre>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        ), document.body)}
-        </>
-    );
-};
-// ─────────────────────────────────────────────────────────────────────────────
-
-const TERMINAL_WORK_STATUSES = new Set(['complete', 'succeeded', 'failed', 'cancelled']);
-const ACTIVE_WORK_STATUSES = new Set(['queued', 'running', 'waiting_user', 'paused', 'thinking', 'responding']);
-
-const WorkControlButton = memo(({ workId, sessionId, isStreaming, statusPhase }) => {
-    const [busy, setBusy] = useState(false);
-    const [workStatus, setWorkStatus] = useState(null);
-
-    const fetchWorkStatus = async () => {
-        if (!workId) return;
-        try {
-            const data = await api.get(`/tasks/works/${workId}`);
-            const nextStatus = String(data?.status || '').toLowerCase();
-            if (nextStatus) setWorkStatus(nextStatus);
-        } catch {
-            // Keep UX resilient even if status fetch fails.
-        }
-    };
-
-    useEffect(() => {
-        fetchWorkStatus();
-    }, [workId]);
-
-    const phase = String(statusPhase || '').toLowerCase();
-    const effectiveStatus = workStatus || (isStreaming ? 'running' : phase);
-    const isLikelyActive = isStreaming || ACTIVE_WORK_STATUSES.has(effectiveStatus) || ACTIVE_WORK_STATUSES.has(phase);
-    const isTerminal = TERMINAL_WORK_STATUSES.has(effectiveStatus) || TERMINAL_WORK_STATUSES.has(phase) || !isLikelyActive;
-    const canShow = !!workId;
-    if (!canShow) return null;
-
-    const onClick = async () => {
-        if (busy) return;
-        setBusy(true);
-        try {
-            if (isTerminal) {
-                const data = await api.post(`/tasks/works/${workId}/restart`, { requester_session_id: sessionId });
-                const restartedId = data?.restarted_work_id ? ` (${String(data.restarted_work_id).slice(0, 8)})` : '';
-                toast.success(`Worker restarted${restartedId}`);
-            } else {
-                await api.post(`/tasks/works/${workId}/commands`, {
-                    command: 'cancel',
-                    payload: { reason: 'Stopped from chat' },
-                    requester_session_id: sessionId,
-                    source_session_id: sessionId,
-                });
-                toast.success('Stop signal sent');
-                setTimeout(() => fetchWorkStatus(), 700);
-            }
-        } catch (err) {
-            toast.error(err?.message || 'Failed to control worker');
-        } finally {
-            setBusy(false);
-        }
-    };
-
-    return (
-        <button
-            onClick={onClick}
-            className="btn-ghost"
-            title={isTerminal ? 'Restart worker' : 'Stop worker'}
-            disabled={busy}
-            style={{
-                padding: '4px 8px',
-                borderRadius: '8px',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                minHeight: '24px',
-                opacity: busy ? 0.7 : 1,
-                border: isTerminal ? '1px solid var(--card-border)' : '1px solid rgba(239,68,68,0.35)',
-                color: isTerminal ? 'var(--text-muted)' : '#ef4444'
-            }}
-        >
-            {isTerminal ? (
-                <RefreshCw size={12} style={busy ? { animation: 'spin 1s linear infinite' } : undefined} />
-            ) : (
-                <Square size={12} fill="currentColor" />
-            )}
-            <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                {isTerminal ? 'Reload' : 'Stop'}
-            </span>
-        </button>
-    );
-});
-
-const InlineApprovalBar = memo(({ workId, sessionId, statusPhase, approvalRequest, statusMessage }) => {
-    const [busy, setBusy] = useState(false);
-    const [snapshot, setSnapshot] = useState(null);
-    const [localDecision, setLocalDecision] = useState(null); // { type: 'approved'|'denied', scope, ts }
-
-    const fetchSnapshot = async () => {
-        if (!workId) return;
-        try {
-            const data = await api.get(`/tasks/works/${workId}?requester_session_id=${encodeURIComponent(sessionId || '')}`);
-            setSnapshot(data || null);
-        } catch {
-            // Keep silent to avoid noisy UI.
-        }
-    };
-
-    useEffect(() => {
-        fetchSnapshot();
-    }, [workId, sessionId]);
-
-    const statusPhaseNorm = String(statusPhase || '').toLowerCase();
-    const terminalStatuses = new Set(['complete', 'succeeded', 'failed', 'cancelled']);
-    const snapshotStatus = String(snapshot?.status || '').toLowerCase();
-    const runtimeStatus = (() => {
-        if (statusPhaseNorm === 'waiting_user' || snapshotStatus === 'waiting_user') return 'waiting_user';
-        if (terminalStatuses.has(statusPhaseNorm)) return statusPhaseNorm;
-        if (terminalStatuses.has(snapshotStatus)) return snapshotStatus;
-        return snapshotStatus || statusPhaseNorm || '';
-    })();
-    const summary = snapshot?.context?.summary && typeof snapshot.context.summary === 'object' ? snapshot.context.summary : {};
-    const snapshotApproval = (snapshot?.approval_request && typeof snapshot.approval_request === 'object')
-        ? snapshot.approval_request
-        : (summary?.approval_request && typeof summary.approval_request === 'object' ? summary.approval_request : null);
-    const effectiveApprovalRequest = (approvalRequest && typeof approvalRequest === 'object')
-        ? approvalRequest
-        : snapshotApproval;
-    const resolvedPrompt = String(
-        effectiveApprovalRequest?.prompt
-        || summary?.approval_prompt
-        || statusMessage
-        || 'Sensitive action detected. Do you authorize execution?'
-    ).trim();
-    const approvalKey = JSON.stringify({
-        workId: String(workId || ''),
-        prompt: resolvedPrompt,
-        action: String(effectiveApprovalRequest?.action_id || effectiveApprovalRequest?.action || summary?.approval_action || ''),
-        args: effectiveApprovalRequest?.args || summary?.approval_args || null,
-    });
-    const waitingUser = runtimeStatus === 'waiting_user' || (
-        !!effectiveApprovalRequest
-        && !terminalStatuses.has(runtimeStatus)
-    );
-    const hasLocalDecision = !!localDecision && localDecision.approvalKey === approvalKey;
-
-    useEffect(() => {
-        if (!workId) return undefined;
-        if (waitingUser || !!effectiveApprovalRequest || hasLocalDecision) {
-            const t = setInterval(fetchSnapshot, 1000);
-            return () => clearInterval(t);
-        }
-        return undefined;
-    }, [workId, waitingUser, effectiveApprovalRequest, hasLocalDecision]);
-
-    useEffect(() => {
-        // New approval request arrived -> clear previous local decision marker.
-        if (!localDecision) return;
-        if (localDecision.approvalKey !== approvalKey) {
-            setLocalDecision(null);
-        }
-    }, [approvalKey, localDecision]);
-
-    if (!waitingUser && !hasLocalDecision) return null;
-
-    const sendApprovalDecision = async (decision, scope = 'worker') => {
-        if (!workId || busy) return;
-        setBusy(true);
-        try {
-            await api.post(`/tasks/works/${workId}/commands`, {
-                command: decision === 'deny' ? 'deny' : 'approve',
-                payload: { scope },
-                requester_session_id: sessionId,
-                source_session_id: sessionId,
-            });
-            setLocalDecision({
-                type: decision === 'deny' ? 'denied' : 'approved',
-                scope,
-                ts: Date.now(),
-                approvalKey,
-            });
-            toast.success(
-                decision === 'deny' ? 'Denied' : `Allowed (${scope})`
-            );
-            setTimeout(() => { fetchSnapshot(); }, 350);
-            setTimeout(() => { fetchSnapshot(); }, 1200);
-        } catch (err) {
-            toast.error(err?.message || 'Failed to send decision');
-        } finally {
-            setBusy(false);
-        }
-    };
-
-    return (
-        <div style={{
-            marginBottom: '12px',
-            padding: '10px 12px',
-            borderRadius: '10px',
-            border: waitingUser
-                ? '1px solid rgba(245,158,11,0.35)'
-                : (localDecision?.type === 'approved' ? '1px solid rgba(16,185,129,0.35)' : '1px solid rgba(239,68,68,0.35)'),
-            background: waitingUser
-                ? 'rgba(245,158,11,0.08)'
-                : (localDecision?.type === 'approved' ? 'rgba(16,185,129,0.10)' : 'rgba(239,68,68,0.10)'),
-        }}>
-            <div style={{ fontSize: '12px', color: 'var(--text-primary)', marginBottom: '8px' }}>
-                {hasLocalDecision
-                    ? (localDecision?.type === 'approved'
-                        ? `Approval sent (${localDecision.scope}). Worker resumed.`
-                        : 'Denied. Worker will stop the sensitive action.')
-                    : resolvedPrompt}
-            </div>
-            {waitingUser && !hasLocalDecision && (
-                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                    <button className="btn-ghost" disabled={busy} onClick={() => sendApprovalDecision('deny')} style={{ fontSize: '10px', padding: '5px 8px', color: '#f87171', border: '1px solid rgba(248,113,113,0.4)' }}>
-                        Deny
-                    </button>
-                    <button className="btn-ghost" disabled={busy} onClick={() => sendApprovalDecision('approve', 'worker')} style={{ fontSize: '10px', padding: '5px 8px' }}>
-                        Allow Worker
-                    </button>
-                    <button className="btn-ghost" disabled={busy} onClick={() => sendApprovalDecision('approve', 'session')} style={{ fontSize: '10px', padding: '5px 8px' }}>
-                        Allow Session
-                    </button>
-                    <button className="btn-ghost" disabled={busy} onClick={() => sendApprovalDecision('approve', 'global')} style={{ fontSize: '10px', padding: '5px 8px' }}>
-                        Allow Global
-                    </button>
-                </div>
-            )}
-        </div>
-    );
-});
-
-const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agentName, latestPlaybackEvent }) => {
-    const [isCognitiveCollapsed, setIsCognitiveCollapsed] = useState(true);
-    const [isExpanded, setIsExpanded] = useState(false);
-    const [isWorkDetailsOpen, setIsWorkDetailsOpen] = useState(false);
-    const isUser = msg.role === 'user';
-    const reasoningTimeline = normalizeReasoningTimeline(msg);
-    const hasReasoning = !isUser && reasoningTimeline.length > 0;
-    const showInlineThoughtToggle = hasReasoning && !isStreaming && isCognitiveCollapsed;
-    const statusPhaseNormalized = String(msg?.statusPhase || '').toLowerCase();
-    const isTerminalPhase = ['complete', 'completed', 'succeeded', 'success', 'done', 'failed', 'error', 'aborted', 'cancelled', 'canceled'].includes(statusPhaseNormalized);
-    const isActivelyStreaming = isStreaming && !isTerminalPhase;
-    const previewMessageContent = useMemo(() => {
-        if (Array.isArray(msg?.contentSegments) && msg.contentSegments.length > 0) {
-            return msg.contentSegments
-                .map((segment) => String(segment?.content || '').trim())
-                .filter(Boolean)
-                .join('\n');
-        }
-        return String(msg?.content || '').trim();
-    }, [msg?.contentSegments, msg?.content]);
-    const cardDetectionText = useMemo(() => {
-        if (Array.isArray(msg?.contentSegments) && msg.contentSegments.length > 0) {
-            const lastNonEmpty = [...msg.contentSegments]
-                .reverse()
-                .map((segment) => String(segment?.content || '').trim())
-                .find(Boolean);
-            if (lastNonEmpty) return lastNonEmpty;
-        }
-        return String(msg?.content || '').trim();
-    }, [msg?.contentSegments, msg?.content]);
-    const capabilityHints = useMemo(() => {
-        const contextCapabilities = msg?.context?.data?.capabilities_used;
-        return [
-            ...(Array.isArray(msg?.capabilities_used) ? msg.capabilities_used : []),
-            ...(Array.isArray(contextCapabilities) ? contextCapabilities : []),
-        ];
-    }, [msg?.capabilities_used, msg?.context?.data?.capabilities_used]);
-    const actionHints = useMemo(() => {
-        const contextActions = msg?.context?.data?.actions_used;
-        return [
-            ...(Array.isArray(msg?.actions_used) ? msg.actions_used : []),
-            ...(Array.isArray(contextActions) ? contextActions : []),
-        ];
-    }, [msg?.actions_used, msg?.context?.data?.actions_used]);
-    const sourceHints = useMemo(() => {
-        const contextSources = msg?.context?.data?.sources_used;
-        return [
-            ...(Array.isArray(msg?.sources_used) ? msg.sources_used : []),
-            ...(Array.isArray(contextSources) ? contextSources : []),
-        ];
-    }, [msg?.sources_used, msg?.context?.data?.sources_used]);
-    const {
-        anchorId,
-        shouldTryWeatherCard,
-        shouldTrySystemHealthCard,
-        shouldTryWikiCard,
-        shouldTryMapCard,
-        wikiCardData,
-        mapCardData,
-        parsedDataChart,
-        weatherCardLoading,
-        weatherCardData,
-        systemHealthLoading,
-        systemHealthData,
-    } = useAssistCards({
-        sessionId,
-        workId: msg?.work_id,
-        text: cardDetectionText,
-        isUser,
-        isStreaming: isActivelyStreaming,
-        capabilitiesUsed: capabilityHints,
-        actionsUsed: actionHints,
-        sourcesUsed: sourceHints,
-    });
-
-    useEffect(() => {
-        if (msg.isComplete || msg.statusPhase === 'complete') {
-            setIsCognitiveCollapsed(true);
-        }
-    }, [msg.isComplete, msg.statusPhase]);
-
-    return (
-        <div className="animate-fade-in" style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: isUser ? 'flex-end' : 'flex-start',
-            width: '100%'
-        }}>
-            <div className={`msg-bubble ${isUser ? 'msg-user' : 'msg-assistant'}`} style={{
-                width: isUser ? 'auto' : '100%',
-                maxWidth: isUser ? '85%' : 'min(92%, 56rem)',
-                overflowWrap: 'anywhere',
-                wordBreak: 'break-word',
-                padding: '16px'
-            }}>
-                <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '8px',
-                    marginBottom: '12px',
-                    paddingBottom: '8px',
-                    borderBottom: isUser ? '1px solid rgba(255,255,255,0.1)' : '1px solid var(--card-border)',
-                    minHeight: '24px'
-                }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, overflow: 'hidden' }}>
-                        <p style={{ fontSize: '11px', fontWeight: 'bold', color: isUser ? '#fff' : 'var(--text-primary)', flexShrink: 0 }}>{isUser ? 'You' : agentName}</p>
-                        {msg.timestamp && <p style={{ fontSize: '10px', color: isUser ? 'rgba(255,255,255,0.7)' : 'var(--text-muted)', flexShrink: 0 }}>{formatTime(msg.timestamp)}</p>}
-                        {!isUser && msg.work_id && (
-                            <WorkUnitInspector
-                                workId={msg.work_id}
-                                sessionId={sessionId}
-                                onExpand={onExpand}
-                                inline
-                                open={isWorkDetailsOpen}
-                                onToggle={setIsWorkDetailsOpen}
-                                hidePanel
-                            />
-                        )}
-
-                        {!isUser && isActivelyStreaming && msg.statusPhase && (
-                            <div style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '6px',
-                                padding: '2px 4px',
-                                marginLeft: '4px',
-                                minWidth: 0,
-                                flexShrink: 1,
-                                minHeight: '18px',
-                                lineHeight: '1'
-                            }}>
-                                <div style={{
-                                    width: '10px', height: '10px',
-                                    border: '1.5px solid rgba(0,0,0,0.1)',
-                                    borderTopColor: 'var(--accent-color)',
-                                    borderRadius: '50%',
-                                    animation: 'spin 1s linear infinite',
-                                    flexShrink: 0
-                                }} />
-                                <span style={{
-                                    fontSize: '9px',
-                                    fontWeight: '800',
-                                    textTransform: 'uppercase',
-                                    color: 'var(--accent-color)',
-                                    letterSpacing: '0.05em',
-                                    whiteSpace: 'nowrap'
-                                }}>
-                                    {msg.statusPhase}
-                                </span>
-                                {msg.statusMessage && (
-                                    <span
-                                        title={String(msg.statusMessage)}
-                                        style={{
-                                            fontSize: '9px',
-                                            fontWeight: '700',
-                                            color: 'var(--text-muted)',
-                                            maxWidth: '280px',
-                                            overflow: 'hidden',
-                                            textOverflow: 'ellipsis',
-                                            whiteSpace: 'nowrap',
-                                            lineHeight: 1.2,
-                                            opacity: 0.9,
-                                        }}
-                                    >
-                                        {String(msg.statusMessage)}
-                                    </span>
-                                )}
-                            </div>
-                        )}
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                        {!isUser && msg.work_id && (
-                            <WorkControlButton
-                                workId={msg.work_id}
-                                sessionId={sessionId}
-                                isStreaming={isStreaming}
-                                statusPhase={msg.statusPhase}
-                            />
-                        )}
-                        {showInlineThoughtToggle && (
-                            <button
-                                onClick={() => setIsCognitiveCollapsed(false)}
-                                title="Expand Thought"
-                                style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '6px',
-                                    cursor: 'pointer',
-                                    padding: '2px 8px',
-                                    background: 'var(--bg-color)',
-                                    border: '1px solid var(--card-border)',
-                                    borderRadius: '6px',
-                                    flexShrink: 0
-                                }}
-                            >
-                                <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} />
-                                <span style={{ fontSize: '9px', fontWeight: '800', color: 'var(--text-primary)', opacity: 0.7, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Thought</span>
-                            </button>
-                        )}
-                    </div>
-                </div>
-
-                {!isUser && msg.work_id && isWorkDetailsOpen && (
-                    <div style={{ marginBottom: '12px' }}>
-                        <WorkUnitInspector
-                            workId={msg.work_id}
-                            sessionId={sessionId}
-                            onExpand={onExpand}
-                            open={isWorkDetailsOpen}
-                            onToggle={setIsWorkDetailsOpen}
-                            hideButton
-                        />
-                    </div>
-                )}
-
-                {!isUser && msg.work_id && (
-                    <InlineApprovalBar
-                        workId={msg.work_id}
-                        sessionId={sessionId}
-                        statusPhase={msg.statusPhase}
-                        approvalRequest={msg.approvalRequest}
-                        statusMessage={msg.statusMessage}
-                    />
-                )}
-
-                {!isUser && shouldTryWeatherCard && (
-                    <>
-                        {weatherCardLoading && (
-                            <ChatCollapsibleAssistCard
-                                sessionId={sessionId}
-                                anchorId={anchorId}
-                                cardType="weather"
-                                title="Weather"
-                                defaultOpen={true}
-                            >
-                                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Loading weather data...</div>
-                            </ChatCollapsibleAssistCard>
-                        )}
-                        {!weatherCardLoading && weatherCardData?.ok && (
-                            <ChatCollapsibleAssistCard
-                                sessionId={sessionId}
-                                anchorId={anchorId}
-                                cardType="weather"
-                                title="Weather"
-                                defaultOpen={true}
-                            >
-                                <WeatherAssistCard data={weatherCardData} />
-                            </ChatCollapsibleAssistCard>
-                        )}
-                    </>
-                )}
-
-                {!isUser && shouldTrySystemHealthCard && (
-                    <>
-                        {systemHealthLoading && (
-                            <ChatCollapsibleAssistCard
-                                sessionId={sessionId}
-                                anchorId={anchorId}
-                                cardType="system-health"
-                                title="System Health"
-                                defaultOpen={true}
-                            >
-                                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Loading system metrics...</div>
-                            </ChatCollapsibleAssistCard>
-                        )}
-                        {!systemHealthLoading && systemHealthData?.ok && (
-                            <ChatCollapsibleAssistCard
-                                sessionId={sessionId}
-                                anchorId={anchorId}
-                                cardType="system-health"
-                                title="System Health"
-                                defaultOpen={true}
-                            >
-                                <SystemHealthAssistCard data={systemHealthData} />
-                            </ChatCollapsibleAssistCard>
-                        )}
-                        {!systemHealthLoading && systemHealthData && !systemHealthData?.ok && (
-                            <ChatCollapsibleAssistCard
-                                sessionId={sessionId}
-                                anchorId={anchorId}
-                                cardType="system-health"
-                                title="System Health"
-                                defaultOpen={true}
-                            >
-                                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                                    Unable to load system metrics now.
-                                    {systemHealthData?.message ? ` ${String(systemHealthData.message)}` : ''}
-                                </div>
-                            </ChatCollapsibleAssistCard>
-                        )}
-                    </>
-                )}
-
-                {!isUser && parsedDataChart && (
-                    <ChatCollapsibleAssistCard
-                        sessionId={sessionId}
-                        anchorId={anchorId}
-                        cardType={`data-chart:${parsedDataChart?.yLabel || 'default'}`}
-                        title="Data Chart"
-                        defaultOpen={true}
-                    >
-                        <DataChartAssistCard chart={parsedDataChart} />
-                    </ChatCollapsibleAssistCard>
-                )}
-
-                {!isUser && shouldTryWikiCard && wikiCardData && (
-                    <ChatCollapsibleAssistCard
-                        sessionId={sessionId}
-                        anchorId={anchorId}
-                        cardType="wikipedia"
-                        title="Wikipedia"
-                        defaultOpen={true}
-                    >
-                        <WikiAssistCard data={wikiCardData} />
-                    </ChatCollapsibleAssistCard>
-                )}
-
-                {!isUser && shouldTryMapCard && mapCardData && (
-                    <ChatCollapsibleAssistCard
-                        sessionId={sessionId}
-                        anchorId={anchorId}
-                        cardType="maps"
-                        title="Maps"
-                        defaultOpen={true}
-                    >
-                        <MapAssistCard data={mapCardData} />
-                    </ChatCollapsibleAssistCard>
-                )}
-
-                {hasReasoning && (
-                    (!isStreaming && isCognitiveCollapsed) ? null : (
-                        <div style={{
-                            marginBottom: '16px',
-                            border: '1px solid var(--card-border)',
-                            borderRadius: '8px',
-                            overflow: 'hidden',
-                            background: 'rgba(0,0,0,0.02)',
-                            fontFamily: '"JetBrains Mono", "Fira Code", monospace'
-                        }}>
-                            <div style={{
-                                padding: '8px 12px',
-                                background: 'rgba(0,0,0,0.04)',
-                                borderBottom: '1px solid var(--card-border)',
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                alignItems: 'center',
-                                cursor: 'pointer'
-                            }} onClick={() => setIsCognitiveCollapsed(!isCognitiveCollapsed)}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: !isStreaming ? '#10b981' : 'var(--accent-color)', animation: !isStreaming ? 'none' : 'pulse 2s infinite' }} />
-                                    <span style={{ fontSize: '10px', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-                                        Thinking Process {isStreaming ? '...' : ''}
-                                    </span>
-                                </div>
-                                {isCognitiveCollapsed ? <ChevronDown size={14} className="text-muted" /> : <ChevronUp size={14} className="text-muted" />}
-                            </div>
-
-                            {!isCognitiveCollapsed && (
-                                <div style={{ padding: '12px', fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                    {reasoningTimeline.map((entry, idx) => (
-                                        <div key={idx} style={{ display: 'flex', gap: '12px', opacity: idx === (reasoningTimeline.length - 1) ? 1 : 0.6 }}>
-                                            <span style={{ color: 'var(--accent-color)', fontWeight: 'bold' }}>{'>'}</span>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                                <span style={{ color: 'var(--text-primary)' }}>{entry.text}</span>
-                                                {entry.ts && (
-                                                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', opacity: 0.9 }}>
-                                                        {formatTime(entry.ts)}
-                                                    </span>
-                                                )}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    )
-                )}
-
-                {/* Segments (Playback, Response, etc.) */}
-                {msg.contentSegments && msg.contentSegments.length > 0 ? (
-                    msg.contentSegments.map((segment, idx) => (
-                        <div key={idx} style={{ position: 'relative' }}>
-                            {(idx > 0 || hasReasoning) && <SegmentDivider />}
-
-                            {segment.playback && (
-                                <div style={{ marginBottom: '16px' }}>
-                                    <PlaybackCard
-                                        runId={segment.playback.run_id}
-                                        sessionId={sessionId}
-                                        liveEvent={latestPlaybackEvent}
-                                    />
-                                </div>
-                            )}
-
-                            {segment.content ? (
-                                <TypewriterMarkdown
-                                    text={segment.content}
-                                    isStreaming={!isUser && isStreaming && idx === msg.contentSegments.length - 1}
-                                    isComplete={msg.statusPhase === 'complete'}
-                                    isUser={isUser}
-                                />
-                            ) : null}
-
-                            {segment.attachments && segment.attachments.length > 0 && (
-                                <div style={{ marginTop: '12px' }}>
-                                    <MessageAttachments msg={{ attachments: segment.attachments }} sessionId={sessionId} onExpand={onExpand} />
-                                </div>
-                            )}
-                        </div>
-                    ))
-                ) : (
-                    /* Fallback for standalone messages */
-                    <>
-                        {hasReasoning && <SegmentDivider />}
-                        {msg.playback && (
-                            <div style={{ marginBottom: '16px' }}>
-                                <PlaybackCard runId={msg.playback.run_id} sessionId={sessionId} liveEvent={latestPlaybackEvent} />
-                            </div>
-                        )}
-                        {msg.content ? (
-                            <TypewriterMarkdown
-                                text={msg.content}
-                                isStreaming={!isUser && isStreaming}
-                                isComplete={msg.statusPhase === 'complete'}
-                                isUser={isUser}
-                            />
-                        ) : null}
-                        <MessageAttachments msg={msg} sessionId={sessionId} onExpand={onExpand} />
-                    </>
-                )}
-
-                {!isUser && previewMessageContent && !isStreaming && (
-                    <div style={{ display: 'flex', justifyContent: 'center', marginTop: 'var(--space-3)' }}>
-                        <LinkPreviewCard messageContent={previewMessageContent} />
-                    </div>
-                )}
-
-            </div>
-        </div>
-    );
-});
-
-const ChatCollapsibleAssistCard = memo(({
-    sessionId,
-    anchorId,
-    cardType,
-    title,
-    defaultOpen = true,
-    children,
-}) => {
-    const storageKey = useMemo(
-        () => `assistant_chat_card:${sessionId || 'global'}:${anchorId || 'unknown'}:${cardType || 'card'}`,
-        [sessionId, anchorId, cardType]
-    );
-
-    const [isOpen, setIsOpen] = useState(() => {
-        try {
-            const raw = localStorage.getItem(storageKey);
-            if (raw === '0') return false;
-            if (raw === '1') return true;
-        } catch {
-            // ignore localStorage failures
-        }
-        return defaultOpen;
-    });
-
-    useEffect(() => {
-        try {
-            localStorage.setItem(storageKey, isOpen ? '1' : '0');
-        } catch {
-            // ignore localStorage failures
-        }
-    }, [storageKey, isOpen]);
-
-    const headerMeta = useMemo(() => {
-        const key = String(cardType || title || '').toLowerCase();
-        if (key.includes('weather') || key.includes('clima')) return { Icon: CloudSun, color: '#facc15' };
-        if (key.includes('system') || key.includes('health')) return { Icon: HeartPulse, color: '#34d399' };
-        if (key.includes('chart') || key.includes('data')) return { Icon: BarChart3, color: '#f59e0b' };
-        if (key.includes('wiki') || key.includes('wikipedia')) return { Icon: BookOpen, color: '#cbd5e1' };
-        if (key.includes('map')) return { Icon: Globe, color: '#34d399' };
-        if (key.includes('youtube')) return { Icon: Video, color: '#ef4444' };
-        if (key.includes('playback') || key.includes('music') || key.includes('audio')) return { Icon: Music, color: '#a78bfa' };
-        if (key.includes('video')) return { Icon: Video, color: '#f87171' };
-        return { Icon: FileText, color: 'var(--text-muted)' };
-    }, [cardType, title]);
-    const HeaderIcon = headerMeta.Icon;
-
-    return (
-        <div style={{ marginBottom: '16px', border: '1px solid var(--card-border)', borderRadius: '10px', overflow: 'hidden', background: 'var(--card-bg)' }}>
-            <button
-                type="button"
-                onClick={() => setIsOpen((prev) => !prev)}
-                style={{
-                    width: '100%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '8px',
-                    border: 'none',
-                    borderBottom: isOpen ? '1px solid var(--card-border)' : 'none',
-                    background: 'transparent',
-                    padding: '10px 12px',
-                    cursor: 'pointer',
-                }}
-            >
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '10px', fontWeight: 900, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                    {!isOpen && <HeaderIcon size={12} color={headerMeta.color} />}
-                    <span>{title}</span>
-                </span>
-                {isOpen ? <ChevronUp size={14} className="text-muted" /> : <ChevronDown size={14} className="text-muted" />}
-            </button>
-            {isOpen && <div style={{ padding: '10px 12px' }}>{children}</div>}
-        </div>
-    );
-});
-
-const MessageList = memo(({ messages, sessionId, streamingMessage, onExpand, scrollRef, agentName, onScroll, latestPlaybackEvent, playbackRuns }) => {
-    const combinedMessages = useMemo(() => {
-        const history = (Array.isArray(messages) ? messages : [])
-            .filter((msg) => msg && typeof msg === 'object')
-            .filter((msg) => !String(msg.content || '').includes('[SYSTEM_NOTIFICATION]'));
-        if (streamingMessage) {
-            return [...history, streamingMessage];
-        }
-        return history;
-    }, [messages, streamingMessage]);
-
-    const groupedHistory = useMemo(() => groupHistoryWithReasoning(combinedMessages), [combinedMessages]);
-
-    const renderMessagesWithDateDividers = () => {
-        const result = [];
-        let lastDateStr = null;
-
-        groupedHistory.forEach((msg, i) => {
-            if (msg.timestamp) {
-                const dateStr = formatDate(msg.timestamp);
-
-                if (dateStr && dateStr !== lastDateStr) {
-                    result.push(
-                        <div key={`date-${lastDateStr}-${i}`} style={{
-                            display: 'flex', justifyContent: 'center', margin: '16px 0', opacity: 0.8
-                        }}>
-                            <div style={{
-                                background: 'rgba(255,255,255,0.05)',
-                                padding: '4px 12px',
-                                borderRadius: '12px',
-                                fontSize: '11px',
-                                fontWeight: 'bold',
-                                color: 'var(--text-muted)'
-                            }}>
-                                {dateStr}
-                            </div>
-                        </div>
-                    );
-                    lastDateStr = dateStr;
-                }
-            }
-
-            const isLatestStreaming = streamingMessage && (
-                (msg.work_id && msg.work_id === streamingMessage.work_id) ||
-                msg.id === streamingMessage.id ||
-                msg === streamingMessage
-            );
-
-            result.push(<MessageItem
-                key={msg.id || `msg-${i}`}
-                msg={msg}
-                sessionId={sessionId}
-                isStreaming={!!isLatestStreaming}
-                onExpand={onExpand}
-                agentName={agentName}
-                latestPlaybackEvent={latestPlaybackEvent}
-            />);
-        });
-
-        return result;
-    };
-
-    return (
-        <div ref={scrollRef} onScroll={onScroll} className="custom-scrollbar h-full chat-container-bg" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            {combinedMessages.length === 0 ? (
-                <div style={{ margin: 'auto', textAlign: 'center', opacity: 0.8, maxWidth: '400px' }}>
-                    <div style={{ width: '64px', height: '64px', background: 'var(--accent-glow)', borderRadius: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 24px', color: 'var(--accent-color)' }}>
-                        <Bot size={32} />
-                    </div>
-                    <div style={{ padding: '32px', borderRadius: '24px', background: 'var(--card-bg)', border: '1px solid var(--card-border)', boxShadow: '0 10px 30px rgba(0,0,0,0.1)' }}>
-                        <h2 style={{ fontSize: '24px', fontWeight: '900', marginBottom: '12px', color: 'var(--text-main)' }}>Cognitive Operating System</h2>
-                        <p style={{ color: 'var(--text-muted)', fontSize: '15px', lineHeight: '1.6' }}>
-                            Ready to process. Identified as <strong>{agentName}</strong>. What is your directive?
-                        </p>
-                    </div>
-                </div>
-            ) : (
-                <>
-                    {renderMessagesWithDateDividers()}
-                </>
-            )}
-        </div>
-    );
-});
-
-const AttachmentGrid = ({ items, sessionId, onExpand }) => {
-    if (!items || items.length === 0) return null;
-    const limit = 4;
-    const displayItems = items.slice(0, limit);
-    const remaining = items.length - limit;
-
-    return (
-        <div className={`attachment-grid grid-${Math.min(items.length, limit)} ${items.length > 4 ? 'grid-more' : ''}`}>
-            {displayItems.map((item, idx) => {
-                const url = getFileUrl(item, sessionId);
-                return (
-                    <div key={idx} className="grid-item" onClick={() => onExpand({ ...item, previewUrl: url })}>
-                        {item.type === 'image' && (
-                            <img src={url} alt={item.name} />
-                        )}
-                        {item.type === 'video' && (
-                            <video src={url} />
-                        )}
-                        {idx === limit - 1 && remaining > 0 && (
-                            <div className="grid-overlay">+{remaining}</div>
-                        )}
-                    </div>
-                )
-            })}
-        </div>
-    );
-};
-
-const truncateFileName = (name, length = 12) => {
-    if (!name || name.length <= length) return name;
-    const extIdx = name.lastIndexOf('.');
-    if (extIdx === -1 || name.length - extIdx > 4) {
-        return name.substring(0, length) + '...';
-    }
-    const ext = name.substring(extIdx);
-    const base = name.substring(0, extIdx);
-    return base.substring(0, length - ext.length - 2) + '..' + ext;
-};
-
-const FilePreviewIcon = ({ type }) => {
-    switch (type) {
-        case 'image': return <FileIcon size={24} color="#ec4899" />;
-        case 'video': return <Video size={24} color="#8b5cf6" />;
-        case 'audio': return <Music size={24} color="#10b981" />;
-        case 'pdf': return <FileText size={24} color="#ef4444" />;
-        case 'doc': return <FileText size={24} color="#3b82f6" />;
-        case 'code': return <FileCode size={24} color="#f59e0b" />;
-        case 'zip':
-        case 'archive': return <Archive size={24} color="#6b7280" />;
-        case 'csv':
-        case 'xls':
-        case 'xlsx': return <Table size={24} color="#10b981" />;
-        default: return <FileIcon size={24} color="var(--text-muted)" />;
-    }
-};
-
-const AttachmentList = ({ items, sessionId, onExpand }) => {
-    if (!items || items.length === 0) return null;
-    return (
-        <div className="attachment-list">
-            {items.length === 1 && (items[0].type === 'pdf' || items[0].name.endsWith('.txt')) && (
-                <div style={{ width: '100%', height: '150px', borderRadius: '10px', overflow: 'hidden', border: '1px solid var(--card-border)', marginBottom: '8px' }}>
-                    <iframe
-                        src={getFileUrl(items[0], sessionId)}
-                        style={{ width: '100%', height: '100%', border: 'none' }}
-                        title="Preview"
-                    />
-                </div>
-            )}
-            {items.map((item, idx) => (
-                <div key={idx} className="doc-item" onClick={() => {
-                    if (item.type === 'audio') return;
-                    onExpand({ ...item, previewUrl: getFileUrl(item, sessionId) });
-                }}>
-                    <FilePreviewIcon type={item.type} />
-                    <div className="doc-info">
-                        {/* Only show filename basename for better UX */}
-                        <span className="doc-name">{item.name?.split('/').pop() || 'File'}</span>
-                        <span className="doc-meta">{item.mime ? (item.mime.split('/')[1]?.toUpperCase() || 'FILE') : (item.name?.split('.').pop()?.toUpperCase() || 'FILE')}</span>
-                    </div>
-                </div>
-            ))}
-            {items.some(i => i.type === 'audio') && (
-                <div className="audio-player-container">
-                    {items.filter(i => i.type === 'audio').map((item, idx) => (
-                        <audio key={idx} controls src={getFileUrl(item, sessionId)} />
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-};
-
-const MessageAttachments = ({ msg, sessionId, onExpand }) => {
-    const allAttachments = msg.attachments || (msg.file ? [msg.file] : []);
-    if (allAttachments.length === 0) return null;
-
-    const visuals = allAttachments.filter(a => a.type === 'image' || a.type === 'video');
-    const docs = allAttachments.filter(a => a.type !== 'image' && a.type !== 'video');
-
-    return (
-        <div style={{ marginBottom: '12px' }}>
-            <AttachmentGrid items={visuals} sessionId={sessionId} onExpand={onExpand} />
-            <AttachmentList items={docs} sessionId={sessionId} onExpand={onExpand} />
-        </div>
-    );
-};
-
+import { SessionAvatar } from '../components/chat/ChatIcons';
+import { ChatHeader } from '../components/chat/ChatHeader';
+import { ChatInputArea } from '../components/chat/ChatInputArea';
+import { MessageList } from '../components/chat/MessageItem';
+import { FilePreviewIcon } from '../components/chat/MessageAttachments';
+import { formatDate } from '../utils/chatHistoryTransform';
 
 const Chat = () => {
     const { agentName } = useAuth();
@@ -2488,30 +41,31 @@ const Chat = () => {
     const [showAttachMenu, setShowAttachMenu] = useState(false);
     const [thought, setThought] = useState('');
     const [isThinking, setIsThinking] = useState(false);
-    const [streamingMessage, setStreamingMessage] = useState(null); // { statusPhase, reasoningLines, content, isComplete }
-    const [pendingFiles, setPendingFiles] = useState([]); // { file, previewUrl, type, name }
+    const [streamingMessage, setStreamingMessage] = useState(null);
+    const [pendingFiles, setPendingFiles] = useState([]);
     const [isSending, setIsSending] = useState(false);
     const [latestPlaybackEvent, setLatestPlaybackEvent] = useState(null);
     const [playbackRuns, setPlaybackRuns] = useState([]);
-    const [activeProfileTab, setActiveProfileTab] = useState('media'); // 'media' | 'docs' | 'links' | 'playback' | 'metrics'
-    const [expandedProfilePlayback, setExpandedProfilePlayback] = useState(null); // run_id of currently expanded playback
+    const [activeProfileTab, setActiveProfileTab] = useState('media');
+    const [expandedProfilePlayback, setExpandedProfilePlayback] = useState(null);
     const [isSessionsCollapsed, setIsSessionsCollapsed] = useState(() => {
         return localStorage.getItem('assistant_chat_sessions_collapsed') === 'true';
     });
 
-    // Rename state
     const [isEditingName, setIsEditingName] = useState(false);
     const [editNameValue, setEditNameValue] = useState("");
 
-    // Pagination State
+    const [activeWorkers, setActiveWorkers] = useState([]);
+    const [systemHealth, setSystemHealth] = useState({ llm: {}, capabilities: {} });
+
     const [hasMoreHistory, setHasMoreHistory] = useState(false);
     const [historyOffset, setHistoryOffset] = useState(0);
     const [isFetchingHistory, setIsFetchingHistory] = useState(false);
 
-    const [previewFile, setPreviewFile] = useState(null); // File to show in modal
+    const [previewFile, setPreviewFile] = useState(null);
 
     const [isMobile, setIsMobile] = useState(window.innerWidth <= 640);
-    const [mobileView, setMobileView] = useState('sessions'); // 'sessions' | 'chat'
+    const [mobileView, setMobileView] = useState('sessions');
     const [showScrollButton, setShowScrollButton] = useState(false);
     const [showActionsMenu, setShowActionsMenu] = useState(false);
     const [showChatProfile, setShowChatProfile] = useState(false);
@@ -2529,464 +83,265 @@ const Chat = () => {
     const wsRef = useRef(null);
     const thoughtTimeoutRef = useRef(null);
     const completeFlushTimeoutRef = useRef(null);
-    const skipResetRef = useRef(false); // Flag to skip state clearing during lazy session creation
-    const prevLastMsgIdRef = useRef(null); // Tracks last message to intelligently auto-scroll
-    const pendingReasoningRef = useRef([]); // Accumulates reasoning timeline entries until the next assistant final message
+    const skipResetRef = useRef(false);
+    const prevLastMsgIdRef = useRef(null);
+    const pendingReasoningRef = useRef([]);
     const streamingMessageRef = useRef(null);
 
     useEffect(() => {
         streamingMessageRef.current = streamingMessage;
     }, [streamingMessage]);
 
-    const pushPendingReasoning = (line, ts = null) => {
-        const entry = toReasoningEntry(line, ts);
-        if (!entry) return;
-
-        const existing = pendingReasoningRef.current || [];
-        if (existing[existing.length - 1]?.text === entry.text) return;
-        pendingReasoningRef.current = [...existing, entry];
-    };
+    useEffect(() => {
+        const handleResize = () => {
+            const mobile = window.innerWidth <= 640;
+            setIsMobile(mobile);
+            if (chatPaneRef.current) {
+                setChatPaneWidth(chatPaneRef.current.clientWidth);
+            }
+        };
+        window.addEventListener('resize', handleResize);
+        handleResize();
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
 
     useEffect(() => {
         localStorage.setItem('assistant_chat_sessions_collapsed', isSessionsCollapsed);
     }, [isSessionsCollapsed]);
 
-    // Auto-expand textarea
     useEffect(() => {
-        if (inputRef.current) {
-            inputRef.current.style.height = 'auto';
-            inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 200)}px`;
-        }
-    }, [input]);
-
-    useEffect(() => {
-        const handleResize = () => {
-            setIsMobile(window.innerWidth <= 640);
-        };
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, []);
-
-    useEffect(() => {
-        if (selectedId && isMobile) {
-            setMobileView('chat');
-        }
-    }, [selectedId, isMobile]);
-
-    useEffect(() => {
-        const pane = chatPaneRef.current;
-        if (!pane) return;
-
-        const updatePaneWidth = () => setChatPaneWidth(pane.clientWidth || 0);
-        updatePaneWidth();
-
-        if (typeof ResizeObserver !== 'undefined') {
-            const observer = new ResizeObserver((entries) => {
-                const entry = entries[0];
-                if (!entry) return;
-                setChatPaneWidth(entry.contentRect.width || 0);
-            });
-            observer.observe(pane);
-            return () => observer.disconnect();
-        }
-
-        window.addEventListener('resize', updatePaneWidth);
-        return () => window.removeEventListener('resize', updatePaneWidth);
-    }, []);
-
-    // Auto-scroll logic: only for live flow, never while paginating older history
-    const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
-    const lastMsgId = lastMsg?.id || lastMsg?.content;
-
-    useEffect(() => {
-        if (scrollRef.current) {
-            if (isFetchingHistory) {
-                // Keep anchor restoration from fetchMoreHistory in control.
-                prevLastMsgIdRef.current = lastMsgId;
-                return;
-            }
-
-            const container = scrollRef.current;
-            const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
-
-            const isNewMessage = prevLastMsgIdRef.current !== lastMsgId;
-
-            if (isNearBottom || (isNewMessage && lastMsg?.role === 'user')) {
-                container.scrollTop = container.scrollHeight;
-            }
-
-            prevLastMsgIdRef.current = lastMsgId;
-        }
-    }, [messages, lastMsgId, lastMsg?.role, isFetchingHistory]);
-
-    // Initial Load
-    useEffect(() => {
-        const fetchSystemInfo = async () => {
-            // No longer needed here as agentName comes from AuthContext
-        };
-        const initializeSessions = async () => {
-            try {
-                // 1. Get active session for auto-open
-                const activeData = await api.get('/sessions/active?interface=web');
-                if (activeData && activeData.id) {
-                    setSelectedId(activeData.id);
-                }
-
-                // 2. Fetch all sessions for the list
-                await fetchSessions();
-            } catch (err) {
-                console.error("Error initializing sessions:", err);
-                fetchSessions(); // Fallback
-            }
-        };
-
-        // fetchSystemInfo(); // No longer needed
-        initializeSessions();
         const handleClickOutside = (e) => {
-            if (attachMenuRef.current &&
-                !attachMenuRef.current.contains(e.target) &&
-                attachButtonRef.current &&
-                !attachButtonRef.current.contains(e.target)) {
+            if (showAttachMenu && attachMenuRef.current && !attachMenuRef.current.contains(e.target) && attachButtonRef.current && !attachButtonRef.current.contains(e.target)) {
                 setShowAttachMenu(false);
             }
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [showAttachMenu]);
+
+    const fetchSessions = async () => {
+        try {
+            const data = await api.get('/sessions');
+            const sorted = (Array.isArray(data) ? data : data?.sessions || []).sort((a, b) => {
+                const ta = new Date(a.updated_at || a.last_active || 0).getTime();
+                const tb = new Date(b.updated_at || b.last_active || 0).getTime();
+                return tb - ta;
+            });
+            setSessions(sorted);
+            if (!selectedId && sorted.length > 0) {
+                setSelectedId(sorted[0].session_id);
+            }
+        } catch (err) {
+            console.error("Error fetching sessions:", err);
+            toast.error("Error loading sessions.");
+        }
+    };
+
+    useEffect(() => {
+        fetchSessions();
     }, []);
 
-    // WebSocket Connection
     useEffect(() => {
+        let isSub = true;
         if (!selectedId) return;
 
-        // ISOLATION FIX: Clear state immediately for new session
-        // Skip if we just created this session via handleSend (lazy creation)
-        if (skipResetRef.current) {
-            skipResetRef.current = false;
-        } else {
-            setMessages([]);
-            setCurrentSession(null);
-            setIsConnected(false);
-            setStreamingMessage(null);
-            setIsSending(false);
-            setIsThinking(false);
-            setThought('');
-            setPendingFiles([]);
-        }
-        pendingReasoningRef.current = [];
+        fetchSessionDetail(selectedId);
+        markSessionRead(selectedId);
+        markSessionOpen(selectedId);
 
-        // Cleanup previous
-        if (wsRef.current) {
-            wsRef.current.close();
-        }
-
-        // Connect
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws/${selectedId}`;
+        const wsHost = window.location.host;
+        let wsUrl = `${protocol}//${wsHost}/ws/${selectedId}`;
 
-        console.log("Connecting to WS:", wsUrl);
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
-            console.log("WS Connected");
-            setIsConnected(true);
-            toast.success("Neural Link Active", { id: 'ws-status' });
-        };
-
-        ws.onclose = () => {
-            console.log("WS Disconnected");
-            setIsConnected(false);
+            if (isSub) setIsConnected(true);
         };
 
         ws.onmessage = (event) => {
+            if (!isSub) return;
             try {
-                const data = JSON.parse(event.data);
-                if (data.type === 'pong') return;
+                const raw = JSON.parse(event.data);
+                if (raw.type === 'ping') return;
 
-                if (data.type === 'status') {
-                    setIsSending(false); // Backend acknowledged and started processing
-                    const playbackData = data.payload?.playback;
-                    const payloadWorkId = data.payload?.work_id || data.work_id;
-                    const payloadStatus = String(data.payload?.status || '').toLowerCase();
-                    if (playbackData) {
-                        setLatestPlaybackEvent({
-                            ...playbackData,
-                            type: 'playback.run_update'
-                        });
-                    }
-                    setStreamingMessage(prev => ({
-                        ...(prev || { content: '', reasoningLines: [], role: 'assistant' }),
-                        work_id: payloadWorkId || prev?.work_id,
-                        statusPhase: payloadStatus || data.phase,
-                        statusMessage: data.message,
-                        approvalRequest: data.payload?.approval_request || prev?.approvalRequest || null,
-                        playback: playbackData || prev?.playback,
-                        isComplete: false
-                    }));
-                }
-
-
-                if (data.type === 'reasoning_chunk') {
-                    pushPendingReasoning(data.content, data.timestamp || Date.now());
-                    setStreamingMessage(prev => ({
-                        ...(prev || { content: '', reasoningLines: [], reasoningTimeline: [], role: 'assistant', statusPhase: 'thinking' }),
-                        reasoningLines: (() => {
-                            const next = [...(prev?.reasoningLines || [])];
-                            const line = String(data.content || '').trim();
-                            if (line && next[next.length - 1] !== line) next.push(line);
-                            return next;
-                        })(),
-                        reasoningTimeline: (() => {
-                            const next = [...(prev?.reasoningTimeline || [])];
-                            const entry = toReasoningEntry(data.content, data.timestamp || Date.now());
-                            if (entry && next[next.length - 1]?.text !== entry.text) next.push(entry);
-                            return next;
-                        })(),
-                    }));
-                }
-
-                if (data.type === 'final_message_chunk') {
-                    setStreamingMessage(prev => ({
-                        ...(prev || { reasoningLines: [], role: 'assistant', statusPhase: 'responding' }),
-                        content: (prev?.content || '') + data.content
-                    }));
-                }
-
-                if (data.type === 'complete') {
-                    setStreamingMessage(prev => {
-                        if (!prev) return null;
-                        // Do not flush here to avoid duplicated assistant bubbles.
-                        // Authoritative history sync comes from `message_added`.
-                        const pendingReasoning = pendingReasoningRef.current || [];
-                        return {
-                            ...prev,
-                            reasoningLines: (prev?.reasoningLines?.length ? prev.reasoningLines : pendingReasoning.map((r) => r.text)),
-                            reasoningTimeline: (prev?.reasoningTimeline?.length ? prev.reasoningTimeline : pendingReasoning),
-                            isComplete: true,
-                            statusPhase: 'complete'
-                        };
-                    });
-                    if (completeFlushTimeoutRef.current) {
-                        clearTimeout(completeFlushTimeoutRef.current);
-                    }
-                    completeFlushTimeoutRef.current = setTimeout(() => {
-                        setStreamingMessage(current => {
-                            if (!current || !String(current.content || '').trim()) return current;
-                            const localFinal = {
-                                ...current,
-                                id: `local-stream-${Date.now()}`,
-                                timestamp: new Date().toISOString(),
-                                role: 'assistant',
-                                isComplete: true
-                            };
-                            setMessages(prev => {
-                                const alreadyExists = prev.some(
-                                    m => m.role === 'assistant' && String(m.content || '').trim() === String(localFinal.content || '').trim()
-                                );
-                                return alreadyExists ? prev : [...prev, localFinal];
-                            });
-                            return null;
-                        });
-                    }, 1200);
-                }
-
-                if (data.type === 'session_updated') {
-                    // Update session name in the list and current session
-                    setSessions(prev => prev.map(s =>
-                        s.session_id === data.session_id ? { ...s, name: data.name } : s
-                    ));
-                    setCurrentSession(prev =>
-                        prev && prev.id === data.session_id ? { ...prev, name: data.name } : prev
-                    );
-                }
-
-                // Legacy support (optional, but keeping for robustness)
-                if (data.type === 'assistant_thought') {
-                    setThought(data.content);
-                    setIsThinking(true);
-                    if (thoughtTimeoutRef.current) clearTimeout(thoughtTimeoutRef.current);
-                    thoughtTimeoutRef.current = setTimeout(() => setIsThinking(false), 8000);
-                }
-
-                if (data.type === 'assistant_response' || data.type === 'msg') {
-                    setIsThinking(false);
-                    // Update streaming message instead of adding new history entry to avoid duplication
-                    // The 'complete' event will handle flushing it to the history list
-                    setStreamingMessage(prev => {
-                        if (prev) {
-                            return {
-                                ...prev,
-                                content: data.content,
-                                file: data.file,
-                                statusPhase: 'complete'
-                            };
-                        } else {
-                            // If no streaming active (message came in a single chunk or system push), 
-                            // we'll rely on 'message_added' to sync it if it's not already there.
-                            return null;
-                        }
-                    });
-                }
-
-                if (data.type?.startsWith('playback.')) {
-                    setLatestPlaybackEvent(data);
+                if (raw.type === 'system_metrics' || raw.type === 'system_health') {
+                    if (raw.data?.active_workers) setActiveWorkers(raw.data.active_workers);
+                    if (raw.data?.health) setSystemHealth(raw.data.health);
                     return;
                 }
 
-                if (data.type === 'unread_count_updated') {
-                    setSessions(prev => prev.map(s =>
-                        s.session_id === data.session_id ? { ...s, unread_count: data.unread_count } : s
-                    ));
+                if (raw.type === 'worker_state') {
+                    setActiveWorkers(prev => {
+                        const next = [...prev];
+                        const idx = next.findIndex(w => w.work_id === raw.data?.work_id);
+                        if (idx >= 0) next[idx] = { ...next[idx], ...raw.data };
+                        else if (raw.data) next.push(raw.data);
+                        return next.filter(w => w.status !== 'complete' && w.status !== 'failed');
+                    });
+                    return;
                 }
 
-                if (data.type === 'message_added') {
-                    // Update unread count for the session list sidebar
-                    setSessions(prev => prev.map(s =>
-                        s.session_id === data.session_id ? { ...s, unread_count: data.unread_count || s.unread_count } : s
-                    ));
+                if (raw.type === 'playback_stream') {
+                    setLatestPlaybackEvent(raw.data);
+                    return;
+                }
 
-                    // If it's the current session, ensure the message is synced in history
-                    if (data.session_id === selectedId) {
-                        const incoming = data.message || {};
-                        const incomingRole = incoming.role;
-                        const incomingType = normalizeHistoryMessageType(incoming);
+                if (raw.type === 'status') {
+                    setStreamingMessage(prev => {
+                        const content = prev ? prev.content : '';
+                        return {
+                            role: 'assistant',
+                            content: content,
+                            reasoningLines: prev?.reasoningLines || [],
+                            reasoningTimeline: prev?.reasoningTimeline || [],
+                            statusPhase: raw.phase || 'thinking',
+                            statusMessage: raw.message || 'Processing...',
+                            isComplete: false,
+                            work_id: raw.work_id || prev?.work_id,
+                            model_info: raw.model_info || prev?.model_info
+                        };
+                    });
+                    return;
+                }
 
-                        // Realtime UX: internal reasoning/system traces should feed Thought stream,
-                        // not be rendered as standalone chat bubbles.
-                        if (incomingType !== 'default') {
-                            if (incomingType === 'reasoning') {
-                                const reasoningLine = extractReasoningLine(incoming) || (typeof incoming.content === 'string' ? incoming.content.trim() : '');
-                                if (reasoningLine) {
-                                    pushPendingReasoning(reasoningLine, incoming.timestamp || Date.now());
-                                }
-                                setStreamingMessage(prev => ({
-                                    ...(prev || { content: '', reasoningLines: [], reasoningTimeline: [], role: 'assistant', statusPhase: 'thinking' }),
-                                    reasoningLines: (() => {
-                                        const next = [...(prev?.reasoningLines || [])];
-                                        if (reasoningLine && next[next.length - 1] !== reasoningLine) next.push(reasoningLine);
-                                        return next;
-                                    })(),
-                                    reasoningTimeline: (() => {
-                                        const next = [...(prev?.reasoningTimeline || [])];
-                                        const entry = toReasoningEntry(reasoningLine, incoming.timestamp || Date.now());
-                                        if (entry && next[next.length - 1]?.text !== entry.text) next.push(entry);
-                                        return next;
-                                    })(),
-                                }));
-                            }
-                            return;
-                        }
+                if (raw.type === 'thought' || raw.type === 'cognitive_thought' || raw.type === 'assistant_thought' || raw.type === 'reasoning_chunk') {
+                    setIsThinking(true);
+                    const thoughtText = raw.thought || raw.content || '';
+                    if (thoughtText) setThought(thoughtText);
 
-                        if (incomingRole === 'system') {
-                            return;
-                        }
-
-                        const incomingForHistory = (() => {
-                            if (incomingRole !== 'assistant') return incoming;
-                            const pendingReasoning = pendingReasoningRef.current || [];
-                            const streamSnapshot = streamingMessageRef.current || {};
-                            const enriched = {
-                                ...incoming,
-                                work_id: incoming.work_id || streamSnapshot.work_id,
-                                playback: incoming.playback || streamSnapshot.playback,
-                                statusPhase: incoming.statusPhase || streamSnapshot.statusPhase,
-                                statusMessage: incoming.statusMessage || streamSnapshot.statusMessage,
-                                approvalRequest: incoming.approvalRequest || streamSnapshot.approvalRequest,
-                            };
-                            if (pendingReasoning.length > 0) {
-                                enriched.reasoningLines = pendingReasoning.map((entry) => entry.text);
-                                enriched.reasoningTimeline = [...pendingReasoning];
-                            }
-                            return enriched;
-                        })();
-
-                        if (incomingRole === 'assistant') {
-                            if (completeFlushTimeoutRef.current) {
-                                clearTimeout(completeFlushTimeoutRef.current);
-                                completeFlushTimeoutRef.current = null;
-                            }
-                            pendingReasoningRef.current = [];
-                            setStreamingMessage(null);
-                        }
-
-                        setMessages(prev => {
-                            // 1. Precise Dedup: Check if ID already exists
-                            if (incomingForHistory.id && prev.some(m => m.id === incomingForHistory.id)) return prev;
-
-                            // 2. Fuzzy Dedup/Sync: Try to find a local message (no ID) that matches this one
-                            const localMatchIdx = prev.findLastIndex(m =>
-                                !m.id &&
-                                m.role === incomingRole &&
-                                (m.content === incomingForHistory.content || (m.content.length > 0 && String(incomingForHistory.content || '').startsWith(m.content.slice(0, 100))))
-                            );
-
-                            if (localMatchIdx !== -1) {
-                                const next = [...prev];
-                                next[localMatchIdx] = incomingForHistory; // Replace with server version (has ID and final timestamp)
-                                return next;
-                            }
-
-                            // 3. Fallback: If it's the user's latest message with a spinner, replace it
-                            if (incomingRole === 'user') {
-                                const lastUserIdx = prev.findLastIndex(m => m.role === 'user' && m.isSending);
-                                if (lastUserIdx !== -1) {
-                                    const next = [...prev];
-                                    next[lastUserIdx] = incomingForHistory;
-                                    return next;
-                                }
-                            }
-
-                            // 4. Default: Just add it (e.g. system notification or background message)
-                            return [...prev, incomingForHistory];
+                    if (thoughtText && thoughtText.trim()) {
+                        pendingReasoningRef.current.push({
+                            text: thoughtText.trim(),
+                            ts: raw.timestamp ? raw.timestamp : Date.now() / 1000
                         });
                     }
+
+                    if (thoughtTimeoutRef.current) clearTimeout(thoughtTimeoutRef.current);
+                    thoughtTimeoutRef.current = setTimeout(() => {
+                        setIsThinking(false);
+                    }, 5000);
+
+                    setStreamingMessage(prev => {
+                        const content = prev ? prev.content : '';
+                        const currentLines = prev?.reasoningLines || [];
+                        const nextLines = thoughtText ? [...currentLines, thoughtText] : currentLines;
+                        return {
+                            role: 'assistant',
+                            content: content,
+                            reasoningLines: nextLines,
+                            reasoningTimeline: pendingReasoningRef.current,
+                            statusPhase: raw.phase || (prev ? prev.statusPhase : 'thinking'),
+                            statusMessage: thoughtText || (prev ? prev.statusMessage : ''),
+                            isComplete: false,
+                            work_id: raw.work_id || prev?.work_id,
+                            model_info: raw.model_info || prev?.model_info
+                        };
+                    });
+                    return;
                 }
-            } catch (e) {
-                console.error("WS Parse Error:", e);
+
+                if (raw.type === 'stream' || raw.type === 'final_message_chunk') {
+                    setIsSending(false);
+                    setIsThinking(false);
+
+                    setStreamingMessage(prev => {
+                        const currentContent = prev ? prev.content : '';
+                        const nextContent = currentContent + (raw.chunk || raw.content || '');
+                        return {
+                            role: 'assistant',
+                            content: nextContent,
+                            reasoningLines: prev?.reasoningLines || [],
+                            reasoningTimeline: pendingReasoningRef.current,
+                            statusPhase: raw.phase || 'responding',
+                            statusMessage: raw.status || 'Streaming response...',
+                            isComplete: false,
+                            work_id: raw.work_id || prev?.work_id,
+                            model_info: raw.model_info || prev?.model_info
+                        };
+                    });
+                    return;
+                }
+
+                if (raw.type === 'complete' || raw.type === 'msg' || raw.type === 'message' || raw.type === 'assistant_response') {
+                    setIsSending(false);
+                    setIsThinking(false);
+
+                    if (thoughtTimeoutRef.current) clearTimeout(thoughtTimeoutRef.current);
+                    if (completeFlushTimeoutRef.current) clearTimeout(completeFlushTimeoutRef.current);
+
+                    const finalContent = raw.content || raw.message || raw.full_text || streamingMessageRef.current?.content || '';
+                    const finalReasoning = [...(pendingReasoningRef.current || [])];
+                    const finalWorkId = raw.work_id || streamingMessageRef.current?.work_id;
+                    const finalModelInfo = raw.model_info || raw.provenance || streamingMessageRef.current?.model_info;
+
+                    const finalMsg = {
+                        id: raw.message_id || `msg-${Date.now()}`,
+                        role: raw.role || 'assistant',
+                        content: finalContent,
+                        timestamp: raw.timestamp ? raw.timestamp / 1000 : Date.now() / 1000,
+                        reasoningTimeline: finalReasoning,
+                        work_id: finalWorkId,
+                        model_info: finalModelInfo,
+                        statusPhase: 'complete',
+                        isComplete: true,
+                        animateTyping: true,
+                        attachments: raw.attachments || [],
+                        contentSegments: raw.contentSegments || []
+                    };
+
+                    setStreamingMessage(null);
+                    pendingReasoningRef.current = [];
+
+                    setMessages(prev => {
+                        const filtered = prev.filter(m => !m.isSending);
+                        if (filtered.some(m => m.id === finalMsg.id)) return filtered;
+                        return [...filtered, finalMsg];
+                    });
+
+                    setTimeout(() => {
+                        if (scrollRef.current) {
+                            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+                        }
+                    }, 100);
+
+                    fetchSessions();
+                    return;
+                }
+            } catch (err) {
+                console.error("WS Parse error:", err, event.data);
             }
         };
 
+        ws.onerror = () => {
+            if (isSub) setIsConnected(false);
+        };
 
-        // Fetch History
-        fetchSessionDetail(selectedId);
-
-        // Mark as open and READ in backend
-        markSessionOpen(selectedId);
-        markSessionRead(selectedId);
+        ws.onclose = () => {
+            if (isSub) setIsConnected(false);
+        };
 
         return () => {
-            if (completeFlushTimeoutRef.current) {
-                clearTimeout(completeFlushTimeoutRef.current);
-                completeFlushTimeoutRef.current = null;
-            }
-            if (wsRef.current) wsRef.current.close();
+            isSub = false;
+            ws.close();
+            if (thoughtTimeoutRef.current) clearTimeout(thoughtTimeoutRef.current);
+            if (completeFlushTimeoutRef.current) clearTimeout(completeFlushTimeoutRef.current);
         };
     }, [selectedId]);
 
-    const fetchSessions = async () => {
-        try {
-            const data = await api.get('/sessions?interface=web');
-            setSessions(data || []);
-        } catch (err) {
-            console.error(err);
-        }
-    };
-
     const handleRenameSession = async () => {
-        if (!selectedId || !editNameValue.trim()) {
-            setIsEditingName(false);
-            return;
-        }
+        if (!selectedId || !isEditingName) return;
         try {
-            await api.patch(`/sessions/${selectedId}`, { name: editNameValue.trim() });
-            setCurrentSession(prev => prev ? { ...prev, name: editNameValue.trim() } : prev);
-            setSessions(prev => prev.map(s => s.session_id === selectedId ? { ...s, name: editNameValue.trim() } : s));
-            toast.success("Name updated");
+            await api.put(`/sessions/${selectedId}`, { name: editNameValue });
+            setSessions(prev => prev.map(s => s.session_id === selectedId ? { ...s, name: editNameValue } : s));
+            if (currentSession) setCurrentSession(prev => ({ ...prev, name: editNameValue }));
+            toast.success("Session renamed!");
         } catch (err) {
-            console.error("Error renaming session:", err);
-            toast.error("Error renaming");
+            toast.error("Failed to rename session.");
+        } finally {
+            setIsEditingName(false);
         }
-        setIsEditingName(false);
     };
 
     const handleAvatarUpload = async (e) => {
@@ -2999,18 +354,14 @@ const Chat = () => {
         try {
             const res = await api.post(`/sessions/${selectedId}/profile_picture`, formData);
             if (res && res.profile_picture) {
-                // Update current session
                 setCurrentSession(prev => prev ? { ...prev, profile_picture: res.profile_picture } : prev);
-                // Update in sessions list
                 setSessions(prev => prev.map(s => s.session_id === selectedId ? { ...s, profile_picture: res.profile_picture } : s));
                 toast.success('Profile image updated!');
             }
         } catch (err) {
-            console.error("Error uploading avatar:", err);
             toast.error("Error uploading image.");
         }
 
-        // Reset input
         if (avatarUploadRef.current) avatarUploadRef.current.value = '';
     };
 
@@ -3019,33 +370,24 @@ const Chat = () => {
         try {
             await api.put(`/sessions/${id}/read`);
             setSessions(prev => prev.map(s => s.session_id === id ? { ...s, unread_count: 0 } : s));
-        } catch (err) {
-            console.error("Error marking session as read:", err);
-        }
+        } catch (err) {}
     };
 
     const markSessionOpen = async (id) => {
         try {
             await api.post(`/sessions/${id}/open`);
-        } catch (err) {
-            console.error("Error marking session as open:", err);
-        }
+        } catch (err) {}
     };
 
     const fetchSessionDetail = async (id) => {
         try {
             const data = await api.get(`/sessions/${id}`);
-            // Safety check: ensure we're still on the same session
             if (selectedId === id) {
-                // Determine if we have more messages to load
                 setHasMoreHistory(data.history?.length === 15);
                 setHistoryOffset(15);
-
-                const rawHistory = data.history || [];
-                setMessages(rawHistory);
+                setMessages(data.history || []);
                 setCurrentSession(data);
 
-                // Scroll to bottom on initial load
                 setTimeout(() => {
                     if (scrollRef.current) {
                         scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -3062,7 +404,6 @@ const Chat = () => {
             const response = await api.get(`/sessions/${id}/media`);
             setSessionMedia(response || { files: [], links: [] });
         } catch (error) {
-            console.error("Error fetching session media:", error);
         } finally {
             setLoadingMedia(false);
         }
@@ -3073,9 +414,7 @@ const Chat = () => {
         try {
             const response = await api.get(`/sessions/${id}/playback`);
             setPlaybackRuns(response?.runs || []);
-        } catch (error) {
-            console.error("Error fetching playback runs:", error);
-        }
+        } catch (error) {}
     };
 
     useEffect(() => {
@@ -3093,9 +432,7 @@ const Chat = () => {
                 const data = await api.get(`/sessions/${selectedId}`);
                 if (cancelled || !data) return;
                 setCurrentSession(prev => (prev ? { ...prev, runtime_metrics: data.runtime_metrics || {} } : prev));
-            } catch (error) {
-                // Silent refresh loop for metrics.
-            }
+            } catch (error) {}
         };
         tick();
         const interval = setInterval(tick, 3000);
@@ -3105,7 +442,6 @@ const Chat = () => {
         };
     }, [showChatProfile, selectedId]);
 
-    // Also fetch playback runs on session load for inline rendering
     useEffect(() => {
         if (selectedId) {
             fetchPlaybackRuns(selectedId);
@@ -3188,23 +524,24 @@ const Chat = () => {
                     </div>
 
                     <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', borderBottom: '1px solid var(--card-border)', paddingBottom: '12px' }}>
-                        {['media', 'docs', 'links', 'metrics'].map(tab => (
+                        {['media', 'docs', 'links', 'tasks', 'metrics', 'health'].map(tab => (
                             <button
                                 key={tab}
                                 onClick={() => setActiveProfileTab(tab)}
                                 style={{
                                     flex: 1,
                                     padding: '8px',
-                                    fontSize: '12px',
+                                    fontSize: '11px',
                                     fontWeight: 'bold',
                                     borderRadius: '8px',
                                     background: activeProfileTab === tab ? 'var(--accent-glow)' : 'transparent',
                                     color: activeProfileTab === tab ? 'var(--accent-color)' : 'var(--text-muted)',
                                     textTransform: 'uppercase',
-                                    transition: '0.2s'
+                                    transition: '0.2s',
+                                    whiteSpace: 'nowrap'
                                 }}
                             >
-                                {tab === 'media' ? 'Fotos' : tab === 'docs' ? 'Files' : tab === 'links' ? 'Links' : tab === 'metrics' ? 'Metrics' : 'Playback'}
+                                {tab === 'media' ? 'Fotos' : tab === 'docs' ? 'Files' : tab === 'links' ? 'Links' : tab === 'tasks' ? 'Tasks' : tab === 'metrics' ? 'Metrics' : 'Health'}
                             </button>
                         ))}
                         {playbackRuns.length > 0 && (
@@ -3370,12 +707,58 @@ const Chat = () => {
                                 </div>
                             )}
 
+                            {activeProfileTab === 'tasks' && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                    {activeWorkers.filter(w => w.session_id === selectedId).length > 0 ? (
+                                        activeWorkers.filter(w => w.session_id === selectedId).map(w => (
+                                            <div 
+                                                key={w.work_id} 
+                                                style={{
+                                                    padding: '12px',
+                                                    borderRadius: '12px',
+                                                    background: 'rgba(59, 130, 246, 0.05)',
+                                                    border: '1px solid var(--card-border)',
+                                                    transition: 'var(--transition)'
+                                                }}
+                                            >
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                                                    <Zap size={14} color="var(--accent-color)" className="animate-pulse" />
+                                                    <span style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-main)' }}>
+                                                        {w.label || w.work_id.substring(0, 8)}
+                                                    </span>
+                                                </div>
+                                                <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0, lineHeight: '1.4' }}>
+                                                    {w.context?.summary?.last_thought || 'Thinking...'}
+                                                </p>
+                                                <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'flex-end' }}>
+                                                    <span style={{ fontSize: '10px', color: 'var(--accent-color)', fontWeight: 'bold', textTransform: 'uppercase' }}>
+                                                        {w.status || 'Active'}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>
+                                            No active workers for this session.
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
                             {activeProfileTab === 'metrics' && (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                                     <div style={{ padding: '12px', borderRadius: '10px', border: '1px solid var(--card-border)', background: 'rgba(255,255,255,0.02)' }}>
                                         <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>Prompt</div>
                                         <div style={{ fontSize: '13px', color: 'var(--text-main)' }}>Total: ~{promptMetrics.prompt_tokens_approx || 0} tokens</div>
-                                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Actions: ~{promptMetrics?.block_tokens_approx?.['[AVAILABLE ACTIONS]'] || 0} · Dynamic: ~{promptMetrics?.block_tokens_approx?.['[DYNAMIC CONTEXT]'] || 0}</div>
+                                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                                            Actions: ~{promptMetrics?.block_tokens_approx?.['[ACTIONS]'] || 0} · 
+                                            State: ~{promptMetrics?.block_tokens_approx?.['[INTERNAL STATE (TOON)]'] || 0} · 
+                                            Context: ~{promptMetrics?.block_tokens_approx?.['[SYSTEM CONTEXT]'] || 0}
+                                        </div>
+                                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                            Broker: ~{promptMetrics?.block_tokens_approx?.['[BROKER EVIDENCE]'] || 0} · 
+                                            Summary: ~{promptMetrics?.block_tokens_approx?.['[SESSION SUMMARY]'] || 0}
+                                        </div>
                                     </div>
 
                                     <div style={{ padding: '12px', borderRadius: '10px', border: '1px solid var(--card-border)', background: 'rgba(255,255,255,0.02)' }}>
@@ -3424,6 +807,75 @@ const Chat = () => {
                                     </div>
                                 </div>
                             )}
+
+                            {activeProfileTab === 'health' && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                                    <div>
+                                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '10px', letterSpacing: '0.05em' }}>LLM Providers</div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                            {Object.entries(systemHealth.llm).map(([id, health]) => (
+                                                <div key={id} style={{ 
+                                                    padding: '12px', 
+                                                    borderRadius: '12px', 
+                                                    background: health.status === 'online' ? 'rgba(34, 197, 94, 0.05)' : 'rgba(239, 68, 68, 0.05)',
+                                                    border: '1px solid var(--card-border)',
+                                                    display: 'flex',
+                                                    flexDirection: 'column',
+                                                    gap: '4px'
+                                                }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                        <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-main)' }}>{id}</span>
+                                                        <span style={{ 
+                                                            fontSize: '10px', 
+                                                            padding: '2px 8px', 
+                                                            borderRadius: '99px', 
+                                                            background: health.status === 'online' ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                                                            color: health.status === 'online' ? '#4ade80' : '#f87171',
+                                                            fontWeight: 'bold',
+                                                            textTransform: 'uppercase'
+                                                        }}>
+                                                            {health.status}
+                                                        </span>
+                                                    </div>
+                                                    {health.last_error && (
+                                                        <div style={{ 
+                                                            fontSize: '11px', 
+                                                            color: '#fca5a5', 
+                                                            marginTop: '4px',
+                                                            fontFamily: 'monospace',
+                                                            padding: '6px',
+                                                            background: 'rgba(0,0,0,0.2)',
+                                                            borderRadius: '6px',
+                                                            wordBreak: 'break-all'
+                                                        }}>
+                                                            {health.last_error}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '10px', letterSpacing: '0.05em' }}>Capabilities</div>
+                                        <div style={{ 
+                                            padding: '12px', 
+                                            borderRadius: '12px', 
+                                            background: 'rgba(255,255,255,0.02)',
+                                            border: '1px solid var(--card-border)'
+                                        }}>
+                                            <div style={{ fontSize: '13px', color: 'var(--text-main)', display: 'flex', justifyContent: 'space-between' }}>
+                                                <span>Loaded</span>
+                                                <span style={{ fontWeight: 'bold' }}>{systemHealth.capabilities.total || 0}</span>
+                                            </div>
+                                            <div style={{ fontSize: '13px', color: systemHealth.capabilities.failed > 0 ? '#f87171' : 'var(--text-main)', display: 'flex', justifyContent: 'space-between', marginTop: '6px' }}>
+                                                <span>Failed Contracts</span>
+                                                <span style={{ fontWeight: 'bold' }}>{systemHealth.capabilities.failed || 0}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
 
@@ -3449,18 +901,13 @@ const Chat = () => {
             const data = await api.get(`/sessions/${selectedId}/history?offset=${historyOffset}&limit=15`);
 
             if (data && data.history && data.history.length > 0) {
-                // Determine if we have more messages to load
                 setHasMoreHistory(data.has_more);
-
                 const rawHistory = data.history;
-
-                // Save current scroll metrics before state update
                 const container = scrollRef.current;
                 const oldScrollHeight = container ? container.scrollHeight : 0;
                 const oldScrollTop = container ? container.scrollTop : 0;
 
                 setMessages(prev => {
-                    // Filter out duplicates using stable IDs
                     const existingIds = new Set(prev.map(m => m.id).filter(id => !!id));
                     const newUnique = rawHistory.filter(m => !m.id || !existingIds.has(m.id));
                     return [...newUnique, ...prev];
@@ -3468,9 +915,7 @@ const Chat = () => {
 
                 setHistoryOffset(prev => prev + data.history.length);
 
-                // Restore scroll position so it doesn't jump
                 if (container) {
-                    // We use requestAnimationFrame or a very short timeout to wait for React render
                     requestAnimationFrame(() => {
                         const newScrollHeight = container.scrollHeight;
                         container.scrollTop = oldScrollTop + (newScrollHeight - oldScrollHeight);
@@ -3486,7 +931,6 @@ const Chat = () => {
         }
     };
 
-    // If initial/history chunk is too short to create scroll, prefetch older pages automatically.
     useEffect(() => {
         if (!selectedId || !hasMoreHistory || isFetchingHistory) return;
         const container = scrollRef.current;
@@ -3498,17 +942,13 @@ const Chat = () => {
         }
     }, [selectedId, hasMoreHistory, isFetchingHistory, historyOffset, messages.length]);
 
-    // Handle infinite scroll + scroll to bottom button
     const handleScroll = (e) => {
         const target = e.target;
-
-        // Infinite scroll (top) with threshold to avoid strict equality issues.
         const isNearTop = target.scrollTop <= 60;
         if (isNearTop && hasMoreHistory && !isFetchingHistory) {
             fetchMoreHistory();
         }
 
-        // Scroll to bottom button visibility
         const isAtBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 100;
         setShowScrollButton(!isAtBottom);
     };
@@ -3557,18 +997,17 @@ const Chat = () => {
 
     const handleSend = async (e) => {
         if (e) e.preventDefault();
-        if (isSending || uploading) return; // Guard against double sends
+        if (isSending || uploading) return;
         if ((!input.trim() && pendingFiles.length === 0)) return;
 
         let activeId = selectedId;
 
-        // Lazy creation if no session is selected
         if (!activeId) {
             try {
                 const data = await api.post('/sessions', { interface: 'web' });
                 if (data && data.id) {
                     activeId = data.id;
-                    skipResetRef.current = true; // Tell WebSocket useEffect not to clear our optimistic state
+                    skipResetRef.current = true;
                     setSelectedId(activeId);
                     fetchSessions();
                 } else {
@@ -3583,9 +1022,74 @@ const Chat = () => {
 
         const text = input.trim();
         setInput('');
+
+        if (text === '/mock' || text === '/demo') {
+            const demoMsgs = [
+                {
+                    id: 'mock-1',
+                    role: 'user',
+                    content: 'Gere um relatório de vendas trimestrais e infraestrutura do sistema.',
+                    timestamp: Date.now() / 1000 - 60
+                },
+                {
+                    id: 'mock-2',
+                    role: 'assistant',
+                    content: `Aqui está o relatório de infraestrutura e vendas trimestrais:
+
+| Mês | Vendas | Meta |
+|---|---|---|
+| Jan | 12000 | 10000 |
+| Fev | 15500 | 14000 |
+| Mar | 18200 | 16000 |
+
+E aqui está o script de monitoramento do servidor em Python:
+\`\`\`python
+import psutil
+import time
+
+def monitor_system():
+    cpu = psutil.cpu_percent(interval=1)
+    mem = psutil.virtual_memory().percent
+    print(f"CPU: {cpu}% | RAM: {mem}%")
+    return {"status": "healthy", "cpu": cpu}
+\`\`\`
+`,
+                    timestamp: Date.now() / 1000 - 30,
+                    statusPhase: 'complete',
+                    isComplete: true,
+                    animateTyping: true,
+                    work_id: 'work-demo-777',
+                    model_info: 'Llama-3.3-70B-Versatile',
+                    reasoningTimeline: [
+                        { text: 'Analisando os dados do banco de vendas trimestrais...', ts: Date.now() / 1000 - 55 },
+                        { text: 'Compilando os gráficos e gerando o script de monitoramento...', ts: Date.now() / 1000 - 40 }
+                    ],
+                    attachments: [
+                        { name: 'relatorio_vendas.pdf', type: 'pdf', url: '/api/static/relatorio_vendas.pdf' },
+                        { name: 'dashboard_preview.png', type: 'image', url: '/api/static/dashboard_preview.png' }
+                    ]
+                },
+                {
+                    id: 'mock-3',
+                    role: 'assistant',
+                    content: 'Como está o clima e a saúde do sistema hoje?',
+                    timestamp: Date.now() / 1000 - 15,
+                    statusPhase: 'complete',
+                    isComplete: true,
+                    animateTyping: true,
+                    capabilities_used: ['weather', 'system_health']
+                }
+            ];
+            setMessages(prev => [...prev, ...demoMsgs]);
+            toast.success("Demonstração Mock injetada com sucesso!");
+            setTimeout(() => {
+                if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+            }, 100);
+            return;
+        }
+
         setIsSending(true);
 
-        // Capture Geolocation (Dynamic Context)
         let location = null;
         if (navigator.geolocation) {
             try {
@@ -3596,10 +1100,9 @@ const Chat = () => {
                     latitude: pos.coords.latitude,
                     longitude: pos.coords.longitude
                 };
-            } catch (err) { console.debug("Geolocation skipped or timed out"); }
+            } catch (err) {}
         }
 
-        // Optimistic "Thinking" state for current agent
         pendingReasoningRef.current = [];
         setStreamingMessage({
             role: 'assistant',
@@ -3611,7 +1114,6 @@ const Chat = () => {
             isComplete: false
         });
 
-        // 1. Upload pending files first if any
         let uploadedFiles = [];
         if (pendingFiles.length > 0) {
             setUploading(true);
@@ -3621,7 +1123,6 @@ const Chat = () => {
             try {
                 const response = await api.post(`/sessions/${activeId}/upload`, formData);
                 uploadedFiles = response.files || [];
-                // Pre-revoke URLs to avoid memory leaks
                 pendingFiles.forEach(item => { if (item.previewUrl) URL.revokeObjectURL(item.previewUrl); });
                 setPendingFiles([]);
             } catch (err) {
@@ -3641,7 +1142,6 @@ const Chat = () => {
             return;
         }
 
-        // 3. Send Message (Optimistic UI)
         const userMsg = {
             role: 'user',
             content: userMsgContent,
@@ -3651,12 +1151,10 @@ const Chat = () => {
         };
         setMessages(prev => [...prev, userMsg]);
 
-        // Optimistic "Thinking" state for current agent is now set at the top
-
         const payload = {
             type: 'msg',
             content: userMsgContent,
-            attachments: uploadedFiles, // Send metadata to handle text + files unified
+            attachments: uploadedFiles,
             timestamp: Date.now(),
             user_data: {
                 location: location
@@ -3678,10 +1176,7 @@ const Chat = () => {
                 setStreamingMessage(null);
             }
         }
-
-        // Note: isSending and streamingMessage will be updated by WS events
     };
-
 
     const handleFileUpload = (e) => {
         const files = Array.from(e.target.files || []);
@@ -3720,43 +1215,6 @@ const Chat = () => {
             return prev.filter((_, i) => i !== index);
         });
     };
-
-    const AttachmentMenu = () => (
-        // ... previous menu ...
-        <div ref={attachMenuRef} className="glass" style={{
-            position: 'absolute',
-            bottom: 'calc(100% + 15px)',
-            left: '20px',
-            padding: '12px',
-            borderRadius: '16px',
-            zIndex: 10000,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '4px',
-            minWidth: '220px',
-            boxShadow: '0 15px 50px rgba(0,0,0,0.6)',
-            background: 'rgba(15, 20, 30, 0.95)',
-            border: '1px solid rgba(255,255,255,0.12)',
-            animation: 'slide-up 0.2s ease-out'
-        }}>
-            <p style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 'bold', padding: '4px 10px 8px' }}>Attached Items (Max 10)</p>
-            <button onClick={() => { fileInputRef.current.accept = "image/*"; fileInputRef.current.click(); }} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px', borderRadius: '10px' }}>
-                <Paperclip size={16} color="#ec4899" /> Imagens
-            </button>
-            <button onClick={() => { fileInputRef.current.accept = "audio/*"; fileInputRef.current.click(); }} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px', borderRadius: '10px' }}>
-                <Music size={16} color="#10b981" /> Audio
-            </button>
-            <button onClick={() => { fileInputRef.current.accept = "video/*"; fileInputRef.current.click(); }} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px', borderRadius: '10px' }}>
-                <Video size={16} color="#8b5cf6" /> Videos
-            </button>
-            <button onClick={() => { fileInputRef.current.accept = ".pdf,.doc,.docx,.xls,.xlsx,.txt"; fileInputRef.current.click(); }} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px', borderRadius: '10px' }}>
-                <FileText size={16} color="#3b82f6" /> Documentos
-            </button>
-            <button onClick={() => { fileInputRef.current.accept = "*/*"; fileInputRef.current.click(); }} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px', borderRadius: '10px' }}>
-                <FileIcon size={16} color="#f59e0b" /> Files
-            </button>
-        </div>
-    );
 
     const PreviewModal = () => {
         if (!previewFile) return null;
@@ -3830,7 +1288,6 @@ const Chat = () => {
 
     return (
         <div className={`animate-fade-in flex-1 ${isMobile ? 'mobile-nav-active' : ''}`} style={{ display: 'flex', flex: 1, minHeight: 0, gap: isMobile ? '0' : '16px', overflow: 'hidden' }}>
-            {/* Hidden File Input */}
             <input
                 type="file"
                 multiple
@@ -3846,10 +1303,7 @@ const Chat = () => {
                 onChange={handleAvatarUpload}
             />
 
-            {/* Navigation Container for Mobile (Slide Effect) */}
             <div className={`mobile-view-container ${mobileView === 'chat' ? 'show-chat' : ''}`} style={{ display: isMobile ? 'flex' : 'contents' }}>
-
-                {/* Sidebar - Sessions List (Mobile View Pane 1) */}
                 <div className={`${isMobile ? 'mobile-view-pane' : ''} glass`} style={{
                     width: isMobile ? '50%' : (isSessionsCollapsed ? '60px' : '300px'),
                     height: '100%',
@@ -3953,7 +1407,6 @@ const Chat = () => {
                     </div>
                 </div>
 
-                {/* Chat Area (Mobile View Pane 2) */}
                 <div ref={chatPaneRef} className={`${isMobile ? 'mobile-view-pane' : ''} glass`} style={{
                     flex: isMobile ? 'none' : 1,
                     display: 'flex',
@@ -3964,134 +1417,27 @@ const Chat = () => {
                 }}>
                     <PreviewModal />
 
-                    {/* Main Chat Body (Messages + Profile on Desktop) */}
                     <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
                         {!shouldUseFullProfileDesktop && (
                             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                                {/* Header */}
-                                <div style={{ padding: isMobile ? '6px 12px' : '8px 16px', borderBottom: '1px solid var(--card-border)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    {isMobile && (
-                                        <button className="btn-ghost" onClick={() => setMobileView('sessions')} style={{ padding: '0.4rem', marginLeft: '-0.4rem' }}>
-                                            <ChevronLeft size={20} />
-                                        </button>
-                                    )}
-                                    {selectedId && currentSession ? (
-                                        <SessionAvatar
-                                            session={currentSession}
-                                            size={isMobile ? 28 : 32}
-                                            showBadge={false}
-                                            onClick={() => setShowChatProfile(true)}
-                                        />
-                                    ) : (
-                                        <div className="flex-center" style={{ width: isMobile ? '28px' : '32px', height: isMobile ? '28px' : '32px', background: isConnected ? 'var(--success)' : 'var(--text-muted)', color: '#fff', borderRadius: '50%' }}>
-                                            <Bot size={isMobile ? 16 : 18} />
-                                        </div>
-                                    )}
-                                    <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                                        {isEditingName ? (
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                                                <input
-                                                    autoFocus
-                                                    value={editNameValue}
-                                                    onChange={(e) => setEditNameValue(e.target.value)}
-                                                    onKeyDown={(e) => {
-                                                        if (e.key === 'Enter') handleRenameSession();
-                                                        if (e.key === 'Escape') setIsEditingName(false);
-                                                    }}
-                                                    onBlur={handleRenameSession}
-                                                    style={{
-                                                        background: 'rgba(255,255,255,0.05)',
-                                                        border: '1px solid var(--accent-color)',
-                                                        borderRadius: '6px',
-                                                        padding: '2px 6px',
-                                                        color: '#fff',
-                                                        fontSize: isMobile ? '13px' : '14px',
-                                                        fontWeight: 'bold',
-                                                        outline: 'none',
-                                                        width: '100%'
-                                                    }}
-                                                />
-                                            </div>
-                                        ) : (
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                <h3
-                                                    style={{ fontSize: isMobile ? '13px' : '14px', fontWeight: 'bold', margin: 0, cursor: selectedId ? 'pointer' : 'default', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}
-                                                    onClick={() => { if (selectedId) setShowChatProfile(true); }}
-                                                >
-                                                    {selectedId ? (currentSession?.name || `Session: ${selectedId.substring(0, 8)}...`) : 'Select a session'}
-                                                </h3>
-                                                {(!isMobile && selectedId) && <ChevronRight size={14} style={{ opacity: 0.5, transition: '0.2s', cursor: 'pointer' }} onClick={() => setShowChatProfile(true)} className="hover:opacity-100" />}
-                                                <div
-                                                    title={isConnected ? 'Connected' : 'Disconnected'}
-                                                    style={{
-                                                        width: '8px',
-                                                        height: '8px',
-                                                        borderRadius: '50%',
-                                                        marginLeft: '4px',
-                                                        backgroundColor: isConnected ? 'var(--success)' : 'var(--text-muted)',
-                                                        boxShadow: isConnected ? '0 0 6px var(--success-glow, rgba(16, 185, 129, 0.4))' : 'none',
-                                                        flexShrink: 0
-                                                    }}
-                                                />
-                                            </div>
-                                        )}
-                                    </div>
+                                <ChatHeader
+                                    isMobile={isMobile}
+                                    setMobileView={setMobileView}
+                                    selectedId={selectedId}
+                                    currentSession={currentSession}
+                                    isConnected={isConnected}
+                                    isEditingName={isEditingName}
+                                    setIsEditingName={setIsEditingName}
+                                    editNameValue={editNameValue}
+                                    setEditNameValue={setEditNameValue}
+                                    handleRenameSession={handleRenameSession}
+                                    showActionsMenu={showActionsMenu}
+                                    setShowActionsMenu={setShowActionsMenu}
+                                    deleteSession={deleteSession}
+                                    setShowChatProfile={setShowChatProfile}
+                                />
 
-                                    {selectedId && (
-                                        <div style={{ position: 'relative' }}>
-                                            <button
-                                                className="btn-ghost"
-                                                onClick={() => setShowActionsMenu(!showActionsMenu)}
-                                                style={{ padding: '8px' }}
-                                            >
-                                                <MoreHorizontal size={20} />
-                                            </button>
-                                            {showActionsMenu && (
-                                                <div className="glass" style={{
-                                                    position: 'absolute',
-                                                    top: '100%',
-                                                    right: 0,
-                                                    marginTop: '8px',
-                                                    padding: '8px',
-                                                    zIndex: 1000,
-                                                    minWidth: '160px',
-                                                    display: 'flex',
-                                                    flexDirection: 'column',
-                                                    gap: '4px',
-                                                    background: 'var(--card-bg)',
-                                                    boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
-                                                }}>
-                                                    <button
-                                                        className="btn-ghost"
-                                                        style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', fontSize: '13px', justifyContent: 'flex-start', color: 'var(--error)' }}
-                                                        onClick={(e) => {
-                                                            deleteSession(e, selectedId);
-                                                            setShowActionsMenu(false);
-                                                        }}
-                                                    >
-                                                        <Trash2 size={16} /> Delete Session
-                                                    </button>
-                                                    <button
-                                                        className="btn-ghost"
-                                                        style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', fontSize: '13px', justifyContent: 'flex-start' }}
-                                                        onClick={() => {
-                                                            setIsEditingName(true);
-                                                            setEditNameValue(currentSession?.name || '');
-                                                            setShowActionsMenu(false);
-                                                        }}
-                                                    >
-                                                        <Edit size={16} /> Rename
-                                                    </button>
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* Messages Container */}
                                 <div className="flex-1 overflow-hidden flex flex-col relative">
-
-
                                     <MessageList
                                         messages={messages}
                                         sessionId={selectedId}
@@ -4104,7 +1450,6 @@ const Chat = () => {
                                         playbackRuns={playbackRuns}
                                     />
 
-                                    {/* WhatsApp-like scroll to bottom button */}
                                     {showScrollButton && (
                                         <button
                                             onClick={scrollToBottom}
@@ -4127,131 +1472,25 @@ const Chat = () => {
                                     )}
                                 </div>
 
-                                {/* Input Area */}
-                                <div style={{
-                                    padding: isMobile ? '2px 8px calc(8px + env(safe-area-inset-bottom))' : '4px 14px 4px',
-                                    borderTop: '1px solid var(--card-border)',
-                                    background: 'var(--bg-color)',
-                                    position: 'relative',
-                                    zIndex: 10
-                                }}>
-                                    {pendingFiles.length > 0 && (
-                                        <div className="previews-container animate-fade-in" style={{
-                                            marginBottom: '8px',
-                                            padding: '6px',
-                                            background: 'rgba(255,255,255,0.02)',
-                                            borderRadius: '12px',
-                                            border: '1px solid var(--card-border)'
-                                        }}>
-                                            {pendingFiles.map((file, idx) => (
-                                                <div key={idx} className="preview-item" onClick={() => setPreviewFile(file)}>
-                                                    <button
-                                                        onClick={(e) => { e.stopPropagation(); removePendingFile(idx); }}
-                                                        className="preview-remove"
-                                                    >
-                                                        <X size={10} />
-                                                    </button>
-                                                    {file.type === 'image' && <img src={file.previewUrl} alt="preview" />}
-                                                    {file.type === 'video' && <video src={file.previewUrl} />}
-                                                    {(file.type !== 'image' && file.type !== 'video') && <FilePreviewIcon type={file.type} />}
-                                                    <div className="file-name-tag">{truncateFileName(file.name)}</div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-
-                                    {showAttachMenu && <AttachmentMenu />}
-                                    <div style={{
-                                        position: 'relative',
-                                        display: 'flex',
-                                        flexDirection: 'column',
-                                        background: 'var(--card-bg)',
-                                        border: '1px solid var(--card-border)',
-                                        borderRadius: isMobile ? '12px' : '8px',
-                                        boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
-                                        overflow: 'hidden',
-                                        transition: 'var(--transition)'
-                                    }} className="input-container-complex">
-                                        <textarea
-                                            ref={inputRef}
-                                            rows="1"
-                                            placeholder={(isConnected || !selectedId) ? (uploading ? "Syncing..." : "Message...") : "Connecting..."}
-                                            value={input}
-                                            onChange={(e) => setInput(e.target.value)}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter') {
-                                                    if (e.ctrlKey) {
-                                                        e.preventDefault();
-                                                        const start = e.target.selectionStart;
-                                                        const end = e.target.selectionEnd;
-                                                        const val = e.target.value;
-                                                        setInput(val.substring(0, start) + "\n" + val.substring(end));
-                                                        setTimeout(() => {
-                                                            e.target.selectionStart = e.target.selectionEnd = start + 1;
-                                                            e.target.style.height = 'auto';
-                                                            e.target.style.height = `${e.target.scrollHeight}px`;
-                                                        }, 0);
-                                                    } else if (!e.shiftKey) {
-                                                        e.preventDefault();
-                                                        handleSend(e);
-                                                    }
-                                                }
-                                            }}
-                                            disabled={!isConnected && selectedId || isSending || uploading}
-                                            className="custom-scrollbar"
-                                            style={{
-                                                width: '100%',
-                                                padding: isMobile ? '10px 44px 10px 44px' : '12px 56px 12px 56px',
-                                                background: 'transparent',
-                                                border: 'none',
-                                                color: 'var(--text-main)',
-                                                fontSize: isMobile ? '14px' : '15px',
-                                                resize: 'none',
-                                                minHeight: isMobile ? '40px' : '48px',
-                                                maxHeight: '200px',
-                                                overflowY: 'auto',
-                                                lineHeight: '1.4',
-                                                outline: 'none',
-                                                whiteSpace: 'pre-wrap'
-                                            }}
-                                        />
-                                        <button
-                                            ref={attachButtonRef}
-                                            type="button"
-                                            disabled={uploading}
-                                            onClick={() => setShowAttachMenu(!showAttachMenu)}
-                                            className="flex-center"
-                                            style={{
-                                                position: 'absolute', left: isMobile ? '8px' : '12px', bottom: isMobile ? '4px' : '6px',
-                                                width: isMobile ? '32px' : '36px', height: isMobile ? '32px' : '36px', borderRadius: '50%',
-                                                color: uploading ? 'var(--warning)' : 'var(--text-muted)',
-                                                background: 'rgba(255,255,255,0.05)',
-                                                border: 'none',
-                                                transition: 'var(--transition)',
-                                                zIndex: 5
-                                            }}
-                                        >
-                                            {uploading ? <Cpu size={18} className="animate-spin" /> : <Paperclip size={isMobile ? 18 : 22} />}
-                                        </button>
-                                        <button
-                                            onClick={handleSend}
-                                            disabled={(!input.trim() && pendingFiles.length === 0) || isSending || uploading}
-                                            className="flex-center"
-                                            style={{
-                                                position: 'absolute', right: isMobile ? '8px' : '12px', bottom: isMobile ? '4px' : '6px',
-                                                width: isMobile ? '32px' : '36px', height: isMobile ? '32px' : '36px', borderRadius: '50%',
-                                                background: (input.trim() || pendingFiles.length > 0) && !isSending && !uploading ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
-                                                color: '#fff',
-                                                transition: 'var(--transition)',
-                                                border: 'none',
-                                                cursor: (input.trim() || pendingFiles.length > 0) && !isSending && !uploading ? 'pointer' : 'default',
-                                                zIndex: 5
-                                            }}
-                                        >
-                                            {isSending || uploading ? <Cpu size={16} className="animate-spin" /> : <Send size={isMobile ? 16 : 18} />}
-                                        </button>
-                                    </div>
-                                </div>
+                                <ChatInputArea
+                                    isMobile={isMobile}
+                                    isConnected={isConnected}
+                                    selectedId={selectedId}
+                                    input={input}
+                                    setInput={setInput}
+                                    handleSend={handleSend}
+                                    isSending={isSending}
+                                    uploading={uploading}
+                                    pendingFiles={pendingFiles}
+                                    removePendingFile={removePendingFile}
+                                    setPreviewFile={setPreviewFile}
+                                    showAttachMenu={showAttachMenu}
+                                    setShowAttachMenu={setShowAttachMenu}
+                                    fileInputRef={fileInputRef}
+                                    inputRef={inputRef}
+                                    attachButtonRef={attachButtonRef}
+                                    attachMenuRef={attachMenuRef}
+                                />
                             </div>
                         )}
                         {!isMobile && showChatProfile && renderChatProfile({ desktopFullWidth: shouldUseFullProfileDesktop })}

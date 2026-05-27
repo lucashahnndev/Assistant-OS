@@ -1,16 +1,13 @@
-# Deep Memory Discoverability
+# Deep Memory Capabilities
+Use these capabilities to access your long-term, indexable storage. This memory is NOT automatically included in the prompt; you must explicit recall it.
 
-Use this capability for richer, longer-lived memory records and recall workflows.
+## `deep.memory.store_memory`
+Saves a piece of information permanently for future retrieval. Use this for user preferences, important facts, or complex instructions.
+- **params**:
+    - `content` (str): The information to save. Be descriptive.
+    - `category` (str, optional): A tag for organization (e.g., 'user_preference', 'system_config', 'project_data'). Default: 'general'.
 
-## When to use
-- Persist structured memory entries
-- Recall deeper user history or stored notes
-- Work with durable memory data rather than quick preferences
-
-## When not to use
-- One-off chat replies
-- Calendar or task execution
-- Browser navigation
-
-## Discovery clues
-- deep memory, long-term memory, durable memory, record, recall, remember, persistent note
+## `deep.memory.recall_memory`
+Searches your deep memory for information relevant to a specific query. The results will be returned in the [OBSERVATION].
+- **params**:
+    - `query` (str): Keywords or a question to search for.

@@ -58,6 +58,8 @@ class Session:
         self.audit_trail: List[Dict[str, Any]] = [] # Auditable ledger of admin changes
         self._max_trace_history = 50
         self.cognitive_state: Dict[str, Any] = default_cognitive_state_dict()
+        self.thoughts: List[Dict[str, Any]] = [] # Dedicated audit trail for cognitive thoughts
+        self.media_cards: List[Dict[str, Any]] = [] # Dedicated persistence layer for UI widgets/cards
         self.last_cognitive_projection: Optional[Dict[str, Any]] = None
         self.cognitive_diagnostics: Optional[Dict[str, Any]] = None
         
@@ -78,6 +80,7 @@ class Session:
         work_id: str = None,
         silent: bool = False,
         actor: Optional[Dict[str, Any]] = None,
+        model_info: Optional[str] = None,
     ):
         # Rough token estimation (chars / 4)
         tokens = len(content) // 4
@@ -94,7 +97,8 @@ class Session:
             "tokens": tokens, 
             "type": msg_type,
             "timestamp": timestamp,
-            "is_read": role == "user" # Agent "reads" user messages immediately
+            "is_read": role == "user", # Agent "reads" user messages immediately
+            "model_info": model_info
         }
         if work_id:
             msg["work_id"] = work_id
@@ -110,6 +114,13 @@ class Session:
             msg["file"] = file
         if attachments:
             msg["attachments"] = attachments
+            
+        # Back-link this message_id to any thoughts that share this work_id
+        if role == "assistant" and work_id:
+            for t in self.thoughts:
+                if t.get("work_id") == work_id and not t.get("message_id"):
+                    t["message_id"] = msg["id"]
+                    
         self.history.append(msg)
         self.turn_id += 1 # Advance turn counter
         self.last_interaction = time.time()
@@ -125,6 +136,49 @@ class Session:
                 "work_id": work_id,
                 "unread_count": self.get_unread_count("assistant")
             })
+
+    def add_thought(self, thought_text: str, work_id: Optional[str] = None, message_id: Optional[str] = None):
+        """Adds a cognitive thought to the dedicated audit trail."""
+        thought_entry = {
+            "id": str(uuid.uuid4()),
+            "message_id": message_id,
+            "work_id": work_id,
+            "thought": thought_text,
+            "timestamp": time.time()
+        }
+        self.thoughts.append(thought_entry)
+        
+        # Emit event for real-time thought syncing in the dashboard
+        global_event_bus.emit_threadsafe({
+            "type": "cognitive_thought",
+            "session_id": self.session_id,
+            "thought": thought_entry
+        })
+
+    def add_media_card(self, card_data: Dict[str, Any]) -> str:
+        """
+        Adds a new media/UI card snapshot to the session's persistence layer.
+        card_data should contain 'id', 'type', 'payload', 'timestamp', etc.
+        """
+        if not isinstance(card_data, dict):
+            return ""
+            
+        card_id = card_data.get("id") or f"media_{int(time.time() * 1000)}_{str(uuid.uuid4())[:8]}"
+        card_data["id"] = card_id
+        
+        if "timestamp" not in card_data:
+            card_data["timestamp"] = int(time.time() * 1000)
+            
+        # Check if card with same ID exists and update it, otherwise append
+        existing = next((c for c in getattr(self, "media_cards", []) if c.get("id") == card_id), None)
+        if existing:
+            existing.update(card_data)
+        else:
+            if not hasattr(self, "media_cards"):
+                self.media_cards = []
+            self.media_cards.append(card_data)
+            
+        return card_id
 
     def get_history(self) -> List[Dict[str, str]]:
         return self.history
@@ -463,6 +517,22 @@ class Session:
             # (they are already captured in task_registry state/summaries)
             if not is_recent and clean_role == "system" and not (msg.get("file") or msg.get("attachments")):
                 continue
+
+            # Stubbornness / Error Pruning: Remove stale assistant errors and repetitive credential requests
+            if not is_recent and clean_role == "assistant":
+                txt_lower = content_str.lower()
+                error_markers = [
+                    "preciso saber qual serviço",
+                    "preciso de algumas informações",
+                    "para verificar sua",
+                    "planning failed",
+                    "admission_reject",
+                    "session_busy",
+                    "session already has a running",
+                    "lidar com uma tarefa",
+                ]
+                if any(m in txt_lower for m in error_markers):
+                    continue
 
             # Preferences: Use summary if older than recent threshold, else content
             if is_recent:

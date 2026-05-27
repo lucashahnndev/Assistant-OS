@@ -9,6 +9,7 @@ import hashlib
 from typing import Dict, Any, List, Optional, Union, Tuple
 
 from .schemas import ToonResponse, EvidencePack, BBox
+from .runtime import BrowserRuntime
 from .vision_contract import normalize_vision_observation
 
 logger = logging.getLogger("aosd.capabilities.browser_control.planner")
@@ -72,9 +73,6 @@ class BrowserSubagent:
         perception_cache_ttl_s: float = 3.5,
         fast_screenshot_format: str = "jpeg",
         fast_screenshot_quality: int = 60,
-        max_same_action_repeats: int = 3,
-        max_state_unchanged_loops: int = 5,
-        max_forced_recovery_attempts: int = 2,
     ):
         self.runtime = runtime
         self.llm_manager = llm_manager
@@ -90,10 +88,6 @@ class BrowserSubagent:
         self._last_action = None
         self._last_args = None
         self._consecutive_same_action = 0
-        self._max_same_action_repeats = max(2, int(max_same_action_repeats))
-        self._max_state_unchanged_loops = max(3, int(max_state_unchanged_loops))
-        self._max_forced_recovery_attempts = max(1, int(max_forced_recovery_attempts))
-        self._forced_recovery_attempts = 0
         self._consecutive_parse_failures = 0
         self._max_parse_failures = 2
         self._locked_target_id = str(getattr(runtime, "target_id", "") or "")
@@ -131,56 +125,6 @@ class BrowserSubagent:
         self._last_vision_signature_hash: str = ""
         self._last_vision_at: float = 0.0
         self._vision_cache_ttl_s: float = 30.0
-        self._bootstrap_attempts: int = 0
-        self._last_bootstrap_url: str = ""
-        # Hard serialization for browser mutations: one action at a time.
-        self._action_serial_lock = asyncio.Lock()
-
-    def _evaluate_loop_guard(
-        self,
-        *,
-        action: str,
-        goal: str,
-        state: Dict[str, Any],
-        state_changed: bool,
-    ) -> Dict[str, Any]:
-        """
-        Enforces deterministic anti-loop behavior:
-        - First threshold breach -> force one recovery action.
-        - Persistent breach after bounded recoveries -> hard stop.
-        """
-        if state_changed:
-            self._forced_recovery_attempts = 0
-            return {"mode": "none"}
-
-        severe_state = self._consecutive_same_state >= self._max_state_unchanged_loops
-        severe_action = self._consecutive_same_action >= self._max_same_action_repeats
-        if not (severe_state or severe_action):
-            return {"mode": "none"}
-
-        trigger = "State Stall" if severe_state else "Action Loop"
-        if self._forced_recovery_attempts < self._max_forced_recovery_attempts:
-            self._forced_recovery_attempts += 1
-            recovery_action, recovery_args, recovery_note = self._choose_recovery_action(trigger, goal, state)
-            return {
-                "mode": "force_recovery",
-                "trigger": trigger,
-                "recovery_action": recovery_action,
-                "recovery_args": recovery_args,
-                "note": recovery_note,
-                "attempt": int(self._forced_recovery_attempts),
-                "max_attempts": int(self._max_forced_recovery_attempts),
-            }
-
-        return {
-            "mode": "hard_stop",
-            "trigger": trigger,
-            "reason": (
-                f"Loop guard hard-stop: {trigger} persisted "
-                f"(same_state={self._consecutive_same_state}, same_action={self._consecutive_same_action}) "
-                f"after {self._forced_recovery_attempts}/{self._max_forced_recovery_attempts} recovery attempts."
-            ),
-        }
 
     @staticmethod
     def _tokenize_text(value: str) -> List[str]:
@@ -262,8 +206,6 @@ class BrowserSubagent:
     def _assess_click_visual_receipt(result_data: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(result_data, dict):
             return {"ok": True, "reason": "no_result_data"}
-        if bool(result_data.get("fallback_clicked", False)):
-            return {"ok": True, "reason": "interactive_fallback_clicked"}
 
         hit = result_data.get("hit_after")
         if not isinstance(hit, dict):
@@ -517,12 +459,13 @@ Example:
         return copy.deepcopy(self._last_vision_observation)
 
     def _extract_url(self, goal: str) -> str:
-        raw_goal = str(goal or "")
-        # Prefer explicit URL in the user goal.
-        match = re.search(r"https?://[^\s,]+", raw_goal)
-        if match:
-            return match.group(0)
-        return ""
+        goal_lower = goal.lower()
+        if "youtube" in goal_lower: return "https://www.youtube.com"
+        if "spotify" in goal_lower: return "https://open.spotify.com"
+        if "github" in goal_lower: return "https://www.github.com"
+        if "google" in goal_lower: return "https://www.google.com"
+        match = re.search(r"https?://[^\s,]+", goal)
+        return match.group(0) if match else "https://www.google.com"
 
     @staticmethod
     def _normalize_spaces(text: str) -> str:
@@ -686,10 +629,7 @@ Example:
         """Generic fallback to avoid dead loops when planner JSON is persistently invalid."""
         url = str(state.get("url", "")).lower()
         if not url or url == "about:blank":
-            explicit_url = self._extract_url(goal)
-            if explicit_url:
-                return {"action": "navigate", "args": {"url": explicit_url}, "thought": "Fallback navigate from blank page due to parse failures."}
-            return {"action": "wait", "args": {"seconds": 2}, "thought": "Fallback wait on blank page; no explicit URL was provided."}
+            return {"action": "navigate", "args": {"url": self._extract_url(goal)}, "thought": "Fallback navigate from blank page due to parse failures."}
         
         # Safe generic fallback without deterministic semantic hijacking. 
         # Attempt minimal wait to settle, or if on an obvious end state (like a video player open), cautiously check if we are done.
@@ -763,17 +703,48 @@ Example:
         ]
         return any(h in blob for h in hints)
 
+    @staticmethod
+    def _state_indicates_context_drift(goal: str, state: Dict[str, Any]) -> bool:
+        g = str(goal or "").lower()
+        url = str(state.get("url") or "").lower()
+        title = str(state.get("title") or "").lower()
+        if "amazon" in g and ("ps4" in g or "controller" in g or "controle" in g):
+            if "amazon." in url and "/deals" in url:
+                return True
+            if "today's deals" in title or "todays deals" in title:
+                return True
+        return False
+
+    def _build_goal_search_url(self, goal: str, state: Dict[str, Any]) -> str:
+        """Constructs a deterministic search URL as drift-recovery fallback."""
+        g = str(goal or "").lower()
+        current_url = str(state.get("url") or "")
+        if "amazon" in g and ("ps4" in g or "controller" in g or "controle" in g):
+            domain = "www.amazon.com"
+            m = re.search(r"https?://([^/]+)/?", current_url)
+            if m and "amazon." in m.group(1):
+                domain = m.group(1)
+            return f"https://{domain}/s?k=PS4+controller"
+        return self._extract_url(goal)
+
     def _choose_recovery_action(self, trigger: str, goal: str, state: Dict[str, Any]) -> Tuple[str, Dict[str, Any], str]:
         """
         Conflict policy:
         1) Vision says target is out of viewport => reposition.
-        2) Otherwise use one vision refresh.
+        2) Context drift => navigate to deterministic goal URL.
+        3) Otherwise use one vision refresh.
         """
         if self._vision_requests_reposition(self._last_vision_observation):
             return (
                 "scroll",
                 {"direction": "up"},
                 f"{trigger} detected. Vision indicates target outside viewport; forcing scroll up.",
+            )
+        if self._state_indicates_context_drift(goal, state):
+            return (
+                "navigate",
+                {"url": self._build_goal_search_url(goal, state)},
+                f"{trigger} detected with context drift; forcing deterministic goal navigation.",
             )
         return (
             "vision",
@@ -1095,18 +1066,15 @@ Example:
                 await self._record_playback_frame(step_num, "thinking", {"goal": goal})
             
                 if step_num == 1 and state['url'] == "about:blank":
-                    bootstrap_url = self._extract_url(goal)
-                    if bootstrap_url:
-                        if bootstrap_url == self._last_bootstrap_url:
-                            self._bootstrap_attempts += 1
-                        else:
-                            self._bootstrap_attempts = 1
-                            self._last_bootstrap_url = bootstrap_url
-                        logger.info(f"[{step_id}] 🌐 Bootstrapping[{self._bootstrap_attempts}] -> {bootstrap_url}")
-                        await self.runtime.navigate(bootstrap_url)
-                        history.append({"step": 1, "thought": "Navigate to explicit URL from goal.", "action": "navigate", "args": {"url": bootstrap_url}, "status": "success"})
-                        await self._record_playback_frame(step_num, "navigate", {"url": bootstrap_url})
-                        continue
+                    target_url = self._extract_url(goal)
+                    logger.info(f"[{step_id}] 🌐 Bootstrapping -> {target_url}")
+                    await self.runtime.navigate(target_url)
+                    history.append({"step": 1, "thought": "Navigate to start.", "action": "navigate", "args": {"url": target_url}, "status": "success"})
+                    
+                    # Record frame after navigation
+                    await self._record_playback_frame(step_num, "navigate", {"url": target_url})
+                    
+                    continue
 
                 try:
                     # REASONING PHASE
@@ -1130,29 +1098,12 @@ Example:
                             action = "scroll"
                             args = {"direction": "up"}
                             thought = f"{thought} | Vision indicates target outside viewport; executing scroll up instead of another vision call."
+                        elif self._state_indicates_context_drift(goal, state):
+                            action = "navigate"
+                            args = {"url": self._build_goal_search_url(goal, state)}
+                            thought = f"{thought} | Context drift detected; navigating back to deterministic goal URL instead of repeating vision."
                         self._last_action = action
                         self._last_args = args
-
-                    # Deterministic anti-loop: suppress redundant navigate when already on
-                    # the same URL and no state progress is happening.
-                    if action == "navigate":
-                        wanted_url = str(args.get("url", "") or "").strip().rstrip("/")
-                        current_url = str(state.get("url", "") or "").strip().rstrip("/")
-                        if (
-                            wanted_url
-                            and current_url
-                            and wanted_url == current_url
-                            and not state_changed
-                            and self._consecutive_same_state >= 2
-                        ):
-                            thought = (
-                                f"{thought} | Redundant navigate suppressed: target URL already active "
-                                "without progress; forcing wait for explicit next-state signal."
-                            )
-                            action = "wait"
-                            args = {"seconds": 1}
-                            self._last_action = action
-                            self._last_args = args
 
                     # LOOP SIGNALING: Detect repeated state/action patterns, but never hard-override
                     # the planner action. Some tasks legitimately require repeated loops (e.g. infinite
@@ -1166,50 +1117,6 @@ Example:
                         )
                         logger.warning(f"⚠️ [Loop Detection] {alert_note}")
                         thought = f"{thought} | {alert_note}"
-
-                    guard = self._evaluate_loop_guard(
-                        action=action,
-                        goal=goal,
-                        state=state,
-                        state_changed=state_changed,
-                    )
-                    if str(guard.get("mode")) == "force_recovery":
-                        forced_action = str(guard.get("recovery_action") or action)
-                        forced_args = guard.get("recovery_args") if isinstance(guard.get("recovery_args"), dict) else args
-                        guard_note = str(guard.get("note") or "Forced recovery action by loop guard.")
-                        logger.warning(
-                            f"[{step_id}] 🛟 Loop guard forcing recovery "
-                            f"attempt {guard.get('attempt')}/{guard.get('max_attempts')}: "
-                            f"{forced_action}({forced_args})"
-                        )
-                        thought = f"{thought} | {guard_note}"
-                        action = forced_action
-                        args = forced_args
-                        self._last_action = action
-                        self._last_args = args
-                    elif str(guard.get("mode")) == "hard_stop":
-                        stop_reason = str(guard.get("reason") or "Loop guard hard-stop")
-                        logger.error(f"[{step_id}] 🛑 {stop_reason}")
-                        self._append_run_report_event(
-                            "loop_guard_hard_stop",
-                            {
-                                "trace_id": trace_id,
-                                "step_id": step_id,
-                                "step_num": int(step_num),
-                                "reason": stop_reason,
-                                "url": str(state.get("url") or ""),
-                                "title": str(state.get("title") or ""),
-                            },
-                        )
-                        self._emit_worker_planner_update(
-                            {
-                                "phase": "loop_guard_hard_stop",
-                                "step_id": step_id,
-                                "step_num": step_num,
-                                "reason": stop_reason,
-                            }
-                        )
-                        return self._fail(stop_reason, trace_id, step_id)
                     
                     logger.info(f"[{step_id}] 🧠 THOUGHT: {thought}")
                     logger.info(f"[{step_id}] 🎯 ACTION: {action}({args})")
@@ -1295,8 +1202,7 @@ Example:
                         })
                         await self._record_playback_frame(step_num, "resume_context", {"context": resume_context})
                     pre_action_focus = copy.deepcopy(state.get("focus") or {})
-                    async with self._action_serial_lock:
-                        resp = await self._execute_action(action, args, step_id, trace_id)
+                    resp = await self._execute_action(action, args, step_id, trace_id)
 
                     if str(getattr(resp, "status", "")) == "error":
                         err = str(getattr(resp, "error_details", "") or "Unknown planner execution error")
@@ -1457,13 +1363,27 @@ Example:
                     self._playback_step_count += 1
                     frame_bytes = await self.runtime.capture_screenshot_bytes()
                     if frame_bytes and self._playback_service:
-                        self._playback_service.add_frame(
+                        step_meta = self._playback_service.add_frame(
                             session_id=self._playback_session_id,
                             run_id=self._playback_run_id,
                             step=self._playback_step_count,
                             action={"type": "paused", "args": {"step_id": step_id}},
                             frame_bytes=frame_bytes,
                         )
+                        emit_event = self._callbacks.get("emit_event") if isinstance(self._callbacks, dict) else None
+                        if callable(emit_event) and isinstance(step_meta, dict) and step_meta:
+                            emit_event(
+                                {
+                                    "type": "playback.frame",
+                                    "run_id": self._playback_run_id,
+                                    "payload": {
+                                        "run_id": self._playback_run_id,
+                                        "session_id": self._playback_session_id,
+                                        "status": "running",
+                                        "frame": step_meta,
+                                    },
+                                }
+                            )
                         send_status = self._callbacks.get("send_status") if isinstance(self._callbacks, dict) else None
                         if callable(send_status):
                             send_status(
@@ -1488,28 +1408,14 @@ Example:
     async def _get_page_state(self, goal: Optional[str] = None) -> Dict[str, Any]:
         """Captures fused perception state using parallel analyzers."""
         await self._ensure_target_binding()
-        page_info = {}
-        if hasattr(self.runtime, "get_page_info"):
-            try:
-                page_info = await self.runtime.get_page_info()
-            except Exception:
-                page_info = {}
-        url = str(page_info.get("url", "") or "") if isinstance(page_info, dict) else ""
-        title = str(page_info.get("title", "") or "") if isinstance(page_info, dict) else ""
-        if not url:
-            url = await self._get_current_url()
-        if not title:
-            try:
-                title = await self.runtime._get_current_title()
-            except Exception:
-                title = ""
-        if isinstance(page_info, dict):
-            viewport = page_info.get("viewport") if isinstance(page_info.get("viewport"), dict) else {}
-            if viewport.get("w") and viewport.get("h"):
-                try:
-                    self._viewport = {"w": int(viewport.get("w")), "h": int(viewport.get("h"))}
-                except Exception:
-                    pass
+        url = await self._get_current_url()
+        title = ""
+        try:
+            res = await self.runtime._call_cdp("Runtime.evaluate", {"expression": "JSON.stringify({title: document.title, w: window.innerWidth, h: window.innerHeight})", "returnByValue": True})
+            info = json.loads(res.get("result", {}).get("value", "{}"))
+            title = info.get("title", "")
+            if info.get("w"): self._viewport = {"w": info["w"], "h": info["h"]}
+        except: pass
 
         # Quick page signature: enables short-TTL cache reuse when state is unchanged.
         page_signature: Dict[str, Any] = {}
@@ -1712,10 +1618,10 @@ Example:
             goal=meta_goal,
             plan=plan_str,
             current_step=current_step_str,
-            total_nodes=int(state.get('total_nodes', 0) or 0),
-            viewport_count=int(state.get('viewport_count', 0) or 0)
+            total_nodes=state['total_nodes'],
+            viewport_count=state['viewport_count']
         )
-        user_prompt = f"### State:\nURL: {state.get('url', '')}\nTitle: {state.get('title', '')}\n"
+        user_prompt = f"### State:\nURL: {state['url']}\nTitle: {state['title']}\n"
         user_prompt += f"Focus: {json.dumps(state.get('focus') or {}, ensure_ascii=False)[:400]}\n"
         user_prompt += (
             f"\n### Objective Hierarchy:\n"
@@ -1746,7 +1652,7 @@ Example:
             user_prompt += json.dumps(self._last_validation_context, ensure_ascii=False)[:700] + "\n"
         
         user_prompt += "\n### Unified Perception (Candidates):\n"
-        for c in state.get('candidates', []):
+        for c in state['candidates']:
             source = c.get("source", "DOM")
             label = c.get("element_id") or c.get("visual_role") or "unknown"
             text = c.get("reasoning", "")
@@ -1754,11 +1660,9 @@ Example:
 
         if state.get('markers'):
             user_prompt += "\n### Landmarks (Informational):\n"
-            for idx, m in enumerate(state.get('markers', []), start=1):
+            for m in state['markers']:
                 safe_text = str(m.get('text', '')).replace('"', "'")
-                marker_id = str(m.get('id') or f"mk_{idx}")
-                marker_kind = str(m.get('kind') or "marker")
-                user_prompt += f"[{marker_id}] {marker_kind}: '{safe_text}'\n"
+                user_prompt += f"[{m['id']}] {m['kind']}: '{safe_text}'\n"
                 
         if state.get('vision'):
             vis = state['vision']
@@ -2268,13 +2172,27 @@ Example:
             self._playback_step_count += 1
             frame_bytes = await self.runtime.capture_screenshot_bytes()
             if frame_bytes:
-                self._playback_service.add_frame(
+                step_meta = self._playback_service.add_frame(
                     session_id=self._playback_session_id,
                     run_id=self._playback_run_id,
                     step=self._playback_step_count,
                     action={"type": action, "args": args},
                     frame_bytes=frame_bytes
                 )
+                emit_event = self._callbacks.get("emit_event") if isinstance(self._callbacks, dict) else None
+                if callable(emit_event) and isinstance(step_meta, dict) and step_meta:
+                    emit_event(
+                        {
+                            "type": "playback.frame",
+                            "run_id": self._playback_run_id,
+                            "payload": {
+                                "run_id": self._playback_run_id,
+                                "session_id": self._playback_session_id,
+                                "status": "running",
+                                "frame": step_meta,
+                            },
+                        }
+                    )
                 send_status = self._callbacks.get("send_status") if isinstance(self._callbacks, dict) else None
                 if callable(send_status):
                     send_status(

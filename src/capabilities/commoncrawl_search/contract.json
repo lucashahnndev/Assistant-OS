@@ -23,39 +23,20 @@
       "handler": "query",
       "risk_level": "low",
       "permissions": {
-        "scopes": [
-          "commoncrawl:search:query"
-        ],
+        "scopes": ["commoncrawl:search:query"],
         "allow_anyone": true,
         "requires_approval": false
       },
       "parameters": {
         "type": "object",
         "properties": {
-          "query": {
-            "type": "string"
-          },
-          "limit": {
-            "type": "integer",
-            "default": 6
-          },
-          "recency_days": {
-            "type": "integer",
-            "default": 0
-          },
-          "language": {
-            "type": "string",
-            "default": "en"
-          },
-          "domains_allow": {
-            "type": "array"
-          },
-          "domains_deny": {
-            "type": "array"
-          },
-          "location": {
-            "type": "object"
-          }
+          "query": { "type": "string" },
+          "limit": { "type": "integer", "default": 6 },
+          "recency_days": { "type": "integer", "default": 0 },
+          "language": { "type": "string", "default": "en" },
+          "domains_allow": { "type": "array" },
+          "domains_deny": { "type": "array" },
+          "location": { "type": "object" }
         },
         "additionalProperties": true
       },
@@ -64,21 +45,10 @@
   ],
   "retrieval_profile": {
     "enabled": true,
-    "roles": [
-      "search"
-    ],
-    "domains": [
-      "web",
-      "archives"
-    ],
-    "entity_types": [
-      "url",
-      "snapshot"
-    ],
-    "freshness": {
-      "type": "batch",
-      "sla_hours": 168
-    },
+    "roles": ["search"],
+    "domains": ["web", "archives"],
+    "entity_types": ["url", "snapshot"],
+    "freshness": { "type": "batch", "sla_hours": 168 },
     "quality": {
       "default_confidence": 0.56,
       "trust_tier": "community",
@@ -97,65 +67,13 @@
       "evidence_schema": "external.evidence.v1"
     },
     "routing_hints": {
-      "preferred_intents": [
-        "general_knowledge",
-        "latest_update"
-      ],
-      "avoid_when": [
-        "music_lookup",
-        "media_lookup"
-      ]
+      "preferred_intents": ["general_knowledge", "latest_update"],
+      "avoid_when": ["music_lookup", "media_lookup"]
     }
   },
   "auth": {
     "mode": "none",
     "required": false,
     "fields": []
-  },
-  "discoverability_profile": {
-    "enabled": true,
-    "roles": [
-      "search"
-    ],
-    "domains": [
-      "web",
-      "archives"
-    ],
-    "entity_types": [
-      "url",
-      "snapshot"
-    ],
-    "keywords": [
-      "commoncrawl_search",
-      "commoncrawl",
-      "search",
-      "busca",
-      "web",
-      "por",
-      "indices",
-      "common",
-      "crawl",
-      "para",
-      "rag",
-      "externo",
-      "discover",
-      "consult",
-      "discoverability",
-      "retrieve",
-      "control",
-      "interact",
-      "manage",
-      "open"
-    ],
-    "routing_hints": {
-      "preferred_intents": [
-        "general_knowledge",
-        "latest_update"
-      ],
-      "avoid_when": [
-        "music_lookup",
-        "media_lookup"
-      ]
-    }
   }
 }

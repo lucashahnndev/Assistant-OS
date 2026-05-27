@@ -32,30 +32,13 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "query": {
-            "type": "string"
-          },
-          "limit": {
-            "type": "integer",
-            "default": 6
-          },
-          "recency_days": {
-            "type": "integer",
-            "default": 0
-          },
-          "language": {
-            "type": "string",
-            "default": "en"
-          },
-          "domains_allow": {
-            "type": "array"
-          },
-          "domains_deny": {
-            "type": "array"
-          },
-          "location": {
-            "type": "object"
-          }
+          "query": { "type": "string" },
+          "limit": { "type": "integer", "default": 6 },
+          "recency_days": { "type": "integer", "default": 0 },
+          "language": { "type": "string", "default": "en" },
+          "domains_allow": { "type": "array" },
+          "domains_deny": { "type": "array" },
+          "location": { "type": "object" }
         },
         "additionalProperties": true
       },
@@ -64,21 +47,10 @@
   ],
   "retrieval_profile": {
     "enabled": true,
-    "roles": [
-      "search"
-    ],
-    "domains": [
-      "web",
-      "news"
-    ],
-    "entity_types": [
-      "article",
-      "snippet"
-    ],
-    "freshness": {
-      "type": "live",
-      "sla_hours": 24
-    },
+    "roles": ["search"],
+    "domains": ["web", "news"],
+    "entity_types": ["article", "snippet"],
+    "freshness": { "type": "live", "sla_hours": 24 },
     "quality": {
       "default_confidence": 0.74,
       "trust_tier": "public_api",
@@ -90,20 +62,14 @@
     },
     "setup": {
       "requires_auth": true,
-      "required_fields": [
-        "provider.api_key"
-      ],
+      "required_fields": ["provider.api_key"],
       "healthcheck_action": "brave.search.query"
     },
     "output_contract": {
       "evidence_schema": "external.evidence.v1"
     },
     "routing_hints": {
-      "preferred_intents": [
-        "general_knowledge",
-        "latest_update",
-        "structured_fact"
-      ],
+      "preferred_intents": ["general_knowledge", "latest_update", "structured_fact"],
       "avoid_when": []
     }
   },
@@ -123,49 +89,5 @@
         }
       }
     ]
-  },
-  "discoverability_profile": {
-    "enabled": true,
-    "roles": [
-      "search"
-    ],
-    "domains": [
-      "web",
-      "news"
-    ],
-    "entity_types": [
-      "article",
-      "snippet"
-    ],
-    "keywords": [
-      "brave_search",
-      "brave",
-      "search",
-      "busca",
-      "web",
-      "via",
-      "api",
-      "retorna",
-      "resultados",
-      "estruturados",
-      "para",
-      "rag",
-      "externo",
-      "discover",
-      "consult",
-      "discoverability",
-      "retrieve",
-      "control",
-      "interact",
-      "manage"
-    ],
-    "routing_hints": {
-      "preferred_intents": [
-        "general_knowledge",
-        "latest_update",
-        "structured_fact"
-      ],
-      "avoid_when": []
-    }
   }
 }

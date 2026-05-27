@@ -42,8 +42,8 @@ def _compose(user_input: str) -> str:
 
 def test_assistive_mode_directive_is_included_for_screen_mark_requests():
     prompt = _compose("atlas, me mostra na minha tela onde está o ícone de rede")
-    assert "[ASSISTIVE MODE DIRECTIVE]" not in prompt
-    assert "overlay.assist.highlight_target" not in prompt
+    assert "[ASSISTIVE MODE DIRECTIVE]" in prompt
+    assert "Prefer `overlay.assist.highlight_target` for marking" in prompt
 
 
 def test_assistive_mode_directive_not_included_for_generic_chat():

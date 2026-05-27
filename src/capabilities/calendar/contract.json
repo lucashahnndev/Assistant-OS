@@ -18,9 +18,9 @@
     },
     "actions": [
         {
-            "id": "calendar.list_events",
+            "id": "calendar.event.list",
             "title": "List Events",
-            "description": "Lists events in compact format (short_id, concise title, start time). Use get_event for full details.",
+            "description": "Lists events in compact format (short_id, concise title, start time). Use calendar.event.get for full details.",
             "handler": "handle_list",
             "risk_level": "low",
             "permissions": {
@@ -49,7 +49,7 @@
             }
         },
         {
-            "id": "calendar.create_event",
+            "id": "calendar.event.create",
             "title": "Create Event",
             "description": "Creates a calendar event. Keep title concise; put long information in details/description.",
             "handler": "handle_create",
@@ -97,7 +97,7 @@
             }
         },
         {
-            "id": "calendar.delete_event",
+            "id": "calendar.event.delete",
             "title": "Delete Event",
             "description": "Deletes a calendar event by short_id (preferred) or event_id.",
             "handler": "handle_delete",
@@ -132,7 +132,7 @@
             }
         },
         {
-            "id": "calendar.get_event",
+            "id": "calendar.event.get",
             "title": "Get Event Details",
             "description": "Retrieves full event details by short_id (preferred) or event_id.",
             "handler": "handle_get",
@@ -185,44 +185,6 @@
             }
         }
     ],
-    "discoverability_profile": {
-        "enabled": true,
-        "roles": [
-            "search",
-            "retrieve",
-            "control"
-        ],
-        "domains": [
-            "calendar",
-            "agenda",
-            "schedule"
-        ],
-        "entity_types": [
-            "event",
-            "appointment",
-            "agenda"
-        ],
-        "keywords": [
-            "agenda",
-            "calendario",
-            "calendário",
-            "compromisso",
-            "compromissos",
-            "evento",
-            "eventos",
-            "schedule",
-            "appointment"
-        ],
-        "routing_hints": {
-            "preferred_intents": [
-                "calendar_lookup",
-                "schedule_lookup",
-                "agenda_lookup",
-                "event_lookup"
-            ],
-            "avoid_when": []
-        }
-    },
     "auth": {
         "mode": "none"
     }

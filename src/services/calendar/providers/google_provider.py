@@ -32,7 +32,7 @@ class GoogleCalendarProvider(CalendarProvider):
         
         if auth["mode"] == "none":
             logger.error(f"Google Auth failed for user {self.user_id}: {auth.get('reason')}")
-            return None
+            raise RuntimeError(f"Google Auth failed: {auth.get('reason')}")
 
         url = f"{self.API_BASE}{path}"
         if params:
@@ -52,11 +52,12 @@ class GoogleCalendarProvider(CalendarProvider):
                     return True
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            logger.error(f"Google Calendar API error: {e.code} {e.reason} - {e.read().decode()}")
-            return None
+            body_content = e.read().decode("utf-8", errors="ignore")
+            logger.error(f"Google Calendar API error: {e.code} {e.reason} - {body_content}")
+            raise RuntimeError(f"Google Calendar API error: {e.code} {e.reason} - {body_content}") from e
         except Exception as e:
             logger.error(f"Unexpected error calling Google Calendar API: {e}")
-            return None
+            raise RuntimeError(f"Unexpected error calling Google Calendar API: {e}") from e
 
     def list_events(self, start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
         params = {

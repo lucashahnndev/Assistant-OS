@@ -474,7 +474,7 @@ class VoiceManager:
 
                     return "".join(out)
                 
-                def send_response(self, text, target=None, is_chunk=False, attachments=None):
+                def send_response(self, text, target=None, is_chunk=False, attachments=None, model_info=None, **kwargs):
                     raw_text = str(text or "")
                     if not raw_text.strip():
                         return
@@ -516,7 +516,7 @@ class VoiceManager:
                             if queued != self.last_queued_tts:
                                 self.manager._queue_tts(self.sid, self.turn_id, queued)
                                 self.last_queued_tts = queued
-
+ 
                     # Fast-path: work-start ACKs sometimes arrive without punctuation.
                     # To avoid delayed speech, queue first short chunk immediately.
                     if (
@@ -530,32 +530,32 @@ class VoiceManager:
                             self.manager._queue_tts(self.sid, self.turn_id, immediate)
                             self.last_queued_tts = immediate
                             self.sentence_buffer = ""
-
+ 
                     # Standard message for chat history/UI
                     self.manager.server_driver.send_response(raw_text, target=self.sid, is_chunk=is_chunk, attachments=attachments)
-
+ 
                     # Voice protocol events (partial)
                     self.manager.server_driver.send_voice_event(self.sid, {
                         "type": "agent.partial", "turnId": self.turn_id, "text": raw_text
                     })
-
-                def send_complete(self, target=None):
+ 
+                def send_complete(self, target=None, *args, **kwargs):
                     # Queue the last bit of text
                     if self.sentence_buffer.strip():
                         self.manager._queue_tts(self.sid, self.turn_id, self.sentence_buffer.strip())
                     
                     # Queue EOF sentinel for this turn
                     self.manager._queue_tts(self.sid, self.turn_id, None)
-
+ 
                     logger.info(f"Interceptor completion for turn {self.turn_id}")
                     self.manager.server_driver.send_voice_event(self.sid, {
                         "type": "agent.final", "turnId": self.turn_id, "text": self.accumulated_text
                     })
-
-                def send_status(self, target, phase, payload=None):
+ 
+                def send_status(self, target, phase, payload=None, model_info=None, **kwargs):
                     self.manager.server_driver.send_status(target, phase, payload)
-
-                def send_reasoning_chunk(self, content):
+ 
+                def send_reasoning_chunk(self, *args, **kwargs):
                     # Mark capability so Kernel/EventConsumer doesn't replay final result.
                     return None
 

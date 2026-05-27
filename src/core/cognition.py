@@ -13,8 +13,8 @@ class CognitiveFrame:
     This defines the layers of context prioritization.
     """
     objective: str = "Standby"
-    primary_task: Optional[Dict[str, Any]] = None
-    secondary_tasks: List[Dict[str, Any]] = field(default_factory=list)
+    foreground_tasks: List[Dict[str, Any]] = field(default_factory=list)
+    background_tasks: List[Dict[str, Any]] = field(default_factory=list)
     active_intents: List[Dict[str, Any]] = field(default_factory=list)
     blockers: List[str] = field(default_factory=list)
     constraints: List[str] = field(default_factory=list)
@@ -26,8 +26,8 @@ class CognitiveFrame:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "objective": self.objective,
-            "primary_task": self.primary_task,
-            "secondary_tasks": self.secondary_tasks,
+            "foreground_tasks": self.foreground_tasks,
+            "background_tasks": self.background_tasks,
             "active_intents": self.active_intents,
             "blockers": self.blockers,
             "constraints": self.constraints,
@@ -52,19 +52,15 @@ def build_cognitive_frame(session: Any, user_input: str = "") -> CognitiveFrame:
         frame.active_user_intent = "user_prompt"
         frame.context_sources.append("user_input")
 
-    # 2. Task Layering (Primary vs Secondary)
-    # Tasks are categorized by focus and status
-    active_focus_id = session.active_focus_task_id
-    running_background = []
-    
+    # 2. Task Layering (Foreground vs Background)
+    # Tasks are categorized by their scheduling status
     for task_id, task in session.task_registry.items():
         status = task.get("status", "").upper()
-        # DEMOTION / DISCARD:
-        # If COMPLETED, FAILED, or SUPERSEDED, it leaves the active context unless it's strictly the primary focus *this turn*
         is_terminal = status in {"COMPLETED", "FAILED", "SUPERSEDED"}
         
-        # Build lightweight task representation for the LLM
-        # Compress the history/timeline
+        if is_terminal:
+            continue
+
         task_snippet = {
             "task_id": task_id,
             "role": task.get("task_role"),
@@ -74,16 +70,15 @@ def build_cognitive_frame(session: Any, user_input: str = "") -> CognitiveFrame:
             "waiting_user": task.get("waiting_user_response", False)
         }
 
-        if task_id == active_focus_id and not is_terminal:
-            frame.primary_task = task_snippet
-            frame.context_sources.append("primary_task")
-        elif not is_terminal and status in {"STARTED", "PROGRESS", "PAUSED", "BLOCKED_BY_DEPENDENCY", "FOREGROUND_BUDGET_EXCEEDED"}:
-            running_background.append(task_snippet)
+        if status in {"STARTED", "PROGRESS", "RUNNING"}:
+            frame.foreground_tasks.append(task_snippet)
+        else:
+            frame.background_tasks.append(task_snippet)
             
-    # If no primary task but there are running background tasks, maybe promote one or leave empty
-    frame.secondary_tasks = running_background
-    if running_background:
-        frame.context_sources.append("secondary_tasks")
+    if frame.foreground_tasks:
+        frame.context_sources.append("foreground_tasks")
+    if frame.background_tasks:
+        frame.context_sources.append("background_tasks")
 
     # Phase 16: Intent Tracking
     if hasattr(session, "intent_agenda"):

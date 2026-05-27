@@ -5,6 +5,17 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>frontend</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="/atlas-wegena/engine/weg_compiler.js"></script>
+    <script src="/atlas-wegena/engine/profiler.js"></script>
+    <script src="/atlas-wegena/engine/simulators.js"></script>
+    <script src="/atlas-wegena/engine/engine.js"></script>
+    <script src="/atlas-wegena/engine/controls.js"></script>
+    <script>
+      if (typeof WegenaEngine !== 'undefined') window.WegenaEngine = WegenaEngine;
+      if (typeof WEGCompiler !== 'undefined') window.WEGCompiler = WEGCompiler;
+      if (typeof WegenaCanvasControls !== 'undefined') window.WegenaCanvasControls = WegenaCanvasControls;
+    </script>
   </head>
   <body>
     <div id="root"></div>

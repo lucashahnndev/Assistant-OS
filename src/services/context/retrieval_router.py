@@ -77,13 +77,15 @@ class RetrievalRouter:
             RetrievalTarget(domain="agent_experience", priority=4, max_results=1, active=False, notes="troubleshooting_hint"),
             RetrievalTarget(domain="custom_knowledge", priority=5, max_results=1, active=False, notes="custom_hint"),
             RetrievalTarget(domain="external_knowledge", priority=6, max_results=1, active=False, notes="documentation_hint"),
-            RetrievalTarget(domain="policies", priority=7, max_results=1, active=False, notes="query_activated"),
+            RetrievalTarget(domain="mcp_resources", priority=7, max_results=1, active=False, notes="resource_hint"),
+            RetrievalTarget(domain="policies", priority=8, max_results=1, active=False, notes="query_activated"),
         ],
         ContextIntent.CAPABILITY_LOOKUP: [
             RetrievalTarget(domain="capability_knowledge", priority=1, max_results=5),
             RetrievalTarget(domain="examples", priority=2, max_results=2),
             RetrievalTarget(domain="external_knowledge", priority=3, max_results=1, active=False, notes="documentation_hint"),
-            RetrievalTarget(domain="policies", priority=4, max_results=1, active=False, notes="query_activated"),
+            RetrievalTarget(domain="mcp_resources", priority=4, max_results=1, active=False, notes="resource_hint"),
+            RetrievalTarget(domain="policies", priority=5, max_results=1, active=False, notes="query_activated"),
         ],
         ContextIntent.POLICY_LOOKUP: [
             RetrievalTarget(domain="policies", priority=1, max_results=3),
@@ -100,7 +102,8 @@ class RetrievalRouter:
             RetrievalTarget(domain="examples", priority=5, max_results=1),
             RetrievalTarget(domain="external_knowledge", priority=6, max_results=1, active=False, notes="documentation_hint"),
             RetrievalTarget(domain="custom_knowledge", priority=7, max_results=1, active=False, notes="custom_hint"),
-            RetrievalTarget(domain="policies", priority=8, max_results=1),
+            RetrievalTarget(domain="mcp_resources", priority=8, max_results=1, active=False, notes="resource_hint"),
+            RetrievalTarget(domain="policies", priority=9, max_results=1),
         ],
         ContextIntent.CONVERSATIONAL: [
             RetrievalTarget(domain="user_memory", priority=1, max_results=1),
@@ -108,6 +111,7 @@ class RetrievalRouter:
         ContextIntent.GENERAL_KNOWLEDGE: [
             RetrievalTarget(domain="external_knowledge", priority=1, max_results=3),
             RetrievalTarget(domain="custom_knowledge", priority=2, max_results=2, active=False, notes="custom_hint"),
+            RetrievalTarget(domain="mcp_resources", priority=3, max_results=2, active=False, notes="resource_hint"),
         ],
     }
 
@@ -192,6 +196,8 @@ class RetrievalRouter:
             return documentation_relevant
         if target.domain == "custom_knowledge" and not target.active:
             return custom_relevant
+        if target.domain == "mcp_resources" and not target.active:
+            return documentation_relevant or custom_relevant
         return target.active
 
     @staticmethod

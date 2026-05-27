@@ -9,7 +9,6 @@ import DashboardLayout from './layouts/DashboardLayout';
 // Pages (to be implemented)
 import Login from './pages/Login';
 import Setup from './pages/Setup';
-import Dashboard from './pages/Dashboard';
 import Chat from './pages/Chat';
 import Capabilities from './pages/Capabilities';
 import Memory from './pages/Memory';
@@ -19,6 +18,8 @@ import Tasks from './pages/Tasks';
 import MessagingAccess from './pages/MessagingAccess';
 import Security from './pages/Security';
 import NotFound from './pages/NotFound';
+import PainelVivo from './pages/PainelVivo';
+import LivePanelScenePreview from './pages/LivePanelScenePreview';
 
 import { Toaster } from 'react-hot-toast';
 
@@ -38,6 +39,10 @@ const AppRoutes = () => {
     return (
         <Routes>
             <Route path="/login" element={<Login />} />
+            <Route
+                path="/__dev/live-panel-scene"
+                element={import.meta.env.DEV ? <LivePanelScenePreview /> : <Navigate to="/" replace />}
+            />
 
             {/* Setup is only available if not initialized */}
             {!initialized ? (
@@ -51,8 +56,9 @@ const AppRoutes = () => {
                     <DashboardLayout />
                 </ProtectedRoute>
             }>
-                <Route index element={<Dashboard />} />
+                <Route index element={<PainelVivo />} />
                 <Route path="chat" element={<Chat />} />
+                <Route path="live_panel" element={<PainelVivo />} />
                 <Route path="capabilities" element={<Capabilities />} />
                 <Route path="memory" element={<Memory />} />
                 <Route path="cognition" element={<CognitionDiagnostics />} />

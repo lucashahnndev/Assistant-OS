@@ -12,6 +12,7 @@ class EvidenceBuilder:
         self.content_limit = max(120, int(content_limit or 420))
         self.domain_limits = {
             "external_knowledge": 320,
+            "mcp_resources": 360,
             "examples": 280,
             "policies": 360,
         }

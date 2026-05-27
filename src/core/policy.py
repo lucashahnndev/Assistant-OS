@@ -112,7 +112,7 @@ class SupervisorPolicy:
     }
 
     SCHEDULING_CONFIG = {
-        "max_foreground_tasks": 1,
+        "max_foreground_tasks": 3,
         "priority_weights": {
             "critical": 100,
             "high": 50,

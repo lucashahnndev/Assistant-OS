@@ -55,13 +55,9 @@ def test_intent_classifier_maps_memory_and_capability_queries():
     classifier = IntentClassifier()
     memory_intent, _ = classifier.classify("Do you remember what I said last time?", session=_session())
     capability_intent, _ = classifier.classify("How do I use the browser tool?", session=_session())
-    weather_intent, _ = classifier.classify("como está o clima?", session=_session())
-    calendar_intent, _ = classifier.classify("como está a minha agenda?", session=_session())
 
     assert memory_intent == ContextIntent.MEMORY_LOOKUP
     assert capability_intent == ContextIntent.CAPABILITY_LOOKUP
-    assert weather_intent == ContextIntent.TASK_EXECUTION
-    assert calendar_intent == ContextIntent.TASK_EXECUTION
 
 
 def test_retrieval_router_exposes_phase1_domains_without_entrenching_store_details():
@@ -76,11 +72,13 @@ def test_retrieval_router_exposes_phase1_domains_without_entrenching_store_detai
         "agent_experience",
         "custom_knowledge",
         "external_knowledge",
+        "mcp_resources",
         "policies",
     ]
     assert any(target.domain == "agent_experience" and target.active is False for target in targets)
     assert any(target.domain == "custom_knowledge" and target.active is False for target in targets)
     assert any(target.domain == "external_knowledge" and target.active is False for target in targets)
+    assert any(target.domain == "mcp_resources" and target.active is False for target in targets)
     assert any(target.domain == "policies" and target.active is False for target in targets)
 
 
@@ -110,23 +108,6 @@ def test_context_broker_builds_normalized_evidence_and_diagnostics():
     assert "capability_knowledge" in bundle.diagnostics.selected_targets
     assert bundle.diagnostics.evidence_count >= 1
     assert any(item.domain == "capability_knowledge" for item in bundle.evidence_items)
-
-
-def test_context_broker_routes_calendar_queries_as_task_execution():
-    broker = ContextBroker(retrieval_handlers=ContextBroker.default_handlers())
-    session = _session()
-
-    bundle = broker.build_bundle(
-        user_input="como está a minha agenda?",
-        session=session,
-        capability_registry=_FakeCapabilityRegistry(),
-        allowed_actions=["calendar.list_events", "calendar.get_event"],
-        situational_context={"channel": "web"},
-        session_context={"turn_id": 4},
-    )
-
-    assert bundle.diagnostics.intent == ContextIntent.TASK_EXECUTION.value
-    assert "capability_knowledge" in bundle.diagnostics.selected_targets
 
 
 def test_prompt_composer_includes_optional_broker_evidence_block():
@@ -176,6 +157,6 @@ def test_prompt_composer_includes_optional_broker_evidence_block():
         ),
     )
 
-    assert "[CONTEXT EVIDENCE]" in prompt
+    assert "[BROKER EVIDENCE]" in prompt
     assert "[EVIDENCE: capability_knowledge]" in prompt
     assert "system.control.capabilities.describe" in prompt

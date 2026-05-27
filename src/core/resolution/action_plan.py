@@ -11,6 +11,7 @@ class ActionPlan:
     thought: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     attachments: Optional[List[str]] = None
+    model_used: Optional[str] = None
 
     def to_dict(self):
         return {
@@ -21,5 +22,6 @@ class ActionPlan:
             "response_text": self.response_text,
             "thought": self.thought,
             "metadata": self.metadata,
-            "attachments": self.attachments
+            "attachments": self.attachments,
+            "model_used": self.model_used
         }

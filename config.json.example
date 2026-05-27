@@ -324,6 +324,41 @@
         "observation_result_max_chars": 900,
         "observation_summarize_threshold_chars": 1800
     },
+    "mcp": {
+        "enabled": false,
+        "servers": [
+            {
+                "id": "obsidian",
+                "title": "Obsidian Vault",
+                "enabled": false,
+                "transport": {
+                    "kind": "http",
+                    "endpoint": "http://127.0.0.1:8765/mcp",
+                    "headers": {},
+                    "startup_timeout_s": 20
+                },
+                "policy": {
+                    "namespace": "mcp",
+                    "trust_tier": "partner",
+                    "allow_tool_discovery": true,
+                    "allow_resources": false,
+                    "allow_prompts": false,
+                    "tool_allowlist": [
+                        "search_notes",
+                        "read_note",
+                        "create_note",
+                        "update_note"
+                    ],
+                    "tool_denylist": [],
+                    "default_requires_approval": null
+                },
+                "metadata": {
+                    "owner": "knowledge",
+                    "notes": "Example MCP server entry for future generic integrations."
+                }
+            }
+        ]
+    },
     "capabilities": {
         "system_logs": {
             "enabled": true

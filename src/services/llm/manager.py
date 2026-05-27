@@ -4,11 +4,6 @@ from drivers.llm.base import ILLMProvider
 from utils.plugin_loader import PluginLoader
 from config import ConfigManager
 from utils.contract_artifacts import write_contract_violation
-from core.error_classifier import ErrorClassifier
-from core.errors import AgentSemanticError, SyntaxError as AgentSyntaxError, TransportError, ProviderQuotaError, ProviderAuthError, ProviderRateLimitError
-from core.health import health_monitor
-from utils.event_bus import global_event_bus
-from services.agent_runtime_v2.flags import get_max_provider_attempts_per_turn
 import os
 import sys
 import logging
@@ -25,6 +20,7 @@ class LLMManager:
     def __init__(self):
         self.config_manager = ConfigManager()
         self._last_router_meta: Dict[str, Any] = {}
+        self.provider_health: Dict[str, Dict[str, Any]] = {}
         self._load_config()
         self._load_providers()
 
@@ -96,9 +92,20 @@ class LLMManager:
                             'max_tokens': inst_cfg.get('max_tokens', 4096),
                             'max_context': inst_cfg.get('max_context', 8000)
                         })
+                        self.provider_health[inst_cfg.get('id', prov_name)] = {
+                            "status": "online",
+                            "last_error": None,
+                            "priority": inst_cfg.get('priority', 99)
+                        }
                         logger.info(f"Loaded Provider Instance: {inst_cfg.get('id', prov_name)} (Priority: {inst_cfg.get('priority', 99)})")
                     except Exception as e:
-                        logger.error(f"Failed to load Provider Instance {inst_cfg.get('id')}: {e}")
+                        error_msg = str(e)
+                        self.provider_health[inst_cfg.get('id', prov_name or 'unknown')] = {
+                            "status": "error",
+                            "last_error": error_msg,
+                            "priority": inst_cfg.get('priority', 99)
+                        }
+                        logger.error(f"Failed to load Provider Instance {inst_cfg.get('id')}: {error_msg}")
             return pool
 
         self.chat_pool = instantiate_pool(self.chat_config)
@@ -116,23 +123,18 @@ class LLMManager:
     def _execute_with_router(self, pool, method_name, *args, **kwargs):
         """
         Executes a method on the pool of providers in priority order.
-        Routing is bounded and classified; no provider is retried in-place.
+        If a provider raises an exception (timeout, rate limit, server error),
+        it falls back to the next provider in the pool.
         """
         if not pool:
             return None, "No active providers in the pool"
-        total_providers = min(len(pool), get_max_provider_attempts_per_turn(self.config_manager))
-        classifier = ErrorClassifier()
+        total_providers = len(pool)
         self._last_router_meta = {}
         last_error = ""
-        for idx, item in enumerate(pool[:total_providers], start=1):
+        for idx, item in enumerate(pool, start=1):
             provider_id = item['id']
-            provider_name = str(item.get("provider") or provider_id or "")
-            
-            if not health_monitor.is_available(provider_id):
-                logger.info(f"Skipping degraded/offline provider {provider_id}")
-                continue
-
             instance = item['instance']
+            provider_name = str(item.get("provider") or provider_id or "")
             
             # Inject limits if the method accepts them (for generate_intent)
             if method_name == 'generate_intent':
@@ -141,16 +143,6 @@ class LLMManager:
             try:
                 method = getattr(instance, method_name)
                 result = method(*args, **kwargs)
-                
-                # Mark success
-                health_monitor.record_success(provider_id)
-                
-                # Inject model hint and fallback status
-                if hasattr(result, "task_label") or hasattr(result, "action"):  # It's an AgentIntent
-                    # We can't easily add fields if the model doesn't support it, but we can set properties
-                    setattr(result, "model_used", self._provider_model_hint(instance))
-                    setattr(result, "fallback_occurred", idx > 1)
-
                 self._last_router_meta = {
                     "provider_id": str(provider_id),
                     "provider": provider_name,
@@ -159,63 +151,11 @@ class LLMManager:
                     "model": self._provider_model_hint(instance),
                 }
                 return result, None
-            except ProviderQuotaError as e:
-                health_monitor.record_failure(provider_id, str(e), is_fatal=True)
-                global_event_bus.emit_threadsafe({
-                    "type": "provider_alert", 
-                    "provider": provider_id, 
-                    "reason": "quota_exceeded",
-                    "message": "The provider has run out of credits/quota."
-                })
-                logger.error(f"Provider {provider_id} quota exceeded. Emitted alert.")
-                last_error = str(e)
-                continue
-            except ProviderAuthError as e:
-                health_monitor.record_failure(provider_id, str(e), is_fatal=True)
-                global_event_bus.emit_threadsafe({
-                    "type": "provider_alert", 
-                    "provider": provider_id, 
-                    "reason": "auth_failed",
-                    "message": "The provider's authentication key is invalid."
-                })
-                logger.error(f"Provider {provider_id} auth failed. Emitted alert.")
-                last_error = str(e)
-                continue
-            except ProviderRateLimitError as e:
-                health_monitor.record_failure(provider_id, str(e), is_fatal=False)
-                logger.warning(f"Provider {provider_id} rate limited.")
-                last_error = str(e)
-                continue
-            except AgentSemanticError as e:
-                self._last_router_meta = {
-                    "provider_id": str(provider_id),
-                    "provider": provider_name,
-                    "attempt": idx,
-                    "max_attempts": total_providers,
-                    "model": self._provider_model_hint(instance),
-                    "error_type": "AgentSemanticError",
-                    "error_code": getattr(getattr(e, "code", None), "value", str(getattr(e, "code", ""))),
-                }
-                raise
             except Exception as e:
-                classified = classifier.classify(e)
-                error_msg = classified.message
-                logger.warning(
-                    "Provider %s failed (%s): %s | classified=%s",
-                    provider_id,
-                    method_name,
-                    error_msg,
-                    classified.error_type,
-                )
-                self._last_router_meta = {
-                    "provider_id": str(provider_id),
-                    "provider": provider_name,
-                    "attempt": idx,
-                    "max_attempts": total_providers,
-                    "model": self._provider_model_hint(instance),
-                    "error_type": classified.error_type,
-                    "error_code": classified.error_code.value,
-                }
+                error_msg = str(e)
+                if provider_id in self.provider_health:
+                    self.provider_health[provider_id]["last_error"] = error_msg
+                logger.warning(f"Provider {provider_id} failed ({method_name}): {error_msg}. Falling back to next...")
                 if method_name in {"generate_structured", "analyze_image_structured"}:
                     self._emit_router_contract_violation(
                         provider=provider_name,
@@ -296,12 +236,14 @@ class LLMManager:
         except Exception as artifact_err:
             logger.warning("LLM router contract artifact failed: %s", artifact_err)
 
-    def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] = None, **kwargs) -> AgentIntent:
+    def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] = None) -> AgentIntent:
         result, err = self._execute_with_router(
             self.chat_pool, 'generate_intent', 
-            user_input, history, system_prompt, attachments=attachments, **kwargs
+            user_input, history, system_prompt, attachments=attachments
         )
         if result:
+            if not result.model_used:
+                result.model_used = self._last_router_meta.get("model")
             return result
             
         return AgentIntent(

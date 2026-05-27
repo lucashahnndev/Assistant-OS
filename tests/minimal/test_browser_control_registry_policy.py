@@ -57,8 +57,8 @@ class _FakeResponse:
 
 
 class _FakeSubagent:
-    async def run_to_goal(self, goal, playback_service=None, run_id="default", session_id="default", **kwargs):
-        _ = (goal, playback_service, run_id, session_id, kwargs)
+    async def run_to_goal(self, goal, playback_service=None, run_id="default", session_id="default"):
+        _ = (goal, playback_service, run_id, session_id)
         return _FakeResponse()
 
     def get_last_vision_observation(self):
@@ -86,8 +86,8 @@ def test_session_policy_media_upgrade():
         current_intent_class="realizar_pesquisa",
         has_runtime=True,
     )
-    assert decision.route == "reuse_tab"
-    assert decision.force_new_instance is False
+    assert decision.route == "new_app_window"
+    assert decision.force_new_instance is True
     assert decision.use_app_mode is True
 
 
@@ -165,7 +165,6 @@ def test_run_goal_emits_execution_context_and_touches_work_context():
             }
 
         capability._apply_session_policy = _fake_apply_session_policy  # type: ignore[method-assign]
-        capability._is_browser_launch_authorized = lambda _ctx: True  # type: ignore[method-assign]
 
         touched = []
 
@@ -216,7 +215,6 @@ def test_run_goal_with_policy_and_registry_disabled():
         capability._subagent = _FakeSubagent()
         capability._owner_session_id = "sess-disabled"
         capability._runtime_intent_class = "realizar_pesquisa"
-        capability._is_browser_launch_authorized = lambda _ctx: True  # type: ignore[method-assign]
         
         async def _noop_ensure_runtime(**kwargs):
             _ = kwargs
@@ -738,7 +736,7 @@ def test_health_action_returns_consolidated_diagnostics():
         assert isinstance(result.get("registry_snapshot"), dict)
 
 
-def test_run_goal_does_not_emit_media_singleton_cleanup_status():
+def test_run_goal_emits_media_singleton_cleanup_status():
     with tempfile.TemporaryDirectory() as tmp:
         kernel = _FakeKernel(tmp)
         # Existing media instance to be replaced by singleton policy.
@@ -765,13 +763,12 @@ def test_run_goal_does_not_emit_media_singleton_cleanup_status():
                 "launch_url": "https://www.youtube.com",
             }
 
-        async def _fail_if_called(*args, **kwargs):
-            _ = (args, kwargs)
-            raise AssertionError("automatic media cleanup should not be triggered")
+        async def _fake_remote_close(instances):
+            _ = instances
+            return {"attempted_instances": 1, "closed_targets": 1, "errors": 0}
 
         capability._apply_session_policy = _fake_apply_session_policy  # type: ignore[method-assign]
-        capability._close_replaced_media_instances = _fail_if_called  # type: ignore[method-assign]
-        capability._is_browser_launch_authorized = lambda _ctx: True  # type: ignore[method-assign]
+        capability._close_replaced_media_instances = _fake_remote_close  # type: ignore[method-assign]
 
         statuses = []
 
@@ -792,14 +789,9 @@ def test_run_goal_does_not_emit_media_singleton_cleanup_status():
         result = asyncio.run(_run())
         assert result.get("ok") is True
         metadata = result.get("metadata") or {}
-        assert "media_singleton_cleanup" not in metadata
-        found = [p for _, p in statuses if str((p or {}).get("code", "")) == "media_singleton_cleanup_disabled"]
+        cleanup_meta = metadata.get("media_singleton_cleanup") or {}
+        assert int(cleanup_meta.get("closed", 0)) >= 1
+        found = [p for _, p in statuses if str((p or {}).get("code", "")) == "media_singleton_cleanup"]
         assert found
         cleanup = found[-1].get("media_cleanup") or {}
-        assert cleanup.get("enabled") is False
-        assert cleanup.get("reason") == "automatic_media_close_disabled"
-        instances = kernel.browser_session_registry.list_instances()
-        old_instances = [inst for inst in instances if int(inst.get("debug_port", 0) or 0) == 9111]
-        assert old_instances
-        assert str(old_instances[0].get("status", "")).lower() == "active"
-        assert not any(str(inst.get("status", "")).lower() == "closed" for inst in instances)
+        assert int(cleanup.get("closed", 0)) >= 1

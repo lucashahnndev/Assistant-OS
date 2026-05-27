@@ -103,46 +103,6 @@ class IntentClassifier:
         "explique",
         "defina",
     )
-    _WEATHER_MARKERS = (
-        "weather",
-        "forecast",
-        "clima",
-        "tempo",
-        "chuva",
-        "temperatura",
-        "vai chover",
-        "como esta o clima",
-        "como está o clima",
-        "qual o clima",
-        "qual esta o clima",
-        "qual está o clima",
-        "current weather",
-        "weather today",
-        "weather now",
-    )
-    _CALENDAR_MARKERS = (
-        "calendar",
-        "calendario",
-        "calendário",
-        "agenda",
-        "schedule",
-        "appointment",
-        "event",
-        "events",
-        "evento",
-        "eventos",
-        "compromisso",
-        "compromissos",
-        "my calendar",
-        "meu calendário",
-        "minha agenda",
-        "minha calendar",
-        "meus compromissos",
-        "próximo evento",
-        "proximo evento",
-        "próximos eventos",
-        "proximos eventos",
-    )
     _DOCUMENTATION_MARKERS = (
         "documentation",
         "docs",
@@ -245,20 +205,12 @@ class IntentClassifier:
             return ContextIntent.POLICY_LOOKUP, notes + ["policy_markers"]
 
         has_memory_markers = self._contains_any(text, self._MEMORY_MARKERS)
-        has_weather_markers = self._contains_any(text, self._WEATHER_MARKERS)
-        has_calendar_markers = self._contains_any(text, self._CALENDAR_MARKERS)
 
         if has_memory_markers and has_task_markers:
             return ContextIntent.TASK_EXECUTION, notes + ["memory_markers", "task_markers", "hybrid_memory_task"]
 
         if has_memory_markers:
             return ContextIntent.MEMORY_LOOKUP, notes + ["memory_markers"]
-
-        if has_weather_markers:
-            return ContextIntent.TASK_EXECUTION, notes + ["weather_markers"]
-
-        if has_calendar_markers:
-            return ContextIntent.TASK_EXECUTION, notes + ["calendar_markers"]
 
         if self._contains_any(text, self._CAPABILITY_MARKERS):
             return ContextIntent.CAPABILITY_LOOKUP, notes + ["capability_markers"]

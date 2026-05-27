@@ -1,113 +1,78 @@
 {
-  "contract_version": "1.0",
-  "capability": {
-    "id": "memory_management",
-    "namespace": "memory",
-    "version": "1.0.0",
-    "title": "Memory",
-    "description": "Memória persistente do agente para armazenar e recuperar fatos relevantes do usuário e do contexto.",
-    "assets": {
-      "icon_svg": "assets/icon.svg"
-    }
-  },
-  "runtime": {
-    "module": "capabilities.memory_management",
-    "factory": "create_capability"
-  },
-  "actions": [
-    {
-      "id": "memory.recall",
-      "title": "Recall",
-      "description": "Busca informações já registradas na memória persistente.",
-      "handler": "recall",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "memory:management:recall"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "properties": {
-            "type": "string"
-          },
-          "required": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": true
-      },
-      "side_effect": "none"
+    "contract_version": "1.0",
+    "capability": {
+        "id": "memory_management",
+        "namespace": "memory",
+        "version": "1.0.0",
+        "title": "Memory",
+        "description": "Mem\u00f3ria persistente do agente para armazenar e recuperar fatos relevantes do usu\u00e1rio e do contexto.",
+        "assets": {
+            "icon_svg": "assets/icon.svg"
+        }
     },
-    {
-      "id": "memory.store",
-      "title": "Store",
-      "description": "Armazena um novo fato na memória persistente.",
-      "handler": "store",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "memory:management:store"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "properties": {
-            "type": "string"
-          },
-          "required": {
-            "type": "string"
-          }
+    "runtime": {
+        "module": "capabilities.memory_management",
+        "factory": "create_capability"
+    },
+    "actions": [
+        {
+            "id": "memory.recall",
+            "title": "Recall",
+            "description": "Busca informa\u00e7\u00f5es j\u00e1 registradas na mem\u00f3ria persistente.",
+            "handler": "recall",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "memory:management:recall"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "properties": {
+                        "type": "string"
+                    },
+                    "required": {
+                        "type": "string"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "none"
         },
-        "additionalProperties": true
-      },
-      "side_effect": "idempotent"
+        {
+            "id": "memory.store",
+            "title": "Store",
+            "description": "Armazena um novo fato na mem\u00f3ria persistente.",
+            "handler": "store",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "memory:management:store"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "properties": {
+                        "type": "string"
+                    },
+                    "required": {
+                        "type": "string"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "idempotent"
+        }
+    ],
+    "auth": {
+        "mode": "none",
+        "required": false,
+        "fields": []
     }
-  ],
-  "auth": {
-    "mode": "none",
-    "required": false,
-    "fields": []
-  },
-  "discoverability_profile": {
-    "enabled": true,
-    "roles": [
-      "search",
-      "retrieve",
-      "control"
-    ],
-    "domains": [
-      "memory",
-      "conversation",
-      "user_memory"
-    ],
-    "entity_types": [
-      "fact",
-      "memory",
-      "preference"
-    ],
-    "keywords": [
-      "memory",
-      "memoria",
-      "memória",
-      "preferencia",
-      "preferência",
-      "context",
-      "user fact"
-    ],
-    "routing_hints": {
-      "preferred_intents": [
-        "memory_lookup",
-        "memory_recall",
-        "memory_write"
-      ],
-      "avoid_when": []
-    }
-  }
 }

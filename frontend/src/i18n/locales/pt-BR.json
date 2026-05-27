@@ -1,6 +1,7 @@
 {
   "nav.dashboard": "Painel",
   "nav.console": "Console",
+  "nav.live_panel": "Painel Vivo",
   "nav.tasks": "Tarefas",
   "nav.capabilities": "Capabilities",
   "nav.memory": "Memória",

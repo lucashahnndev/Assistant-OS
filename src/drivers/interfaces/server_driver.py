@@ -85,6 +85,15 @@ class ServerDriver(BaseDriver):
             from utils.event_bus import global_event_bus
             global_event_bus.set_loop(self.loop)
             
+            # Start Wegena Scene Observer conditionally
+            try:
+                from services.wegena_observer import WegenaSceneObserver
+                self.wegena_observer = WegenaSceneObserver()
+                self.wegena_observer.start()
+                logger.info("ServerDriver: Wegena Scene Observer started successfully.")
+            except Exception as e:
+                logger.error(f"ServerDriver: Failed to initialize Wegena Scene Observer: {e}")
+            
             async def event_bridge():
                 queue = global_event_bus.subscribe()
                 try:
@@ -103,10 +112,17 @@ class ServerDriver(BaseDriver):
                         # List-affecting events should be broadcasted so ALL connected clients
                         # (even if on different active sessions) see the updates in their sidebar.
                         if event.get("type") in ["session_updated", "unread_count_updated", "message_added"]:
+                            logger.debug(f"Broadcasting event: {event.get('type')} to all clients")
+                            await self.connection_manager.broadcast(payload)
+                        elif event.get("type") == "weg_scene":
+                            # Broadcast or send weg_scene event directly
+                            logger.info(f"Broadcasting weg_scene event to all clients for session {target}")
                             await self.connection_manager.broadcast(payload)
                         elif target:
+                             logger.debug(f"Sending event: {event.get('type')} to session {target}")
                              await self.connection_manager.send_personal_message(payload, target)
                         else:
+                             logger.debug(f"Broadcasting generic event: {event.get('type')}")
                              await self.connection_manager.broadcast(payload)
                 except Exception as e:
                     logger.error(f"Error in EventBus-to-WS bridge: {e}")
@@ -120,6 +136,13 @@ class ServerDriver(BaseDriver):
             from utils.event_bus import global_event_bus
             logger.info("ServerDriver shutdown event: clearing EventBus loop reference.")
             global_event_bus.set_loop(None)
+            
+            if hasattr(self, 'wegena_observer') and self.wegena_observer:
+                try:
+                    self.wegena_observer.stop()
+                except Exception as e:
+                    logger.error(f"ServerDriver: Error stopping Wegena Scene Observer: {e}")
+            
             self.loop = None
             self.loop_ready.clear()
 
@@ -323,7 +346,7 @@ class ServerDriver(BaseDriver):
         # But setting daemon=True on thread helps.
         pass
 
-    def send_response(self, text, target=None, is_chunk=False, attachments=None):
+    def send_response(self, text, target=None, is_chunk=False, attachments=None, model_info=None):
         # Input: Text from Kernel
         # Output: Send to specific WebSocket (target=session_id)
 
@@ -344,6 +367,7 @@ class ServerDriver(BaseDriver):
             response_payload = json.dumps({
                 "type": msg_type,
                 "content": text,
+                "model_info": model_info,
                 "timestamp": time.time(),
                 "attachments": attachments
             })
@@ -351,10 +375,22 @@ class ServerDriver(BaseDriver):
                 self.connection_manager.send_personal_message(response_payload, target), 
                 self.loop
             )
+            if is_chunk and text:
+                try:
+                    from utils.event_bus import global_event_bus
+                    global_event_bus.emit_threadsafe({
+                        "type": "assistant_chunk",
+                        "session_id": target,
+                        "content": text,
+                        "model_info": model_info,
+                        "attachments": attachments or []
+                    })
+                except Exception as e:
+                    logger.debug(f"ServerDriver: Failed to emit assistant_chunk event: {e}")
         else:
             logger.error("ServerDriver: Loop not captured or target missing. Cannot send response.")
 
-    def send_status(self, target, phase, payload=None):
+    def send_status(self, target, phase, payload=None, model_info=None):
         """Sends a status update (loader phase)."""
         if not self.loop or self.loop.is_closed() or not target: return
         
@@ -370,6 +406,7 @@ class ServerDriver(BaseDriver):
             "phase": phase,
             "message": display_message,
             "payload": payload, # Keep full payload for new UI components
+            "model_info": model_info,
             "timestamp": time.time()
         })
 

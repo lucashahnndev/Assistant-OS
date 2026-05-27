@@ -643,6 +643,77 @@ def get_session_history(session_id: str, offset: int = 0, limit: int = 15, reque
     # Calculate indices from the end
     end_idx = total - offset
     start_idx = max(0, end_idx - limit)
+
+@router.get("/{session_id}/thoughts")
+def get_session_thoughts(session_id: str, message_id: str = None, request: Request = None, user: User = Depends(get_current_user)):
+    """
+    Get the cognitive audit trail (thoughts) for a session.
+    Optional message_id query parameter filters thoughts correlated to a specific assistant response.
+    """
+    kernel = get_kernel(request)
+    orch = kernel.orchestrator
+    
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    thoughts = getattr(session, "thoughts", [])
+    
+    if message_id:
+        thoughts = [t for t in thoughts if str(t.get("message_id")) == str(message_id)]
+        
+    return {
+        "id": session_id,
+        "thoughts": thoughts,
+        "total": len(thoughts)
+    }
+
+@router.get("/{session_id}/cards")
+def get_session_cards(session_id: str, request: Request = None, user: User = Depends(get_current_user)):
+    """
+    Get the historic UI media cards for a session.
+    """
+    kernel = get_kernel(request)
+    orch = kernel.orchestrator
+    
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    cards = getattr(session, "media_cards", [])
+    
+    return {
+        "id": session_id,
+        "cards": cards,
+        "total": len(cards)
+    }
+
+@router.post("/{session_id}/cards")
+async def add_session_card(session_id: str, request: Request, user: User = Depends(get_current_user)):
+    """
+    Add a new media card snapshot to the session's persistence layer.
+    """
+    kernel = get_kernel(request)
+    orch = kernel.orchestrator
+    
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    try:
+        card_data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+        
+    if not isinstance(card_data, dict):
+        raise HTTPException(status_code=400, detail="Payload must be a JSON object")
+
+    card_id = session.add_media_card(card_data)
+    
+    # Save the session to write the cards.json update
+    orch._save_session(session)
+    
+    return {"status": "success", "card_id": card_id}
     
     if end_idx <= 0 or start_idx >= total:
         paginated = []
@@ -997,11 +1068,25 @@ def get_weather_card(
     if not isinstance(forecast_payload, dict) or not forecast_payload.get("ok"):
         forecast_payload = {"ok": False, "forecast": [], "days": 0}
 
+    provider = current_payload.get("provider") or forecast_payload.get("provider") or "unknown"
+    location_name = current_payload.get("location") or forecast_payload.get("location") or "Unknown"
+
+    if isinstance(getattr(session, "context", None), dict):
+        session.context["weather"] = {
+            "ok": True,
+            "provider": provider,
+            "location": location_name,
+            "current": current_payload.get("current", {}),
+            "updated_at": time.time(),
+        }
+        if hasattr(orch, "_save_session"):
+            orch._save_session(session)
+
     return {
         "ok": True,
         "card_type": "weather",
-        "provider": current_payload.get("provider") or forecast_payload.get("provider") or "unknown",
-        "location": current_payload.get("location") or forecast_payload.get("location") or "Unknown",
+        "provider": provider,
+        "location": location_name,
         "current": current_payload.get("current", {}),
         "forecast": forecast_payload.get("forecast", []),
         "days": int(forecast_payload.get("days") or 0),

@@ -21,9 +21,6 @@ class CalendarService:
         self.sync_services["admin"] = sync_service
         logger.info(f"Registered sync service for user admin (request from {user_id})")
 
-    def has_sync_service(self, user_id: str = "admin") -> bool:
-        return "admin" in self.sync_services
-
     def create_event(self, user_id: str, title: str, start_time: Any, end_time: Any, **kwargs) -> tuple[CalendarEvent, bool]:
         user_id = "admin" # Forced single-user
         event = CalendarEvent(

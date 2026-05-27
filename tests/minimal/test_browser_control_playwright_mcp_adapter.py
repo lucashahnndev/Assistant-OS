@@ -1,6 +1,15 @@
 import asyncio
 import json
+import sys
+from pathlib import Path
 from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+for candidate in (ROOT, SRC):
+    candidate_str = str(candidate)
+    if candidate_str not in sys.path:
+        sys.path.insert(0, candidate_str)
 
 from src.capabilities.browser_control.playwright_mcp_adapter import PlaywrightMCPAdapter
 from src.capabilities.browser_control.runtime_playwright import BrowserRuntimePlaywright
@@ -13,6 +22,11 @@ async def _fake_invoker(name, args):
         action = str(args.get("action") or "").strip().lower()
         if action == "list":
             return {"result": {"tabs": list(_FAKE_TAB_STATE["tabs"]), "active_index": int(_FAKE_TAB_STATE["active_index"])}}
+        if action == "new":
+            idx = len(_FAKE_TAB_STATE["tabs"])
+            _FAKE_TAB_STATE["tabs"].append({"index": idx, "title": f"Tab {idx}"})
+            _FAKE_TAB_STATE["active_index"] = idx
+            return {"result": {"index": idx}}
         if action == "create":
             idx = len(_FAKE_TAB_STATE["tabs"])
             _FAKE_TAB_STATE["tabs"].append({"index": idx, "title": f"Tab {idx}"})
@@ -124,6 +138,28 @@ def test_playwright_mcp_adapter_tab_lifecycle_via_invoker():
     assert listed3["active_index"] == 0
 
 
+def test_playwright_mcp_adapter_create_tab_prefers_browser_tabs_new():
+    calls = []
+
+    async def _invoker(name, args):
+        calls.append({"name": name, "args": dict(args or {})})
+        if name == "browser_tabs":
+            action = str(args.get("action") or "").strip().lower()
+            if action == "new":
+                return {"result": {"index": 2}}
+            if action == "list":
+                return {"result": {"tabs": [{"index": 0}, {"index": 1}, {"index": 2}], "active_index": 2}}
+        raise RuntimeError(f"unexpected_call:{name}")
+
+    adapter = PlaywrightMCPAdapter(endpoint="http://unused", invoker=_invoker)
+    created = asyncio.run(adapter.create_tab("https://example.com"))
+
+    assert created["index"] == 2
+    assert calls[0]["name"] == "browser_tabs"
+    assert calls[0]["args"]["action"] == "new"
+    assert calls[0]["args"]["url"] == "https://example.com"
+
+
 def test_runtime_playwright_launches_in_mcp_mode_when_endpoint_present():
     _FAKE_TAB_STATE["tabs"] = [{"index": 0, "title": "Tab 0"}]
     _FAKE_TAB_STATE["active_index"] = 0
@@ -150,7 +186,7 @@ def test_runtime_playwright_launches_in_mcp_mode_when_endpoint_present():
     )
     with patch(
         "src.capabilities.browser_control.runtime_playwright.PlaywrightMCPAdapter",
-        side_effect=lambda endpoint: PlaywrightMCPAdapter(endpoint="http://unused", invoker=_fake_invoker),
+        side_effect=lambda endpoint, **kwargs: PlaywrightMCPAdapter(endpoint="http://unused", invoker=_fake_invoker, **kwargs),
     ):
         asyncio.run(rt.launch())
     meta = rt.get_connection_metadata()
@@ -187,7 +223,7 @@ def test_runtime_playwright_mcp_open_new_tab_and_attach_target():
     )
     with patch(
         "src.capabilities.browser_control.runtime_playwright.PlaywrightMCPAdapter",
-        side_effect=lambda endpoint: PlaywrightMCPAdapter(endpoint="http://unused", invoker=_fake_invoker),
+        side_effect=lambda endpoint, **kwargs: PlaywrightMCPAdapter(endpoint="http://unused", invoker=_fake_invoker, **kwargs),
     ):
         asyncio.run(rt.launch())
         target = asyncio.run(rt.open_new_tab("https://example.com"))
@@ -223,7 +259,7 @@ def test_runtime_playwright_mcp_click_receipt_exposes_fallback_clicked():
     )
     with patch(
         "src.capabilities.browser_control.runtime_playwright.PlaywrightMCPAdapter",
-        side_effect=lambda endpoint: PlaywrightMCPAdapter(endpoint="http://unused", invoker=_fake_invoker),
+        side_effect=lambda endpoint, **kwargs: PlaywrightMCPAdapter(endpoint="http://unused", invoker=_fake_invoker, **kwargs),
     ):
         asyncio.run(rt.launch())
         resp = asyncio.run(rt.click(x=780, y=170))
@@ -586,7 +622,7 @@ def test_runtime_playwright_mcp_navigate_retries_when_info_stays_blank():
     )
     with patch(
         "src.capabilities.browser_control.runtime_playwright.PlaywrightMCPAdapter",
-        side_effect=lambda endpoint: flaky,
+        side_effect=lambda endpoint, **kwargs: flaky,
     ):
         asyncio.run(rt.launch())
         resp = asyncio.run(rt.navigate("https://example.com"))

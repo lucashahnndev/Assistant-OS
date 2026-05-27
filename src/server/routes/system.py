@@ -9,7 +9,6 @@ import os
 import asyncio
 import logging
 import requests
-from core.health import health_monitor
 
 # Logger for this module
 logger = logging.getLogger("SystemRoutes")
@@ -90,22 +89,29 @@ def get_status(request: Request):
     except HTTPException:
         return {"status": "starting", "message": "Kernel initializing"}
 
-@router.get("/providers/health")
-def get_providers_health(user: User = Depends(get_current_user)):
+@router.get("/health")
+def get_health(request: Request):
     """
-    Returns the current health status of all LLM providers.
+    Returns detailed health status of LLM providers and other system components.
     """
-    return health_monitor.get_all_health()
-
-@router.post("/providers/{provider_id}/reset")
-def reset_provider_health(provider_id: str, user: User = Depends(get_current_user)):
-    """
-    Manually resets a provider to healthy state.
-    """
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only admins can reset provider health")
-    health_monitor.reset_provider(provider_id)
-    return {"success": True, "provider_id": provider_id, "status": "healthy"}
+    try:
+        kernel = get_kernel(request)
+        llm_health = getattr(kernel.llm_manager, "provider_health", {})
+        
+        # Sort by priority for consistent UI display
+        sorted_llm = dict(sorted(llm_health.items(), key=lambda x: x[1].get("priority", 99)))
+        
+        return {
+            "status": "ok",
+            "llm": sorted_llm,
+            "capabilities": {
+                "total": len(getattr(kernel.capability_registry, "capabilities", {})),
+                "failed": len(getattr(getattr(kernel.orchestrator, "capability_loader", None), "failed_contracts", {})),
+            }
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {"status": "error", "message": str(e)}
 
 @router.get("/deezer/track/{track_id}")
 def get_deezer_track(track_id: str, user: User = Depends(get_current_user)):

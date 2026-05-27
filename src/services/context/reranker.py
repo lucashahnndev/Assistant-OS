@@ -46,16 +46,17 @@ class ContextReranker:
     }
     _INTENT_DOMAIN_BONUS = {
         ContextIntent.POLICY_LOOKUP.value: {"policies": 0.35, "procedures": 0.08, "capability_knowledge": 0.05},
-        ContextIntent.TASK_EXECUTION.value: {"procedures": 0.26, "capability_knowledge": 0.18, "user_memory": 0.1, "agent_experience": 0.04, "custom_knowledge": 0.12, "external_knowledge": 0.03, "policies": 0.04},
-        ContextIntent.TROUBLESHOOTING.value: {"agent_experience": 0.3, "procedures": 0.22, "examples": 0.12, "capability_knowledge": 0.12, "user_memory": 0.08, "external_knowledge": 0.04, "custom_knowledge": 0.05, "policies": 0.04},
-        ContextIntent.CAPABILITY_LOOKUP.value: {"capability_knowledge": 0.26, "examples": 0.14, "external_knowledge": 0.08, "policies": 0.06},
+        ContextIntent.TASK_EXECUTION.value: {"procedures": 0.26, "capability_knowledge": 0.18, "user_memory": 0.1, "agent_experience": 0.04, "custom_knowledge": 0.12, "external_knowledge": 0.03, "mcp_resources": 0.1, "policies": 0.04},
+        ContextIntent.TROUBLESHOOTING.value: {"agent_experience": 0.3, "procedures": 0.22, "examples": 0.12, "capability_knowledge": 0.12, "user_memory": 0.08, "external_knowledge": 0.04, "custom_knowledge": 0.05, "mcp_resources": 0.09, "policies": 0.04},
+        ContextIntent.CAPABILITY_LOOKUP.value: {"capability_knowledge": 0.26, "examples": 0.14, "external_knowledge": 0.08, "mcp_resources": 0.16, "policies": 0.06},
         ContextIntent.MEMORY_LOOKUP.value: {"user_memory": 0.28},
-        ContextIntent.GENERAL_KNOWLEDGE.value: {"external_knowledge": 0.24, "custom_knowledge": 0.3},
+        ContextIntent.GENERAL_KNOWLEDGE.value: {"external_knowledge": 0.24, "custom_knowledge": 0.3, "mcp_resources": 0.28},
     }
     _DOMAIN_CAPS = {
         "agent_experience": 1,
         "custom_knowledge": 1,
         "external_knowledge": 1,
+        "mcp_resources": 1,
         "policies": 1,
         "examples": 1,
         "procedures": 2,
@@ -190,6 +191,8 @@ class ContextReranker:
                 boost += 0.18
             if domain == "custom_knowledge":
                 boost += 0.12
+            if domain == "mcp_resources":
+                boost += 0.1
             if domain == "examples":
                 boost -= 0.08
             if domain == "policies" and not bool(hints.get("approval_pending")):
@@ -199,6 +202,8 @@ class ContextReranker:
                 boost += 0.22
             if domain == "procedures":
                 boost += 0.14
+            if domain == "mcp_resources":
+                boost += 0.08
             if domain == "examples":
                 boost -= 0.04
         elif intent == ContextIntent.CAPABILITY_LOOKUP.value:
@@ -206,6 +211,8 @@ class ContextReranker:
                 boost += 0.18
             if domain == "examples":
                 boost += 0.06
+            if domain == "mcp_resources":
+                boost += 0.12
             if domain == "policies":
                 boost -= 0.06
         elif intent == ContextIntent.POLICY_LOOKUP.value:
@@ -218,6 +225,8 @@ class ContextReranker:
                 boost += 0.16
             if domain == "external_knowledge":
                 boost -= 0.02
+            if domain == "mcp_resources":
+                boost += 0.14
         return round(min(1.0, max(0.1, boost)), 4)
 
     @staticmethod
@@ -248,6 +257,6 @@ class ContextReranker:
             return 3
         if intent == ContextIntent.POLICY_LOOKUP.value and domain == "policies":
             return 2
-        if intent == ContextIntent.GENERAL_KNOWLEDGE.value and domain in {"external_knowledge", "custom_knowledge"}:
+        if intent == ContextIntent.GENERAL_KNOWLEDGE.value and domain in {"external_knowledge", "custom_knowledge", "mcp_resources"}:
             return 2
         return self._DOMAIN_CAPS.get(domain, 2)

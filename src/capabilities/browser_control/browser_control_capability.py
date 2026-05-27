@@ -1,11 +1,8 @@
 import asyncio
-import hashlib
 import logging
 import os
 import re
 import shutil
-import threading
-import time
 from typing import List, Dict, Any, Optional, Union
 from ..base import CapabilityBase
 from .session_policy import BrowserSessionPolicy
@@ -26,15 +23,6 @@ class BrowserControlCapability(CapabilityBase):
         self._visual_cursor_enabled = self._cfg_bool("visual_cursor_enabled", True)
         self._tab_user_lock_enabled = self._cfg_bool("tab_user_lock_enabled", True)
         self._tab_control_bar_enabled = self._cfg_bool("tab_control_bar_enabled", True)
-        self._require_delegated_executor_for_browser_launch = self._cfg_bool(
-            "require_delegated_executor_for_browser_launch", True
-        )
-        self._run_failure_cooldown_seconds = self._cfg_int("run_failure_cooldown_seconds", 45)
-        self._runtime_backend = self._cfg_str("runtime_backend", "playwright").lower()
-        self._playwright_transport_mode = self._cfg_str("playwright_transport_mode", "mcp").lower()
-        self._playwright_mcp_endpoint = self._cfg_str("playwright_mcp_endpoint", "")
-        self._playwright_mcp_fallback_to_local = self._cfg_bool("playwright_mcp_fallback_to_local", False)
-        self._max_new_tabs_per_session = self._cfg_int("max_new_tabs_per_session", 3)
         self._browser_engine_preference = self._cfg_str("browser_engine_preference", "managed_chromium")
         self._chrome_path_override = self._cfg_str("chrome_path", "")
         self._managed_chromium_path = self._cfg_path(
@@ -51,9 +39,6 @@ class BrowserControlCapability(CapabilityBase):
         self._perception_cache_ttl_s = self._cfg_float("perception_cache_ttl_s", 3.5)
         self._perception_fast_screenshot_format = self._cfg_str("perception_fast_screenshot_format", "jpeg")
         self._perception_fast_screenshot_quality = self._cfg_int("perception_fast_screenshot_quality", 60)
-        self._planner_max_same_action_repeats = self._cfg_int("planner_max_same_action_repeats", 3)
-        self._planner_max_state_unchanged_loops = self._cfg_int("planner_max_state_unchanged_loops", 5)
-        self._planner_max_forced_recovery_attempts = self._cfg_int("planner_max_forced_recovery_attempts", 2)
         
         agent_config = getattr(self.kernel, "config", {}).get("agent", {}) if self.kernel else {}
         self._agent_name = agent_config.get("agent_name", "Agent")
@@ -75,84 +60,8 @@ class BrowserControlCapability(CapabilityBase):
         self._tab_id: Optional[str] = None
         self._owner_session_id: Optional[str] = None
         self._runtime_intent_class: Optional[str] = None
-        self._new_tabs_opened_by_session: Dict[str, int] = {}
-        self._active_run_by_session: Dict[str, float] = {}
-        self._recent_failed_goal_by_session: Dict[str, Dict[str, Any]] = {}
-        self._run_dispatch_lock = threading.Lock()
-        self._runtime_init_lock: Optional[asyncio.Lock] = None
         self._policy = BrowserSessionPolicy({"app_mode_enabled": self._app_mode_enabled})
         self._initialize_global_browser_storage()
-
-    def _supports_cross_loop_runtime_reuse(self) -> bool:
-        """
-        MCP transport is process/external-server based and does not bind browser state to
-        the local asyncio loop. In this mode we must preserve runtime across loop changes
-        to avoid open/close thrashing on every dispatch.
-        """
-        backend = self._resolve_runtime_backend()
-        transport = str(self._playwright_transport_mode or "").strip().lower()
-        return backend == "playwright" and transport == "mcp"
-
-    def _get_new_tab_open_count(self, owner_session_id: str) -> int:
-        key = str(owner_session_id or "default")
-        return int(self._new_tabs_opened_by_session.get(key, 0))
-
-    def _increment_new_tab_open_count(self, owner_session_id: str) -> int:
-        key = str(owner_session_id or "default")
-        count = self._get_new_tab_open_count(key) + 1
-        self._new_tabs_opened_by_session[key] = count
-        return count
-
-    def _resolve_runtime_backend(self) -> str:
-        backend = str(self._runtime_backend or "playwright").strip().lower()
-        if backend != "playwright":
-            logger.warning(
-                "runtime_backend=%s is deprecated and ignored; forcing playwright backend.",
-                backend,
-            )
-        return "playwright"
-
-    def _resolve_runtime_class(self):
-        from .runtime_playwright import BrowserRuntimePlaywright
-
-        return BrowserRuntimePlaywright
-
-    def _build_runtime_kwargs(
-        self,
-        *,
-        resolved_browser_path: str,
-        runtime_base_profile: str,
-        runtime_overlay_parent: str,
-        headless: bool,
-        muted: bool,
-        use_app_mode: bool,
-        launch_url: str,
-    ) -> Dict[str, Any]:
-        kwargs: Dict[str, Any] = {
-            "chrome_path": resolved_browser_path,
-            "base_profile_path": runtime_base_profile,
-            "overlay_profile_parent": runtime_overlay_parent,
-            "desktop_cache_dir": self._desktop_cache_dir,
-            "desktop_launch_enabled": self._desktop_launch_enabled,
-            "extension_install_mode": self._extension_install_mode,
-            "extension_fallback_enabled": self._extension_fallback_enabled,
-            "headless": headless,
-            "muted": muted,
-            "app_mode": use_app_mode,
-            "launch_url": launch_url,
-            "humanize_input_enabled": self._humanize_input_enabled,
-            "visual_cursor_enabled": self._visual_cursor_enabled,
-            "tab_user_lock_enabled": self._tab_user_lock_enabled,
-            "tab_control_bar_enabled": self._tab_control_bar_enabled,
-            "agent_name": self._agent_name,
-        }
-        kwargs["playwright_transport_mode"] = self._playwright_transport_mode
-        kwargs["playwright_mcp_endpoint"] = self._playwright_mcp_endpoint
-        kwargs["playwright_mcp_fallback_to_local"] = self._playwright_mcp_fallback_to_local
-        kwargs["playwright_mcp_server_command"] = self._cfg_str("playwright_mcp_server_command", "")
-        env_cfg = self._config.get("playwright_mcp_env") if isinstance(self._config, dict) else None
-        kwargs["playwright_mcp_env"] = env_cfg if isinstance(env_cfg, dict) else {}
-        return kwargs
 
     def _cfg_bool(self, key: str, default: bool) -> bool:
         if not isinstance(self._config, dict):
@@ -367,82 +276,85 @@ class BrowserControlCapability(CapabilityBase):
         use_app_mode: bool = False,
         launch_url: str = "about:blank",
     ):
+        from .runtime import BrowserRuntime
         from .planner import BrowserSubagent
         from .perception_merger import PerceptionMerger
         from .dom_analyzer import DomAnalyzer
         from .image_analyzer import ImageAnalyzer
-        RuntimeClass = self._resolve_runtime_class()
         current_loop = asyncio.get_running_loop()
-        if self._runtime_init_lock is None or self._loop != current_loop:
-            self._runtime_init_lock = asyncio.Lock()
+        should_recreate = force_new_instance
+        loop_changed = False
 
-        async with self._runtime_init_lock:
-            should_recreate = force_new_instance
-            loop_changed = False
+        # Re-init if loop changed or launch options differ
+        if self._runtime and self._loop != current_loop:
+            logger.info("Event loop changed, re-initializing runtime")
+            should_recreate = True
+            loop_changed = True
 
-            # Re-init if loop changed or launch options differ.
-            # In Playwright+MCP mode, keep runtime alive across loop changes to guarantee
-            # serial continuation in the same browser session and avoid tab/window churn.
-            if self._runtime and self._loop != current_loop:
-                if self._supports_cross_loop_runtime_reuse():
-                    logger.info("Event loop changed, preserving runtime (cross-loop reuse enabled for Playwright MCP)")
-                    self._loop = current_loop
+        if should_recreate and self._runtime:
+            try:
+                if loop_changed and hasattr(self._runtime, "force_close"):
+                    # Cross-loop teardown must be synchronous to avoid "Future attached to a different loop".
+                    self._runtime.force_close()
                 else:
-                    logger.info("Event loop changed, preserving runtime to avoid automatic browser closure")
-                    self._loop = current_loop
-                    should_recreate = False
+                    await self._runtime.close()
+            finally:
+                self._runtime = None
+                self._subagent = None
+                self._tab_id = None
+                self._runtime_intent_class = None
 
-            if should_recreate and self._runtime:
-                logger.info("Auto-close suppressed for browser runtime; retaining existing instance")
-                should_recreate = False
-
-            if not self._runtime:
-                if not self.kernel:
-                    raise RuntimeError("Kernel not initialized in BrowserControlCapability")
-                self._loop = current_loop
-                resolved_browser_path = self._resolve_browser_path()
-                logger.info("Browser runtime path resolved to %s", resolved_browser_path)
-                runtime_base_profile, runtime_overlay_parent = self._resolve_runtime_profile_paths(resolved_browser_path)
-                self._ensure_runtime_profile_storage(runtime_base_profile, runtime_overlay_parent)
-                logger.info(
-                    "Browser runtime profile resolved to base=%s overlay=%s",
-                    runtime_base_profile,
-                    runtime_overlay_parent,
-                )
-                logger.info("Browser runtime backend selected: %s", self._resolve_runtime_backend())
-                runtime_kwargs = self._build_runtime_kwargs(
-                    resolved_browser_path=resolved_browser_path,
-                    runtime_base_profile=runtime_base_profile,
-                    runtime_overlay_parent=runtime_overlay_parent,
-                    headless=headless,
-                    muted=muted,
-                    use_app_mode=use_app_mode,
-                    launch_url=launch_url,
-                )
-                self._runtime = RuntimeClass(**runtime_kwargs)
-                await self._runtime.launch()
-                dom_analyzer = DomAnalyzer()
-                image_analyzer = ImageAnalyzer(self.kernel.llm_manager)
-                perception_merger = PerceptionMerger(
-                    dom_analyzer,
-                    image_analyzer,
-                    dom_weight=self._perception_dom_weight,
-                    vision_weight=self._perception_vision_weight,
-                    dom_timeout_s=self._perception_dom_timeout_s,
-                    vision_timeout_s=self._perception_vision_timeout_s,
-                )
-                self._subagent = BrowserSubagent(
-                    self._runtime,
-                    self.kernel.llm_manager,
-                    perception_merger,
-                    dom_max_nodes=self._perception_dom_max_nodes,
-                    perception_cache_ttl_s=self._perception_cache_ttl_s,
-                    fast_screenshot_format=self._perception_fast_screenshot_format,
-                    fast_screenshot_quality=self._perception_fast_screenshot_quality,
-                    max_same_action_repeats=self._planner_max_same_action_repeats,
-                    max_state_unchanged_loops=self._planner_max_state_unchanged_loops,
-                    max_forced_recovery_attempts=self._planner_max_forced_recovery_attempts,
-                )
+        if not self._runtime:
+            if not self.kernel:
+                raise RuntimeError("Kernel not initialized in BrowserControlCapability")
+            self._loop = current_loop
+            resolved_browser_path = self._resolve_browser_path()
+            logger.info("Browser runtime path resolved to %s", resolved_browser_path)
+            runtime_base_profile, runtime_overlay_parent = self._resolve_runtime_profile_paths(resolved_browser_path)
+            self._ensure_runtime_profile_storage(runtime_base_profile, runtime_overlay_parent)
+            logger.info(
+                "Browser runtime profile resolved to base=%s overlay=%s",
+                runtime_base_profile,
+                runtime_overlay_parent,
+            )
+            self._runtime = BrowserRuntime(
+                chrome_path=resolved_browser_path,
+                base_profile_path=runtime_base_profile,
+                overlay_profile_parent=runtime_overlay_parent,
+                desktop_cache_dir=self._desktop_cache_dir,
+                desktop_launch_enabled=self._desktop_launch_enabled,
+                extension_install_mode=self._extension_install_mode,
+                extension_fallback_enabled=self._extension_fallback_enabled,
+                headless=headless,
+                muted=muted,
+                app_mode=use_app_mode,
+                launch_url=launch_url,
+                humanize_input_enabled=self._humanize_input_enabled,
+                visual_cursor_enabled=self._visual_cursor_enabled,
+                tab_user_lock_enabled=self._tab_user_lock_enabled,
+                tab_control_bar_enabled=self._tab_control_bar_enabled,
+                agent_name=self._agent_name,
+            )
+            await self._runtime.launch()
+            dom_analyzer = DomAnalyzer()
+            image_analyzer = ImageAnalyzer(self.kernel.llm_manager)
+            perception_merger = PerceptionMerger(
+                dom_analyzer,
+                image_analyzer,
+                dom_weight=self._perception_dom_weight,
+                vision_weight=self._perception_vision_weight,
+                dom_timeout_s=self._perception_dom_timeout_s,
+                vision_timeout_s=self._perception_vision_timeout_s,
+            )
+            self._subagent = BrowserSubagent(
+                self._runtime,
+                self.kernel.llm_manager,
+                perception_merger,
+                dom_max_nodes=self._perception_dom_max_nodes,
+                perception_cache_ttl_s=self._perception_cache_ttl_s,
+                fast_screenshot_format=self._perception_fast_screenshot_format,
+                fast_screenshot_quality=self._perception_fast_screenshot_quality,
+            )
 
     @staticmethod
     def _extract_first_url(text: str) -> str:
@@ -487,9 +399,11 @@ class BrowserControlCapability(CapabilityBase):
         return "about:blank"
 
     async def _close_registered_instance(self, reason: str = "replaced") -> None:
-        # Automatic instance closure is intentionally disabled.
-        # Lifecycle cleanup should happen only through explicit user/admin actions.
-        _ = reason
+        if self._registry_enabled and self._browser_instance_id and self.kernel and hasattr(self.kernel, "browser_session_registry"):
+            try:
+                self.kernel.browser_session_registry.close_instance(self._browser_instance_id, reason=reason)
+            except Exception:
+                pass
         self._browser_instance_id = None
         self._tab_id = None
 
@@ -540,6 +454,9 @@ class BrowserControlCapability(CapabilityBase):
             current_url=current_url,
         )
 
+        if decision.force_new_instance and self._runtime:
+            await self._close_registered_instance(reason=f"policy:{decision.reason}")
+
         await self._ensure_runtime(
             headless=headless,
             muted=muted,
@@ -550,62 +467,17 @@ class BrowserControlCapability(CapabilityBase):
         self._owner_session_id = owner_session_id
         self._runtime_intent_class = intent_class
         decision_data: Dict[str, Any] = {**decision.as_dict(), "launch_url": launch_url, "current_url": current_url}
-        if decision.route == "new_tab":
-            # Side-effects (open tab/window) are deferred to the browser subagent action loop.
-            # Session policy should only decide routing metadata, not execute browser mutations.
-            decision_data["requested_route"] = "new_tab"
-            decision_data["route"] = "reuse_tab"
-            decision_data["reason"] = "new_tab_deferred_to_subagent"
-            decision_data["new_tab_deferred_to_subagent"] = True
+        if decision.route == "new_tab" and self._runtime and hasattr(self._runtime, "open_new_tab"):
+            try:
+                new_target = await self._runtime.open_new_tab(launch_url)
+                decision_data["new_tab_opened"] = bool(new_target)
+                if new_target:
+                    self._tab_id = None
+                    decision_data["new_tab_target_id"] = str(new_target)
+            except Exception as e:
+                decision_data["new_tab_opened"] = False
+                decision_data["new_tab_error"] = str(e)
         return decision_data
-
-    @staticmethod
-    def _delegation_child_id(context: Dict[str, Any]) -> str:
-        envelope = context.get("execution_context_envelope") if isinstance(context, dict) else None
-        envelope = envelope if isinstance(envelope, dict) else {}
-        delegation = envelope.get("delegation") if isinstance(envelope.get("delegation"), dict) else {}
-        return str(delegation.get("child_agent_id") or "").strip().lower()
-
-    def _is_browser_launch_authorized(self, context: Dict[str, Any]) -> bool:
-        if not self._require_delegated_executor_for_browser_launch:
-            return True
-        if bool(context.get("allow_local_browser_launch", False)):
-            return True
-        envelope = context.get("execution_context_envelope") if isinstance(context, dict) else None
-        if not isinstance(envelope, dict):
-            return False
-        child_id = self._delegation_child_id(context)
-        return bool(child_id.startswith("browser_subagent"))
-
-    @staticmethod
-    def _goal_fingerprint(goal: str, intent_class: str) -> str:
-        payload = f"{str(intent_class or '').strip().lower()}::{str(goal or '').strip().lower()}"
-        return hashlib.sha1(payload.encode("utf-8")).hexdigest()
-
-    def _should_block_run_by_cooldown(self, *, session_id: str, goal_fingerprint: str) -> Optional[Dict[str, Any]]:
-        cooldown_s = int(max(0, self._run_failure_cooldown_seconds))
-        if cooldown_s <= 0:
-            return None
-        record = self._recent_failed_goal_by_session.get(str(session_id or "default"))
-        if not isinstance(record, dict):
-            return None
-        last_fp = str(record.get("goal_fingerprint") or "")
-        last_ts = float(record.get("failed_at_ts") or 0.0)
-        if not last_fp or not last_ts or last_fp != goal_fingerprint:
-            return None
-        elapsed = max(0, int(time.time() - last_ts))
-        if elapsed >= cooldown_s:
-            return None
-        return {
-            "ok": False,
-            "error": (
-                "Browser run blocked by cooldown after repeated failure for the same goal. "
-                "Please wait before retrying."
-            ),
-            "error_code": "BROWSER_RUN_COOLDOWN",
-            "cooldown_seconds": cooldown_s,
-            "retry_after_seconds": max(0, cooldown_s - elapsed),
-        }
 
     def _run_sync(self, coro):
         """Helper to run a coroutine from a synchronous context, 
@@ -663,28 +535,16 @@ class BrowserControlCapability(CapabilityBase):
                 return {"ok": False, "error": str(exc)}
             completion_mode = str(params.get("completion_mode") or "").strip().lower()
             logger.info(f"Resolved goal for 'run': '{goal}' (from params keys: {list(params.keys())})")
-            if not self._run_dispatch_lock.acquire(blocking=False):
-                return {
-                    "ok": False,
-                    "error": (
-                        "Another browser.control.run dispatch is in progress. "
-                        "Wait for the delegated browser executor to finish."
-                    ),
-                    "error_code": "BROWSER_RUN_DISPATCH_BUSY",
-                }
-            try:
-                return self._run_sync(
-                    self.run_goal(
-                        goal,
-                        headless=headless,
-                        muted=muted,
-                        intent_class=intent_class,
-                        completion_mode=completion_mode,
-                        context=run_context,
-                    )
+            return self._run_sync(
+                self.run_goal(
+                    goal,
+                    headless=headless,
+                    muted=muted,
+                    intent_class=intent_class,
+                    completion_mode=completion_mode,
+                    context=run_context,
                 )
-            finally:
-                self._run_dispatch_lock.release()
+            )
         elif action == "step":
             instruction = (
                 params.get("instruction")
@@ -740,38 +600,19 @@ class BrowserControlCapability(CapabilityBase):
         tab_id: Optional[str],
         debug_port: Optional[int],
         cdp_target_id: Optional[str],
-        runtime_backend: str,
         intent_class: str,
         reused: bool,
         policy_decision: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        target_id = cdp_target_id or ""
         return {
             "browser_instance_id": browser_instance_id or "",
             "tab_id": tab_id or "",
             "debug_port": debug_port,
-            "runtime_backend": str(runtime_backend or "playwright"),
-            "runtime_target_id": target_id,
-            "cdp_target_id": target_id,
+            "cdp_target_id": cdp_target_id or "",
             "intent_class": intent_class,
             "reused_instance": bool(reused),
             "policy_decision": policy_decision or {},
         }
-
-    @staticmethod
-    def _resolve_browser_owner_id(context: Optional[Dict[str, Any]] = None) -> str:
-        ctx = context or {}
-        work_id = str(ctx.get("work_id") or "").strip()
-        if work_id:
-            return work_id
-        worker_ctx = ctx.get("worker_context") if isinstance(ctx.get("worker_context"), dict) else {}
-        work_id = str(worker_ctx.get("work_id") or "").strip()
-        if work_id:
-            return work_id
-        session_id = str(ctx.get("session_id") or "").strip()
-        if session_id:
-            return session_id
-        return "default"
 
     @staticmethod
     def _emit_status(callbacks: Dict[str, Any], payload: Dict[str, Any]) -> None:
@@ -813,27 +654,20 @@ class BrowserControlCapability(CapabilityBase):
         if not registry:
             return None
         try:
-            browser_owner_id = self._resolve_browser_owner_id(context)
+            session_id = str((context or {}).get("session_id", "default"))
+            work_id = str((context or {}).get("work_id", ""))
             meta = self._runtime.get_connection_metadata() if hasattr(self._runtime, "get_connection_metadata") else {}
-            mcp_endpoint = str(meta.get("mcp_endpoint") or self._playwright_mcp_endpoint or "")
-            try:
-                mcp_port = int(str(mcp_endpoint).rsplit(":", 1)[-1]) if mcp_endpoint else None
-            except Exception:
-                mcp_port = None
             self._browser_instance_id = registry.register_instance(
-                owner_session_id=browser_owner_id,
-                work_id=browser_owner_id,
+                owner_session_id=session_id,
+                work_id=work_id,
                 intent_class=intent_class,
                 debug_port=meta.get("debug_port") or getattr(self._runtime, "remote_debugging_port", None),
                 cdp_ws_url=meta.get("ws_url") or getattr(self._runtime, "ws_url", None),
-                mcp_endpoint=mcp_endpoint,
-                mcp_port=mcp_port,
                 metadata={
                     "headless": bool(getattr(self._runtime, "headless", False)),
                     "muted": bool(getattr(self._runtime, "muted", False)),
                     "app_mode": bool(meta.get("app_mode", False)),
                     "launch_url": str(meta.get("launch_url") or ""),
-                    "browser_owner_id": browser_owner_id,
                 },
             )
             return self._browser_instance_id
@@ -850,11 +684,6 @@ class BrowserControlCapability(CapabilityBase):
         if not registry:
             return None
         meta = self._runtime.get_connection_metadata() if hasattr(self._runtime, "get_connection_metadata") else {}
-        mcp_endpoint = str(meta.get("mcp_endpoint") or self._playwright_mcp_endpoint or "")
-        try:
-            mcp_port = int(str(mcp_endpoint).rsplit(":", 1)[-1]) if mcp_endpoint else None
-        except Exception:
-            mcp_port = None
         target_id = str(meta.get("target_id") or "")
         if not target_id:
             return None
@@ -862,15 +691,6 @@ class BrowserControlCapability(CapabilityBase):
             url = await self._runtime._get_current_url()
             title = await self._runtime._get_current_title()
             role = "media" if self._runtime_intent_class == "controlar_midia" else "generic"
-            existing_instance = registry.get_instance(self._browser_instance_id) if hasattr(registry, "get_instance") else None
-            browser_owner_id = str(
-                (existing_instance or {}).get("work_id")
-                or (existing_instance or {}).get("owner_session_id")
-                or self._owner_session_id
-                or ""
-            ).strip()
-            if not browser_owner_id:
-                browser_owner_id = self._resolve_browser_owner_id({"session_id": self._owner_session_id})
             self._tab_id = registry.register_tab(
                 instance_id=self._browser_instance_id,
                 target_id=target_id,
@@ -883,11 +703,8 @@ class BrowserControlCapability(CapabilityBase):
                 self._browser_instance_id,
                 cdp_ws_url=str(meta.get("ws_url") or ""),
                 debug_port=meta.get("debug_port"),
-                mcp_endpoint=mcp_endpoint,
-                mcp_port=mcp_port,
                 intent_class=self._runtime_intent_class,
-                owner_session_id=browser_owner_id,
-                work_id=browser_owner_id,
+                owner_session_id=self._owner_session_id,
             )
             return self._tab_id
         except Exception as e:
@@ -1028,15 +845,6 @@ class BrowserControlCapability(CapabilityBase):
         except Exception:
             return ""
 
-    def _runtime_connection_meta(self) -> Dict[str, Any]:
-        if not self._runtime or not hasattr(self._runtime, "get_connection_metadata"):
-            return {}
-        try:
-            meta = self._runtime.get_connection_metadata() or {}
-            return meta if isinstance(meta, dict) else {}
-        except Exception:
-            return {}
-
     def _build_registry_snapshot(self, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not self._registry_enabled:
             return {"enabled": False, "instances": [], "open_tabs": [], "count_instances": 0, "count_tabs": 0}
@@ -1044,13 +852,13 @@ class BrowserControlCapability(CapabilityBase):
         if not registry:
             return {"enabled": True, "instances": [], "open_tabs": [], "count_instances": 0, "count_tabs": 0}
         ctx = context or {}
-        browser_owner_id = self._resolve_browser_owner_id(ctx)
+        session_id = str(ctx.get("session_id", "") or "")
         instances = []
         open_tabs = []
         for inst in registry.list_instances():
             if not isinstance(inst, dict):
                 continue
-            if browser_owner_id and str(inst.get("owner_session_id", "")) != browser_owner_id:
+            if session_id and str(inst.get("owner_session_id", "")) != session_id:
                 continue
             tabs_obj = inst.get("tabs", {})
             tabs = list(tabs_obj.values()) if isinstance(tabs_obj, dict) else []
@@ -1084,7 +892,7 @@ class BrowserControlCapability(CapabilityBase):
                 )
         return {
             "enabled": True,
-            "session_id": browser_owner_id,
+            "session_id": session_id,
             "instances": instances,
             "open_tabs": open_tabs,
             "count_instances": len(instances),
@@ -1120,8 +928,12 @@ class BrowserControlCapability(CapabilityBase):
 
     @staticmethod
     def _lock_owner_from_context(context: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
-        browser_owner_id = BrowserControlCapability._resolve_browser_owner_id(context)
-        return {"owner_session_id": browser_owner_id, "work_id": browser_owner_id}
+        ctx = context or {}
+        session_id = str(ctx.get("session_id", "default") or "default")
+        work_id = str(ctx.get("work_id", "") or "").strip()
+        if not work_id:
+            work_id = f"inline_{session_id}"
+        return {"owner_session_id": session_id, "work_id": work_id}
 
     async def _acquire_instance_execution_lock(self, instance_id: Optional[str], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not self._registry_enabled:
@@ -1254,36 +1066,15 @@ class BrowserControlCapability(CapabilityBase):
     ) -> Dict[str, Any]:
         logger.info(f"Capability executing run_goal with intent: '{goal}'")
         ctx = context or {}
-        if not self._is_browser_launch_authorized(ctx):
-            return {
-                "ok": False,
-                "error": (
-                    "Browser launch denied: only delegated browser subagent executor can initialize browser runtime."
-                ),
-                "error_code": "BROWSER_LAUNCH_NOT_DELEGATED",
-            }
-        session_key = self._resolve_browser_owner_id(ctx)
-        now_ts = float(time.time())
-        if session_key in self._active_run_by_session:
-            return {
-                "ok": False,
-                "error": "Another browser run is already active for this session.",
-                "error_code": "BROWSER_RUN_ALREADY_ACTIVE",
-            }
         try:
             intent_class = self._resolve_intent_class(intent_class)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
-        goal_fp = self._goal_fingerprint(goal, intent_class)
-        cooldown_block = self._should_block_run_by_cooldown(session_id=session_key, goal_fingerprint=goal_fp)
-        if cooldown_block is not None:
-            return cooldown_block
-        self._active_run_by_session[session_key] = now_ts
         callbacks = ctx.get("callbacks") if isinstance(ctx.get("callbacks"), dict) else {}
         planner_callbacks = self._build_planner_callbacks(ctx, callbacks)
-        gc_info = {"enabled": False, "ok": True, "reason": "automatic_gc_disabled"}
+        gc_info = self._maybe_run_registry_gc(ctx)
         reused_instance = self._runtime is not None
-        owner_session_id = session_key
+        owner_session_id = str(ctx.get("session_id", "default"))
         user_request = str(ctx.get("original_user_input") or ctx.get("user_input") or "").strip()
         policy_decision = await self._apply_session_policy(
             goal=goal,
@@ -1293,8 +1084,6 @@ class BrowserControlCapability(CapabilityBase):
             headless=headless,
             muted=muted,
         )
-        self._owner_session_id = owner_session_id
-        self._runtime_intent_class = intent_class
         if not policy_decision.get("force_new_instance"):
             try:
                 attached = await self._ensure_attached_to_registered_tab()
@@ -1314,41 +1103,57 @@ class BrowserControlCapability(CapabilityBase):
             and self.kernel
             and hasattr(self.kernel, "browser_session_registry")
         ):
-            # Automatic media-instance closure is disabled.
-            # Session policy may still mark the mode, but lifecycle changes must be explicit.
-            policy_decision["media_singleton_cleanup"] = {
-                "enabled": False,
-                "reason": "automatic_media_close_disabled",
-                "keep_instance_id": browser_instance_id,
-            }
+            try:
+                registry = self.kernel.browser_session_registry
+                if hasattr(registry, "close_other_media_instances_detailed"):
+                    close_result = registry.close_other_media_instances_detailed(
+                        owner_session_id=owner_session_id,
+                        keep_instance_id=browser_instance_id,
+                    )
+                    policy_decision["media_singleton_closed"] = int(close_result.get("closed", 0))
+                    remote = await self._close_replaced_media_instances(
+                        close_result.get("instances") if isinstance(close_result.get("instances"), list) else []
+                    )
+                    policy_decision["media_singleton_remote_close"] = remote
+                else:
+                    closed_media = registry.close_other_media_instances(
+                        owner_session_id=owner_session_id,
+                        keep_instance_id=browser_instance_id,
+                    )
+                    policy_decision["media_singleton_closed"] = int(closed_media)
+            except Exception as e:
+                logger.warning(f"Failed to enforce media singleton: {e}")
+                policy_decision["media_singleton_closed"] = 0
         tab_id = await self._sync_registry_tab()
         exec_ctx = self._build_execution_context(
             browser_instance_id=browser_instance_id,
             tab_id=tab_id,
             debug_port=getattr(self._runtime, "remote_debugging_port", None) if self._runtime else None,
             cdp_target_id=self._current_target_id(),
-            runtime_backend=self._resolve_runtime_backend(),
             intent_class=intent_class,
             reused=reused_instance,
             policy_decision=policy_decision,
         )
         if user_request:
             exec_ctx["original_user_input"] = user_request[:500]
-        if isinstance(policy_decision.get("media_singleton_cleanup"), dict):
+        if isinstance(policy_decision.get("media_singleton_remote_close"), dict):
             self._emit_status(
                 callbacks,
                 {
                     "action": "browser.control.run",
-                    "code": "media_singleton_cleanup_disabled",
-                    "label": "Media singleton cleanup disabled.",
-                    "media_cleanup": policy_decision.get("media_singleton_cleanup"),
+                    "code": "media_singleton_cleanup",
+                    "label": "Media singleton cleanup applied.",
+                    "media_cleanup": {
+                        "closed": int(policy_decision.get("media_singleton_closed", 0) or 0),
+                        "remote_close": policy_decision.get("media_singleton_remote_close"),
+                    },
                     "browser": exec_ctx,
                 },
             )
 
         # Playback integration
         playback_service = ctx.get("playback_service")
-        session_id = session_key
+        session_id = ctx.get("session_id", "default")
         run_id = f"browser_{int(asyncio.get_running_loop().time() * 1000)}"
         run_status = "completed"
         
@@ -1376,11 +1181,6 @@ class BrowserControlCapability(CapabilityBase):
         exec_ctx["instance_lock"] = lock_info
         if not lock_info.get("ok"):
             reason = str(lock_info.get("reason") or "instance lock denied")
-            self._recent_failed_goal_by_session[session_key] = {
-                "goal_fingerprint": goal_fp,
-                "failed_at_ts": float(time.time()),
-                "reason": reason,
-            }
             self._touch_work_context(
                 ctx,
                 {
@@ -1398,11 +1198,6 @@ class BrowserControlCapability(CapabilityBase):
             exec_ctx["tab_lock"] = tab_lock_info
             if not tab_lock_info.get("ok"):
                 reason = str(tab_lock_info.get("reason") or "tab lock denied")
-                self._recent_failed_goal_by_session[session_key] = {
-                    "goal_fingerprint": goal_fp,
-                    "failed_at_ts": float(time.time()),
-                    "reason": reason,
-                }
                 self._touch_work_context(
                     ctx,
                     {
@@ -1434,11 +1229,6 @@ class BrowserControlCapability(CapabilityBase):
             is_error_response = response_status in {"error", "failed", "failure"}
             if is_error_response:
                 run_status = "failed"
-                self._recent_failed_goal_by_session[session_key] = {
-                    "goal_fingerprint": goal_fp,
-                    "failed_at_ts": float(time.time()),
-                    "reason": str(response_payload.get("error_details") or response_payload.get("error") or "planner_error"),
-                }
             result_data = {
                 "ok": not is_error_response,
                 "status": "error" if is_error_response else "success",
@@ -1447,9 +1237,7 @@ class BrowserControlCapability(CapabilityBase):
             final_tab_id = await self._sync_registry_tab()
             if final_tab_id:
                 exec_ctx["tab_id"] = final_tab_id
-            runtime_target_id = self._current_target_id()
-            exec_ctx["runtime_target_id"] = runtime_target_id
-            exec_ctx["cdp_target_id"] = runtime_target_id
+            exec_ctx["cdp_target_id"] = self._current_target_id()
             last_vision = self._get_last_vision_observation()
             if last_vision:
                 exec_ctx["last_vision_observation"] = last_vision
@@ -1481,11 +1269,6 @@ class BrowserControlCapability(CapabilityBase):
         except Exception as e:
             logger.error(f"Error in run_goal: {e}")
             run_status = "failed"
-            self._recent_failed_goal_by_session[session_key] = {
-                "goal_fingerprint": goal_fp,
-                "failed_at_ts": float(time.time()),
-                "reason": str(e),
-            }
             self._touch_work_context(
                 ctx,
                 {
@@ -1502,7 +1285,6 @@ class BrowserControlCapability(CapabilityBase):
                 fail_payload["metadata"] = metadata
             return fail_payload
         finally:
-            self._active_run_by_session.pop(session_key, None)
             try:
                 release_tab_info = await self._release_tab_execution_lock(browser_instance_id, tab_id, ctx)
                 exec_ctx["tab_lock_release"] = release_tab_info
@@ -1515,6 +1297,19 @@ class BrowserControlCapability(CapabilityBase):
                 pass
             if playback_service:
                 playback_service.end_run(session_id, run_id, status=run_status)
+                emit_event = callbacks.get("emit_event") if isinstance(callbacks, dict) else None
+                if callable(emit_event):
+                    emit_event(
+                        {
+                            "type": "playback.end",
+                            "run_id": run_id,
+                            "payload": {
+                                "run_id": run_id,
+                                "session_id": session_id,
+                                "status": run_status,
+                            },
+                        }
+                    )
                 
                 # Notify frontend about playback completion
                 self._emit_status(callbacks, {
@@ -1527,14 +1322,12 @@ class BrowserControlCapability(CapabilityBase):
                     },
                     "browser": exec_ctx,
                 })
-            if run_status == "completed":
-                self._recent_failed_goal_by_session.pop(session_key, None)
 
     async def step(self, instruction: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         ctx = context or {}
         callbacks = ctx.get("callbacks") if isinstance(ctx.get("callbacks"), dict) else {}
         planner_callbacks = self._build_planner_callbacks(ctx, callbacks)
-        gc_info = {"enabled": False, "ok": True, "reason": "automatic_gc_disabled"}
+        gc_info = self._maybe_run_registry_gc(ctx)
         if not self._runtime or not self._subagent:
             return {"ok": False, "error": "No active browser runtime. Run browser.control.run first."}
         if not str(instruction or "").strip():
@@ -1574,7 +1367,6 @@ class BrowserControlCapability(CapabilityBase):
             tab_id=tab_id,
             debug_port=getattr(self._runtime, "remote_debugging_port", None) if self._runtime else None,
             cdp_target_id=self._current_target_id(),
-            runtime_backend=self._resolve_runtime_backend(),
             intent_class=intent_class,
             reused=True,
             policy_decision=step_policy_decision,
@@ -1639,9 +1431,7 @@ class BrowserControlCapability(CapabilityBase):
             final_tab_id = await self._sync_registry_tab()
             if final_tab_id:
                 exec_ctx["tab_id"] = final_tab_id
-            runtime_target_id = self._current_target_id()
-            exec_ctx["runtime_target_id"] = runtime_target_id
-            exec_ctx["cdp_target_id"] = runtime_target_id
+            exec_ctx["cdp_target_id"] = self._current_target_id()
             last_vision = self._get_last_vision_observation()
             if last_vision:
                 exec_ctx["last_vision_observation"] = last_vision
@@ -1697,7 +1487,6 @@ class BrowserControlCapability(CapabilityBase):
         await self._close_registered_instance(reason="capability_close")
         self._owner_session_id = None
         self._runtime_intent_class = None
-        self._new_tabs_opened_by_session = {}
         return {"ok": True}
 
     async def inspect(self, params: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -1736,8 +1525,6 @@ class BrowserControlCapability(CapabilityBase):
                     row["tabs"] = []
             rows.append(row)
 
-        runtime_connection = self._runtime_connection_meta()
-
         return {
             "ok": True,
             "instances": rows,
@@ -1746,8 +1533,6 @@ class BrowserControlCapability(CapabilityBase):
                 "browser_instance_id": self._browser_instance_id,
                 "tab_id": self._tab_id,
                 "owner_session_id": self._owner_session_id,
-                "runtime_backend": self._resolve_runtime_backend(),
-                "runtime_connection": runtime_connection,
                 "last_vision_observation": self._get_last_vision_observation() if include_last_vision else {},
             },
         }
@@ -1854,19 +1639,12 @@ class BrowserControlCapability(CapabilityBase):
         instance_id = await self._ensure_registry_instance(ctx, intent_class)
         tab_id = await self._sync_registry_tab()
         last_vision = self._get_last_vision_observation()
-        runtime_meta = self._runtime_connection_meta()
         return {
             "ok": True,
             "browser_instance_id": instance_id,
             "tab_id": tab_id,
             "debug_port": getattr(self._runtime, "remote_debugging_port", None) if self._runtime else None,
-            "runtime_backend": self._resolve_runtime_backend(),
-            "transport_mode_configured": str(runtime_meta.get("transport_mode_configured", "") or ""),
-            "transport_mode_effective": str(runtime_meta.get("transport_mode_effective", "") or ""),
-            "mcp_endpoint": str(runtime_meta.get("mcp_endpoint", "") or ""),
-            "runtime_target_id": self._current_target_id(),
             "cdp_target_id": self._current_target_id(),
-            "mcp_calls_total": int((runtime_meta.get("mcp_calls_total", 0) or 0)),
             "registry_snapshot": self._build_registry_snapshot(ctx),
             "last_vision_observation": last_vision if last_vision else {},
         }
@@ -1892,6 +1670,7 @@ class BrowserControlCapability(CapabilityBase):
     async def health(self, params: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         p = params or {}
         ctx = context or {}
+        run_gc = bool(p.get("run_gc", False))
         include_tabs = bool(p.get("include_tabs", True))
         include_last_vision = bool(p.get("include_last_vision", True))
         only_current_session = bool(p.get("only_current_session", True))
@@ -1905,11 +1684,9 @@ class BrowserControlCapability(CapabilityBase):
             context=ctx,
         )
         sync_result = await self.sync_registry(context=ctx)
-        gc_result: Dict[str, Any] = {
-            "enabled": False,
-            "ok": True,
-            "reason": "health_does_not_run_gc",
-        }
+        gc_result: Dict[str, Any] = {"enabled": False, "ok": False}
+        if run_gc:
+            gc_result = (await self.gc(params=p.get("gc_params") if isinstance(p.get("gc_params"), dict) else {}, context=ctx)).get("gc", {})
 
         snapshot = self._build_registry_snapshot(ctx)
         issues: List[str] = []
@@ -1918,17 +1695,10 @@ class BrowserControlCapability(CapabilityBase):
             current_exec = {}
         if not str(current_exec.get("browser_instance_id", "")).strip():
             issues.append("no_active_browser_instance_bound")
-        transport_mode_configured = str(sync_result.get("transport_mode_configured", "") or "").strip().lower()
-        transport_mode_effective = str(sync_result.get("transport_mode_effective", "") or "").strip().lower()
-        if transport_mode_configured == "mcp":
-            if transport_mode_effective and transport_mode_effective != "mcp":
-                issues.append("mcp_transport_not_effective")
-            if not str(sync_result.get("mcp_endpoint", "") or "").strip():
-                issues.append("mcp_mode_without_endpoint")
-        runtime_target = str(sync_result.get("runtime_target_id", "") or sync_result.get("cdp_target_id", "")).strip()
-        if not runtime_target:
-            issues.append("no_active_runtime_target")
+        if not str(sync_result.get("cdp_target_id", "")).strip():
             issues.append("no_active_cdp_target")
+        if run_gc and not bool(gc_result.get("ok", False)):
+            issues.append("gc_execution_failed")
         if isinstance(snapshot, dict) and int(snapshot.get("count_instances", 0) or 0) == 0:
             issues.append("no_registry_instances_for_scope")
 

@@ -77,33 +77,3 @@ class AgentError(Exception):
             "message": self.message,
             "details": self.details
         }
-
-
-class TransportError(AgentError):
-    pass
-
-
-class SyntaxError(AgentError):
-    pass
-
-
-class AgentSemanticError(AgentError):
-    pass
-
-class ProviderQuotaError(TransportError):
-    def __init__(self, message: str, provider: str = ""):
-        super().__init__(message, code=ErrorCode.NETWORK_FAILURE)
-        self.provider = provider
-        self.category = ErrorCategory.PERMISSION
-
-class ProviderAuthError(TransportError):
-    def __init__(self, message: str, provider: str = ""):
-        super().__init__(message, code=ErrorCode.TOOL_PERMISSION_DENIED)
-        self.provider = provider
-        self.category = ErrorCategory.PERMISSION
-
-class ProviderRateLimitError(TransportError):
-    def __init__(self, message: str, provider: str = ""):
-        super().__init__(message, code=ErrorCode.TOOL_RATE_LIMITED)
-        self.provider = provider
-        self.category = ErrorCategory.TRANSIENT

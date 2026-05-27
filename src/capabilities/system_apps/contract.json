@@ -1,145 +1,112 @@
 {
-  "contract_version": "1.0",
-  "capability": {
-    "id": "system_apps",
-    "namespace": "system.apps",
-    "version": "1.0.0",
-    "title": "System Apps",
-    "description": "Abre, fecha e verifica aplicativos locais/atalhos web com feedback operacional.",
-    "assets": {
-      "icon_svg": "assets/icon.svg"
-    }
-  },
-  "runtime": {
-    "module": "capabilities.system_apps",
-    "factory": "create_capability",
-    "config_schema": "./config.schema.json"
-  },
-  "actions": [
-    {
-      "id": "system.apps.open",
-      "title": "Open",
-      "description": "Abre aplicativo local ou atalho web (por nome ou alias).",
-      "handler": "open",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "system:apps:open"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "program_name": {
-            "type": "string",
-            "description": "Nome do aplicativo ou comando a abrir."
-          },
-          "query": {
-            "type": "string",
-            "description": "Alias de program_name."
-          }
-        },
-        "additionalProperties": true
-      },
-      "side_effect": "idempotent"
+    "contract_version": "1.0",
+    "capability": {
+        "id": "system_apps",
+        "namespace": "system.apps",
+        "version": "1.0.0",
+        "title": "System Apps",
+        "description": "Abre, fecha e verifica aplicativos locais/atalhos web com feedback operacional.",
+        "assets": {
+            "icon_svg": "assets/icon.svg"
+        }
     },
-    {
-      "id": "system.apps.close",
-      "title": "Close",
-      "description": "Solicita fechamento de um programa/processo pelo nome.",
-      "handler": "close",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "system:apps:close"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "program_name": {
-            "type": "string",
-            "description": "Nome do processo/programa para fechar."
-          },
-          "query": {
-            "type": "string",
-            "description": "Alias de program_name."
-          }
-        },
-        "additionalProperties": true
-      },
-      "side_effect": "idempotent"
+    "runtime": {
+        "module": "capabilities.system_apps",
+        "factory": "create_capability",
+        "config_schema": "./config.schema.json"
     },
-    {
-      "id": "system.apps.find",
-      "title": "Find",
-      "description": "Verifica disponibilidade do app no sistema (PATH/processo) ou no mapa de aliases.",
-      "handler": "find",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "system:apps:find"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "program_name": {
-            "type": "string",
-            "description": "Nome do aplicativo/comando a procurar."
-          },
-          "query": {
-            "type": "string",
-            "description": "Alias de program_name."
-          }
+    "actions": [
+        {
+            "id": "system.apps.open",
+            "title": "Open",
+            "description": "Abre aplicativo local ou atalho web (por nome ou alias).",
+            "handler": "open",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "system:apps:open"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "program_name": {
+                        "type": "string",
+                        "description": "Nome do aplicativo ou comando a abrir."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Alias de program_name."
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "idempotent"
         },
-        "additionalProperties": true
-      },
-      "side_effect": "none"
+        {
+            "id": "system.apps.close",
+            "title": "Close",
+            "description": "Solicita fechamento de um programa/processo pelo nome.",
+            "handler": "close",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "system:apps:close"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "program_name": {
+                        "type": "string",
+                        "description": "Nome do processo/programa para fechar."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Alias de program_name."
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "idempotent"
+        },
+        {
+            "id": "system.apps.find",
+            "title": "Find",
+            "description": "Verifica disponibilidade do app no sistema (PATH/processo) ou no mapa de aliases.",
+            "handler": "find",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "system:apps:find"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "program_name": {
+                        "type": "string",
+                        "description": "Nome do aplicativo/comando a procurar."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Alias de program_name."
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "none"
+        }
+    ],
+    "auth": {
+        "mode": "none",
+        "required": false,
+        "fields": []
     }
-  ],
-  "auth": {
-    "mode": "none",
-    "required": false,
-    "fields": []
-  },
-  "discoverability_profile": {
-    "enabled": true,
-    "roles": [
-      "control",
-      "search"
-    ],
-    "domains": [
-      "apps",
-      "window",
-      "desktop"
-    ],
-    "entity_types": [
-      "application",
-      "window",
-      "launcher"
-    ],
-    "keywords": [
-      "app",
-      "application",
-      "programa",
-      "janela",
-      "window",
-      "launcher",
-      "abrir"
-    ],
-    "routing_hints": {
-      "preferred_intents": [
-        "app_launch",
-        "window_control"
-      ],
-      "avoid_when": []
-    }
-  }
 }

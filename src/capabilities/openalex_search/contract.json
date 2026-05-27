@@ -23,39 +23,20 @@
       "handler": "query",
       "risk_level": "low",
       "permissions": {
-        "scopes": [
-          "openalex:search:query"
-        ],
+        "scopes": ["openalex:search:query"],
         "allow_anyone": true,
         "requires_approval": false
       },
       "parameters": {
         "type": "object",
         "properties": {
-          "query": {
-            "type": "string"
-          },
-          "limit": {
-            "type": "integer",
-            "default": 6
-          },
-          "recency_days": {
-            "type": "integer",
-            "default": 0
-          },
-          "language": {
-            "type": "string",
-            "default": "en"
-          },
-          "domains_allow": {
-            "type": "array"
-          },
-          "domains_deny": {
-            "type": "array"
-          },
-          "location": {
-            "type": "object"
-          }
+          "query": { "type": "string" },
+          "limit": { "type": "integer", "default": 6 },
+          "recency_days": { "type": "integer", "default": 0 },
+          "language": { "type": "string", "default": "en" },
+          "domains_allow": { "type": "array" },
+          "domains_deny": { "type": "array" },
+          "location": { "type": "object" }
         },
         "additionalProperties": true
       },
@@ -64,23 +45,10 @@
   ],
   "retrieval_profile": {
     "enabled": true,
-    "roles": [
-      "search",
-      "structured_entity"
-    ],
-    "domains": [
-      "academic",
-      "papers"
-    ],
-    "entity_types": [
-      "paper",
-      "study",
-      "author"
-    ],
-    "freshness": {
-      "type": "live",
-      "sla_hours": 24
-    },
+    "roles": ["search", "structured_entity"],
+    "domains": ["academic", "papers"],
+    "entity_types": ["paper", "study", "author"],
+    "freshness": { "type": "live", "sla_hours": 24 },
     "quality": {
       "default_confidence": 0.78,
       "trust_tier": "public_api",
@@ -100,67 +68,13 @@
       "entity_schema": "external.entity.v1"
     },
     "routing_hints": {
-      "preferred_intents": [
-        "academic_lookup",
-        "structured_fact"
-      ],
-      "avoid_when": [
-        "music_lookup",
-        "media_lookup"
-      ]
+      "preferred_intents": ["academic_lookup", "structured_fact"],
+      "avoid_when": ["music_lookup", "media_lookup"]
     }
   },
   "auth": {
     "mode": "none",
     "required": false,
     "fields": []
-  },
-  "discoverability_profile": {
-    "enabled": true,
-    "roles": [
-      "search",
-      "structured_entity"
-    ],
-    "domains": [
-      "academic",
-      "papers"
-    ],
-    "entity_types": [
-      "paper",
-      "study",
-      "author"
-    ],
-    "keywords": [
-      "openalex_search",
-      "openalex",
-      "search",
-      "busca",
-      "academica",
-      "via",
-      "para",
-      "rag",
-      "externo",
-      "discover",
-      "consult",
-      "discoverability",
-      "retrieve",
-      "control",
-      "interact",
-      "manage",
-      "open",
-      "close",
-      "read",
-      "write"
-    ],
-    "routing_hints": {
-      "preferred_intents": [
-        "academic_lookup",
-        "structured_fact"
-      ],
-      "avoid_when": [
-        "music_lookup",
-        "media_lookup"
-      ]
-    }
   }
 }

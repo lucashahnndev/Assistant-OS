@@ -1,0 +1,234 @@
+@Meta: label="Aether Minimal" version="1.0.0"
+
+{{
+    engine.visualState.updaters = [];
+    engine.visualState.nodeUpdaters = [];
+    engine.visualState.env.rotationSpeed = 0;
+    engine.visualState.env.rotation = 0;
+    engine.visualState.atlasSignal = engine.visualState.atlasSignal || {
+        status: 'idle',
+        micIntensity: 0,
+        ttsIntensity: 0,
+        isRecording: false,
+        theme: 'dark'
+    };
+
+    engine.setBackground({
+        type: 'hdri',
+        sky: { top: '#05080f', bottom: '#010103' },
+        lights: [{ color: '#1d4ed8', pos: [0, 1, 0.5], intensity: 0.25 }]
+    });
+    
+    engine.visualState.navigation.targetZoom = 150;
+    engine.setParticleShape('orb');
+
+    const totalActive = engine.config.particleCount; // typically 120,000
+    
+    // We only want a few visible particles for extreme minimalism
+    const visibleCount = 2800;
+    const initialColor = new THREE.Color('#3b82f6');
+    const particleMeta = new Array(visibleCount);
+
+    for (let i = 0; i < totalActive; i++) {
+        const i3 = i * 3;
+
+        if (i < visibleCount) {
+            // Visible minimal sphere particles
+            engine.roles[i] = 1;
+            const theta = Math.random() * Math.PI * 2.0;
+            const phi = Math.acos(2.0 * Math.random() - 1.0);
+            const radius = 60.0 + (Math.random() - 0.5) * 2.0; // Very thin boundary
+            const speed = (0.3 + Math.random() * 0.7) * (Math.random() > 0.5 ? 1 : -1);
+            
+            particleMeta[i] = { theta, phi, radius, speed };
+            
+            engine.basePositions[i3] = radius * Math.sin(phi) * Math.cos(theta);
+            engine.basePositions[i3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
+            engine.basePositions[i3 + 2] = radius * Math.cos(phi);
+        } else {
+            // Hide all other particles completely at origin
+            engine.roles[i] = 0;
+            engine.basePositions[i3] = 0;
+            engine.basePositions[i3 + 1] = 0;
+            engine.basePositions[i3 + 2] = 0;
+        }
+
+        engine.positions[i3] = engine.basePositions[i3];
+        engine.positions[i3 + 1] = engine.basePositions[i3 + 1];
+        engine.positions[i3 + 2] = engine.basePositions[i3 + 2];
+        engine.targetPositions[i3] = engine.basePositions[i3];
+        engine.targetPositions[i3 + 1] = engine.basePositions[i3 + 1];
+        engine.targetPositions[i3 + 2] = engine.basePositions[i3 + 2];
+        
+        engine.colors[i3] = initialColor.r;
+        engine.colors[i3 + 1] = initialColor.g;
+        engine.colors[i3 + 2] = initialColor.b;
+        engine.targetColors[i3] = initialColor.r;
+        engine.targetColors[i3 + 1] = initialColor.g;
+        engine.targetColors[i3 + 2] = initialColor.b;
+    }
+
+    // Role 0 (Hidden) -> Solid, Role 1 (Visible) -> Additive Glow
+    engine.setParticleRangeMaterial(0, visibleCount, 0); 
+    engine.setParticleRangeMaterial(visibleCount, totalActive, 1); 
+
+    const smooth = { intensity: 0, peak: 0 };
+
+    engine.visualState.onUpdate = (time, delta) => {
+        const signal = engine.visualState.atlasSignal || {};
+        const currentVisualStatus = signal.status || 'idle';
+        
+        const rawMic = currentVisualStatus === 'listening' ? (signal.micIntensity || 0) : 0;
+        const rawTts = currentVisualStatus === 'speaking' ? (signal.ttsIntensity || 0) : 0;
+        const rawIntensity = Math.max(rawMic, rawTts);
+        
+        // Fast attack, smooth decay for realistic audio reactivity
+        const attack = 0.5;
+        const decay = 0.15;
+        smooth.intensity += (rawIntensity - smooth.intensity) * (rawIntensity > smooth.intensity ? attack : decay);
+        
+        // Track peaks for bass-like bursts
+        if (rawIntensity > smooth.peak) {
+            smooth.peak = rawIntensity;
+        } else {
+            smooth.peak += (0 - smooth.peak) * 0.05; // slow peak decay
+        }
+
+        const voiceIntensity = smooth.intensity;
+        const peakIntensity = smooth.peak;
+
+        // Elegant Minimalist Palette (Cyan / Purple / Soft White)
+        let primaryHex = '#00f2ff'; // Cyan
+        let secondaryHex = '#b895f2'; // Soft Purple
+
+        if (currentVisualStatus === 'listening') {
+            primaryHex = '#00a8ff';
+            secondaryHex = '#ffffff';
+        } else if (currentVisualStatus === 'thinking') {
+            primaryHex = '#9d4edd';
+            secondaryHex = '#ff00a0';
+        } else if (currentVisualStatus === 'speaking') {
+            primaryHex = '#ff7ec3';
+            secondaryHex = '#ffffff';
+        }
+
+        const primaryCol = new THREE.Color(primaryHex);
+        const secondaryCol = new THREE.Color(secondaryHex);
+
+        let globalRotX = time * 0.05;
+        let globalRotY = time * 0.08;
+
+        // Dynamic global speed based on state
+        if (currentVisualStatus === 'thinking') {
+            globalRotY = time * 0.4; // Spin moderately like a radar
+        } else if (currentVisualStatus === 'listening') {
+            globalRotX = time * 0.15;
+            globalRotY = time * 0.15;
+            // Add chaotic global spin when receiving loud audio
+            if (peakIntensity > 0.3) {
+                globalRotY += peakIntensity * 0.5;
+            }
+        }
+
+        const cx = Math.cos(globalRotX), sx = Math.sin(globalRotX);
+        const cy = Math.cos(globalRotY), sy = Math.sin(globalRotY);
+
+        for (let i = 0; i < totalActive; i++) {
+            const role = engine.roles[i];
+            
+            // Optimization: Skip calculations for hidden particles entirely
+            if (role === 0) continue;
+
+            const i3 = i * 3;
+            
+            // Mix primary and secondary colors per particle
+            let targetColor = i % 2 === 0 ? primaryCol : secondaryCol;
+
+            // Flash white on extreme audio peaks
+            if ((currentVisualStatus === 'listening' || currentVisualStatus === 'speaking') && peakIntensity > 0.4) {
+                const flash = new THREE.Color('#ffffff');
+                targetColor = targetColor.clone().lerp(flash, peakIntensity * 0.8);
+            }
+
+            engine.colors[i3] += (targetColor.r - engine.colors[i3]) * 0.1;
+            engine.colors[i3 + 1] += (targetColor.g - engine.colors[i3 + 1]) * 0.1;
+            engine.colors[i3 + 2] += (targetColor.b - engine.colors[i3 + 2]) * 0.1;
+
+            // Recalculate base position for sliding effect
+            const meta = particleMeta[i];
+            const currentTheta = meta.theta + time * meta.speed * 0.5; // Sliding along the surface
+            let rx = meta.radius * Math.sin(meta.phi) * Math.cos(currentTheta);
+            let ry = meta.radius * Math.sin(meta.phi) * Math.sin(currentTheta);
+            let rz = meta.radius * Math.cos(meta.phi);
+
+            let scale = 1.0;
+
+            // --- REACTIVITY MODIFIERS ---
+            if (currentVisualStatus === 'thinking') {
+                // Was listening (radar dish). Now thinking is a gentle pulsing sphere (NOT flattened)
+                scale = 1.0 + 0.1 * Math.sin(time * 6.0 - Math.sqrt(rx*rx + rz*rz) * 0.1); 
+            } else if (currentVisualStatus === 'listening') {
+                // Was thinking (Quantum ripples). Now listening uses these ripples + audio reactivity
+                const chaos = time * 8.0 + i * 0.05;
+                const audioAmp = 1.0 + voiceIntensity * 2.0; // scales ripples with voice
+                rx += 3.0 * audioAmp * Math.sin(chaos);
+                ry += 3.0 * audioAmp * Math.cos(chaos * 1.2);
+                rz += 3.0 * audioAmp * Math.sin(chaos * 0.8);
+                
+                scale *= 1.0 + 0.08 * Math.sin(time * 20.0 + i * 0.1);
+                
+                // Audio peak geometric pop
+                if (voiceIntensity > 0.02) {
+                    scale *= 1.0 + voiceIntensity * 0.2;
+                    // Add bass jitter to radius
+                    const bassJitter = peakIntensity > 0.2 ? (Math.random() - 0.5) * peakIntensity * 0.15 : 0;
+                    scale += bassJitter;
+                }
+            } else if (currentVisualStatus === 'speaking') {
+                // Energetic speaking pulse, enhanced with true peaks
+                if (voiceIntensity > 0.01) {
+                    scale = 1.0 + (voiceIntensity * 0.25 * Math.sin(time * 15.0 + i * 0.02));
+                    const peakScale = 1.0 + peakIntensity * 0.15;
+                    rx *= peakScale;
+                    ry *= peakScale;
+                    rz *= peakScale;
+                }
+            } else {
+                // Idle breathing
+                if (voiceIntensity > 0.05) {
+                    scale = 1.0 + (voiceIntensity * 0.05 * Math.sin(time * 5.0 + i));
+                } else {
+                    scale = 1.0 + 0.02 * Math.sin(time * 2.0);
+                }
+            }
+
+            rx *= scale; ry *= scale; rz *= scale;
+
+            // Global Rotation
+            let tx = rx * cy + rz * sy;
+            let tz = -rx * sy + rz * cy;
+            rx = tx; rz = tz;
+            
+            let ty = ry * cx - rz * sx;
+            tz = ry * sx + rz * cx;
+            ry = ty; rz = tz;
+            
+            // Global Floating (Bobbing up and down) and Elevation
+            const floatOffset = Math.sin(time * 1.2) * 5.0;
+            const elevation = 18.0; // Raise the orb so it doesn't hide behind the UI
+            ry += floatOffset + elevation;
+
+            engine.positions[i3] = rx;
+            engine.positions[i3 + 1] = ry;
+            engine.positions[i3 + 2] = rz;
+            
+            engine.targetPositions[i3] = rx;
+            engine.targetPositions[i3 + 1] = ry;
+            engine.targetPositions[i3 + 2] = rz;
+        }
+
+        // Dynamic base size reactive to audio peaks
+        const baseSize = currentVisualStatus === 'listening' ? 2.5 : 2.0;
+        engine.setParticleSize(baseSize + peakIntensity * 1.5);
+    };
+}}

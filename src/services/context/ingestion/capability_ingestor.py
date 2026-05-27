@@ -222,13 +222,27 @@ class CapabilityKnowledgeIngestor:
         if not isinstance(parameters, dict):
             return "none"
         properties = parameters.get("properties") if isinstance(parameters.get("properties"), dict) else {}
+        required = parameters.get("required") if isinstance(parameters.get("required"), list) else []
         pairs = []
         for name, definition in list(properties.items())[:12]:
             if not isinstance(definition, dict):
                 continue
-            descriptor = definition.get("description") or definition.get("type") or "parameter"
-            pairs.append(f"{name} ({descriptor})")
-        return ", ".join(pairs) or "none"
+            
+            type_str = definition.get("type") or "any"
+            description = definition.get("description") or ""
+            enum = definition.get("enum")
+            
+            # Enrich with required/enum metadata
+            meta = []
+            if name in required:
+                meta.append("required")
+            if enum:
+                meta.append(f"enum:{json.dumps(enum, ensure_ascii=False)}")
+                
+            meta_str = f" [{', '.join(meta)}]" if meta else ""
+            pairs.append(f"{name} ({type_str}{meta_str}): {description}")
+            
+        return " | ".join(pairs) or "none"
 
     @staticmethod
     def _summarize_examples(examples: object) -> str:

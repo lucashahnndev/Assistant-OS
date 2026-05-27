@@ -17,8 +17,7 @@ class AgentIntent(BaseModel):
     task_label: Optional[str] = Field(None, description="A short, human-readable label for the task (e.g., 'Capturing screen', 'Searching on Google').")
     response_text: str = Field(default="", description="Text to be spoken back to the user immediately.")
     attachments: Optional[List[str]] = Field(None, description="A list of absolute file paths to attach to the response when action is 'reply'.")
-    model_used: Optional[str] = Field(None, exclude=True, description="The specific LLM model version that generated this intent.")
-    fallback_occurred: bool = Field(default=False, exclude=True, description="Whether this intent was generated using a fallback provider.")
+    model_used: Optional[str] = Field(None, description="The name of the model that generated this intent.")
 
     def to_json(self) -> str:
         return self.model_dump_json()

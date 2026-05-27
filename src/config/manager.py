@@ -139,6 +139,14 @@ class ConfigManager:
         """Returns configuration for a specific capability."""
         return self.get_capabilities_config().get(capability_name, {})
 
+    def get_mcp_config(self):
+        """Returns generic MCP client/server integration configuration."""
+        default_mcp = {
+            "enabled": False,
+            "servers": [],
+        }
+        return self.get("mcp", default_mcp)
+
     def get_location_config(self):
         """Returns location specific configuration."""
         default_loc = {

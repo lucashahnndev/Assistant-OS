@@ -37,7 +37,7 @@ class WeatherCapability(CapabilityBase):
             session_ctx = session.context
 
         current_loc = self.location_service.get_current_location(session_ctx)
-        city = params.get("city") or params.get("location")
+        city = params.get("city") or params.get("location") or current_loc.get("city")
         lat = params.get("lat") or current_loc.get("latitude")
         lon = params.get("lon") or current_loc.get("longitude")
         return {"city": city, "lat": lat, "lon": lon}
@@ -184,8 +184,8 @@ class WeatherCapability(CapabilityBase):
             current = (data.get("current_condition") or [{}])[0]
             area = (data.get("nearest_area") or [{}])[0]
             area_name = (
-                ((area.get("areaName") or [{}])[0]).get("value")
-                or city
+                city
+                or ((area.get("areaName") or [{}])[0]).get("value")
                 or "your region"
             )
 

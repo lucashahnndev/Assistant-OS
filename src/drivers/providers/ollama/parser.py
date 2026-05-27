@@ -1,25 +1,33 @@
 import json
 import logging
-from typing import Any, Dict
-
-from core.errors import SyntaxError as AgentSyntaxError, ErrorCode
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger("OllamaParser")
 
-def extract_and_parse_json(content: str, *, strict: bool = False) -> Dict[str, Any]:
+def extract_and_parse_json(content: str) -> Dict[str, Any]:
     """
     Standardized JSON extraction for Ollama.
-    Only direct JSON parsing is allowed.
+    Ollama often returns JSON mode, but we still use brace counting for safety.
     """
     if not content:
-        raise AgentSyntaxError("Ollama structured output is empty.", code=ErrorCode.PLANNER_INVALID_JSON)
-
+        return {}
+    
     text = content.strip()
     try:
-        parsed = json.loads(text)
+        # Fast path
+        return json.loads(text)
     except json.JSONDecodeError:
-        raise AgentSyntaxError("Ollama structured output is not valid JSON.", code=ErrorCode.PLANNER_INVALID_JSON)
+        pass
 
-    if not isinstance(parsed, dict):
-        raise AgentSyntaxError("Ollama structured output must be a JSON object.", code=ErrorCode.PLANNER_INVALID_JSON)
-    return parsed
+    # Robust path: scan for the first decodable object
+    decoder = json.JSONDecoder()
+    for idx, ch in enumerate(text):
+        if ch != "{":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(text[idx:])
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            continue
+    return {}

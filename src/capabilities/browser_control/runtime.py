@@ -1400,43 +1400,6 @@ Categories=Network;AudioVideo;
         except: pass
         return ""
 
-    async def get_page_info(self) -> Dict[str, Any]:
-        """
-        Runtime-agnostic page info contract for planner:
-        {url, title, viewport:{w,h}}
-        """
-        try:
-            expr = (
-                "JSON.stringify({"
-                "url:String(window.location.href||''),"
-                "title:String(document.title||''),"
-                "w:Number(window.innerWidth||0),"
-                "h:Number(window.innerHeight||0)"
-                "})"
-            )
-            res = await self._call_cdp("Runtime.evaluate", {"expression": expr, "returnByValue": True})
-            raw = res.get("result", {}).get("value", "{}")
-            if isinstance(raw, str):
-                data = json.loads(raw or "{}")
-            elif isinstance(raw, dict):
-                data = raw
-            else:
-                data = {}
-            return {
-                "url": str(data.get("url", "") or ""),
-                "title": str(data.get("title", "") or ""),
-                "viewport": {
-                    "w": int(data.get("w", 0) or 0),
-                    "h": int(data.get("h", 0) or 0),
-                },
-            }
-        except Exception:
-            return {
-                "url": await self._get_current_url(),
-                "title": await self._get_current_title(),
-                "viewport": {"w": 0, "h": 0},
-            }
-
     def _error_response(self, action: str, error: str, start_time: float) -> ToonResponse:
         return ToonResponse(
             command_id=f"err_{int(time.time())}",

@@ -46,21 +46,7 @@ from services.notifications.store import NotificationStore
 from services.notifications.context_service import CommunicationContextService
 from services.notifications.delivery_resolver import DeliveryResolver
 from services.notifications.dispatcher import NotificationDispatcher
-from services.agent_runtime_v2 import (
-    DelegationContract,
-    ExecutionContextEnvelope,
-    GlobalScheduler,
-    PolicyLayer,
-    RuntimeV2Observability,
-    PolicyRolloutEngine,
-    PolicySimulationMode,
-    RuntimeCostBudget,
-    RuntimeRateLimiter,
-    RiskModel,
-    TenantGovernance,
-    TenantGovernanceContext,
-    is_agent_runtime_v2_enabled,
-)
+from services.mcp import MCPIntegrationService
 
 # New resolution and capability imports
 from core.resolution.chain_resolver import FallbackChainResolver
@@ -77,9 +63,6 @@ from core.worker_runtime import WorkerRuntime
 from core.events import TaskOrigin, TaskSpawnReason
 from core.policy import SupervisorPolicy, SupervisorOutcome, ExecutionRecommendation
 from core.plan_validator import PlanValidator
-from core.action_gateway import ActionGateway
-from core.output_governor import OutputGovernor
-from services.agent_runtime_v2.flags import is_paranoid_mode_enabled, is_strict_mode_enabled
 
 # Configure logging
 logger = get_logger("AgentOrchestrator")
@@ -146,6 +129,7 @@ class AgentOrchestrator:
         self.sessions_index: Optional[SessionIndexManager] = None
         self.capability_registry: Optional[CapabilityRegistry] = None
         self.capability_loader: Optional[CapabilityLoader] = None
+        self.mcp_integration_service: Optional[MCPIntegrationService] = None
         self.reflex_registry: Optional[ReflexRegistry] = None
         self.reflex_resolver: Optional[ReflexResolver] = None
         self.llm_resolver: Optional[LLMResolver] = None
@@ -158,16 +142,6 @@ class AgentOrchestrator:
         self._turn_metrics_cache: Dict[str, Dict[str, Any]] = {}
         self._observation_metrics_cache: Dict[str, deque] = {}
         self._task_func_registry: Dict[str, Callable] = {}
-        self._runtime_v2_policy_layer = PolicyLayer()
-        self._runtime_v2_policy_rollout = PolicyRolloutEngine(self.config_manager)
-        self._runtime_v2_policy_simulation = PolicySimulationMode(self._runtime_v2_policy_layer)
-        self._runtime_v2_risk_model = RiskModel()
-        self._runtime_v2_tenant_governance = TenantGovernance()
-        self._runtime_v2_rate_limiter = RuntimeRateLimiter()
-        self._runtime_v2_cost_budget = RuntimeCostBudget()
-        self._runtime_v2_scheduler_global = GlobalScheduler()
-        self._runtime_v2_observability = RuntimeV2Observability(self.config_manager)
-        self.action_gateway = ActionGateway()
         
         # 0. Calendar Domain
         self.calendar_store = CalendarStore(self.config_manager.base_data_dir)
@@ -187,6 +161,11 @@ class AgentOrchestrator:
         # 1. Capability System
         self.capability_registry = CapabilityRegistry()
         self.capability_loader = CapabilityLoader(self.capability_registry, config_manager=self.config_manager)
+        self.mcp_integration_service = MCPIntegrationService(
+            config_manager=self.config_manager,
+            capability_registry=self.capability_registry,
+        )
+        self.context_broker.retrieval_handlers["mcp_resources"] = self._retrieve_mcp_resources
         
         # 2. Reflex System (Centralized)
         self.reflex_registry = ReflexRegistry()
@@ -229,9 +208,6 @@ class AgentOrchestrator:
         Initializes Google Calendar sync for a user if they have a linked account.
         Registration is guaranteed; the initial pull is attempted separately.
         """
-        if hasattr(self.calendar_service, "has_sync_service") and self.calendar_service.has_sync_service(user_id):
-            return
-
         try:
             provider = GoogleCalendarProvider(self.kernel, user_id)
             sync_service = CalendarSyncService(self.kernel, self.calendar_store, provider)
@@ -333,6 +309,23 @@ class AgentOrchestrator:
         self.proactive_running = False
         # self.proactive_thread = threading.Thread(target=self._start_proactive_loop, daemon=True)
         # self.proactive_thread.start()
+
+    def _retrieve_mcp_resources(
+        self,
+        *,
+        query: str,
+        session,
+        capability_registry=None,
+        allowed_actions=None,
+        target=None,
+    ) -> List[Dict[str, Any]]:
+        _ = session, capability_registry, allowed_actions
+        if not self.mcp_integration_service or target is None:
+            return []
+        return self.mcp_integration_service.retrieve_resources(
+            query=query,
+            max_results=int(getattr(target, "max_results", 3) or 3),
+        )
 
     def _start_proactive_loop(self):
         """
@@ -619,6 +612,8 @@ class AgentOrchestrator:
             # Load external capabilities ONLY after kernel is bound
             capability_modules_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'capabilities')
             self.capability_loader.load_from_directory(capability_modules_path)
+            if self.mcp_integration_service:
+                self.mcp_integration_service.refresh()
             
             # Re-initialize Reflex Registry after loading capabilities
             if self.reflex_registry:
@@ -1322,6 +1317,16 @@ class AgentOrchestrator:
                 
                 self._atomic_write_json(file_path, session_data)
                 
+                # Save thoughts to thoughts.json (Cognitive Audit Trail)
+                if hasattr(session, "thoughts") and session.thoughts:
+                    thoughts_file_path = os.path.join(sess_dir, "thoughts.json")
+                    self._atomic_write_json(thoughts_file_path, session.thoughts)
+                    
+                # Save media cards to cards.json (UI Persistence)
+                if hasattr(session, "media_cards") and session.media_cards:
+                    cards_file_path = os.path.join(sess_dir, "cards.json")
+                    self._atomic_write_json(cards_file_path, session.media_cards)
+                
                 # Update Index
                 if hasattr(self, 'sessions_index'):
                     self.sessions_index.register_session(session)
@@ -1353,7 +1358,27 @@ class AgentOrchestrator:
 
                 # Context source of truth remains session.json.
                 data["history"] = session_history
-                return Session.from_dict(data)
+                session_obj = Session.from_dict(data)
+                
+                # Load thoughts.json if it exists
+                thoughts_file_path = os.path.join(self.sessions_dir, session_id, "thoughts.json")
+                if os.path.exists(thoughts_file_path):
+                    try:
+                        with open(thoughts_file_path, 'r', encoding='utf-8') as f:
+                            session_obj.thoughts = json.load(f)
+                    except Exception as e:
+                        logger.error(f"Failed to load thoughts.json for {session_id}: {e}")
+                        
+                # Load cards.json if it exists
+                cards_file_path = os.path.join(self.sessions_dir, session_id, "cards.json")
+                if os.path.exists(cards_file_path):
+                    try:
+                        with open(cards_file_path, 'r', encoding='utf-8') as f:
+                            session_obj.media_cards = json.load(f)
+                    except Exception as e:
+                        logger.error(f"Failed to load cards.json for {session_id}: {e}")
+                        
+                return session_obj
         except Exception as e:
             logger.error(f"Error loading session {session_id}: {e}")
         return None
@@ -1582,676 +1607,9 @@ class AgentOrchestrator:
         allowed = {}
         if callable(callbacks.get("send_status")):
             allowed["send_status"] = callbacks["send_status"]
+        if callable(callbacks.get("emit_event")):
+            allowed["emit_event"] = callbacks["emit_event"]
         return allowed
-
-    def _build_execution_context_envelope(
-        self,
-        *,
-        plan: Optional[ActionPlan],
-        context: Optional[PrincipalContext],
-        session_id: str,
-        work_id: Optional[str],
-    ) -> Dict[str, Any]:
-        action_id = str(getattr(plan, "action_id", "") or "").strip()
-        plan_metadata = plan.metadata if (plan and isinstance(plan.metadata, dict)) else {}
-        runtime_v2_cfg = self.config_manager.get("runtime", {}).get("agent_runtime_v2", {})
-        if not isinstance(runtime_v2_cfg, dict):
-            runtime_v2_cfg = {}
-        capability_metadata: Dict[str, Any] = {}
-        if self.capability_registry and action_id:
-            capability_metadata = self.capability_registry.get_action_metadata(action_id) or {}
-        risk_level = str(capability_metadata.get("risk_level", "low") or "low").strip().lower()
-        if risk_level not in {"low", "medium", "high", "critical"}:
-            risk_level = "low"
-
-        tenant_id = "default"
-        context_tenant = str(getattr(context, "tenant_id", "") or "").strip() if context else ""
-        if context_tenant:
-            tenant_id = context_tenant
-        if context and getattr(context, "group_id", None):
-            tenant_id = str(getattr(context, "group_id", "") or "default").strip() or "default"
-        plan_tenant = str(plan_metadata.get("tenant_id", "") or "").strip()
-        if plan_tenant:
-            tenant_id = plan_tenant
-
-        qos_class = str(plan_metadata.get("qos_class", "NORMAL") or "NORMAL").strip().upper()
-        if qos_class not in {"CRITICAL", "HIGH", "NORMAL", "LOW"}:
-            qos_class = "NORMAL"
-
-        policy_version = str(runtime_v2_cfg.get("policy_version", "policy_v1") or "policy_v1").strip() or "policy_v1"
-        planner_version = str(runtime_v2_cfg.get("planner_version", "planner_v1") or "planner_v1").strip() or "planner_v1"
-        runtime_version = str(runtime_v2_cfg.get("runtime_version", "runtime_v2") or "runtime_v2").strip() or "runtime_v2"
-        environment_mode, sandbox_profile_id = self._resolve_runtime_v2_environment_mode(
-            runtime_v2_cfg=runtime_v2_cfg,
-            tenant_id=tenant_id,
-            context=context,
-            plan_metadata=plan_metadata,
-        )
-
-        delegation = self._build_delegation_contract(plan=plan, context=context)
-
-        envelope = ExecutionContextEnvelope(
-            environment_mode=environment_mode,
-            sandbox_profile_id=sandbox_profile_id,
-            tenant_id=tenant_id,
-            agent_id=str(plan_metadata.get("agent_id", "main_orchestrator") or "main_orchestrator"),
-            session_id=str(session_id or ""),
-            work_id=str(work_id or ""),
-            action_id=action_id,
-            qos_class=qos_class,
-            risk_level=risk_level,
-            runtime_version=runtime_version,
-            planner_version=planner_version,
-            policy_version=policy_version,
-            delegation=delegation,
-            metadata={
-                "runtime_v2_enabled": bool(is_agent_runtime_v2_enabled(self.config_manager)),
-            },
-        )
-        return envelope.to_dict()
-
-    @staticmethod
-    def _resolve_runtime_v2_environment_mode(
-        *,
-        runtime_v2_cfg: Dict[str, Any],
-        tenant_id: str,
-        context: Optional[PrincipalContext],
-        plan_metadata: Dict[str, Any],
-    ) -> tuple[str, str]:
-        cfg = runtime_v2_cfg if isinstance(runtime_v2_cfg, dict) else {}
-        sandbox_cfg = cfg.get("sandbox", {})
-        sandbox_cfg = sandbox_cfg if isinstance(sandbox_cfg, dict) else {}
-
-        explicit_mode = str(plan_metadata.get("environment_mode", "") or "").strip().lower()
-        if not explicit_mode and context is not None:
-            explicit_mode = str(getattr(context, "environment_mode", "") or "").strip().lower()
-        if explicit_mode not in {"sandbox", "production"}:
-            explicit_mode = ""
-
-        mode = "sandbox" if bool(sandbox_cfg.get("force_for_all", False)) else "production"
-        if explicit_mode:
-            mode = explicit_mode
-        else:
-            sandbox_tenants = {
-                str(x).strip()
-                for x in (sandbox_cfg.get("tenant_ids") or [])
-                if str(x).strip()
-            }
-            if str(tenant_id or "").strip() in sandbox_tenants:
-                mode = "sandbox"
-
-        profile_map = sandbox_cfg.get("profile_by_tenant", {})
-        profile_map = profile_map if isinstance(profile_map, dict) else {}
-        sandbox_profile_id = str(profile_map.get(tenant_id, sandbox_cfg.get("default_profile_id", "")) or "").strip()
-        return mode, sandbox_profile_id
-
-    def _build_delegation_contract(
-        self,
-        *,
-        plan: Optional[ActionPlan],
-        context: Optional[PrincipalContext],
-    ) -> Optional[DelegationContract]:
-        plan_metadata = plan.metadata if (plan and isinstance(plan.metadata, dict)) else {}
-        candidate = plan_metadata.get("delegation_contract")
-        if not isinstance(candidate, dict):
-            candidate = plan_metadata.get("delegation")
-        if not isinstance(candidate, dict):
-            candidate = {}
-
-        delegation_id = str(candidate.get("delegation_id", "") or "").strip()
-        if not delegation_id:
-            delegation_id = str(getattr(context, "delegation_id", "") or "").strip() if context else ""
-        if not delegation_id:
-            action_id = str(getattr(plan, "action_id", "") or "").strip().lower() if plan else ""
-            if action_id == "browser.control.run":
-                plan_metadata = plan.metadata if (plan and isinstance(plan.metadata, dict)) else {}
-                parent_agent_id = str(plan_metadata.get("agent_id", "main_orchestrator") or "main_orchestrator").strip()
-                child_agent_id = "browser_subagent_executor"
-                goal = ""
-                if isinstance(getattr(plan, "args", None), dict):
-                    goal = str(
-                        plan.args.get("goal")
-                        or plan.args.get("instruction")
-                        or plan.args.get("query")
-                        or ""
-                    ).strip()
-                session_part = str(getattr(context, "session_id", "") or "session") if context else "session"
-                delegation_id = f"auto_browser_{session_part}"
-                return DelegationContract(
-                    delegation_id=delegation_id,
-                    parent_agent_id=parent_agent_id,
-                    child_agent_id=child_agent_id,
-                    delegated_goal=goal,
-                    allowed_scopes=["browser_control"],
-                    inherited_budget={"max_actions_per_goal": 120, "max_mcp_calls_per_step": 15},
-                    success_criteria=["goal_completed_or_explicit_failure"],
-                    cancellation_criteria=["session_cancelled", "work_cancelled"],
-                )
-            return None
-
-        return DelegationContract(
-            delegation_id=delegation_id,
-            parent_agent_id=str(candidate.get("parent_agent_id", "") or "").strip(),
-            child_agent_id=str(candidate.get("child_agent_id", "") or "").strip(),
-            delegated_goal=str(candidate.get("delegated_goal", "") or "").strip(),
-            allowed_scopes=[str(x).strip() for x in candidate.get("allowed_scopes", []) if str(x).strip()],
-            inherited_budget=dict(candidate.get("inherited_budget", {}) or {}),
-            success_criteria=[str(x).strip() for x in candidate.get("success_criteria", []) if str(x).strip()],
-            cancellation_criteria=[str(x).strip() for x in candidate.get("cancellation_criteria", []) if str(x).strip()],
-        )
-
-    def _evaluate_runtime_v2_governance(
-        self,
-        *,
-        envelope_payload: Dict[str, Any],
-        action_params: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        if not isinstance(envelope_payload, dict):
-            return {}
-        envelope = ExecutionContextEnvelope(
-            envelope_version=str(envelope_payload.get("envelope_version", "1.0")),
-            environment_mode=str(envelope_payload.get("environment_mode", "production")),
-            sandbox_profile_id=str(envelope_payload.get("sandbox_profile_id", "")),
-            tenant_id=str(envelope_payload.get("tenant_id", "default")),
-            agent_id=str(envelope_payload.get("agent_id", "")),
-            session_id=str(envelope_payload.get("session_id", "")),
-            work_id=str(envelope_payload.get("work_id", "")),
-            action_id=str(envelope_payload.get("action_id", "")),
-            qos_class=str(envelope_payload.get("qos_class", "NORMAL")),
-            risk_level=str(envelope_payload.get("risk_level", "low")),
-            runtime_version=str(envelope_payload.get("runtime_version", "runtime_v1")),
-            planner_version=str(envelope_payload.get("planner_version", "planner_v1")),
-            policy_version=str(envelope_payload.get("policy_version", "policy_v1")),
-            metadata=dict(envelope_payload.get("metadata", {}) or {}),
-        )
-        action_data = action_params if isinstance(action_params, dict) else {}
-        metadata = {}
-        if self.capability_registry and envelope.action_id:
-            metadata = self.capability_registry.get_action_metadata(envelope.action_id) or {}
-        envelope.risk_level = self._runtime_v2_risk_model.evaluate(
-            envelope.action_id,
-            action_metadata=metadata,
-            context=action_data,
-        )
-        runtime_cfg = self.config_manager.get("runtime", {})
-        if not isinstance(runtime_cfg, dict):
-            runtime_cfg = {}
-        v2_cfg = runtime_cfg.get("agent_runtime_v2", {})
-        if not isinstance(v2_cfg, dict):
-            v2_cfg = {}
-        policy_cfg = self._resolve_runtime_v2_effective_policy_cfg(
-            tenant_id=envelope.tenant_id,
-            v2_cfg=v2_cfg,
-        )
-        governance = self._runtime_v2_tenant_governance.evaluate(
-            TenantGovernanceContext(
-                tenant_id=envelope.tenant_id,
-                agent_id=envelope.agent_id,
-                qos_class=envelope.qos_class,
-            )
-        )
-        policy_decision = self._runtime_v2_policy_layer.evaluate(
-            envelope,
-            action_params=action_data,
-            policy_cfg=policy_cfg,
-        )
-        queue_profile = self._runtime_v2_scheduler_global.select_fair(
-            jobs=[
-                {
-                    "tenant_id": envelope.tenant_id,
-                    "agent_id": envelope.agent_id,
-                    "qos_class": envelope.qos_class,
-                    "waiting_ms": 0,
-                }
-            ],
-            slots=1,
-        )
-        return {
-            "tenant_governance": governance,
-            "policy_decision": policy_decision.to_dict(),
-            "scheduler": {"selected": queue_profile},
-        }
-
-    def _resolve_runtime_v2_effective_policy_cfg(
-        self,
-        *,
-        tenant_id: str,
-        v2_cfg: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        cfg = v2_cfg if isinstance(v2_cfg, dict) else {}
-        default_policy = cfg.get("policy", {})
-        if not isinstance(default_policy, dict):
-            default_policy = {}
-        rollout_cfg = cfg.get("policy_rollout", {})
-        if not isinstance(rollout_cfg, dict):
-            rollout_cfg = {}
-        if not bool(rollout_cfg.get("enabled", True)):
-            return dict(default_policy)
-        rollout_engine = getattr(self, "_runtime_v2_policy_rollout", None)
-        if rollout_engine is None or not hasattr(rollout_engine, "resolve_effective_policy"):
-            return dict(default_policy)
-        return rollout_engine.resolve_effective_policy(
-            tenant_id=str(tenant_id or "default"),
-            default_policy_cfg=default_policy,
-        )
-
-    def _runtime_v2_policy_rollout_create_draft(
-        self,
-        *,
-        policy_id: str,
-        policy_cfg: Dict[str, Any],
-        created_by: str = "",
-    ) -> Dict[str, Any]:
-        return self._runtime_v2_policy_rollout.create_draft(
-            policy_id=policy_id,
-            policy_cfg=policy_cfg,
-            created_by=created_by,
-        )
-
-    def _runtime_v2_policy_rollout_mark_simulated(
-        self,
-        *,
-        policy_id: str,
-        simulation_result: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        return self._runtime_v2_policy_rollout.mark_simulated(
-            policy_id=policy_id,
-            simulation_result=simulation_result,
-        )
-
-    def _runtime_v2_policy_rollout_start_canary(
-        self,
-        *,
-        policy_id: str,
-        tenant_ids: Optional[List[str]] = None,
-        rollout_percent: float = 0.0,
-        qos_classes: Optional[List[str]] = None,
-        risk_levels: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
-        return self._runtime_v2_policy_rollout.start_canary(
-            policy_id=policy_id,
-            tenant_ids=tenant_ids,
-            rollout_percent=rollout_percent,
-            qos_classes=qos_classes,
-            risk_levels=risk_levels,
-        )
-
-    def _runtime_v2_policy_rollout_promote_active(
-        self,
-        *,
-        policy_id: str,
-        tenant_ids: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
-        return self._runtime_v2_policy_rollout.promote_active(
-            policy_id=policy_id,
-            tenant_ids=tenant_ids,
-        )
-
-    def _runtime_v2_policy_rollout_rollback(
-        self,
-        *,
-        policy_id: str,
-        reason: str = "",
-    ) -> Dict[str, Any]:
-        return self._runtime_v2_policy_rollout.rollback(policy_id=policy_id, reason=reason)
-
-    def _runtime_v2_policy_rollout_auto_abort_canary(
-        self,
-        *,
-        policy_id: str,
-        metrics: Dict[str, Any],
-        thresholds: Optional[Dict[str, float]] = None,
-    ) -> Dict[str, Any]:
-        return self._runtime_v2_policy_rollout.evaluate_canary_regression(
-            policy_id=policy_id,
-            metrics=metrics,
-            thresholds=thresholds,
-        )
-
-    def _simulate_runtime_v2_policy(
-        self,
-        *,
-        mode: str,
-        envelope_payload: Dict[str, Any],
-        action_params: Optional[Dict[str, Any]] = None,
-        policy_current: Optional[Dict[str, Any]] = None,
-        policy_candidate: Optional[Dict[str, Any]] = None,
-        historical_events: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        simulation_mode = str(mode or "single_policy_eval").strip().lower()
-        if simulation_mode == "single_policy_eval":
-            return self._runtime_v2_policy_simulation.single_policy_eval(
-                envelope_payload=envelope_payload,
-                action_params=action_params or {},
-                policy_cfg=policy_current or {},
-            )
-        if simulation_mode == "diff_eval":
-            return self._runtime_v2_policy_simulation.diff_eval(
-                envelope_payload=envelope_payload,
-                action_params=action_params or {},
-                policy_current=policy_current or {},
-                policy_candidate=policy_candidate or {},
-            )
-        if simulation_mode == "historical_replay_eval":
-            return self._runtime_v2_policy_simulation.historical_replay_eval(
-                events=historical_events or [],
-                policy_current=policy_current or {},
-                policy_candidate=policy_candidate or {},
-            )
-        return {
-            "mode": simulation_mode,
-            "status": "error",
-            "error_code": "UNKNOWN_POLICY_SIMULATION_MODE",
-            "error_details": f"Unsupported simulation mode: {simulation_mode}",
-        }
-
-    def _apply_runtime_v2_operational_gate(
-        self,
-        *,
-        exec_context: Dict[str, Any],
-        work_id: Optional[str],
-    ) -> Optional[Dict[str, Any]]:
-        governance = exec_context.get("runtime_v2_governance") if isinstance(exec_context, dict) else {}
-        governance = governance if isinstance(governance, dict) else {}
-        tenant_eval = governance.get("tenant_governance") if isinstance(governance.get("tenant_governance"), dict) else {}
-        envelope = exec_context.get("execution_context_envelope") if isinstance(exec_context, dict) else {}
-        envelope = envelope if isinstance(envelope, dict) else {}
-        tenant_id = str(envelope.get("tenant_id", "default") or "default")
-        agent_id = str(envelope.get("agent_id", "main_orchestrator") or "main_orchestrator")
-
-        runtime_cfg = self.config_manager.get("runtime", {})
-        if not isinstance(runtime_cfg, dict):
-            runtime_cfg = {}
-        v2_cfg = runtime_cfg.get("agent_runtime_v2", {})
-        if not isinstance(v2_cfg, dict):
-            v2_cfg = {}
-        governance_cfg = v2_cfg.get("governance", {})
-        if not isinstance(governance_cfg, dict):
-            governance_cfg = {}
-
-        tenant_mode = str(tenant_eval.get("mode", "log_only") or "log_only").strip().lower()
-        if tenant_mode == "enforce" and tenant_eval.get("allowed") is False:
-            return {
-                "ok": False,
-                "status": "error",
-                "error_code": "TENANT_GOVERNANCE_DENIED",
-                "error_details": "Tenant governance denied execution.",
-            }
-
-        rl_cfg = governance_cfg.get("rate_limit", {})
-        if not isinstance(rl_cfg, dict):
-            rl_cfg = {}
-        rl_eval = self._runtime_v2_rate_limiter.acquire(
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            cfg=rl_cfg,
-        )
-        governance["rate_limit"] = rl_eval
-        exec_context["runtime_v2_governance"] = governance
-        if rl_eval.get("allowed") is not True:
-            return {
-                "ok": False,
-                "status": "error",
-                "error_code": "RUNTIME_RATE_LIMITED",
-                "error_details": str(rl_eval.get("reason", "rate_limited")),
-            }
-        if isinstance(rl_eval.get("lease"), dict):
-            exec_context["_runtime_v2_rate_limit_lease"] = rl_eval.get("lease")
-
-        budget_cfg = governance_cfg.get("cost_budget", {})
-        if not isinstance(budget_cfg, dict):
-            budget_cfg = {}
-        budget_eval = self._runtime_v2_cost_budget.consume(
-            tenant_id=tenant_id,
-            work_id=str(work_id or ""),
-            cfg=budget_cfg,
-            action_units=1,
-            mcp_calls=0,
-        )
-        governance["cost_budget"] = budget_eval
-        exec_context["runtime_v2_governance"] = governance
-        if budget_eval.get("allowed") is not True:
-            return {
-                "ok": False,
-                "status": "error",
-                "error_code": "RUNTIME_COST_BUDGET_EXCEEDED",
-                "error_details": str(budget_eval.get("reason", "budget_exceeded")),
-            }
-        return None
-
-    def _release_runtime_v2_operational_leases(self, exec_context: Dict[str, Any]) -> None:
-        lease = exec_context.get("_runtime_v2_rate_limit_lease") if isinstance(exec_context, dict) else None
-        if isinstance(lease, dict):
-            self._runtime_v2_rate_limiter.release(lease)
-            exec_context.pop("_runtime_v2_rate_limit_lease", None)
-
-    @staticmethod
-    def _apply_runtime_v2_policy_gate(exec_context: Dict[str, Any], action_id: str) -> Optional[Dict[str, Any]]:
-        governance = exec_context.get("runtime_v2_governance") if isinstance(exec_context, dict) else {}
-        governance = governance if isinstance(governance, dict) else {}
-        policy_decision = governance.get("policy_decision") if isinstance(governance.get("policy_decision"), dict) else {}
-        decision = str(policy_decision.get("decision", "allow") or "allow").strip().lower()
-        mode = str(policy_decision.get("policy_mode", "log_only") or "log_only").strip().lower()
-        if mode != "enforce":
-            constraints = policy_decision.get("constraints")
-            if isinstance(constraints, dict) and constraints:
-                exec_context["runtime_v2_constraints"] = dict(constraints)
-            return None
-
-        if decision == "deny":
-            return {
-                "ok": False,
-                "status": "error",
-                "error_code": "POLICY_DENIED",
-                "error_details": f"Action '{action_id}' denied by runtime policy.",
-                "policy_decision_envelope": policy_decision,
-            }
-        if decision == "require_approval":
-            return {
-                "ok": False,
-                "status": "error",
-                "error_code": "POLICY_APPROVAL_REQUIRED",
-                "error_details": f"Action '{action_id}' requires approval by runtime policy.",
-                "policy_decision_envelope": policy_decision,
-            }
-        if decision == "allow_with_constraints":
-            constraints = policy_decision.get("constraints")
-            if isinstance(constraints, dict):
-                exec_context["runtime_v2_constraints"] = dict(constraints)
-        return None
-
-    def _apply_runtime_v2_sandbox_gate(
-        self,
-        *,
-        exec_context: Dict[str, Any],
-        action_id: str,
-        action_args: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Dict[str, Any]]:
-        envelope = exec_context.get("execution_context_envelope") if isinstance(exec_context, dict) else {}
-        envelope = envelope if isinstance(envelope, dict) else {}
-        mode = str(envelope.get("environment_mode", "production") or "production").strip().lower()
-        if mode != "sandbox":
-            return None
-
-        runtime_cfg = self.config_manager.get("runtime", {})
-        if not isinstance(runtime_cfg, dict):
-            runtime_cfg = {}
-        v2_cfg = runtime_cfg.get("agent_runtime_v2", {})
-        if not isinstance(v2_cfg, dict):
-            v2_cfg = {}
-        sandbox_cfg = v2_cfg.get("sandbox", {})
-        if not isinstance(sandbox_cfg, dict):
-            sandbox_cfg = {}
-
-        allow_actions = {
-            str(a).strip().lower()
-            for a in (sandbox_cfg.get("allow_effect_actions") or [])
-            if str(a).strip()
-        }
-        metadata = {}
-        if self.capability_registry and action_id:
-            metadata = self.capability_registry.get_action_metadata(action_id) or {}
-        side_effect = str(metadata.get("side_effect", "none") or "none").strip().lower()
-        action_id_l = str(action_id or "").strip().lower()
-        if side_effect == "none" or action_id_l in allow_actions:
-            return None
-
-        payload_args = dict(action_args or {}) if isinstance(action_args, dict) else {}
-        return {
-            "ok": True,
-            "status": "success",
-            "provider": "runtime_v2_sandbox",
-            "data": {
-                "simulated": True,
-                "sandbox_blocked_real_effect": True,
-                "action_id": action_id,
-                "side_effect": side_effect,
-                "args": payload_args,
-            },
-            "metadata": {
-                "sandbox": {
-                    "environment_mode": "sandbox",
-                    "sandbox_profile_id": str(envelope.get("sandbox_profile_id", "") or ""),
-                    "reason": "real_side_effect_blocked_in_sandbox",
-                }
-            },
-        }
-
-    @staticmethod
-    def _build_runtime_v2_receipt(
-        *,
-        exec_context: Dict[str, Any],
-        latency_ms: int,
-    ) -> Dict[str, Any]:
-        envelope = exec_context.get("execution_context_envelope") if isinstance(exec_context, dict) else {}
-        envelope = envelope if isinstance(envelope, dict) else {}
-        governance = exec_context.get("runtime_v2_governance") if isinstance(exec_context, dict) else {}
-        governance = governance if isinstance(governance, dict) else {}
-        policy_decision = governance.get("policy_decision") if isinstance(governance.get("policy_decision"), dict) else {}
-        explanation = policy_decision.get("explanation") if isinstance(policy_decision.get("explanation"), dict) else {}
-        rate_limit = governance.get("rate_limit") if isinstance(governance.get("rate_limit"), dict) else {}
-        cost_budget = governance.get("cost_budget") if isinstance(governance.get("cost_budget"), dict) else {}
-        return {
-            "receipt_version": "2.0",
-            "engine": "agent_runtime_v2",
-            "environment_mode": str(envelope.get("environment_mode", "production") or "production"),
-            "sandbox_profile_id": str(envelope.get("sandbox_profile_id", "") or ""),
-            "tenant_id": str(envelope.get("tenant_id", "default") or "default"),
-            "qos_class": str(envelope.get("qos_class", "NORMAL") or "NORMAL"),
-            "risk_level": str(envelope.get("risk_level", "low") or "low"),
-            "policy_version": str(envelope.get("policy_version", "policy_v1") or "policy_v1"),
-            "policy_decision": str(policy_decision.get("decision", "allow") or "allow"),
-            "policy_mode": str(policy_decision.get("policy_mode", "log_only") or "log_only"),
-            "decision_explanation_id": str(explanation.get("explanation_id", "") or ""),
-            "decision_reason": str(explanation.get("reason", "") or ""),
-            "rate_limit_allowed": bool(rate_limit.get("allowed", True)),
-            "cost_budget_allowed": bool(cost_budget.get("allowed", True)),
-            "latency_ms": int(latency_ms),
-        }
-
-    def _attach_runtime_v2_receipt(
-        self,
-        *,
-        result: Any,
-        exec_context: Dict[str, Any],
-        latency_ms: int,
-        work_id: Optional[str],
-    ) -> Any:
-        receipt = self._build_runtime_v2_receipt(exec_context=exec_context, latency_ms=latency_ms)
-        if isinstance(result, dict):
-            metadata = result.get("metadata")
-            if not isinstance(metadata, dict):
-                metadata = {}
-            metadata["runtime_v2_receipt"] = receipt
-            result["metadata"] = metadata
-            result["runtime_v2_receipt"] = receipt
-        if work_id:
-            self._touch_work_context(
-                work_id,
-                {
-                    "runtime_v2": {
-                        "last_receipt": receipt,
-                        "sandbox": {
-                            "environment_mode": receipt.get("environment_mode", "production"),
-                            "sandbox_profile_id": receipt.get("sandbox_profile_id", ""),
-                        },
-                    }
-                },
-            )
-        return result
-
-    def _record_runtime_v2_observability(
-        self,
-        *,
-        exec_context: Dict[str, Any],
-        action_id: str,
-        action_args: Dict[str, Any],
-        result_status: str,
-        result_reason: str,
-        latency_ms: int,
-        loop_index: int,
-        work_id: Optional[str],
-    ) -> None:
-        telemetry = getattr(self, "_runtime_v2_observability", None)
-        if telemetry is None or not bool(getattr(telemetry, "enabled", True)):
-            return
-        try:
-            envelope = exec_context.get("execution_context_envelope") if isinstance(exec_context, dict) else {}
-            envelope = envelope if isinstance(envelope, dict) else {}
-            governance = exec_context.get("runtime_v2_governance") if isinstance(exec_context, dict) else {}
-            governance = governance if isinstance(governance, dict) else {}
-            replay_payload = telemetry.build_replay_payload(
-                envelope=envelope,
-                governance=governance,
-                action_id=action_id,
-                action_args=action_args,
-                result_status=result_status,
-                result_reason=result_reason,
-                latency_ms=latency_ms,
-                loop_index=loop_index,
-            )
-            policy_decision = governance.get("policy_decision") if isinstance(governance.get("policy_decision"), dict) else {}
-            telemetry_snapshot = telemetry.record_execution_event(
-                {
-                    "session_id": str(exec_context.get("session_id", "") or ""),
-                    "work_id": str(work_id or ""),
-                    "action_id": str(action_id or ""),
-                    "trace_id": str(exec_context.get("trace_id", "") or ""),
-                    "turn_id": str(exec_context.get("turn_id", envelope.get("turn_id", "")) or ""),
-                    "attempt_id": int(exec_context.get("attempt_id", loop_index) or loop_index),
-                    "provider_used": str(exec_context.get("provider_used", exec_context.get("llm_provider", "")) or ""),
-                    "raw_llm_output": str(exec_context.get("raw_llm_output", "") or ""),
-                    "parsed_output": exec_context.get("parsed_output", {}) if isinstance(exec_context.get("parsed_output"), dict) else {},
-                    "syntax_valid": bool(exec_context.get("syntax_valid", True)),
-                    "action_candidate": str(exec_context.get("action_candidate", action_id) or ""),
-                    "action_valid": bool(exec_context.get("action_valid", result_status == "success")),
-                    "final_action": str(exec_context.get("final_action", action_id) or action_id),
-                    "error_type": str(exec_context.get("error_type", result_reason or "") or ""),
-                    "result_status": str(result_status or "unknown"),
-                    "result_reason": str(result_reason or ""),
-                    "latency_ms": int(latency_ms),
-                    "tenant_id": str(envelope.get("tenant_id", "default") or "default"),
-                    "qos_class": str(envelope.get("qos_class", "NORMAL") or "NORMAL"),
-                    "risk_level": str(envelope.get("risk_level", "low") or "low"),
-                    "policy_version": str(envelope.get("policy_version", "policy_v1") or "policy_v1"),
-                    "policy_decision": str(policy_decision.get("decision", "allow") or "allow"),
-                    "environment_mode": str(envelope.get("environment_mode", "production") or "production"),
-                    "replay_payload": replay_payload,
-                }
-            )
-            if work_id:
-                self._touch_work_context(
-                    work_id,
-                    {
-                        "runtime_v2": {
-                            "last_replay_payload": replay_payload,
-                            "metrics_snapshot": telemetry_snapshot,
-                        }
-                    },
-                )
-        except Exception as e:
-            logger.warning("Runtime v2 observability failed (non-fatal): %s", e)
-
 
     def build_work_start_ack(
         self,
@@ -2293,7 +1651,7 @@ class AgentOrchestrator:
             if "send_complete" in callbacks:
                 callbacks["send_complete"]()
             if session:
-                session.add_message("assistant", commit_msg, work_id=work_id)
+                session.add_message("assistant", commit_msg, work_id=work_id, model_info=plan.model_used if plan else None)
                 self._save_session(session)
 
         # 4. Technical Status Update
@@ -2460,8 +1818,8 @@ class AgentOrchestrator:
         logger.debug(f"Processing input in session '{session_id}' [Work: {work_id}]: {user_input}")
         turn_started_at = time.perf_counter()
         lock_wait_ms = 0
-        loops = 0
         last_action_id = None
+        last_model_used = None
 
         # Get or Create Session
         session = self.get_session_robust(session_id)
@@ -2540,6 +1898,8 @@ class AgentOrchestrator:
             # Note: Auto-naming logic was moved to main.py process_input to ensure it runs even for quick replies.
             
             plan = initial_plan
+            if plan:
+                last_model_used = plan.model_used
             
             # ENSURE PERSISTENCE: Add user message to history
             if user_input and not initial_plan:
@@ -2640,14 +2000,12 @@ class AgentOrchestrator:
             last_generated_attachment_paths: List[str] = []
             browser_open_recovery_attempts = 0
             browser_control_recovery_attempts = 0
-            browser_run_failures_in_turn = 0
             no_plan_global_retry_attempts = 0
             final_response = self._t(session, "reply.step_budget_exceeded")
             final_structured_attachments = None
             final_response_persisted = False
             final_response_streamed = False
             stream_completed = False
-            exec_context: Dict[str, Any] = {}
             paused = False
             actions_used: List[str] = []
             capabilities_used: List[str] = []
@@ -2817,7 +2175,7 @@ class AgentOrchestrator:
                     if not plan:
                         thinking_label = self.i18n.t("status.thinking_next_action", locale=self._session_locale(session))
                         if callbacks and 'send_status' in callbacks:
-                            callbacks['send_status']('thinking', {'step': loops, 'max_steps': max_steps, 'label': thinking_label})
+                            callbacks['send_status']('thinking', {'step': loops, 'max_steps': max_steps, 'label': thinking_label}, model_info=last_model_used)
                         
                         # Emit global event for real-time synchronization
                         global_event_bus.emit_threadsafe({
@@ -2850,18 +2208,13 @@ class AgentOrchestrator:
                         self._release_if_owned(lock)
                         try:
                             plan = self.intent_resolver_chain.resolve(user_input, reasoning_context)
+                            if plan:
+                                last_model_used = plan.model_used
                             
                             # Fix #4: Check Tool Override Cooldown
                             if plan and plan.action_id == "browser.control.run":
-                                now_ts = float(time.time())
-                                cooldown_until = float(session.context.get("browser_run_cooldown_until", 0.0) or 0.0)
                                 cooldowns = session.context.get("cooldowns", {})
-                                legacy_cooldown = bool(
-                                    isinstance(cooldowns, dict)
-                                    and "browser.control.run" in cooldowns
-                                    and int(cooldowns.get("browser.control.run") or 0) > 0
-                                )
-                                if browser_run_failures_in_turn > 0 or now_ts < cooldown_until or legacy_cooldown:
+                                if "browser.control.run" in cooldowns and cooldowns["browser.control.run"] > 0:
                                     logger.warning("Action browser.control.run is in cooldown. Blocking planner override.")
                                     # Overwrite the plan to force a different strategy or halt
                                     plan = ActionPlan(
@@ -3004,44 +2357,57 @@ class AgentOrchestrator:
                         },
                     )
     
-                    # Centralized action gateway: explicit canonicalization only.
+                    # Normalize/repair action IDs to reduce "unknown action" loops.
                     if plan.action_id not in ("reply", "error"):
-                        gateway_allowed_actions = self.capability_registry.list_actions() if self.capability_registry else []
-                        gateway_strict = bool(
-                            is_strict_mode_enabled(self.config_manager) or is_paranoid_mode_enabled(self.config_manager)
-                        )
-                        gateway_result = self.action_gateway.resolve(
-                            action_id=plan.action_id,
-                            params=plan.args if isinstance(plan.args, dict) else {},
-                            allowed_actions=gateway_allowed_actions,
-                            capability_registry=self.capability_registry,
-                            capability_metadata=(
-                                self.capability_registry.get_action_metadata(plan.action_id)
-                                if self.capability_registry
-                                else {}
-                            ),
-                            strict_mode=gateway_strict,
-                        )
-                        if gateway_result.outcome != "EXECUTE":
+                        resolved_action = self.capability_registry.resolve_action_id(plan.action_id)
+                        if resolved_action and resolved_action != plan.action_id:
+                            logger.info(f"Resolved action alias: {plan.action_id} -> {resolved_action}")
+                            plan.action_id = resolved_action
+                        elif not self.capability_registry.get_capability_for_action(plan.action_id):
+                            parts = str(plan.action_id or "").strip().lower().split(".")
+                            legacy_removed = len(parts) >= 3 and parts[0] == "browser" and parts[1] in {"automator", "controller"}
+                            if legacy_removed:
+                                final_response = "Capability removed."
+                                logger.warning(
+                                    "Removed browser capability requested: %s | returning SKILL_REMOVED_USE_BROWSER_CONTROL",
+                                    plan.action_id,
+                                )
+                                session.add_message(
+                                    "system",
+                                    "ERROR_CODE: SKILL_REMOVED_USE_BROWSER_CONTROL",
+                                    msg_type="reasoning",
+                                )
+                                plan = ActionPlan(
+                                    action_id="error",
+                                    args={"error_code": "SKILL_REMOVED_USE_BROWSER_CONTROL"},
+                                    response_text=final_response,
+                                    source="internal",
+                                )
+                                continue
+                            suggestions = self.capability_registry.suggest_actions(plan.action_id, limit=3)
+                            suggestion_text = ", ".join(suggestions) if suggestions else "no suggestions"
                             logger.warning(
-                                "Action gateway rejected action=%s details=%s",
-                                plan.action_id,
-                                gateway_result.details,
+                                f"Unknown action from resolver: {plan.action_id} | suggestions: {suggestion_text}"
                             )
-                            validation_error_msg = (
-                                f"ACTION_GATEWAY_REJECTED: {plan.action_id}\nDETAILS: {json.dumps(gateway_result.details)}"
+                            final_response = (
+                                self._t(
+                                    session,
+                                    "reply.unknown_action_template",
+                                    action_id=plan.action_id,
+                                    suggestions=suggestion_text,
+                                )
                             )
-                            session.add_message("system", validation_error_msg, msg_type="reasoning", work_id=work_id)
-                            self._release_if_owned(lock)
-                            try:
-                                time.sleep(0.01)
-                            finally:
-                                self._reacquire_lock(lock)
-                                if cancel_check and cancel_check():
-                                    break
-                            plan = None
+                            # Ensure final_response doesn't contain raw signals
+                            if "SYSTEM_SIGNAL:" in str(final_response):
+                                final_response = self._t(session, "reply.technical_issue")
+
+                            plan = ActionPlan(
+                                action_id="reply",
+                                args={},
+                                response_text=final_response,
+                                source="internal",
+                            )
                             continue
-                        plan.action_id = gateway_result.action_id or plan.action_id
 
                     # --- Phase 9: Plan Validation ---
                     validation_context = {
@@ -3061,20 +2427,32 @@ class AgentOrchestrator:
                             "Plan validation failed | action=%s error=%s msg=%s diag=%s",
                             plan.action_id, v_res.error_code, v_res.message, v_res.diagnostics
                         )
-                        # Inject error into reasoning history to force re-planning
-                        validation_error_msg = f"PLAN_VALIDATION_FAILED: {v_res.message}\nDIAGNOSTICS: {json.dumps(v_res.diagnostics)}"
-                        session.add_message("system", validation_error_msg, msg_type="reasoning", work_id=work_id)
                         
-                        # Yield lock before re-entering planning loop
-                        self._release_if_owned(lock)
-                        try:
-                            time.sleep(0.01) # Small yield to allow main loop to process interrupts
-                        finally:
-                            self._reacquire_lock(lock)
-                            if cancel_check and cancel_check(): break
+                        # Self-healing: if it's the first failure for this turn, try to repair
+                        if repeated_failure_count < 1:
+                            repeated_failure_count += 1
+                            validation_error_msg = f"PLAN_VALIDATION_FAILED: {v_res.message}\nDIAGNOSTICS: {json.dumps(v_res.diagnostics)}"
+                            session.add_message("system", validation_error_msg, msg_type="reasoning", work_id=work_id)
+                            
+                            repair_label = "Corrigindo erro de validação do plano..." if self._session_locale(session).startswith("pt") else "Repairing plan validation error..."
+                            if callbacks and 'send_status' in callbacks:
+                                callbacks['send_status']('thinking', {'message': repair_label}, model_info=last_model_used)
+                                
+                            # Yield lock before re-entering planning loop
+                            self._release_if_owned(lock)
+                            try:
+                                time.sleep(0.01)
+                            finally:
+                                self._reacquire_lock(lock)
+                                if cancel_check and cancel_check(): break
 
-                        plan = None
-                        continue
+                            plan = None # Force re-planning with error context
+                            continue
+                        else:
+                            # Too many failures, abort
+                            final_response = f"Não consegui executar o comando devido a erros repetidos de validação: {v_res.message}" if self._session_locale(session).startswith("pt") else f"I couldn't execute the command due to repeated validation errors: {v_res.message}"
+                            session.add_message("assistant", final_response, work_id=work_id, model_info=last_model_used)
+                            break
 
                     plan = self._apply_media_decision_policy(
                         session=session,
@@ -3124,7 +2502,7 @@ class AgentOrchestrator:
                                 session,
                                 last_generated_attachment_paths,
                             ) if last_generated_attachment_paths else None
-                            session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id)
+                            session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id, model_info=last_model_used)
                             final_response_persisted = True
                             session.scratchpad = ""
                             session.plan = []
@@ -3133,6 +2511,7 @@ class AgentOrchestrator:
                                     final_response,
                                     is_chunk=True,
                                     attachments=final_structured_attachments,
+                                    model_info=last_model_used,
                                 )
                                 final_response_streamed = True
                             if callbacks and 'send_complete' in callbacks:
@@ -3179,7 +2558,7 @@ class AgentOrchestrator:
                                     session,
                                     last_generated_attachment_paths,
                                 ) if last_generated_attachment_paths else None
-                                session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id)
+                                session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id, model_info=last_model_used)
                                 final_response_persisted = True
                                 session.scratchpad = ""
                                 session.plan = []
@@ -3188,6 +2567,7 @@ class AgentOrchestrator:
                                         final_response,
                                         is_chunk=True,
                                         attachments=final_structured_attachments,
+                                        model_info=last_model_used,
                                     )
                                     final_response_streamed = True
                                 if callbacks and 'send_complete' in callbacks:
@@ -3197,6 +2577,11 @@ class AgentOrchestrator:
                     
                     # Notify Reasoning Chunk
                     ui_reasoning = self._build_proactive_reasoning_chunk(session, plan)
+                    
+                    # Capture actual AI thought for the cognitive audit trail
+                    if getattr(plan, "thought", None):
+                        session.add_thought(plan.thought, work_id=work_id)
+                        
                     if callbacks and 'send_reasoning_chunk' in callbacks:
                         callbacks['send_reasoning_chunk'](ui_reasoning)
                     
@@ -3386,6 +2771,11 @@ class AgentOrchestrator:
                             final_response,
                             language=self._session_locale(session),
                         )
+                        self._emit_visual_subagent_intent(
+                            session=session,
+                            plan=plan,
+                            response_text=normalized_response,
+                        )
                         if normalized_response != final_response:
                             if isinstance(session.context, dict):
                                 metrics = session.context.get("metrics")
@@ -3409,13 +2799,6 @@ class AgentOrchestrator:
                             final_response,
                             language=self._session_locale(session),
                         )
-                        final_response = self._govern_final_user_response(
-                            session=session,
-                            user_input=user_input,
-                            response_text=final_response,
-                            work_id=work_id,
-                            exec_context=exec_context,
-                        )
                         
                         # Process attachments
                         attachment_inputs = plan.attachments or last_generated_attachment_paths
@@ -3424,7 +2807,7 @@ class AgentOrchestrator:
                         if not final_response and structured_attachments:
                             final_response = "Here is the requested file."
                         
-                        session.add_message("assistant", final_response, attachments=structured_attachments, work_id=work_id)
+                        session.add_message("assistant", final_response, attachments=structured_attachments, work_id=work_id, model_info=last_model_used)
                         final_structured_attachments = structured_attachments
                         final_response_persisted = True
                         session.scratchpad = ""
@@ -3442,7 +2825,7 @@ class AgentOrchestrator:
                         )
 
                         if callbacks and 'send_response' in callbacks:
-                            callbacks['send_response'](final_response, is_chunk=True, attachments=structured_attachments)
+                            callbacks['send_response'](final_response, is_chunk=True, attachments=structured_attachments, model_info=last_model_used)
                             final_response_streamed = True
                                 
                         if callbacks and 'send_complete' in callbacks:
@@ -3451,28 +2834,43 @@ class AgentOrchestrator:
                         break
     
                     if plan.action_id == 'error':
+                        error_code = plan.metadata.get("error_code") if isinstance(plan.metadata, dict) else None
+                        
+                        if error_code == "low_confidence":
+                             # Yield lock during conversational recovery
+                            self._release_if_owned(lock)
+                            try:
+                                final_response = self._generate_recovery_reply(
+                                    session=session,
+                                    user_input=user_input,
+                                    reason="no_plan_resolved",
+                                    last_tool_data=None,
+                                    last_action_id=None
+                                )
+                            finally:
+                                self._reacquire_lock(lock)
+                        else:
+                            final_response = self._t(
+                                session,
+                                "reply.error_during_processing",
+                                details=(plan.thought or plan.response_text or "unknown"),
+                            )
+
                         if callbacks and 'send_status' in callbacks:
                             callbacks['send_status'](
                                 'error',
                                 {
-                                    'code': 'action_error',
-                                    'message': self._t(
-                                        session,
-                                        "reply.error_during_processing",
-                                        details=(plan.thought or "unknown"),
-                                    ),
+                                    'code': error_code or 'action_error',
+                                    'message': final_response,
+                                    'action': plan.metadata.get("attempted_action", "") if isinstance(plan.metadata, dict) else "",
                                 },
+                                model_info=last_model_used
                             )
                             
-                        final_response = self._t(
-                            session,
-                            "reply.error_during_processing",
-                            details=(plan.thought or "unknown"),
-                        )
-                        session.add_message("assistant", final_response, work_id=work_id)
+                        session.add_message("assistant", final_response, work_id=work_id, model_info=last_model_used)
                         final_response_persisted = True
                         if callbacks and 'send_response' in callbacks:
-                            callbacks['send_response'](final_response, is_chunk=True)
+                            callbacks['send_response'](final_response, is_chunk=True, model_info=last_model_used)
                             final_response_streamed = True
                         
                         if callbacks and 'send_complete' in callbacks:
@@ -3553,7 +2951,7 @@ class AgentOrchestrator:
                                 "work_id": work_id,
                                 "requested_at": now_str,
                             }
-                            target_session.add_message("assistant", approval_msg, work_id=work_id)
+                            target_session.add_message("assistant", approval_msg, work_id=work_id, model_info=last_model_used)
                             self._save_session(target_session)
 
                             self._touch_work_context(
@@ -3646,7 +3044,7 @@ class AgentOrchestrator:
                                         "last_action_reason": "approval_denied",
                                         "handoff_or_escalation": True,
                                     }
-                                    session.add_message("assistant", final_response, work_id=work_id)
+                                    session.add_message("assistant", final_response, work_id=work_id, model_info=last_model_used)
                                     final_response_persisted = True
                                     if callbacks and 'send_response' in callbacks:
                                         callbacks['send_response'](final_response, is_chunk=True)
@@ -3662,7 +3060,7 @@ class AgentOrchestrator:
                                 if hasattr(session, "intent_agenda"):
                                     for intent in session.intent_agenda.get_active_intents():
                                         session.intent_agenda.update_intent_status(intent.intent_id, "PAUSED", blocking_reason="approval_pending")
-                                session.add_message("assistant", approval_msg, work_id=work_id)
+                                session.add_message("assistant", approval_msg, work_id=work_id, model_info=last_model_used)
                                 self._commit_cognitive_turn_state(
                                     session=session,
                                     user_input=user_input,
@@ -3691,7 +3089,7 @@ class AgentOrchestrator:
 
                     # Execute via CapabilityRegistry
                     if callbacks and 'send_status' in callbacks:
-                        callbacks['send_status']('executing', {'action': plan.action_id, 'label': f"Executing {plan.action_id}..."})
+                        callbacks['send_status']('executing', {'action': plan.action_id, 'label': f"Executing {plan.action_id}..."}, model_info=last_model_used)
     
                     # Emit global event for real-time synchronization
                     global_event_bus.emit_threadsafe({
@@ -3715,97 +3113,25 @@ class AgentOrchestrator:
                         "capability_registry": self.capability_registry,
                         "playback_service": getattr(self, "playback_service", None),
                     }
-                    exec_context["execution_context_envelope"] = self._build_execution_context_envelope(
-                        plan=plan,
-                        context=context,
-                        session_id=session_id,
-                        work_id=work_id,
-                    )
-                    exec_context["runtime_v2_governance"] = self._evaluate_runtime_v2_governance(
-                        envelope_payload=exec_context["execution_context_envelope"],
-                        action_params=plan.args if isinstance(plan.args, dict) else {},
-                    )
                     
                     start_ts = time.time()
+                    self._release_if_owned(lock)
                     try:
-                        policy_block = self._apply_runtime_v2_policy_gate(exec_context, plan.action_id)
-                        if policy_block is not None:
-                            result = policy_block
-                        operational_block = None
-                        if policy_block is None:
-                            operational_block = self._apply_runtime_v2_operational_gate(
-                                exec_context=exec_context,
-                                work_id=work_id,
-                            )
-                            if operational_block is not None:
-                                result = operational_block
-                        sandbox_override = None
-                        if policy_block is None and operational_block is None:
-                            sandbox_override = self._apply_runtime_v2_sandbox_gate(
-                                exec_context=exec_context,
-                                action_id=plan.action_id,
-                                action_args=plan.args if isinstance(plan.args, dict) else {},
-                            )
-                            if sandbox_override is not None:
-                                result = sandbox_override
                         if context:
-                            if policy_block is None and operational_block is None and sandbox_override is None:
-                                allowed, reason = self.access_controller.pre_dispatch_gate(
-                                    context,
-                                    plan.action_id,
-                                    plan.args,
-                                    self.capability_registry,
-                                    self.config_manager
-                                )
-                            else:
-                                allowed, reason = True, ""
+                            allowed, reason = self.access_controller.pre_dispatch_gate(
+                                context,
+                                plan.action_id,
+                                plan.args,
+                                self.capability_registry,
+                                self.config_manager
+                            )
                             if not allowed:
-                                result = {
-                                    "ok": False,
-                                    "status": "error",
-                                    "error_code": "ACCESS_PRE_DISPATCH_DENIED",
-                                    "error_details": str(reason),
-                                    "policy_decision_envelope": (
-                                        (exec_context.get("runtime_v2_governance") or {}).get("policy_decision")
-                                        if isinstance(exec_context.get("runtime_v2_governance"), dict)
-                                        else None
-                                    ),
-                                }
+                                result = f"NEGADO: {reason}"
                             else:
-                                if policy_block is None and operational_block is None and sandbox_override is None:
-                                    result = self.action_gateway.execute_action(
-                                        action_id=plan.action_id,
-                                        params=plan.args if isinstance(plan.args, dict) else {},
-                                        allowed_actions=self.capability_registry.list_actions() if self.capability_registry else [],
-                                        capability_registry=self.capability_registry,
-                                        capability_metadata=(
-                                            self.capability_registry.get_action_metadata(plan.action_id)
-                                            if self.capability_registry
-                                            else {}
-                                        ),
-                                        context=exec_context,
-                                        strict_mode=bool(
-                                            is_strict_mode_enabled(self.config_manager) or is_paranoid_mode_enabled(self.config_manager)
-                                        ),
-                                    )
+                                result = self.capability_registry.dispatch(plan.action_id, plan.args, exec_context)
                         else:
-                            if policy_block is None and operational_block is None and sandbox_override is None:
-                                result = self.action_gateway.execute_action(
-                                    action_id=plan.action_id,
-                                    params=plan.args if isinstance(plan.args, dict) else {},
-                                    allowed_actions=self.capability_registry.list_actions() if self.capability_registry else [],
-                                    capability_registry=self.capability_registry,
-                                    capability_metadata=(
-                                        self.capability_registry.get_action_metadata(plan.action_id)
-                                        if self.capability_registry
-                                        else {}
-                                    ),
-                                    context=exec_context,
-                                    strict_mode=bool(
-                                        is_strict_mode_enabled(self.config_manager) or is_paranoid_mode_enabled(self.config_manager)
-                                    ),
-                                )
-                        
+                            result = self.capability_registry.dispatch(plan.action_id, plan.args, exec_context)
+
                         latency_ms = int((time.time() - start_ts) * 1000)
                         logger.info(
                             "Tool dispatch completed | action=%s session_id=%s work_id=%s latency_ms=%d",
@@ -3823,7 +3149,7 @@ class AgentOrchestrator:
                         error_code = ErrorCode.TOOL_EXECUTION_FAILED
                         if "timeout" in str(e).lower():
                             error_code = ErrorCode.TOOL_TIMEOUT
-                        
+
                         logger.error(
                             "Tool execution failed | action=%s session_id=%s work_id=%s error=%s latency_ms=%d",
                             plan.action_id, session_id, work_id, str(e), latency_ms,
@@ -3841,13 +3167,11 @@ class AgentOrchestrator:
                             "error_code": error_code.value,
                             "message": str(e)
                         }
-                    result = self._attach_runtime_v2_receipt(
-                        result=result,
-                        exec_context=exec_context,
-                        latency_ms=latency_ms,
-                        work_id=work_id,
-                    )
-                    self._release_runtime_v2_operational_leases(exec_context)
+                    finally:
+                        self._reacquire_lock(lock)
+                        if cancel_check and cancel_check():
+                            logger.info(f"Cancellation after tool dispatch for session {session_id}")
+                            break
                     
                     # Persistence: Attach playback metadata if returned by capability.
                     # First try a user-visible assistant message for this work_id (e.g. work ack),
@@ -3910,45 +3234,6 @@ class AgentOrchestrator:
                     )
                     result_status, result_reason = self._assess_action_result(result, raw_result)
                     structured_result = self._extract_structured_result(result, raw_result)
-                    if plan.action_id == "system.control.consult_tools" and result_status == "success":
-                        discovery_payload = structured_result if isinstance(structured_result, dict) else {}
-                        toon_payload: Dict[str, Any] = {}
-                        discovery_items = discovery_payload.get("items")
-                        if not isinstance(discovery_items, list):
-                            toon_payload = discovery_payload.get("toon") if isinstance(discovery_payload.get("toon"), dict) else {}
-                            discovery_items = toon_payload.get("i") if isinstance(toon_payload.get("i"), list) else []
-                        candidate_ids = [
-                            str(item.get("action_id") or item.get("a") or "").strip()
-                            for item in discovery_items
-                            if isinstance(item, dict) and str(item.get("action_id") or item.get("a") or "").strip()
-                        ]
-                        primary_action_id = str(discovery_payload.get("primary_action_id") or toon_payload.get("p") or (candidate_ids[0] if candidate_ids else "")).strip()
-                        tool_discovery = {
-                            "query": str(discovery_payload.get("query") or plan.args.get("query") or "").strip() if isinstance(plan.args, dict) else str(discovery_payload.get("query") or "").strip(),
-                            "intent": str(discovery_payload.get("intent") or plan.args.get("intent") or "").strip() if isinstance(plan.args, dict) else str(discovery_payload.get("intent") or "").strip(),
-                            "domain": str(discovery_payload.get("domain") or plan.args.get("domain") or "").strip() if isinstance(plan.args, dict) else str(discovery_payload.get("domain") or "").strip(),
-                            "role": str(discovery_payload.get("role") or plan.args.get("role") or "").strip() if isinstance(plan.args, dict) else str(discovery_payload.get("role") or "").strip(),
-                            "entity_type": str(discovery_payload.get("entity_type") or plan.args.get("entity_type") or "").strip() if isinstance(plan.args, dict) else str(discovery_payload.get("entity_type") or "").strip(),
-                            "count": int(discovery_payload.get("count") or len(candidate_ids) or 0),
-                            "candidate_ids": candidate_ids[:8],
-                            "primary_action_id": primary_action_id,
-                            "ts": time.time(),
-                        }
-                        if isinstance(session.context, dict):
-                            session.context["last_tool_discovery"] = tool_discovery
-                        if isinstance(session.state_summary, dict):
-                            session.state_summary["last_tool_discovery"] = tool_discovery
-                            session.state_summary["tool_candidates"] = candidate_ids[:8]
-                    self._record_runtime_v2_observability(
-                        exec_context=exec_context,
-                        action_id=str(plan.action_id or ""),
-                        action_args=plan.args if isinstance(plan.args, dict) else {},
-                        result_status=result_status,
-                        result_reason=result_reason,
-                        latency_ms=latency_ms,
-                        loop_index=loops,
-                        work_id=work_id,
-                    )
                     last_action_status = result_status
                     last_action_reason = result_reason
                     last_action_id = plan.action_id
@@ -4020,7 +3305,7 @@ class AgentOrchestrator:
                                     f"Technical detail: {details or result_reason}."
                                 )
                             session.state_summary["last_error"] = result_reason
-                            session.add_message("assistant", final_response, work_id=work_id)
+                            session.add_message("assistant", final_response, work_id=work_id, model_info=last_model_used)
                             final_response_persisted = True
                             if callbacks and 'send_response' in callbacks:
                                 callbacks['send_response'](final_response, is_chunk=True)
@@ -4048,9 +3333,6 @@ class AgentOrchestrator:
                             if "cooldowns" not in session.context:
                                 session.context["cooldowns"] = {}
                             session.context["cooldowns"][plan.action_id] = 2 # Block for 2 turns
-                        if plan.action_id == "browser.control.run":
-                            browser_run_failures_in_turn += 1
-                            session.context["browser_run_cooldown_until"] = float(time.time()) + 120.0
 
                         if planner_tree:
                             self._mark_planner_blocked(planner_tree)
@@ -4214,7 +3496,7 @@ class AgentOrchestrator:
                             session,
                             last_generated_attachment_paths,
                         ) if last_generated_attachment_paths else None
-                        session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id)
+                        session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id, model_info=last_model_used)
                         final_response_persisted = True
                         session.scratchpad = ""
                         session.plan = []
@@ -4273,7 +3555,7 @@ class AgentOrchestrator:
                                 session,
                                 last_generated_attachment_paths,
                             ) if last_generated_attachment_paths else None
-                            session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id)
+                            session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id, model_info=last_model_used)
                             final_response_persisted = True
                             session.scratchpad = ""
                             session.plan = []
@@ -4386,17 +3668,9 @@ class AgentOrchestrator:
                     final_response,
                     language=self._session_locale(session),
                 )
-                if not exec_context.get("output_governance_checked"):
-                    final_response = self._govern_final_user_response(
-                        session=session,
-                        user_input=user_input,
-                        response_text=final_response,
-                        work_id=work_id,
-                        exec_context=exec_context,
-                    )
 
             if final_response and not final_response_persisted and not session.pending_action:
-                session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id)
+                session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id, model_info=last_model_used)
                 final_response_persisted = True
     
             if callbacks and 'send_response' in callbacks and final_response and not final_response_streamed and not session.pending_action:
@@ -5835,177 +5109,6 @@ class AgentOrchestrator:
 
         return text
 
-    def _retry_final_user_response(
-        self,
-        *,
-        session: Session,
-        user_input: str,
-        draft_text: str,
-        retry_instruction: str,
-    ) -> str:
-        system_prompt, prompt = OutputGovernor.minimal_retry_prompt(
-            user_input=user_input,
-            draft_text=draft_text,
-            retry_instruction=retry_instruction,
-        )
-        try:
-            response = self.llm_manager.generate_text(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                max_tokens=256,
-                temperature=0.2,
-            )
-            return str(response or "").strip()
-        except Exception as e:
-            logger.warning("Final output retry failed for session %s: %s", session.session_id, e)
-            return ""
-
-    def _govern_final_user_response(
-        self,
-        *,
-        session: Session,
-        user_input: str,
-        response_text: str,
-        work_id: str = "",
-        exec_context: Optional[Dict[str, Any]] = None,
-    ) -> str:
-        exec_context = exec_context if isinstance(exec_context, dict) else {}
-        trace_id = str(exec_context.get("trace_id") or "")
-        turn_id = str(exec_context.get("turn_id") or getattr(session, "turn_id", 0) or 0)
-        attempt_id = int(exec_context.get("attempt_id") or 0)
-        provider_used = str(exec_context.get("provider_used") or exec_context.get("llm_provider") or "")
-        raw_llm_output = str(exec_context.get("raw_llm_output") or response_text or "")
-        parsed_output = exec_context.get("parsed_output") if isinstance(exec_context.get("parsed_output"), dict) else {}
-        action_candidate = str(exec_context.get("action_candidate") or "reply")
-        action_valid = bool(exec_context.get("action_valid", True))
-        final_action = str(exec_context.get("final_action") or "reply")
-        error_type = str(exec_context.get("error_type") or "")
-        session_language = self._session_locale(session, fallback=self._detect_user_language(user_input))
-
-        result = OutputGovernor.classify_final_user_response(
-            user_input=user_input,
-            response_text=response_text,
-            session_language=session_language,
-        )
-        output_rejected = not result.accepted
-        rejection_reason = result.rejection_reason
-        retry_triggered = False
-        retry_success = False
-        final_text = result.text
-        result_status = "success"
-        telemetry = getattr(self, "_runtime_v2_observability", None)
-
-        def _emit_output_event(*, current_text: str, current_result_status: str, current_result_reason: str, current_output_rejected: bool, current_retry_triggered: bool, current_retry_success: bool, current_error_type: str, current_attempt_count: int) -> None:
-            if telemetry is None or not bool(getattr(telemetry, "enabled", True)):
-                return
-            try:
-                telemetry.record_execution_event(
-                    {
-                        "session_id": str(getattr(session, "session_id", "") or ""),
-                        "work_id": str(work_id or ""),
-                        "trace_id": trace_id,
-                        "turn_id": turn_id,
-                        "attempt_id": attempt_id,
-                        "provider_used": provider_used,
-                        "attempt_count": int(current_attempt_count),
-                        "raw_llm_output": str(current_text or ""),
-                        "parsed_output": {
-                            "kind": "classified_error" if current_output_rejected else "final_user_response",
-                            "text": str(current_text or ""),
-                        },
-                        "syntax_valid": True,
-                        "action_candidate": action_candidate,
-                        "action_valid": action_valid,
-                        "final_action": final_action,
-                        "error_type": current_error_type,
-                        "result_status": current_result_status,
-                        "result_reason": current_result_reason,
-                        "output_rejected": bool(current_output_rejected),
-                        "rejection_reason": current_result_reason,
-                        "retry_triggered": bool(current_retry_triggered),
-                        "retry_success": bool(current_retry_success),
-                    }
-                )
-            except Exception as e:
-                logger.warning("Failed to record output governance telemetry: %s", e)
-
-        if output_rejected:
-            retry_triggered = True
-            result_status = "failure"
-            logger.warning(
-                "Output contract rejected | session=%s reason=%s expected=%s detected=%s",
-                session.session_id,
-                rejection_reason,
-                result.expected_language,
-                result.detected_language,
-            )
-            _emit_output_event(
-                current_text=response_text,
-                current_result_status="failure",
-                current_result_reason=rejection_reason,
-                current_output_rejected=True,
-                current_retry_triggered=True,
-                current_retry_success=False,
-                current_error_type="AgentSemanticError",
-                current_attempt_count=1,
-            )
-            retry_text = self._retry_final_user_response(
-                session=session,
-                user_input=user_input,
-                draft_text=response_text,
-                retry_instruction=result.retry_instruction,
-            )
-            retry_result = OutputGovernor.classify_final_user_response(
-                user_input=user_input,
-                response_text=retry_text,
-                session_language=session_language,
-            )
-            if retry_result.accepted:
-                final_text = retry_result.text
-                retry_success = True
-                output_rejected = False
-                rejection_reason = ""
-                result_status = "success"
-            else:
-                logger.error(
-                    "Final output retry rejected | session=%s reason=%s expected=%s detected=%s",
-                    session.session_id,
-                    retry_result.rejection_reason,
-                    retry_result.expected_language,
-                    retry_result.detected_language,
-                )
-                final_text = self._t(session, "reply.technical_issue", details="output contract violation")
-                _emit_output_event(
-                    current_text=final_text,
-                    current_result_status="failure",
-                    current_result_reason=retry_result.rejection_reason,
-                    current_output_rejected=True,
-                    current_retry_triggered=True,
-                    current_retry_success=False,
-                    current_error_type="AgentSemanticError",
-                    current_attempt_count=2,
-                )
-
-        if not output_rejected:
-            _emit_output_event(
-                current_text=final_text,
-                current_result_status=result_status,
-                current_result_reason=rejection_reason or "output_ok",
-                current_output_rejected=False,
-                current_retry_triggered=bool(retry_triggered),
-                current_retry_success=bool(retry_success),
-                current_error_type=str(error_type or ""),
-                current_attempt_count=1 + int(retry_triggered),
-            )
-
-        exec_context["output_governance_checked"] = True
-        exec_context["output_rejected"] = bool(output_rejected)
-        exec_context["rejection_reason"] = rejection_reason
-        exec_context["retry_triggered"] = bool(retry_triggered)
-        exec_context["retry_success"] = bool(retry_success)
-        exec_context["final_user_response"] = final_text
-        return final_text
-
     @staticmethod
     def _clip_text(value: Any, limit: int) -> str:
         text = str(value or "").strip()
@@ -6065,8 +5168,9 @@ class AgentOrchestrator:
             "fq_action_ids",
             "read_before_write",
             "grounded_failures",
+            "multi_tasking",
+            "parallel_execution",
             "reply_when_done_or_blocked",
-            "consult_tools_first",
             "progress_ack_for_non_reply",
             "stop_after_3_same_failures",
         ]
@@ -6074,7 +5178,7 @@ class AgentOrchestrator:
             "v": "ip.v3",
             "n": self._clip_text(agent_name, 40),
             "scope": str(personality_scope or "response_text_only").strip().lower(),
-            "lang": f"ta=en;r={user_language or 'auto'};single",
+            "lang": f"ta={user_language or 'en'};r={user_language or 'auto'};single",
             "present": presentation_mode + ("+md" if markdown_supported else ""),
             "policy": policy_compact,
             "browser": "browser.control.run|infer|controlar_midia,realizar_pesquisa,automacao_ui,validacao_visual,manutencao",
@@ -6114,10 +5218,15 @@ class AgentOrchestrator:
             "[INSTRUCTION PACK]",
             "[SYSTEM CONTEXT]",
             "[INTERNAL STATE (TOON)]",
+            "[TOON CONTEXT DELTAS]",
             "[SESSION SUMMARY]",
             "[BROKER EVIDENCE]",
             "[ACTIONS]",
             "[STRUCTURED OUTPUT CONTRACT]",
+            "[SCRATCHPAD]",
+            "[RELEVANT MEMORY]",
+            "[PYTHON CONTEXT]",
+            "[BROWSER STATE]",
         ]
         sizes: Dict[str, int] = {}
         for i, header in enumerate(headers):
@@ -6423,7 +5532,7 @@ class AgentOrchestrator:
             self.prompt_composer.update_budgets(self.prompt_composer._BLOCK_BUDGETS)
 
         location_payload = self.location_service.get_current_location(session.context)
-        prompt_location = self._format_prompt_location(location_payload)
+        prompt_location = self._format_prompt_location(location_payload, session=session)
 
         cognitive_projection = None
         legacy_cognitive_frame = None
@@ -6597,6 +5706,14 @@ class AgentOrchestrator:
                 self._record_cognitive_effectiveness(session, cognitive_diag)
 
         relevant_memory = self._retrieve_relevant_memory(session, user_input)
+ 
+        # Phase 16: Multi-tasking Directive
+        multi_task_directive = (
+            "[ASYNCHRONOUS MULTI-TASKING]\n"
+            "- You are a truly asynchronous agent capable of managing multiple tasks/workers simultaneously.\n"
+            "- Never claim you can only handle one task at a time. If a user asks for something while a task is running, spawn a new worker or execute directly.\n"
+            "- Do not wait for completion of background tasks to engage in new conversations or actions unless there is a strict logical dependency."
+        )
 
         prompt = self.prompt_composer.compose(
             agent_name=agent_name,
@@ -6630,6 +5747,8 @@ class AgentOrchestrator:
             context_bundle=context_bundle,
             prompt_profile=prompt_profile,
         )
+        prompt += "\n\n" + multi_task_directive
+
         prompt_reduction_metrics = dict(getattr(self.prompt_composer, "last_compose_metrics", {}) or {})
         if isinstance(session.context, dict):
             session.context["last_prompt_reduction"] = prompt_reduction_metrics
@@ -6973,7 +6092,7 @@ class AgentOrchestrator:
         }
 
     @staticmethod
-    def _format_prompt_location(location_payload: Any) -> str:
+    def _format_prompt_location(location_payload: Any, session: Any = None) -> str:
         if not isinstance(location_payload, dict):
             return "Unknown"
 
@@ -6985,12 +6104,26 @@ class AgentOrchestrator:
         lat = location_payload.get("latitude")
         lon = location_payload.get("longitude")
 
+        weather_str = ""
+        if session and isinstance(getattr(session, "context", None), dict):
+            weather_data = session.context.get("weather")
+            if isinstance(weather_data, dict) and weather_data.get("ok"):
+                cur = weather_data.get("current")
+                if isinstance(cur, dict) and cur.get("temp") is not None:
+                    desc = str(cur.get("description") or "").capitalize()
+                    temp = cur.get("temp")
+                    feels = cur.get("feels_like")
+                    humidity = cur.get("humidity")
+                    weather_str = f"Weather: {temp}°C {desc} (feels {feels}°C, {humidity}% hum)"
+
         parts = [p for p in (city, state, country) if p and p.lower() != "unknown"]
         extras = []
         if timezone and timezone.lower() not in {"unknown", "none"}:
             extras.append(f"TZ: {timezone}")
         if language and language.lower() not in {"unknown", "none"}:
             extras.append(f"Lang: {language}")
+        if weather_str:
+            extras.append(weather_str)
         if parts:
             if lat is not None and lon is not None:
                 base = f"{', '.join(parts)} [{lat},{lon}]"
@@ -7043,7 +6176,7 @@ class AgentOrchestrator:
 
     def _build_prompt_actions_block(self, user_input: str, allowed_actions: Optional[List[str]]) -> str:
         """
-        Builds a minimal discovery bootstrap for prompt injection.
+        Builds a compact, low-token action catalog for prompt injection.
         """
         prompt_cfg = self.config_manager.get("prompt_context", {}) or {}
         mode = str(prompt_cfg.get("actions_mode", "on_demand")).strip().lower()
@@ -7054,24 +6187,94 @@ class AgentOrchestrator:
                 return header
             return header + "\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
-        # Legacy compatibility mode only.
+        # Legacy compatibility mode
         if mode == "full":
             return self.capability_registry.get_summary(allowed_actions)
 
-        allowed_set = set(allowed_actions) if allowed_actions is not None else set(self.capability_registry.list_actions())
-        bootstrap = [action_id for action_id in ("system.control.consult_tools",) if action_id in allowed_set]
-        if not bootstrap:
-            return "m=discover_only"
+        manifest = self.capability_registry.get_compact_manifest(allowed_actions)
+        focus_limit = int(prompt_cfg.get("focus_limit", 8))
+        dense_threshold = int(prompt_cfg.get("dense_catalog_threshold", 24) or 24)
+        focus = self.capability_registry.get_focus_actions(
+            user_input=user_input or "",
+            allowed_actions=allowed_actions,
+            limit=focus_limit,
+        )
+        focus_ids = [str(row.get("id") or "") for row in focus if str(row.get("id") or "").strip()]
+
+        if mode in {"on_demand", "catalog_on_demand"}:
+            allowed_set = set(allowed_actions) if allowed_actions is not None else set(self.capability_registry.list_actions())
+            bootstrap = [
+                action_id
+                for action_id in (
+                    "system.control.capabilities.list.ai",
+                    "system.control.capabilities.describe.ai",
+                    "system.control.capabilities.list",
+                    "system.control.capabilities.describe",
+                )
+                if action_id in allowed_set
+            ]
+            if not bootstrap:
+                # Fallback safely when discovery actions are unavailable.
+                mode = "compact_hybrid"
+            else:
+                relevant_seeds = [aid for aid in focus_ids[:4] if aid not in bootstrap]
+                base_payload = {
+                    "v": "ac.v4",
+                    "m": "od",
+                    "d": bootstrap,
+                    "f": relevant_seeds,
+                    "r": ["discover", "prefer_ai", "catalog_only"],
+                }
+                if self._is_conversational_turn(user_input):
+                    return _pack(
+                        {
+                            **base_payload,
+                            "m": "od_chat",
+                            "pr": True,
+                        },
+                        "m=od_chat",
+                    )
+                return _pack(base_payload, "m=od")
+
+        if self._is_conversational_turn(user_input):
+            short_focus_ids = [str(row.get("id") or "") for row in focus[:4] if str(row.get("id") or "").strip()]
+            return _pack(
+                {
+                    "v": "ac.v4",
+                    "m": "chat",
+                    "pr": True,
+                    "f": short_focus_ids,
+                },
+                "m=chat",
+            )
+
+        focus_ids = [str(row.get("id") or "") for row in focus if str(row.get("id") or "").strip()]
+        action_ids = [str(item) for item in list(manifest.get("actions", []))]
+        total_actions = int(manifest.get("count", 0) or len(action_ids))
+        if total_actions > dense_threshold:
+            dense_seed = focus_ids[:10] or action_ids[:12]
+            payload = {
+                "v": "ac.v4",
+                "m": "dense_hybrid" if mode == "compact_hybrid" else "dense",
+                "c": total_actions,
+                "h": str(manifest.get("hash", "none") or "none"),
+                "ns": list(manifest.get("namespaces", [])[:8]),
+                "a": dense_seed,
+                "f": focus_ids[:10],
+                "more": max(0, total_actions - len(dense_seed)),
+            }
+            return _pack(payload, f"m={payload['m']}")
 
         payload = {
             "v": "ac.v4",
-            "m": "od_chat" if self._is_conversational_turn(user_input) else "od",
-            "d": bootstrap,
-            "r": ["discover", "consult_first", "semantic_index"],
+            "m": mode,
+            "c": total_actions,
+            "h": str(manifest.get("hash", "none") or "none"),
+            "ns": list(manifest.get("namespaces", [])[:10]),
+            "a": action_ids,
+            "f": focus_ids,
         }
-        if self._is_conversational_turn(user_input):
-            payload["pr"] = True
-        return _pack(payload, f"m={payload['m']}")
+        return _pack(payload, f"m={mode}")
 
 
     @staticmethod
@@ -7219,6 +6422,45 @@ class AgentOrchestrator:
 
         return text
 
+    def _emit_visual_subagent_intent(
+        self,
+        session: Optional[Session],
+        plan: Optional[ActionPlan],
+        response_text: str = "",
+    ) -> None:
+        if not session or not plan or plan.action_id != "reply":
+            return
+        args = plan.args if isinstance(plan.args, dict) else {}
+        visualization = args.get("visualization") if isinstance(args.get("visualization"), dict) else None
+        if not visualization or not visualization.get("enabled"):
+            return
+
+        mode = str(visualization.get("mode") or "").strip().lower()
+        if mode not in {"data_flow", "cloud_rain", "neural_mesh", "concept_orbit"}:
+            mode = "concept_orbit"
+
+        intent = str(visualization.get("intent") or response_text or plan.response_text or "").strip()
+        if not intent:
+            return
+
+        background_policy = str(visualization.get("background_policy") or "adaptive").strip().lower()
+        if background_policy not in {"adaptive", "locked", "narrative"}:
+            background_policy = "adaptive"
+
+        try:
+            global_event_bus.emit_threadsafe({
+                "type": "assistant_visual_intent",
+                "session_id": session.session_id,
+                "payload": {
+                    "mode": mode,
+                    "intent": intent[:400],
+                    "background_policy": background_policy,
+                    "source": "atlas_reply_plan",
+                },
+            })
+        except Exception as exc:
+            logger.debug("Failed to emit assistant_visual_intent: %s", exc)
+
     def _get_principal_context(self, session: Session) -> Optional[PrincipalContext]:
         """Reconstructs PrincipalContext from persisted session context."""
         data = session.context.get("principal_context")
@@ -7312,7 +6554,7 @@ class AgentOrchestrator:
         value = str(text or "").strip().lower()
         if not value:
             return False
-        interactive_markers = (
+        ui_action_markers = (
             "clique",
             "clicar",
             "preencha",
@@ -7341,16 +6583,16 @@ class AgentOrchestrator:
             "na tela",
             "screen",
             "ui",
-            "site",
-            "website",
-            "navegador",
-            "browser",
-            "abrir ",
-            "open ",
-            "go to ",
-            "acessar ",
         )
-        return any(marker in value for marker in interactive_markers)
+        if any(marker in value for marker in ui_action_markers):
+            return True
+
+        explicit_navigation_patterns = (
+            r"\b(abra|abrir|open|go to|acessar|acesse|visitar|visit|navegar para)\b.{0,40}\b(https?://|www\.|[a-z0-9-]+\.(com|org|net|io|dev|ai|gov|edu|app|co))",
+            r"\b(abra|abrir|open|go to|acessar|acesse|visitar|visit|navegar para)\b.{0,25}\b(site|website|p[aá]gina|page|navegador|browser|aba|tab)\b",
+            r"\b(feche|fechar|close|switch|troque|mude|refresh|reload|recarregue|volte|back)\b.{0,20}\b(aba|tab|janela|window|p[aá]gina|page|site|browser|navegador)\b",
+        )
+        return any(re.search(pattern, value) for pattern in explicit_navigation_patterns)
 
     @staticmethod
     def _looks_like_knowledge_research_request(text: str) -> bool:

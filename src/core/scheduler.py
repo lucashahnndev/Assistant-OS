@@ -13,7 +13,6 @@ from croniter import croniter
 import holidays
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from config.manager import ConfigManager
-from services.agent_runtime_v2 import GlobalScheduler
 
 logger = logging.getLogger("Scheduler")
 SYSTEM_WORKER_ANCHOR_SESSION_ID = "__system_worker_anchor__"
@@ -245,7 +244,6 @@ class Scheduler:
         self._work_commands: Dict[str, List[Dict[str, Any]]] = {}
         self.running = False
         self.thread = None
-        self._global_scheduler = GlobalScheduler()
         
         base_data_dir = ConfigManager.get_data_dir()
         self.data_dir = os.path.abspath(base_data_dir)
@@ -631,43 +629,6 @@ class Scheduler:
             except Exception:
                 payload["context"] = {}
         return payload
-
-    def list_works_fair(
-        self,
-        *,
-        slots: int = 20,
-        include_completed: bool = False,
-    ) -> List[Dict[str, Any]]:
-        rows = self.list_works(include_completed=include_completed, include_context=True, limit=1000)
-        jobs: List[Dict[str, Any]] = []
-        now = self._now()
-        for row in rows:
-            context = row.get("context") if isinstance(row.get("context"), dict) else {}
-            context_data = context.get("data") if isinstance(context.get("data"), dict) else {}
-            runtime_v2 = context_data.get("runtime_v2") if isinstance(context_data.get("runtime_v2"), dict) else {}
-            last_receipt = runtime_v2.get("last_receipt") if isinstance(runtime_v2.get("last_receipt"), dict) else {}
-            tenant_id = str(last_receipt.get("tenant_id", "default") or "default")
-            qos_class = str(last_receipt.get("qos_class", "NORMAL") or "NORMAL")
-            agent_id = str(((context.get("planner") or {}).get("agent_id") if isinstance(context.get("planner"), dict) else "") or "main_orchestrator")
-            try:
-                updated_at = datetime.datetime.fromisoformat(str(row.get("updated_at") or now.isoformat()))
-                if updated_at.tzinfo is None:
-                    updated_at = updated_at.replace(tzinfo=now.tzinfo)
-                waiting_ms = max(0.0, (now - updated_at).total_seconds() * 1000.0)
-            except Exception:
-                waiting_ms = 0.0
-            jobs.append(
-                {
-                    "work_id": row.get("work_id"),
-                    "tenant_id": tenant_id,
-                    "agent_id": agent_id,
-                    "qos_class": qos_class,
-                    "waiting_ms": waiting_ms,
-                    "row": row,
-                }
-            )
-        selected = self._global_scheduler.select_fair(jobs, slots=max(1, int(slots)))
-        return [item.get("row") for item in selected if isinstance(item.get("row"), dict)]
             
     def cancel_session_work(self, session_id: str):
         """Cancel visible loading works for a session to prevent interleaving"""

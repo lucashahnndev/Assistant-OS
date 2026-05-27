@@ -4,6 +4,7 @@ import datetime
 import json
 import logging
 from typing import Any, Dict, Optional
+from urllib.error import HTTPError
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
@@ -13,6 +14,11 @@ from server.core.secret_manager import resolve_secret_ref
 from server.core.token_vault import TokenVaultError, get_token_vault
 
 logger = logging.getLogger("GoogleAuthShared")
+
+
+class GoogleOAuthPermanentError(RuntimeError):
+    """Raised when Google OAuth refresh fails permanently (e.g. invalid_grant)."""
+    pass
 
 
 def _resolve_secret_value(value: Any) -> str:
@@ -133,6 +139,19 @@ def _refresh_google_token_if_needed(
         merged["expires_in"] = refreshed.get("expires_in")
         merged["_refreshed_at"] = now.isoformat()
         return merged
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        logger.warning("Google token refresh HTTP error: %s - %s", exc.code, body)
+        try:
+            err_data = json.loads(body)
+            err_msg = err_data.get("error", "")
+            if err_msg in ("invalid_grant", "invalid_client", "unauthorized_client"):
+                raise GoogleOAuthPermanentError(f"Permanent Google OAuth failure: {err_msg} ({err_data.get('error_description', '')})")
+        except GoogleOAuthPermanentError:
+            raise
+        except Exception:
+            pass
+        return token_payload
     except Exception as exc:
         logger.warning("Google token refresh failed: %s", exc)
         return token_payload
@@ -189,11 +208,24 @@ def resolve_google_request_auth(
             if conn:
                 vault = get_token_vault()
                 tokens = vault.decrypt_json(conn.encrypted_tokens)
-                refreshed = _refresh_google_token_if_needed(
-                    kernel=kernel,
-                    token_payload=tokens,
-                    token_expires_at=conn.token_expires_at,
-                )
+                try:
+                    refreshed = _refresh_google_token_if_needed(
+                        kernel=kernel,
+                        token_payload=tokens,
+                        token_expires_at=conn.token_expires_at,
+                    )
+                except GoogleOAuthPermanentError as exc:
+                    logger.error("Permanent Google OAuth failure for connection %s: %s. Deactivating connection.", conn.id, exc)
+                    conn.is_active = False
+                    conn.updated_at = datetime.datetime.now(datetime.timezone.utc)
+                    db.commit()
+                    return {
+                        "mode": "none",
+                        "headers": {},
+                        "params": {},
+                        "token_payload": None,
+                        "reason": f"Google OAuth permanent failure: {exc}",
+                    }
 
                 # Persist updated tokens if changed
                 if refreshed != tokens:

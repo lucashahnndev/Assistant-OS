@@ -1,150 +1,116 @@
 {
-  "contract_version": "1.0",
-  "capability": {
-    "id": "weather_control",
-    "namespace": "weather.control",
-    "version": "1.0.0",
-    "title": "weather.control",
-    "description": "Consulta clima atual e previsão por cidade/coordenadas, com fallback automático.",
-    "assets": {
-      "icon_svg": "assets/icon.svg"
-    }
-  },
-  "runtime": {
-    "module": "capabilities.weather_control",
-    "factory": "create_capability",
-    "config_schema": "./config.schema.json"
-  },
-  "actions": [
-    {
-      "id": "weather.control.get",
-      "title": "Get",
-      "description": "Obtém o clima atual para cidade/localização/coordenadas.",
-      "handler": "get",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "weather:control:get"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "city": {
-            "type": "string",
-            "description": "Nome da cidade."
-          },
-          "location": {
-            "type": "string",
-            "description": "Alias de city."
-          },
-          "lat": {
-            "type": "number",
-            "description": "Latitude."
-          },
-          "lon": {
-            "type": "number",
-            "description": "Longitude."
-          }
-        },
-        "additionalProperties": true
-      },
-      "side_effect": "none"
-    },
-    {
-      "id": "weather.control.forecast",
-      "title": "Forecast",
-      "description": "Obtém previsão de 1 a 5 dias para cidade/localização/coordenadas.",
-      "handler": "forecast",
-      "risk_level": "low",
-      "permissions": {
-        "scopes": [
-          "weather:control:forecast"
-        ],
-        "allow_anyone": true,
-        "requires_approval": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "city": {
-            "type": "string",
-            "description": "Nome da cidade."
-          },
-          "location": {
-            "type": "string",
-            "description": "Alias de city."
-          },
-          "lat": {
-            "type": "number",
-            "description": "Latitude."
-          },
-          "lon": {
-            "type": "number",
-            "description": "Longitude."
-          },
-          "days": {
-            "type": "integer",
-            "description": "Quantidade de dias (1-5).",
-            "default": 3
-          }
-        },
-        "additionalProperties": true
-      },
-      "side_effect": "none"
-    }
-  ],
-  "auth": {
-    "mode": "api_key",
-    "required": false,
-    "fields": [
-      {
-        "id": "api_key",
-        "type": "secret_ref",
-        "config_path": "api_key",
-        "required": false,
-        "title": "OpenWeather API Key",
-        "secret_policy": {
-          "allow_create": true,
-          "allow_select": true
+    "contract_version": "1.0",
+    "capability": {
+        "id": "weather_control",
+        "namespace": "weather.control",
+        "version": "1.0.0",
+        "title": "weather.control",
+        "description": "Consulta clima atual e previs\u00e3o por cidade/coordenadas, com fallback autom\u00e1tico.",
+        "assets": {
+            "icon_svg": "assets/icon.svg"
         }
-      }
-    ]
-  },
-  "discoverability_profile": {
-    "enabled": true,
-    "roles": [
-      "search",
-      "retrieve",
-      "control"
+    },
+    "runtime": {
+        "module": "capabilities.weather_control",
+        "factory": "create_capability",
+        "config_schema": "./config.schema.json"
+    },
+    "actions": [
+        {
+            "id": "weather.control.get",
+            "title": "Get",
+            "description": "Obt\u00e9m o clima atual para cidade/localiza\u00e7\u00e3o/coordenadas.",
+            "handler": "get",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "weather:control:get"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {
+                        "type": "string",
+                        "description": "Nome da cidade."
+                    },
+                    "location": {
+                        "type": "string",
+                        "description": "Alias de city."
+                    },
+                    "lat": {
+                        "type": "number",
+                        "description": "Latitude."
+                    },
+                    "lon": {
+                        "type": "number",
+                        "description": "Longitude."
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "none"
+        },
+        {
+            "id": "weather.control.forecast",
+            "title": "Forecast",
+            "description": "Obt\u00e9m previs\u00e3o de 1 a 5 dias para cidade/localiza\u00e7\u00e3o/coordenadas.",
+            "handler": "forecast",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "weather:control:forecast"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {
+                        "type": "string",
+                        "description": "Nome da cidade."
+                    },
+                    "location": {
+                        "type": "string",
+                        "description": "Alias de city."
+                    },
+                    "lat": {
+                        "type": "number",
+                        "description": "Latitude."
+                    },
+                    "lon": {
+                        "type": "number",
+                        "description": "Longitude."
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": "Quantidade de dias (1-5).",
+                        "default": 3
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "none"
+        }
     ],
-    "domains": [
-      "weather",
-      "climate",
-      "forecast"
-    ],
-    "entity_types": [
-      "weather_report",
-      "forecast",
-      "location"
-    ],
-    "keywords": [
-      "weather",
-      "clima",
-      "tempo",
-      "forecast",
-      "previsao",
-      "previsão"
-    ],
-    "routing_hints": {
-      "preferred_intents": [
-        "weather_lookup",
-        "forecast",
-        "current_conditions"
-      ],
-      "avoid_when": []
+    "auth": {
+        "mode": "api_key",
+        "required": false,
+        "fields": [
+            {
+                "id": "api_key",
+                "type": "secret_ref",
+                "config_path": "api_key",
+                "required": false,
+                "title": "OpenWeather API Key",
+                "secret_policy": {
+                    "allow_create": true,
+                    "allow_select": true
+                }
+            }
+        ]
     }
-  }
 }

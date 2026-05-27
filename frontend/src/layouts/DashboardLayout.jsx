@@ -21,7 +21,8 @@ import {
     PanelLeftOpen,
     PanelLeftClose,
     Menu,
-    X as CloseIcon
+    X as CloseIcon,
+    Sparkles
 } from 'lucide-react';
 
 const DashboardLayout = () => {
@@ -32,6 +33,8 @@ const DashboardLayout = () => {
     const isChat = location.pathname === '/chat' || location.pathname === '/chat/';
     const isFullBleedPage =
         isChat ||
+        location.pathname === '/live_panel' ||
+        location.pathname === '/live_panel/' ||
         location.pathname === '/capabilities' ||
         location.pathname === '/memory' ||
         location.pathname === '/security' ||
@@ -76,8 +79,8 @@ const DashboardLayout = () => {
     };
 
     const navItems = [
-        { to: '/', icon: LayoutDashboard, label: t('nav.dashboard') },
         { to: '/chat', icon: MessageSquare, label: t('nav.console') },
+        { to: '/live_panel', icon: Sparkles, label: t('nav.live_panel') },
         { to: '/tasks', icon: ClipboardCheck, label: t('nav.tasks') },
         { to: '/capabilities', icon: Cpu, label: t('nav.capabilities') },
         { to: '/memory', icon: Database, label: t('nav.memory') },
