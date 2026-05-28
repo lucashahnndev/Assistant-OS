@@ -101,6 +101,7 @@ def _setup_service_logs(log_dir, formatter, service_levels):
     """Configures specific loggers to output to their own files."""
     
     mapping = {
+        "network": ["NetworkCapability", "NgrokTunnelCapability", "CloudflareTunnelCapability"],
         "llm": ["LLMManager", "AgentOrchestrator", "LLMResolver", "LLMService"],
         "telegram": ["TelegramDriver", "drivers.interfaces.telegram.telegram_bot", "TelegramBot"],
         "web": ["ServerDriver"],
@@ -178,7 +179,7 @@ def _setup_service_logs(log_dir, formatter, service_levels):
     # but we can pre-configure common ones.
     common_capabilities = ["SystemCapability", "SearchCapability", "MemoryCapability", "PowerCapability", "ReflexCapability", 
                      "ShellCapability", "MediaCapability", "ServiceCapability", "SystemAppsCapability", "SystemLogsCapability",
-                     "FSCapability", "TaskCapability", "NetworkCapability", "ProcessCapability"]
+                     "FSCapability", "TaskCapability", "ProcessCapability"]
     
     capabilities_handler = logging.handlers.RotatingFileHandler(
         os.path.join(log_dir, "capabilities.log"), maxBytes=5*1024*1024, backupCount=3, encoding='utf-8'
