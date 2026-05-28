@@ -134,6 +134,7 @@ def get_tunnels_status(request: Request):
                 is_running = getattr(cap, "_is_running", False)
                 if is_running:
                     tunnels.append({
+                        "id": name,
                         "provider": name.replace("_tunnel", ""),
                         "public_url": getattr(cap, "_public_url", None),
                         "status": "running"
