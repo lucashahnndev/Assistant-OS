@@ -14,6 +14,7 @@ class NgrokTunnelCapability(CapabilityBase):
         self._tunnel = None
         self._public_url = None
         self._is_running = False
+        self._last_error = None
 
     @property
     def name(self) -> str:
@@ -26,6 +27,7 @@ class NgrokTunnelCapability(CapabilityBase):
     def _start_tunnel(self):
         if self._is_running:
             return
+        self._last_error = None
         
         try:
             auth_token = resolve_secret_ref(self.config.get("auth_token"))
@@ -68,6 +70,7 @@ class NgrokTunnelCapability(CapabilityBase):
             logger.error(f"Failed to start Ngrok Tunnel: {e}")
             self._is_running = False
             self._public_url = None
+            self._last_error = str(e)
 
     def _stop_tunnel(self):
         if not self._is_running:
@@ -82,6 +85,7 @@ class NgrokTunnelCapability(CapabilityBase):
             logger.info("Ngrok Tunnel stopped")
         except Exception as e:
             logger.error(f"Failed to stop Ngrok Tunnel: {e}")
+            self._last_error = str(e)
 
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         action = action_id.split(".")[-1]
@@ -91,14 +95,16 @@ class NgrokTunnelCapability(CapabilityBase):
             return {
                 "ok": self._is_running,
                 "status": "running" if self._is_running else "error",
-                "public_url": self._public_url
+                "public_url": self._public_url,
+                "error_details": self._last_error
             }
 
         if action == "stop":
             self._stop_tunnel()
             return {
-                "ok": True,
-                "status": "stopped"
+                "ok": not self._is_running,
+                "status": "stopped" if not self._is_running else "error",
+                "error_details": self._last_error
             }
 
         if action == "status":
