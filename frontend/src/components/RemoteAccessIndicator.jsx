@@ -13,7 +13,7 @@ const RemoteAccessIndicator = () => {
         try {
             const res = await api.get('/system/tunnels/status');
             if (res?.active_tunnels) {
-                setTunnels(res.active_tunnels);
+                setTunnels(res.active_tunnels.filter(t => t.status === 'running'));
             }
         } catch (error) {
             console.error("Failed to fetch tunnel status", error);
