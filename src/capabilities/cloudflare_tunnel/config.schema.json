@@ -7,6 +7,13 @@
       "default": false,
       "title": "Enabled"
     },
+    "auth_token": {
+      "type": "string",
+      "title": "Cloudflare Tunnel Token",
+      "x-ui": {
+        "placeholder": "Seu token do túnel (gerado no Zero Trust)"
+      }
+    },
     "target_port": {
       "type": "integer",
       "title": "Target Port",
