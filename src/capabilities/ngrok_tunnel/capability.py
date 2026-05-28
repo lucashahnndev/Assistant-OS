@@ -50,8 +50,8 @@ class NgrokTunnelCapability(CapabilityBase):
                 except ValueError:
                     logger.warning(f"Invalid target_port {target_port}, using {port}")
             
-            # Setup options
-            options = {"bind_tls": True}
+            # Setup options with a safe name for the pyngrok API
+            options = {"bind_tls": True, "name": f"assistant-os-vite-{port}"}
             domain = self.config.get("domain")
             if domain and domain.strip():
                 options["domain"] = domain.strip()

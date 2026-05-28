@@ -10,7 +10,7 @@ export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, process.cwd(), '');
     const apiTarget = env.VITE_API_URL || 'https://127.0.0.1:8000';
     const port = parseInt(env.VITE_PORT) || 5173;
-    const host = env.VITE_HOST || 'localhost';
+    const host = env.VITE_HOST || '0.0.0.0';
     const httpsEnabled = (env.VITE_HTTPS || 'true').toLowerCase() === 'true';
     const certPath = env.VITE_SSL_CERT_FILE
         ? path.resolve(env.VITE_SSL_CERT_FILE)
