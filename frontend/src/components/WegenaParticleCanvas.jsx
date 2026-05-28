@@ -15,6 +15,15 @@ const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = '
     const defaultSceneRetryCountRef = useRef(0);
     const defaultSceneScriptCacheRef = useRef({});
 
+    const injectOverrides = (script) => {
+        if (!script || !overrideConfig) return script;
+        let injected = script;
+        if (overrideConfig.particleSize !== undefined && overrideConfig.particleSize !== '') {
+            injected += `\n@World { size: ${overrideConfig.particleSize} }`;
+        }
+        return injected;
+    };
+
     const buildAtlasSignal = () => {
         const voiceStatus = state?.voiceState?.status || 'idle';
         const isRecording = !!voice?.isRecording;
@@ -69,7 +78,7 @@ const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = '
             if (engine.visualState.currentShapeType !== 'script') {
                 try {
                     const wegDefaultScript = await fetchDefaultSceneScript();
-                    engine.applySceneWEG(wegDefaultScript);
+                    engine.applySceneWEG(injectOverrides(wegDefaultScript));
                     syncAtlasSignal();
                 } catch (error) {
                     console.error('Failed to re-apply Atlas default Wegena preset:', error);
@@ -95,7 +104,7 @@ const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = '
             engine.clearSceneNodes();
             engine.clearFxFragments();
             const wegDefaultScript = await fetchDefaultSceneScript();
-            engine.applySceneWEG(wegDefaultScript);
+            engine.applySceneWEG(injectOverrides(wegDefaultScript));
             appliedDefaultPresetIdRef.current = defaultPresetId;
             syncAtlasSignal();
             scheduleDefaultSceneVerification();
@@ -173,48 +182,69 @@ const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = '
     }));
 
     useEffect(() => {
-        const container = containerRef.current;
-        if (!container) return;
+        const initEngine = async () => {
+            const container = containerRef.current;
+            if (!container) return;
 
-        const WegenaEngineClass = window.WegenaEngine || (typeof WegenaEngine !== 'undefined' ? WegenaEngine : null);
-        if (!WegenaEngineClass) {
-            console.error('WegenaEngine was not found in the global scope. Verify that the scripts are loaded in index.html.');
-            return;
-        }
-
-        try {
-            const engine = new WegenaEngineClass(container, {
-                particleCount: 70000,
-                activeCount: 45000,
-                zoom: 165,
-                baseColor: new window.THREE.Color('#3b82f6'),
-                glowColor: new window.THREE.Color('#00f2ff')
-            });
-
-            engine.setSimulatorMode('cpu');
-            engineRef.current = engine;
-            if (import.meta.env.DEV && typeof window !== 'undefined') {
-                window.__atlasWegenaEngine = engine;
+            const WegenaEngineClass = window.WegenaEngine || (typeof WegenaEngine !== 'undefined' ? WegenaEngine : null);
+            if (!WegenaEngineClass) {
+                console.error('WegenaEngine was not found in the global scope. Verify that the scripts are loaded in index.html.');
+                return;
             }
-            syncAtlasSignal();
 
-            loadDefaultScene();
+            let maxParticles = 70000;
+            let activeParticles = 45000;
 
-            const WegenaCanvasControlsClass = window.WegenaCanvasControls || (typeof WegenaCanvasControls !== 'undefined' ? WegenaCanvasControls : null);
-            if (WegenaCanvasControlsClass) {
-                const controls = new WegenaCanvasControlsClass(engine, {
-                    viewport: window.document.body,
-                    THREE: window.THREE,
-                    shouldIgnoreTarget: (target) => {
-                        return !!target.closest('.chat-input-area, textarea, input, button, .sidebar, .glass, a, label');
+            try {
+                const res = await window.fetch('/api/system/config');
+                if (res.ok) {
+                    const sysConfig = await res.json();
+                    const wegConf = sysConfig.capabilities?.wegena?.config || {};
+                    if (wegConf.initial_particles) {
+                        maxParticles = Number(wegConf.initial_particles);
+                        activeParticles = Number(wegConf.initial_particles);
                     }
-                });
-                engine.setControlsManager(controls);
-                controlsRef.current = controls;
+                }
+            } catch (err) {
+                console.warn('Failed to fetch global wegena config, using defaults.', err);
             }
-        } catch (err) {
-            console.error('Failed to initialize WegenaEngine host:', err);
-        }
+
+            try {
+                const engine = new WegenaEngineClass(container, {
+                    particleCount: maxParticles,
+                    activeCount: activeParticles,
+                    zoom: 165,
+                    baseColor: new window.THREE.Color('#3b82f6'),
+                    glowColor: new window.THREE.Color('#00f2ff')
+                });
+
+                engine.setSimulatorMode('cpu');
+                engineRef.current = engine;
+                if (import.meta.env.DEV && typeof window !== 'undefined') {
+                    window.__atlasWegenaEngine = engine;
+                }
+                syncAtlasSignal();
+
+                loadDefaultScene();
+
+                const WegenaCanvasControlsClass = window.WegenaCanvasControls || (typeof WegenaCanvasControls !== 'undefined' ? WegenaCanvasControls : null);
+                if (WegenaCanvasControlsClass) {
+                    const controls = new WegenaCanvasControlsClass(engine, {
+                        viewport: window.document.body,
+                        THREE: window.THREE,
+                        shouldIgnoreTarget: (target) => {
+                            return !!target.closest('.chat-input-area, textarea, input, button, .sidebar, .glass, a, label');
+                        }
+                    });
+                    engine.setControlsManager(controls);
+                    controlsRef.current = controls;
+                }
+            } catch (err) {
+                console.error('Failed to initialize WegenaEngine host:', err);
+            }
+        };
+
+        initEngine();
 
         return () => {
             clearDefaultRetryTimer();
@@ -248,7 +278,7 @@ const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = '
                     currentModeRef.current = 'script';
                     sceneStreamActiveRef.current = true;
                     appliedDefaultPresetIdRef.current = null;
-                    engine.applySceneWEG(wegScript);
+                    engine.applySceneWEG(injectOverrides(wegScript));
                 } catch (err) {
                     console.error('Failed to compile or apply Wegena script:', err);
                 }
@@ -282,7 +312,7 @@ const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = '
                 window.fetch(`/presets/${overrideConfig.preset}/scene-script.weg?v=${Date.now()}`)
                     .then(res => res.text())
                     .then(script => {
-                        engine.applySceneWEG(script);
+                        engine.applySceneWEG(injectOverrides(script));
                         syncAtlasSignal();
                     }).catch(console.error);
             }
@@ -294,13 +324,18 @@ const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = '
                     // Re-apply script to fix roles after density resize
                     window.fetch(`/presets/${overrideConfig.preset || appliedDefaultPresetIdRef.current}/scene-script.weg?v=${Date.now()}`)
                         .then(res => res.text())
-                        .then(script => engine.applySceneWEG(script))
+                        .then(script => engine.applySceneWEG(injectOverrides(script)))
                         .catch(console.error);
                 }
             }
             
-            if (overrideConfig.particleSize && typeof engine.setParticleSize === 'function') {
-                engine.setParticleSize(overrideConfig.particleSize);
+            if (overrideConfig.particleSize !== undefined && typeof engine.setParticleSize === 'function') {
+                if (engine.matUniforms && engine.matUniforms.u_size && Math.abs(engine.matUniforms.u_size.value - overrideConfig.particleSize) > 0.001) {
+                    window.fetch(`/presets/${overrideConfig.preset || appliedDefaultPresetIdRef.current}/scene-script.weg?v=${Date.now()}`)
+                        .then(res => res.text())
+                        .then(script => engine.applySceneWEG(injectOverrides(script)))
+                        .catch(console.error);
+                }
             }
         } catch (err) {
             console.error('Failed to apply Wegena override config', err);
