@@ -18,7 +18,7 @@ Data da ultima atualizacao: 2026-05-28
 - integracao efetiva de cada provedor de tunnel com o runtime atual validada;
 - indicador unificado e popover multi-tunnel criados e revisados;
 - arquivos de capabilities criados e operacionais;
-- codigo e specs commitados com sucesso (commit `0d14b326`).
+- codigo e specs commitados com sucesso (commit `0d14b326` e `c649ca0d`).
 
 ## Proximo passo recomendado
 
