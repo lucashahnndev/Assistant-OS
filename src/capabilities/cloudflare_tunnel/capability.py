@@ -4,7 +4,7 @@ import logging
 from ..base import CapabilityBase
 from typing import Dict, Any, List
 from pycloudflared.util import get_info
-from pycloudflared import trycloudflare
+from pycloudflared import try_cloudflare
 import subprocess
 import atexit
 from server.core.secret_manager import resolve_secret_ref
@@ -71,8 +71,8 @@ class CloudflareTunnelCapability(CapabilityBase):
                 self._public_url = f"https://{domain}" if domain else "Managed via Zero Trust"
                 logger.info(f"Cloudflare Authenticated Tunnel started for {self._public_url}")
             else:
-                # Start trycloudflare tunnel pointing to the local port (Anonymous mode fallback)
-                self._tunnel = trycloudflare(port=port)
+                # Start try_cloudflare tunnel pointing to the local port (Anonymous mode fallback)
+                self._tunnel = try_cloudflare(port=port)
                 self._public_url = self._tunnel.tunnel
                 self._is_running = True
                 logger.info(f"Cloudflare Quick Tunnel started at {self._public_url} pointing to local port {port}")
