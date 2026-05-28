@@ -650,3 +650,47 @@ def get_capability_registry(
             }
         )
     return rows
+
+@router.post("/{capability_id}/actions/{action_id}")
+def execute_capability_action(
+    capability_id: str,
+    action_id: str,
+    params: dict,
+    request: Request,
+    user: User = Depends(get_current_user)
+):
+    """
+    Executes a specific action exposed by a capability.
+    Requires an authenticated web user context.
+    """
+    kernel = getattr(request.app.state, "kernel", None)
+    if not kernel or not hasattr(kernel, "capability_registry"):
+        raise HTTPException(status_code=500, detail="Capability registry not available")
+    
+    registry = kernel.capability_registry
+    capability_instance = registry.capabilities.get(capability_id)
+    
+    if not capability_instance:
+        raise HTTPException(status_code=404, detail=f"Capability '{capability_id}' not found or not loaded")
+    
+    # Optional: Verify if capability is actually enabled in config
+    # though sometimes we want to execute test actions even if disabled.
+    # For now, we allow execution if it exists.
+    
+    # Construct a UI context
+    from core.identity import PrincipalContext
+    context = PrincipalContext(
+        interface="web",
+        sender_id=str(user.id),
+        sender_name=getattr(user, "username", None)
+    )
+    
+    try:
+        # Assuming parameters are sent in JSON body as a dict
+        logger.info(f"UI executing action '{action_id}' on capability '{capability_id}' with params={params}")
+        result = capability_instance.execute(action_id, params, context)
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        logger.error(f"Error executing action '{action_id}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+

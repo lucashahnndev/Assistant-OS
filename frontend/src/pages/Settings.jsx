@@ -42,6 +42,7 @@ import toast from 'react-hot-toast';
 import PageHeader from '../components/PageHeader';
 import ModelPoolManager from '../components/ModelPoolManager';
 import { createSecret, deleteSecret, listSecretEntries, listSecretRefs, auditEnvSecrets, importEnvSecrets } from '../utils/secretsApi';
+import { QRCodeSVG } from 'qrcode.react';
 
 const Settings = () => {
     const [config, setConfig] = useState(null);
@@ -72,6 +73,8 @@ const Settings = () => {
     const [isCompressing, setIsCompressing] = useState(false);
     const [networkTunnels, setNetworkTunnels] = useState([]);
     const [networkTunnelsLoading, setNetworkTunnelsLoading] = useState(false);
+    const [activeTunnels, setActiveTunnels] = useState([]);
+    const [tunnelLoadingState, setTunnelLoadingState] = useState({});
 
     useEffect(() => {
         const handleResize = () => {
@@ -169,6 +172,15 @@ const Settings = () => {
         if (activeTab === 'mcp') {
             fetchMcpStatus();
         }
+        
+        let intervalId;
+        if (activeTab === 'network') {
+            fetchActiveTunnels();
+            intervalId = setInterval(fetchActiveTunnels, 5000);
+        }
+        return () => {
+            if (intervalId) clearInterval(intervalId);
+        };
     }, [activeTab]);
 
     useEffect(() => {
@@ -340,6 +352,32 @@ const Settings = () => {
             console.error("Failed to fetch network tunnels", err);
         } finally {
             setNetworkTunnelsLoading(false);
+        }
+    };
+
+    const fetchActiveTunnels = async () => {
+        try {
+            const data = await api.get('/system/tunnels/status');
+            if (Array.isArray(data?.active_tunnels)) {
+                setActiveTunnels(data.active_tunnels);
+            }
+        } catch (err) {
+            console.error("Failed to fetch active tunnels", err);
+        }
+    };
+
+    const handleToggleTunnel = async (tunnelId, isRunning) => {
+        const action = isRunning ? 'stop' : 'start';
+        setTunnelLoadingState(prev => ({ ...prev, [tunnelId]: true }));
+        try {
+            await api.post(`/capabilities/${tunnelId}/actions/${tunnelId}.${action}`, {});
+            toast.success(`Tunnel ${action} signal sent successfully.`);
+            await fetchActiveTunnels();
+        } catch (err) {
+            console.error(err);
+            toast.error(`Failed to ${action} tunnel: ` + (err.response?.data?.detail || err.message));
+        } finally {
+            setTunnelLoadingState(prev => ({ ...prev, [tunnelId]: false }));
         }
     };
 
@@ -845,53 +883,89 @@ const Settings = () => {
                             <Loader className="spin" size={24} style={{ margin: '0 auto 12px' }} />
                             <div style={{ fontSize: '13px' }}>Loading tunnel plugins...</div>
                         </div>
-                    ) : networkTunnels.length > 0 ? (
-                        networkTunnels.map(tunnel => {
-                            const tunnelConfig = config.capabilities?.[tunnel.id] || {};
-                            return (
-                                <div key={tunnel.id} style={{ background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                            <Puzzle size={16} color="var(--accent-color)" />
-                                            <h4 style={{ margin: 0, fontSize: '14px', fontWeight: '600' }}>{tunnel.title || tunnel.name}</h4>
-                                            <span style={{ fontSize: '10px', padding: '2px 6px', background: 'rgba(16, 185, 129, 0.1)', color: '#10b981', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.2)' }}>Plugin</span>
-                                        </div>
-                                        <div className="toggle-item" style={{ padding: 0, border: 'none', background: 'transparent' }}>
-                                            <input type="checkbox" className="luxury-checkbox"
-                                                checked={tunnelConfig.enabled || false}
-                                                onChange={(e) => updateNestedValue(`capabilities.${tunnel.id}.enabled`, e.target.checked)}
-                                            />
-                                        </div>
-                                    </div>
-                                    
-                                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px' }}>
-                                        <div className="form-group">
-                                            <label>Target Port</label>
-                                            <input type="number" className="input-field"
-                                                value={tunnelConfig.target_port || ''}
-                                                placeholder={config.frontend?.port || 5173}
-                                                onChange={(e) => updateNestedValue(`capabilities.${tunnel.id}.target_port`, e.target.value ? parseInt(e.target.value) : undefined)}
-                                            />
-                                        </div>
-                                        <div className="form-group">
-                                            <label>Custom Domain</label>
-                                            <input type="text" className="input-field"
-                                                value={tunnelConfig.domain || ''}
-                                                placeholder="e.g. app.meudominio.com"
-                                                onChange={(e) => updateNestedValue(`capabilities.${tunnel.id}.domain`, e.target.value)}
-                                            />
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        })
                     ) : (
-                        <div style={{ background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '13px' }}>
-                                <CheckCircle size={16} color="var(--accent-color)" /> 
-                                Check the top-right Cloud icon when tunnels are active to view QR codes and public links.
-                            </div>
-                        </div>
+                        (() => {
+                            const enabledTunnels = networkTunnels.filter(t => config.capabilities?.[t.id]?.enabled);
+                            
+                            if (enabledTunnels.length === 0) {
+                                return (
+                                    <div style={{ background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '13px' }}>
+                                            <CheckCircle size={16} color="var(--accent-color)" /> 
+                                            Enable a Remote Access plugin in the Capabilities Hub to manage it here.
+                                        </div>
+                                    </div>
+                                );
+                            }
+
+                            return enabledTunnels.map(tunnel => {
+                                const tunnelConfig = config.capabilities?.[tunnel.id] || {};
+                                const activeStatus = activeTunnels.find(a => a.id === tunnel.id) || {};
+                                const isRunning = activeStatus.is_running || false;
+                                const publicUrl = activeStatus.public_url || '';
+                                const isLoading = tunnelLoadingState[tunnel.id] || false;
+
+                                return (
+                                    <div key={tunnel.id} style={{ background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <Puzzle size={16} color="var(--accent-color)" />
+                                                <h4 style={{ margin: 0, fontSize: '14px', fontWeight: '600' }}>{tunnel.title || tunnel.name}</h4>
+                                                <span style={{ fontSize: '10px', padding: '2px 6px', background: isRunning ? 'rgba(16, 185, 129, 0.1)' : 'rgba(255,255,255,0.1)', color: isRunning ? '#10b981' : 'var(--text-secondary)', borderRadius: '12px', border: isRunning ? '1px solid rgba(16, 185, 129, 0.2)' : '1px solid rgba(255,255,255,0.1)' }}>
+                                                    {isRunning ? 'ONLINE' : 'OFFLINE'}
+                                                </span>
+                                            </div>
+                                            <div className="toggle-item" style={{ padding: 0, border: 'none', background: 'transparent' }}>
+                                                {isLoading ? (
+                                                    <Loader className="spin" size={20} color="var(--accent-color)" />
+                                                ) : (
+                                                    <input type="checkbox" className="luxury-checkbox"
+                                                        checked={isRunning}
+                                                        onChange={() => handleToggleTunnel(tunnel.id, isRunning)}
+                                                    />
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {isRunning && publicUrl && (
+                                            <div style={{ padding: '16px', background: 'rgba(16, 185, 129, 0.05)', borderRadius: '8px', border: '1px solid rgba(16, 185, 129, 0.2)', marginBottom: '16px', display: 'flex', gap: '16px', alignItems: 'center' }}>
+                                                <div style={{ background: '#fff', padding: '8px', borderRadius: '8px' }}>
+                                                    <QRCodeSVG value={publicUrl} size={64} />
+                                                </div>
+                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                    <div style={{ fontSize: '12px', color: '#10b981', fontWeight: '600', marginBottom: '4px' }}>PUBLIC URL</div>
+                                                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                                        <a href={publicUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--text-primary)', fontSize: '14px', wordBreak: 'break-all', textDecoration: 'none' }} className="hover-underline">
+                                                            {publicUrl}
+                                                        </a>
+                                                        <ExternalLink size={14} color="var(--text-muted)" />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                        
+                                        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px' }}>
+                                            <div className="form-group">
+                                                <label>Target Port {isRunning && <span style={{fontSize: '10px', color: 'var(--text-muted)'}}>(Requires restart)</span>}</label>
+                                                <input type="number" className="input-field"
+                                                    value={tunnelConfig.target_port || ''}
+                                                    placeholder={config.frontend?.port || 5173}
+                                                    onChange={(e) => updateNestedValue(`capabilities.${tunnel.id}.target_port`, e.target.value ? parseInt(e.target.value) : undefined)}
+                                                />
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Custom Domain {isRunning && <span style={{fontSize: '10px', color: 'var(--text-muted)'}}>(Requires restart)</span>}</label>
+                                                <input type="text" className="input-field"
+                                                    value={tunnelConfig.domain || ''}
+                                                    placeholder="e.g. app.meudominio.com"
+                                                    onChange={(e) => updateNestedValue(`capabilities.${tunnel.id}.domain`, e.target.value)}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            });
+                        })()
                     )}
                 </div>
             </section>
