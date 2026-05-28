@@ -4,9 +4,9 @@ import logging
 from ..base import CapabilityBase
 from typing import Dict, Any, List
 from pycloudflared.util import get_info
-from pycloudflared import try_cloudflare
 import subprocess
 import atexit
+import re
 from server.core.secret_manager import resolve_secret_ref
 
 logger = logging.getLogger("CloudflareTunnelCapability")
@@ -18,7 +18,7 @@ class CloudflareTunnelCapability(CapabilityBase):
         self._namespace = "cloudflare.tunnel"
         self._tunnel = None
         self._auth_process = None
-        self._public_url = None
+        self._anon_process = None
         self._is_running = False
 
     @property
@@ -71,11 +71,34 @@ class CloudflareTunnelCapability(CapabilityBase):
                 self._public_url = f"https://{domain}" if domain else "Managed via Zero Trust"
                 logger.info(f"Cloudflare Authenticated Tunnel started for {self._public_url}")
             else:
-                # Start try_cloudflare tunnel pointing to the local port (Anonymous mode fallback)
-                self._tunnel = try_cloudflare(port=port)
-                self._public_url = self._tunnel.tunnel
+                # Start anonymous cloudflared tunnel pointing to the local HTTPS port
+                exe = get_info().executable
+                self._anon_process = subprocess.Popen(
+                    [exe, "tunnel", "--url", f"https://127.0.0.1:{port}", "--no-tls-verify"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                atexit.register(self._anon_process.terminate)
+                
+                # Extract URL from stderr
+                extracted_url = None
+                for _ in range(50):
+                    line = self._anon_process.stderr.readline()
+                    if not line:
+                        break
+                    m = re.search(r'(https?://\S+\.trycloudflare\.com)', line)
+                    if m:
+                        extracted_url = m.group(1)
+                        break
+                
+                if not extracted_url:
+                    self._anon_process.terminate()
+                    raise Exception("Failed to extract Cloudflare Tunnel URL")
+                
+                self._public_url = extracted_url
                 self._is_running = True
-                logger.info(f"Cloudflare Quick Tunnel started at {self._public_url} pointing to local port {port}")
+                logger.info(f"Cloudflare Quick Tunnel started at {self._public_url} pointing to local HTTPS port {port}")
         except Exception as e:
             logger.error(f"Failed to start Cloudflare Tunnel: {e}")
             self._is_running = False
@@ -89,9 +112,9 @@ class CloudflareTunnelCapability(CapabilityBase):
             if self._auth_process:
                 self._auth_process.terminate()
                 self._auth_process = None
-            elif self._tunnel:
-                self._tunnel.stop()
-                self._tunnel = None
+            elif self._anon_process:
+                self._anon_process.terminate()
+                self._anon_process = None
             
             self._public_url = None
             self._is_running = False

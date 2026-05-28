@@ -60,8 +60,8 @@ class NgrokTunnelCapability(CapabilityBase):
             if region and region.strip():
                 options["region"] = region.strip()
             
-            # Create tunnel
-            self._tunnel = ngrok.connect(port, **options)
+            # Create tunnel mapping to HTTPS local Vite server
+            self._tunnel = ngrok.connect(f"https://127.0.0.1:{port}", **options)
             self._public_url = self._tunnel.public_url
             self._is_running = True
             
