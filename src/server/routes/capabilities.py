@@ -671,7 +671,7 @@ def execute_capability_action(
     capability_instance = registry.capabilities.get(capability_id)
     
     if not capability_instance:
-        raise HTTPException(status_code=404, detail=f"Capability '{capability_id}' not found or not loaded")
+        raise HTTPException(status_code=404, detail=f"Capability '{capability_id}' not found in memory. Please restart the backend after enabling new capabilities.")
     
     # Optional: Verify if capability is actually enabled in config
     # though sometimes we want to execute test actions even if disabled.
@@ -682,7 +682,8 @@ def execute_capability_action(
     context = PrincipalContext(
         interface="web",
         sender_id=str(user.id),
-        sender_name=getattr(user, "username", None)
+        sender_name=getattr(user, "username", None),
+        session_id="web_dashboard"
     )
     
     try:
