@@ -906,8 +906,9 @@ const Settings = () => {
                             return enabledTunnels.map(tunnel => {
                                 const tunnelConfig = config.capabilities?.[tunnel.id] || {};
                                 const activeStatus = activeTunnels.find(a => a.id === tunnel.id) || {};
-                                const isRunning = activeStatus.is_running || false;
+                                const isRunning = activeStatus.status === 'running';
                                 const publicUrl = activeStatus.public_url || '';
+                                const errorDetails = activeStatus.error || null;
                                 const isLoading = tunnelLoadingState[tunnel.id] || false;
 
                                 return (
@@ -949,7 +950,19 @@ const Settings = () => {
                                             </div>
                                         )}
                                         
-                                        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px' }}>
+                                        {!isRunning && errorDetails && (
+                                            <div style={{ padding: '12px 16px', background: 'rgba(239, 68, 68, 0.05)', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.2)', marginBottom: '16px', display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                                                <XCircle size={16} color="#ef4444" style={{ flexShrink: 0, marginTop: '2px' }} />
+                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                    <div style={{ fontSize: '12px', color: '#ef4444', fontWeight: '600', marginBottom: '4px' }}>TUNNEL ERROR</div>
+                                                    <div style={{ color: 'var(--text-secondary)', fontSize: '13px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'monospace' }}>
+                                                        {errorDetails}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                        
+                                        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
                                             <div className="form-group">
                                                 <label>Target Port {isRunning && <span style={{fontSize: '10px', color: 'var(--text-muted)'}}>(Requires restart)</span>}</label>
                                                 <input type="number" className="input-field"
@@ -966,6 +979,17 @@ const Settings = () => {
                                                     onChange={(e) => updateNestedValue(`capabilities.${tunnel.id}.domain`, e.target.value)}
                                                 />
                                             </div>
+                                        </div>
+                                        
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+                                            <div>
+                                                <div style={{ fontSize: '13px', fontWeight: '500' }}>Auto-Start on Boot</div>
+                                                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Automatically start this tunnel when the system loads.</div>
+                                            </div>
+                                            <input type="checkbox" className="luxury-checkbox"
+                                                checked={tunnelConfig.autostart || false}
+                                                onChange={(e) => updateNestedValue(`capabilities.${tunnel.id}.autostart`, e.target.checked)}
+                                            />
                                         </div>
                                     </div>
                                 );

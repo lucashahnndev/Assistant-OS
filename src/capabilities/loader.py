@@ -177,6 +177,19 @@ class CapabilityLoader:
                 capability_folder_name,
                 len(contract.actions),
             )
+            
+            # Handle Auto-Start
+            if capability_config.get("autostart", False):
+                try:
+                    action_id = f"{contract.capability.namespace}.start"
+                    # Only auto-start if the capability actually has a 'start' action
+                    if any(a.id == "start" or a.id == action_id for a in contract.actions):
+                        logger.info(f"Auto-starting capability: {capability_folder_name}")
+                        # Execute in background or synchronously (it usually returns immediately for tunnels)
+                        capability_instance.execute(action_id, {}, {})
+                except Exception as e:
+                    logger.error(f"Auto-start failed for capability {capability_folder_name}: {e}")
+                    
             self.failed_contracts.pop(capability_folder_name, None)
         except Exception as e:
             message = str(e)

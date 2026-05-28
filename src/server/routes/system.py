@@ -131,14 +131,13 @@ def get_tunnels_status(request: Request):
         for name in ["cloudflare_tunnel", "ngrok_tunnel"]:
             cap = capabilities.get(name)
             if cap:
-                is_running = getattr(cap, "_is_running", False)
-                if is_running:
-                    tunnels.append({
-                        "id": name,
-                        "provider": name.replace("_tunnel", ""),
-                        "public_url": getattr(cap, "_public_url", None),
-                        "status": "running"
-                    })
+                tunnels.append({
+                    "id": name,
+                    "provider": name.replace("_tunnel", ""),
+                    "public_url": getattr(cap, "_public_url", None),
+                    "status": "running" if getattr(cap, "_is_running", False) else "stopped",
+                    "error": getattr(cap, "_last_error", None)
+                })
         return {
             "status": "ok",
             "active_tunnels": tunnels
