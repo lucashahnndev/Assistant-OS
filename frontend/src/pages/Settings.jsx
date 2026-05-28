@@ -386,6 +386,17 @@ const Settings = () => {
         }
     };
 
+    const handleToggleAutostart = async (tunnelId, nextVal) => {
+        try {
+            await api.patch(`/capabilities/${tunnelId}/config`, { autostart: nextVal });
+            updateNestedValue(`capabilities.${tunnelId}.autostart`, nextVal);
+            toast.success(`Auto-start ${nextVal ? 'enabled' : 'disabled'} for tunnel`);
+        } catch (err) {
+            console.error(err);
+            toast.error("Failed to save auto-start preference");
+        }
+    };
+
     const fetchVaultEntries = async () => {
         try {
             const data = await listSecretEntries();
@@ -988,7 +999,7 @@ const Settings = () => {
                                             </div>
                                             <input type="checkbox" className="luxury-checkbox"
                                                 checked={tunnelConfig.autostart || false}
-                                                onChange={(e) => updateNestedValue(`capabilities.${tunnel.id}.autostart`, e.target.checked)}
+                                                onChange={(e) => handleToggleAutostart(tunnel.id, e.target.checked)}
                                             />
                                         </div>
                                     </div>
