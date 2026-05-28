@@ -12,7 +12,8 @@
     },
     "runtime": {
         "module": "capabilities.cloudflare_tunnel",
-        "factory": "create_capability"
+        "factory": "create_capability",
+        "config_schema": "./config.schema.json"
     },
     "actions": [
         {
