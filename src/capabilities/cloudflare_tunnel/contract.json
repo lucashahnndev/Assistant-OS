@@ -72,6 +72,20 @@
         }
     ],
     "auth": {
-        "mode": "none"
+        "mode": "api_key",
+        "required": false,
+        "fields": [
+            {
+                "id": "auth_token",
+                "type": "secret_ref",
+                "config_path": "auth_token",
+                "required": false,
+                "title": "Cloudflare Tunnel Token",
+                "secret_policy": {
+                    "allow_create": true,
+                    "allow_select": true
+                }
+            }
+        ]
     }
 }

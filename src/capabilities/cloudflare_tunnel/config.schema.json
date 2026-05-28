@@ -14,6 +14,14 @@
       "x-ui": {
         "placeholder": "Ex: 8000"
       }
+    },
+    "domain": {
+      "type": "string",
+      "title": "Custom Domain",
+      "description": "Seu domínio configurado no painel do Cloudflare Zero Trust (usado para exibir o link na interface)",
+      "x-ui": {
+        "placeholder": "Ex: atlas.meudominio.com"
+      }
     }
   }
 }

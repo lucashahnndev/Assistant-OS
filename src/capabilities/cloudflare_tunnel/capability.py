@@ -3,7 +3,11 @@ import time
 import logging
 from ..base import CapabilityBase
 from typing import Dict, Any, List
+from pycloudflared.util import get_info
 from pycloudflared import trycloudflare
+import subprocess
+import atexit
+from server.core.secret_manager import resolve_secret_ref
 
 logger = logging.getLogger("CloudflareTunnelCapability")
 
@@ -13,6 +17,7 @@ class CloudflareTunnelCapability(CapabilityBase):
         self.config = config or {}
         self._namespace = "cloudflare.tunnel"
         self._tunnel = None
+        self._auth_process = None
         self._public_url = None
         self._is_running = False
 
@@ -44,11 +49,33 @@ class CloudflareTunnelCapability(CapabilityBase):
                 except ValueError:
                     logger.warning(f"Invalid target_port {target_port}, using {port}")
 
-            # Start trycloudflare tunnel pointing to the local port
-            # Note: trycloudflare might block, so we run it in a thread if it does, but pycloudflared provides a non-blocking wrapper.
-            self._tunnel = trycloudflare(port=port)
-            self._public_url = self._tunnel.tunnel
-            logger.info(f"Cloudflare Tunnel started at {self._public_url} pointing to local port {port}")
+            # Resolve auth_token to check if we are doing authenticated mode
+            auth_token = None
+            if self.config.get("auth_token"):
+                auth_token = resolve_secret_ref(self.config.get("auth_token"))
+
+            if auth_token:
+                # Use authenticated tunnel
+                exe = get_info().executable
+                self._auth_process = subprocess.Popen(
+                    [exe, "tunnel", "--no-autoupdate", "run", "--token", auth_token],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                atexit.register(self._auth_process.terminate)
+                self._is_running = True
+                
+                # In authenticated mode, the CLI doesn't output the public URL (it's managed in Zero Trust)
+                # So we try to get it from the user's config 'domain' setting for UI display purposes
+                domain = self.config.get("domain", "")
+                self._public_url = f"https://{domain}" if domain else "Managed via Zero Trust"
+                logger.info(f"Cloudflare Authenticated Tunnel started for {self._public_url}")
+            else:
+                # Start trycloudflare tunnel pointing to the local port (Anonymous mode fallback)
+                self._tunnel = trycloudflare(port=port)
+                self._public_url = self._tunnel.tunnel
+                self._is_running = True
+                logger.info(f"Cloudflare Quick Tunnel started at {self._public_url} pointing to local port {port}")
         except Exception as e:
             logger.error(f"Failed to start Cloudflare Tunnel: {e}")
             self._is_running = False
@@ -59,9 +86,13 @@ class CloudflareTunnelCapability(CapabilityBase):
             return
         
         try:
-            if self._tunnel:
+            if self._auth_process:
+                self._auth_process.terminate()
+                self._auth_process = None
+            elif self._tunnel:
                 self._tunnel.stop()
-            self._tunnel = None
+                self._tunnel = None
+            
             self._public_url = None
             self._is_running = False
             logger.info("Cloudflare Tunnel stopped")
