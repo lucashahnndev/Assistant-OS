@@ -70,6 +70,8 @@ const Settings = () => {
     const [isMobile, setIsMobile] = useState(window.innerWidth <= 640);
     const [isTablet, setIsTablet] = useState(window.innerWidth > 640 && window.innerWidth <= 1024);
     const [isCompressing, setIsCompressing] = useState(false);
+    const [networkTunnels, setNetworkTunnels] = useState([]);
+    const [networkTunnelsLoading, setNetworkTunnelsLoading] = useState(false);
 
     useEffect(() => {
         const handleResize = () => {
@@ -151,6 +153,7 @@ const Settings = () => {
         fetchConfig();
         fetchVaultEntries();
         fetchLogSources();
+        fetchNetworkTunnels();
         return () => stopLogStream();
     }, []);
 
@@ -324,6 +327,20 @@ const Settings = () => {
             toast.error("Failed to load configuration");
         }
         finally { setLoading(false); }
+    };
+
+    const fetchNetworkTunnels = async () => {
+        setNetworkTunnelsLoading(true);
+        try {
+            const caps = await api.get('/capabilities/');
+            if (Array.isArray(caps)) {
+                setNetworkTunnels(caps.filter(c => c.id && c.id.endsWith('_tunnel')));
+            }
+        } catch (err) {
+            console.error("Failed to fetch network tunnels", err);
+        } finally {
+            setNetworkTunnelsLoading(false);
+        }
     };
 
     const fetchVaultEntries = async () => {
@@ -822,11 +839,60 @@ const Settings = () => {
                     Remote access is now powered by dedicated capabilities (plugins). 
                     Install and configure Ngrok or Cloudflare Tunnel directly from the Capabilities Hub.
                 </p>
-                <div style={{ background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '13px' }}>
-                        <CheckCircle size={16} color="var(--accent-color)" /> 
-                        Check the top-right Cloud icon when tunnels are active to view QR codes and public links.
-                    </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
+                    {networkTunnelsLoading ? (
+                        <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                            <Loader className="spin" size={24} style={{ margin: '0 auto 12px' }} />
+                            <div style={{ fontSize: '13px' }}>Loading tunnel plugins...</div>
+                        </div>
+                    ) : networkTunnels.length > 0 ? (
+                        networkTunnels.map(tunnel => {
+                            const tunnelConfig = config.capabilities?.[tunnel.id] || {};
+                            return (
+                                <div key={tunnel.id} style={{ background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <Puzzle size={16} color="var(--accent-color)" />
+                                            <h4 style={{ margin: 0, fontSize: '14px', fontWeight: '600' }}>{tunnel.title || tunnel.name}</h4>
+                                            <span style={{ fontSize: '10px', padding: '2px 6px', background: 'rgba(16, 185, 129, 0.1)', color: '#10b981', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.2)' }}>Plugin</span>
+                                        </div>
+                                        <div className="toggle-item" style={{ padding: 0, border: 'none', background: 'transparent' }}>
+                                            <input type="checkbox" className="luxury-checkbox"
+                                                checked={tunnelConfig.enabled || false}
+                                                onChange={(e) => updateNestedValue(`capabilities.${tunnel.id}.enabled`, e.target.checked)}
+                                            />
+                                        </div>
+                                    </div>
+                                    
+                                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px' }}>
+                                        <div className="form-group">
+                                            <label>Target Port</label>
+                                            <input type="number" className="input-field"
+                                                value={tunnelConfig.target_port || ''}
+                                                placeholder={config.frontend?.port || 5173}
+                                                onChange={(e) => updateNestedValue(`capabilities.${tunnel.id}.target_port`, e.target.value ? parseInt(e.target.value) : undefined)}
+                                            />
+                                        </div>
+                                        <div className="form-group">
+                                            <label>Custom Domain</label>
+                                            <input type="text" className="input-field"
+                                                value={tunnelConfig.domain || ''}
+                                                placeholder="e.g. app.meudominio.com"
+                                                onChange={(e) => updateNestedValue(`capabilities.${tunnel.id}.domain`, e.target.value)}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })
+                    ) : (
+                        <div style={{ background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '13px' }}>
+                                <CheckCircle size={16} color="var(--accent-color)" /> 
+                                Check the top-right Cloud icon when tunnels are active to view QR codes and public links.
+                            </div>
+                        </div>
+                    )}
                 </div>
             </section>
         </div>
