@@ -10,12 +10,14 @@ Isso garante extrema modularidade: o usuário instala apenas o provedor que dese
 Serão desenvolvidas as seguintes capabilities na pasta `src/capabilities/`:
 
 ### A. `ngrok_tunnel`
-- **Ferramentas:** `start_ngrok_tunnel()`, `stop_ngrok_tunnel()`, `get_ngrok_status()`
-- **Lógica:** Gerencia a thread do `pyngrok`. Requer configuração do Token (AuthToken) no Hub de Capabilities via Vault.
+- **Ferramentas:** `ngrok.tunnel.start()`, `ngrok.tunnel.stop()`, `ngrok.tunnel.status()`
+- **Configurações (Schema):** `auth_token` (obrigatório, salvo no Vault), `target_port` (opcional), `domain` (opcional), `region` (opcional).
+- **Lógica:** Gerencia a thread do `pyngrok` e aceita domínios customizados ou regiões específicas.
 
 ### B. `cloudflare_tunnel`
-- **Ferramentas:** `start_cloudflare_tunnel()`, `stop_cloudflare_tunnel()`, `get_cloudflare_status()`
-- **Lógica:** Gerencia a thread do `pycloudflared`. Operação "Plug & Play" (trycloudflare) ou uso de token para domínios próprios.
+- **Ferramentas:** `cloudflare.tunnel.start()`, `cloudflare.tunnel.stop()`, `cloudflare.tunnel.status()`
+- **Configurações (Schema):** `auth_token` (opcional, salvo no Vault), `target_port` (opcional), `domain` (opcional para exibição na UI).
+- **Lógica:** Gerencia a thread do `pycloudflared`. Operação híbrida: "Plug & Play" (trycloudflare anônimo) ou túnel autenticado (Zero Trust via token) para domínios próprios.
 
 ### C. `tailscale_tunnel`
 - **Ferramentas:** `get_tailscale_status()`
