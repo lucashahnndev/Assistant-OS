@@ -731,15 +731,38 @@ async def add_wegena_feedback(session_id: str, request: Request, user: User = De
     try:
         data = await request.json()
         feedback_type = data.get("feedback_type")
+        script_url = data.get("script_url", "")
         if feedback_type not in ("like", "dislike"):
             raise ValueError()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid payload, must contain feedback_type 'like' or 'dislike'")
         
-    # TODO: Implementar gravação no VectorDB de estilo ou banco SQL 
-    logger.info(f"Wegena Feedback recebido no backend: session={session_id}, type={feedback_type}")
+    config_manager = kernel.config_manager
+    wegena_config = config_manager.get("capabilities", {}).get("wegena", {})
+    learning_enabled = wegena_config.get("feedback_learning_enabled", True)
+
+    if learning_enabled:
+        os.makedirs("data/workspace/wegena", exist_ok=True)
+        rag_path = os.path.join("data/workspace/wegena", "feedback_rag.jsonl")
+        
+        record = {
+            "session_id": session_id,
+            "timestamp": time.time(),
+            "feedback": feedback_type,
+            "user_id": user.id if user else "anonymous",
+            "script_url": script_url
+        }
+        
+        try:
+            with open(rag_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record) + "\n")
+            logger.info(f"Wegena Feedback salvo no RAG DB: {record}")
+        except Exception as e:
+            logger.error(f"Falha ao salvar feedback RAG: {e}")
+    else:
+        logger.info(f"Wegena Feedback ignorado (learning disabled): session={session_id}, type={feedback_type}")
     
-    return {"status": "success", "feedback_type": feedback_type}
+    return {"status": "success", "feedback_type": feedback_type, "saved_to_rag": learning_enabled}
     
     if end_idx <= 0 or start_idx >= total:
         paginated = []

@@ -1,5 +1,7 @@
 # Broker / RAG Tuning Pass 1 Report
 
+> Historical report. This tuning note reflects an earlier broker stage and may not match the current discovery-first contract.
+
 ## 1. Executive Summary
 This pass tightened broker evidence selection with intent-aware caps, domain balance tuning, low-value suppression, and more informative diagnostics. Reranking now favors operationally useful domains (procedures/capability/custom) while keeping policy and example evidence bounded unless explicitly relevant.
 

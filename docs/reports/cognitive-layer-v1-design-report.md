@@ -1,5 +1,7 @@
 # Cognitive Layer v1 Design Report
 
+> Historical report. This design note predates the current discovery-first contract and should be read as architectural context, not active runtime specification.
+
 ## 1. Executive Summary
 
 The current architecture is now clearly broker-centric for knowledge retrieval and prompt-reduced for execution stability, but it still lacks a durable strategic state layer.

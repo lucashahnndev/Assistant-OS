@@ -1,5 +1,7 @@
 # Prompt Reduction Pass 4 Report
 
+> Historical report. Some terminology and architecture assumptions here were superseded by the current discovery-first contract.
+
 ## 1. Executive Summary
 
 Prompt Reduction Pass 4 targeted the last large compactable planner blocks without removing kernel behavior, live context, session continuity, or deterministic enforcement.

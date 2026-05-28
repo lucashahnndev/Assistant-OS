@@ -1,0 +1,11 @@
+tmp/*
+!tmp/.gitkeep
+
+prints/*
+!prints/.gitkeep
+
+reports/*
+!reports/.gitkeep
+
+note/*
+!note/.gitkeep

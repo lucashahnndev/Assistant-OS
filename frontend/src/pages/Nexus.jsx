@@ -1681,6 +1681,25 @@ const Nexus = () => {
         msmRef.current = msm;
     }, [msm]);
 
+    useEffect(() => {
+        const fetchConfig = async () => {
+            try {
+                const res = await api.get('/system/config');
+                const weg = res?.capabilities?.wegena;
+                if (weg) {
+                    setWegenaConfig(prev => ({
+                        ...prev,
+                        particleCount: weg.initial_particles || prev.particleCount,
+                        particleSize: weg.base_particle_size || prev.particleSize,
+                    }));
+                }
+            } catch (err) {
+                console.error("Failed to load wegena config from system", err);
+            }
+        };
+        fetchConfig();
+    }, []);
+
     const activeWorksRef = useRef(new Set());
     const terminalWorksRef = useRef(new Set());
     const approvalCardByWorkRef = useRef(new Map());

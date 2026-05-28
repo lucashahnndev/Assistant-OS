@@ -1,5 +1,7 @@
 # Cognitive Layer v1 Stage 2 Implementation Report
 
+> Historical report. This implementation note reflects an earlier cognition stage and may not match the current discovery-first contract.
+
 ## 1. Executive Summary
 
 Cognitive Layer v1 Stage 2 has been implemented as a conservative post-turn strategic commit phase.

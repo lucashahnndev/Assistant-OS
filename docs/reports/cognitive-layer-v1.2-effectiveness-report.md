@@ -1,5 +1,7 @@
 # Cognitive Layer v1.2 - Effectiveness Pass
 
+> Historical report. This implementation note reflects an earlier cognition stage and may not match the current discovery-first contract.
+
 ## 1. Executive Summary
 
 Cognitive Layer v1.2 was implemented as a bounded refinement pass over the existing v1, Stage 2, and v1.1 architecture.

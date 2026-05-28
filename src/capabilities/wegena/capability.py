@@ -52,6 +52,7 @@ class WegenaCapability(CapabilityBase):
         fidelity = self.config.get("composition_fidelity", "high")
         budget = float(self.config.get("budget_limit", 1.0))
         max_particles = int(self.config.get("max_particles", 70000))
+        refinement_turns = int(self.config.get("refinement_turns", 1))
         
         system_prompt = FINAL_WEG_SYSTEM_PROMPT.format(
             budget=budget,
@@ -60,36 +61,45 @@ class WegenaCapability(CapabilityBase):
         )
 
         try:
-            # Geração usando LLM
-            logger.info(f"WegenaCapability: Gerando cena para '{description}'")
-            # Rodar sincronamente bloqueando a thread do capability executor (ok para actions)
-            # Mas idealmente chamamos de forma assíncrona ou rodamos em event loop
+            logger.info(f"WegenaCapability: Gerando cena para '{description}' com {refinement_turns} turno(s) de refinamento.")
             import re
             
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(
-                asyncio.to_thread(
-                    self.llm.generate_text,
-                    prompt=f"Gere a cena: {description}",
-                    system_prompt=system_prompt,
-                    max_tokens=1800,
+            
+            current_prompt = f"Gere a cena: {description}"
+            weg_script = ""
+            
+            for attempt in range(max(1, refinement_turns)):
+                result = loop.run_until_complete(
+                    asyncio.to_thread(
+                        self.llm.generate_text,
+                        prompt=current_prompt,
+                        system_prompt=system_prompt,
+                        max_tokens=1800,
+                    )
                 )
-            )
+                
+                # Extrair script
+                weg_script = result.strip()
+                weg_match = re.search(r"```weg\s*([\s\S]*?)```", weg_script, re.IGNORECASE)
+                if weg_match:
+                    weg_script = weg_match.group(1).strip()
+                else:
+                    code_match = re.search(r"```(?:[a-zA-Z0-9_-]+)?\s*([\s\S]*?)```", weg_script)
+                    if code_match and ("@Node" in code_match.group(1) or "@World" in code_match.group(1) or "@Background" in code_match.group(1)):
+                        weg_script = code_match.group(1).strip()
+
+                if weg_script and ("@" in weg_script):
+                    break # Sintaxe básica ok
+                else:
+                    logger.warning(f"WegenaCapability: Falha na validação sintática (tentativa {attempt+1}).")
+                    current_prompt = f"O script gerado era inválido ou não continha sintaxe Wegena (@Node, @World, etc). Por favor, tente novamente.\n\nDescrição original: {description}"
+            
             loop.close()
 
-            # Extrair script
-            weg_script = result.strip()
-            weg_match = re.search(r"```weg\s*([\s\S]*?)```", weg_script, re.IGNORECASE)
-            if weg_match:
-                weg_script = weg_match.group(1).strip()
-            else:
-                code_match = re.search(r"```(?:[a-zA-Z0-9_-]+)?\s*([\s\S]*?)```", weg_script)
-                if code_match and ("@Node" in code_match.group(1) or "@World" in code_match.group(1)):
-                    weg_script = code_match.group(1).strip()
-
             if not weg_script or "@" not in weg_script:
-                raise Exception("Script .weg não pôde ser gerado ou é inválido.")
+                raise Exception("Script .weg não pôde ser gerado validamente após todas as tentativas.")
 
             # Salvar como artefato
             os.makedirs("data/workspace/wegena", exist_ok=True)

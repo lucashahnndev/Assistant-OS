@@ -1,5 +1,7 @@
 # Context Broker Phase 1 Implementation Report
 
+> Historical report. This implementation note reflects an earlier broker stage and may differ from the current discovery-first contract.
+
 ## 1. Executive Summary
 
 Phase 1 introduced a production-ready Context Broker subsystem that classifies turn intent, routes retrieval by logical domain, normalizes evidence into typed prompt-ready units, and injects that evidence into the orchestrator prompt assembly path.

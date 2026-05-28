@@ -1,5 +1,7 @@
 # Prompt Reduction Pass 2 Report
 
+> Historical report. Some terminology and architecture assumptions here were superseded by the current discovery-first contract.
+
 ## 1. Executive Summary
 
 Prompt Reduction Pass 2 continues the transition from a prompt-centric planner to a broker-centric planner using the retrieval coverage and observability introduced in earlier phases.

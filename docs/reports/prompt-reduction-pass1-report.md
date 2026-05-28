@@ -1,5 +1,7 @@
 # Prompt Reduction Pass 1 Report
 
+> Historical report. Some terminology and architecture assumptions here were superseded by the current discovery-first contract.
+
 ## 1. Executive Summary
 
 Prompt Reduction Pass 1 introduces the first controlled prompt diet for the planner. The goal of this pass was not to rewrite the prompt system, but to reduce fixed explanatory prose that is now better supplied by the Context Broker and active retrieval domains.

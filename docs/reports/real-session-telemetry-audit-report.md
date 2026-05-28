@@ -1,5 +1,7 @@
 # Real Session Telemetry Audit Report
 
+> Historical report. This telemetry snapshot is point-in-time data and should not be treated as the active contract.
+
 ## 1. Executive Summary
 - Sessions analyzed: 2
 - Hint application rate: 0.0

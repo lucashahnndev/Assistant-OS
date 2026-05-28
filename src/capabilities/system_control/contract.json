@@ -112,7 +112,7 @@
         {
             "id": "system.control.consult_tools",
             "title": "Consult Tools",
-            "description": "Consulta o bibliotecário de ferramentas e retorna um subconjunto ordenado do catálogo descoberto.",
+            "description": "Consulta o bibliotecário de ferramentas e retorna um subconjunto ordenado da descoberta semântica.",
             "handler": "consult_tools",
             "risk_level": "low",
             "permissions": {

@@ -2,10 +2,47 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object",
     "properties": {
-        "enabled": { "type": "boolean", "default": true },
-        "budget_limit": { "type": "number", "default": 1.0 },
-        "max_particles": { "type": "integer", "default": 70000 },
-        "composition_fidelity": { "type": "string", "default": "high" }
+        "enabled": { 
+            "type": "boolean", 
+            "default": true,
+            "title": "Ativar Capability"
+        },
+        "budget_limit": { 
+            "type": "number", 
+            "default": 1.0,
+            "title": "Orçamento de Renderização (Budget)"
+        },
+        "max_particles": { 
+            "type": "integer", 
+            "default": 70000,
+            "title": "Limite Máximo de Partículas"
+        },
+        "initial_particles": {
+            "type": "integer",
+            "default": 20000,
+            "title": "Partículas Pré-alocadas"
+        },
+        "base_particle_size": {
+            "type": "number",
+            "default": 1.0,
+            "title": "Tamanho Base das Partículas"
+        },
+        "composition_fidelity": { 
+            "type": "string", 
+            "default": "high",
+            "enum": ["minimal", "low", "medium", "high", "ultra"],
+            "title": "Fidelidade da Composição"
+        },
+        "refinement_turns": {
+            "type": "integer",
+            "default": 1,
+            "title": "Turnos de Refinamento (LLM)"
+        },
+        "feedback_learning_enabled": {
+            "type": "boolean",
+            "default": true,
+            "title": "Aprendizado por RAG de Feedback"
+        }
     },
     "additionalProperties": false
 }

@@ -595,10 +595,10 @@ class SystemCapability(CapabilityBase):
                 return self._result(
                     ok=True,
                     status="success" if rows else "empty",
-                    message=f"Capability catalog returned {len(rows)} action(s).",
+                    message=f"Capability discovery returned {len(rows)} action(s).",
                     count=len(rows),
                     items=rows,
-                    catalog_mode="on_demand",
+                    discovery_mode="on_demand",
                     format="legacy",
                     audience=mode,
                 )
@@ -607,10 +607,10 @@ class SystemCapability(CapabilityBase):
             return self._result(
                 ok=True,
                 status="success" if rows else "empty",
-                message=f"Capability catalog returned {len(rows)} action(s) in TOON format.",
+                message=f"Capability discovery returned {len(rows)} action(s) in TOON format.",
                 count=len(rows),
                 toon=toon,
-                catalog_mode="on_demand",
+                discovery_mode="on_demand",
                 format="toon",
                 audience=mode,
                 query_ignored=query_ignored,

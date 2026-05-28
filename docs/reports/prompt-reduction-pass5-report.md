@@ -1,5 +1,7 @@
 # Prompt Reduction Pass 5 Report
 
+> Historical report. Some terminology and architecture assumptions here were superseded by the current discovery-first contract.
+
 ## 1. Executive Summary
 
 Prompt Reduction Pass 5 shifted the reduction effort away from kernel-adjacent framing and into dynamic prompt cost.

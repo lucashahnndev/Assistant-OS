@@ -364,7 +364,11 @@
             "enabled": true,
             "budget_limit": 1.0,
             "max_particles": 70000,
-            "composition_fidelity": "high"
+            "initial_particles": 20000,
+            "base_particle_size": 1.0,
+            "composition_fidelity": "high",
+            "refinement_turns": 1,
+            "feedback_learning_enabled": true
         },
         "system_logs": {
             "enabled": true

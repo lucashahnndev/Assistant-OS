@@ -1,5 +1,7 @@
 # Context Broker Phase 2C Implementation Report
 
+> Historical report. This phase note reflects an earlier broker rollout and may not match the current discovery-first contract.
+
 ## 1. Executive Summary
 
 Phase 2C activates the `policies` retrieval domain and introduces a deterministic cross-domain reranker for broker evidence selection.

@@ -1,5 +1,7 @@
 # Prompt Reduction Pass 3 Report
 
+> Historical report. Some terminology and architecture assumptions here were superseded by the current discovery-first contract.
+
 ## 1. Executive Summary
 
 Prompt Reduction Pass 3 moved the planner further from legacy prompt-heavy operational framing toward broker-first grounding without removing kernel rules, live context, session state, or deterministic enforcement.

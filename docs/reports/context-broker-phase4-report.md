@@ -1,5 +1,7 @@
 # Phase 4 - External and Custom Knowledge Implementation Report
 
+> Historical report. This phase note reflects an earlier broker rollout and may not match the current discovery-first contract.
+
 ## 1. Executive Summary
 
 Phase 4 activates two new retrieval domains in the Unified Context architecture:

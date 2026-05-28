@@ -1,5 +1,7 @@
 # Cognitive Layer v1.1 Implementation Report
 
+> Historical report. This implementation note reflects an earlier cognition stage and may not match the current discovery-first contract.
+
 ## 1. Executive Summary
 
 Cognitive Layer v1.1 has been implemented as a safe refinement over Stage 1 and Stage 2.

@@ -1,5 +1,7 @@
 # Cognitive Diagnostics Viewer + Telemetry Pass
 
+> Historical report. This telemetry/viewer pass reflects an earlier instrumentation stage and may not match the current discovery-first contract.
+
 ## 1. Executive Summary
 
 This pass adds a thin operational diagnostics surface for the existing cognitive architecture.

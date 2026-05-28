@@ -402,10 +402,10 @@ class PromptComposer:
             f"{self._clip_block('capabilities_summary', capabilities_summary or '- No actions available for this principal.')}"
         )
         _append("actions", actions_block)
-        reduction_audit["actions_catalog"] = {
+        reduction_audit["discovery_anchor"] = {
             "before_chars": len(self._legacy_actions_block(capability_scope, capabilities_summary)),
             "after_chars": len(actions_block),
-            "replacement": "dense_catalog_variant",
+            "replacement": "single_discovery_entrypoint",
             "pass": "pass4",
         }
         legacy_browser_block = self._legacy_browser_intent_classes_block(capabilities_summary)
@@ -454,7 +454,7 @@ class PromptComposer:
             reduction_audit=reduction_audit,
             context_bundle=context_bundle,
             prompt_profile=active_prompt_profile,
-            catalog_mode=self._extract_catalog_mode(capabilities_summary),
+            discovery_mode=self._extract_discovery_mode(capabilities_summary),
             state_stats=state_stats,
             evidence_stats=evidence_stats,
         )
@@ -685,7 +685,7 @@ class PromptComposer:
         reduction_audit: Dict[str, Dict[str, int]],
         context_bundle: ContextBundle | None,
         prompt_profile: str,
-        catalog_mode: str,
+        discovery_mode: str,
         state_stats: Dict[str, Any],
         evidence_stats: Dict[str, Any],
     ) -> Dict[str, Any]:
@@ -729,7 +729,7 @@ class PromptComposer:
         )
         retained_focus_sizes = {
             "structured_output_contract_chars": int(block_sizes.get("structured_output_contract", 0)),
-            "action_catalog_chars": int(block_sizes.get("actions", 0)),
+            "discovery_anchor_chars": int(block_sizes.get("actions", 0)),
             "presentation_chars": int(block_sizes.get("presentation_directive", 0)),
             "response_persona_chars": int(block_sizes.get("response_persona", 0)),
             "specialist_chars": int(block_sizes.get("specialist_prompt", 0)),
@@ -756,8 +756,8 @@ class PromptComposer:
             "evidence_domains": evidence_domains,
             "fallback_no_evidence_mode": not bool(evidence_items),
             "prompt_profile": prompt_profile,
-            "catalog_mode": catalog_mode,
-            "compact_catalog_used": catalog_mode in {"dense", "dense_hybrid", "chat", "od", "od_chat"},
+            "discovery_mode": discovery_mode,
+            "compact_discovery_used": discovery_mode in {"dense", "dense_hybrid", "chat", "od", "od_chat"},
             "retained_block_sizes": retained_blocks,
             "retained_focus_sizes": retained_focus_sizes,
             "dynamic_state_metrics": {
@@ -892,7 +892,7 @@ class PromptComposer:
         return "conversational" if self._is_conversational_turn(user_input) else "operational"
 
     @staticmethod
-    def _extract_catalog_mode(capabilities_summary: str) -> str:
+    def _extract_discovery_mode(capabilities_summary: str) -> str:
         first_line = str(capabilities_summary or "").splitlines()[0].strip()
         if first_line.startswith("m="):
             return first_line[2:].strip()

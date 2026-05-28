@@ -1,5 +1,7 @@
 # Phase 3 - Agent Experience Implementation Report
 
+> Historical report. This phase note reflects an earlier broker rollout and may not match the current discovery-first contract.
+
 ## 1. Executive Summary
 
 Phase 3 activates the `agent_experience` retrieval domain on top of the existing Context Broker flow. The new domain converts prior operational traces into compact, reusable experience lessons instead of storing raw logs. It now ingests high-signal recovery and failure patterns from session decision traces, event history, task registry state, and the legacy episodic memory store when available.

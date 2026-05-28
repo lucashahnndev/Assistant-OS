@@ -3,6 +3,8 @@
 This directory centralizes technical reports and audit notes that were previously
 stored at the repository root.
 
+> Most reports in this directory are historical records. Some predate the current discovery-first contract and may use older terminology or architecture assumptions.
+
 Conventions:
 - Keep report filenames descriptive and date/versioned when applicable.
 - Prefer `kebab-case` names.

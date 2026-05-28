@@ -5064,7 +5064,7 @@ class AgentOrchestrator:
             "lang": f"ta={user_language or 'en'};r={user_language or 'auto'};single",
             "present": presentation_mode + ("+md" if markdown_supported else ""),
             "policy": policy_compact,
-            "discovery": "consult_tools|discover_before_execute|choose_from_returned_candidates",
+            "discovery": "consult_tools_only",
             "out": "thought,plan,state_summary,action,params,task_label,response_text,attachments",
         }
         if str(personality_scope or "").strip().lower() == "global":

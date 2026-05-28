@@ -406,7 +406,7 @@ const Capabilities = () => {
             );
         }
 
-        const widget = ui.widget || (schema.type === 'boolean' ? 'checkbox' : 'text');
+        const widget = ui.widget || (schema.enum ? 'select' : (schema.type === 'boolean' ? 'checkbox' : 'text'));
         const currentValue = getConfigValue(fullPath);
         const parseInputBySchema = (rawValue) => {
             if (rawValue === '') return '';

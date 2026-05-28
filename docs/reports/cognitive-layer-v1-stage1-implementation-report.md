@@ -1,5 +1,7 @@
 # Cognitive Layer v1 Stage 1 Implementation Report
 
+> Historical report. This implementation note reflects an earlier cognition stage and may not match the current discovery-first contract.
+
 ## 1. Executive Summary
 
 Stage 1 of Cognitive Layer v1 has been implemented as a conservative, production-safe strategic state layer.
