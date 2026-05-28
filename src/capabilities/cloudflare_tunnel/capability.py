@@ -36,11 +36,19 @@ class CloudflareTunnelCapability(CapabilityBase):
                 frontend_config = self.kernel.config_manager.get("frontend", {})
                 port = frontend_config.get("port", 5173)
 
+            # Override with capability config if provided
+            target_port = self.config.get("target_port")
+            if target_port:
+                try:
+                    port = int(target_port)
+                except ValueError:
+                    logger.warning(f"Invalid target_port {target_port}, using {port}")
+
             # Start trycloudflare tunnel pointing to the local port
             # Note: trycloudflare might block, so we run it in a thread if it does, but pycloudflared provides a non-blocking wrapper.
             self._tunnel = trycloudflare(port=port)
             self._public_url = self._tunnel.tunnel
-            logger.info(f"Cloudflare Tunnel started at {self._public_url}")
+            logger.info(f"Cloudflare Tunnel started at {self._public_url} pointing to local port {port}")
         except Exception as e:
             logger.error(f"Failed to start Cloudflare Tunnel: {e}")
             self._is_running = False

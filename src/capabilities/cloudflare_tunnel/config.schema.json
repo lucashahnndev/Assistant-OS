@@ -6,6 +6,14 @@
       "type": "boolean",
       "default": false,
       "title": "Enabled"
+    },
+    "target_port": {
+      "type": "integer",
+      "title": "Target Port",
+      "description": "Port to expose (leave empty for default frontend port)",
+      "x-ui": {
+        "placeholder": "Ex: 8000"
+      }
     }
   }
 }

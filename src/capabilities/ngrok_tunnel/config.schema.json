@@ -13,6 +13,29 @@
       "x-ui": {
         "placeholder": "Seu Ngrok AuthToken (será salvo no Cofre)"
       }
+    },
+    "target_port": {
+      "type": "integer",
+      "title": "Target Port",
+      "description": "Port to expose (leave empty for default frontend port)",
+      "x-ui": {
+        "placeholder": "Ex: 8000"
+      }
+    },
+    "domain": {
+      "type": "string",
+      "title": "Custom Domain",
+      "description": "Static Ngrok domain (e.g. my-app.ngrok.app). Requires a paid Ngrok account.",
+      "x-ui": {
+        "placeholder": "my-app.ngrok.app"
+      }
+    },
+    "region": {
+      "type": "string",
+      "title": "Region",
+      "description": "Ngrok server region to connect to",
+      "enum": ["us", "eu", "ap", "au", "sa", "jp", "in"],
+      "default": "us"
     }
   }
 }

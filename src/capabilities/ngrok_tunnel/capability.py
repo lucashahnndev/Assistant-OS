@@ -39,14 +39,32 @@ class NgrokTunnelCapability(CapabilityBase):
                 frontend_config = self.kernel.config_manager.get("frontend", {})
                 port = frontend_config.get("port", 5173)
 
+            # Override with capability config if provided
+            target_port = self.config.get("target_port")
+            if target_port:
+                try:
+                    port = int(target_port)
+                except ValueError:
+                    logger.warning(f"Invalid target_port {target_port}, using {port}")
+
             ngrok.set_auth_token(auth_token)
             
+            # Setup options
+            options = {"bind_tls": True}
+            domain = self.config.get("domain")
+            if domain and domain.strip():
+                options["domain"] = domain.strip()
+            
+            region = self.config.get("region")
+            if region and region.strip():
+                options["region"] = region.strip()
+            
             # Create tunnel
-            self._tunnel = ngrok.connect(port, bind_tls=True)
+            self._tunnel = ngrok.connect(port, **options)
             self._public_url = self._tunnel.public_url
             self._is_running = True
             
-            logger.info(f"Ngrok Tunnel started at {self._public_url}")
+            logger.info(f"Ngrok Tunnel started at {self._public_url} pointing to local port {port}")
         except Exception as e:
             logger.error(f"Failed to start Ngrok Tunnel: {e}")
             self._is_running = False
