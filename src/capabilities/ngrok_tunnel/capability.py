@@ -29,9 +29,10 @@ class NgrokTunnelCapability(CapabilityBase):
         
         try:
             auth_token = resolve_secret_ref(self.config.get("auth_token"))
-            if not auth_token:
-                logger.error("Ngrok auth_token is not configured or resolved.")
-                return
+            if auth_token:
+                ngrok.set_auth_token(auth_token)
+            else:
+                logger.info("Ngrok auth_token not provided in config. Relying on system ngrok.yml.")
 
             # Assuming frontend runs on port 5173
             port = 5173
@@ -46,8 +47,6 @@ class NgrokTunnelCapability(CapabilityBase):
                     port = int(target_port)
                 except ValueError:
                     logger.warning(f"Invalid target_port {target_port}, using {port}")
-
-            ngrok.set_auth_token(auth_token)
             
             # Setup options
             options = {"bind_tls": True}

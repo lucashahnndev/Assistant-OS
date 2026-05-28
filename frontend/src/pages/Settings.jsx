@@ -370,8 +370,13 @@ const Settings = () => {
         const action = isRunning ? 'stop' : 'start';
         setTunnelLoadingState(prev => ({ ...prev, [tunnelId]: true }));
         try {
-            await api.post(`/capabilities/${tunnelId}/actions/${tunnelId}.${action}`, {});
-            toast.success(`Tunnel ${action} signal sent successfully.`);
+            const res = await api.post(`/capabilities/${tunnelId}/actions/${tunnelId}.${action}`, {});
+            const result = res?.result || {};
+            if (result.ok === false) {
+                toast.error(`Failed to ${action} tunnel: ${result.error_details || 'Unknown error'}`);
+            } else {
+                toast.success(`Tunnel ${action} signal sent successfully.`);
+            }
             await fetchActiveTunnels();
         } catch (err) {
             console.error(err);
