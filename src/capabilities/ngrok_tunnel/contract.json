@@ -6,7 +6,9 @@
         "version": "1.0.0",
         "title": "Ngrok Tunnel",
         "description": "Inicia e gerencia túneis Ngrok para acesso remoto seguro.",
-        "assets": {}
+        "assets": {
+            "icon_svg": "assets/icon.svg"
+        }
     },
     "runtime": {
         "module": "capabilities.ngrok_tunnel",

@@ -6,7 +6,9 @@
         "version": "1.0.0",
         "title": "Cloudflare Tunnel",
         "description": "Inicia e gerencia túneis gratuitos do Cloudflare (trycloudflare) para acesso remoto.",
-        "assets": {}
+        "assets": {
+            "icon_svg": "assets/icon.svg"
+        }
     },
     "runtime": {
         "module": "capabilities.cloudflare_tunnel",
