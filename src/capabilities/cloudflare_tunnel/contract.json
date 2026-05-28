@@ -1,0 +1,74 @@
+{
+    "contract_version": "1.0",
+    "capability": {
+        "id": "cloudflare_tunnel",
+        "namespace": "cloudflare.tunnel",
+        "version": "1.0.0",
+        "title": "Cloudflare Tunnel",
+        "description": "Inicia e gerencia túneis gratuitos do Cloudflare (trycloudflare) para acesso remoto.",
+        "assets": {}
+    },
+    "runtime": {
+        "module": "capabilities.cloudflare_tunnel",
+        "factory": "create_capability"
+    },
+    "actions": [
+        {
+            "id": "cloudflare.tunnel.start",
+            "title": "Start Tunnel",
+            "description": "Inicia o túnel Cloudflare.",
+            "handler": "start",
+            "risk_level": "medium",
+            "permissions": {
+                "scopes": ["cloudflare:tunnel:start"],
+                "allow_anyone": false,
+                "requires_approval": true
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": true
+            },
+            "side_effect": "state_change"
+        },
+        {
+            "id": "cloudflare.tunnel.stop",
+            "title": "Stop Tunnel",
+            "description": "Desliga o túnel Cloudflare.",
+            "handler": "stop",
+            "risk_level": "medium",
+            "permissions": {
+                "scopes": ["cloudflare:tunnel:stop"],
+                "allow_anyone": false,
+                "requires_approval": true
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": true
+            },
+            "side_effect": "state_change"
+        },
+        {
+            "id": "cloudflare.tunnel.status",
+            "title": "Get Status",
+            "description": "Retorna o status atual do túnel Cloudflare e a URL pública.",
+            "handler": "status",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": ["cloudflare:tunnel:status"],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": true
+            },
+            "side_effect": "none"
+        }
+    ],
+    "auth": {
+        "mode": "none"
+    }
+}

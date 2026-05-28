@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": false,
+      "title": "Enabled"
+    },
+    "auth_token": {
+      "type": "string",
+      "title": "Ngrok Auth Token",
+      "x-ui": {
+        "placeholder": "Seu Ngrok AuthToken (será salvo no Cofre)"
+      }
+    }
+  }
+}

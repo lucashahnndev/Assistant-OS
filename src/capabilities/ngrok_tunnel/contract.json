@@ -1,0 +1,88 @@
+{
+    "contract_version": "1.0",
+    "capability": {
+        "id": "ngrok_tunnel",
+        "namespace": "ngrok.tunnel",
+        "version": "1.0.0",
+        "title": "Ngrok Tunnel",
+        "description": "Inicia e gerencia túneis Ngrok para acesso remoto seguro.",
+        "assets": {}
+    },
+    "runtime": {
+        "module": "capabilities.ngrok_tunnel",
+        "factory": "create_capability"
+    },
+    "actions": [
+        {
+            "id": "ngrok.tunnel.start",
+            "title": "Start Tunnel",
+            "description": "Inicia o túnel Ngrok.",
+            "handler": "start",
+            "risk_level": "medium",
+            "permissions": {
+                "scopes": ["ngrok:tunnel:start"],
+                "allow_anyone": false,
+                "requires_approval": true
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": true
+            },
+            "side_effect": "state_change"
+        },
+        {
+            "id": "ngrok.tunnel.stop",
+            "title": "Stop Tunnel",
+            "description": "Desliga o túnel Ngrok.",
+            "handler": "stop",
+            "risk_level": "medium",
+            "permissions": {
+                "scopes": ["ngrok:tunnel:stop"],
+                "allow_anyone": false,
+                "requires_approval": true
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": true
+            },
+            "side_effect": "state_change"
+        },
+        {
+            "id": "ngrok.tunnel.status",
+            "title": "Get Status",
+            "description": "Retorna o status atual do túnel Ngrok e a URL pública.",
+            "handler": "status",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": ["ngrok:tunnel:status"],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": true
+            },
+            "side_effect": "none"
+        }
+    ],
+    "auth": {
+        "mode": "api_key",
+        "required": true,
+        "fields": [
+            {
+                "id": "auth_token",
+                "type": "secret_ref",
+                "config_path": "auth_token",
+                "required": true,
+                "title": "Ngrok Auth Token",
+                "secret_policy": {
+                    "allow_create": true,
+                    "allow_select": true
+                }
+            }
+        ]
+    }
+}

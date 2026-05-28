@@ -30,7 +30,12 @@ import {
     ChevronUp,
     Trash2,
     Link2,
-    Settings2
+    Settings2,
+    Bot,
+    Loader,
+    Server,
+    FolderOpen,
+    Cloud
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -59,8 +64,12 @@ const Settings = () => {
     const [externalSecretEditor, setExternalSecretEditor] = useState({ target: '', key: '', value: '' });
     const [selectedConnectProvider, setSelectedConnectProvider] = useState('');
     const [connectingProvider, setConnectingProvider] = useState('');
+    const [mcpStatus, setMcpStatus] = useState({ servers: [], resources: [], refresh: {} });
+    const [mcpLoading, setMcpLoading] = useState(false);
+    const [mcpCollapsedServers, setMcpCollapsedServers] = useState({});
     const [isMobile, setIsMobile] = useState(window.innerWidth <= 640);
     const [isTablet, setIsTablet] = useState(window.innerWidth > 640 && window.innerWidth <= 1024);
+    const [isCompressing, setIsCompressing] = useState(false);
 
     useEffect(() => {
         const handleResize = () => {
@@ -96,6 +105,48 @@ const Settings = () => {
         return next;
     };
 
+    const withMcpDefaults = (sourceConfig) => {
+        const next = sourceConfig && typeof sourceConfig === 'object' ? { ...sourceConfig } : {};
+        const mcp = next.mcp && typeof next.mcp === 'object' ? { ...next.mcp } : {};
+        const servers = Array.isArray(mcp.servers) ? mcp.servers.map((server, index) => normalizeMcpServer(server, index)) : [];
+        next.mcp = {
+            enabled: mcp.enabled ?? false,
+            servers,
+        };
+        return next;
+    };
+
+    const normalizeMcpServer = (server, index = 0) => {
+        const raw = server && typeof server === 'object' ? { ...server } : {};
+        const transport = raw.transport && typeof raw.transport === 'object' ? { ...raw.transport } : {};
+        const policy = raw.policy && typeof raw.policy === 'object' ? { ...raw.policy } : {};
+        return {
+            id: String(raw.id || `server_${index + 1}`).trim().toLowerCase(),
+            title: String(raw.title || `Server ${index + 1}`).trim(),
+            enabled: raw.enabled ?? true,
+            transport: {
+                kind: String(transport.kind || 'http').trim().toLowerCase(),
+                endpoint: String(transport.endpoint || '').trim(),
+                command: String(transport.command || '').trim(),
+                args: Array.isArray(transport.args) ? [...transport.args] : [],
+                env: transport.env && typeof transport.env === 'object' ? { ...transport.env } : {},
+                headers: transport.headers && typeof transport.headers === 'object' ? { ...transport.headers } : {},
+                startup_timeout_s: transport.startup_timeout_s ?? 20,
+            },
+            policy: {
+                trust_tier: String(policy.trust_tier || 'partner').trim().toLowerCase(),
+                namespace: String(policy.namespace || 'mcp').trim().toLowerCase(),
+                allow_tool_discovery: policy.allow_tool_discovery ?? true,
+                allow_resources: policy.allow_resources ?? true,
+                allow_prompts: policy.allow_prompts ?? false,
+                default_requires_approval: policy.default_requires_approval ?? null,
+                tool_allowlist: Array.isArray(policy.tool_allowlist) ? [...policy.tool_allowlist] : [],
+                tool_denylist: Array.isArray(policy.tool_denylist) ? [...policy.tool_denylist] : [],
+            },
+            metadata: raw.metadata && typeof raw.metadata === 'object' ? { ...raw.metadata } : {},
+        };
+    };
+
     useEffect(() => {
         fetchConfig();
         fetchVaultEntries();
@@ -111,6 +162,9 @@ const Settings = () => {
         }
         if (activeTab === 'interfaces' || activeTab === 'security') {
             fetchEnvKeys();
+        }
+        if (activeTab === 'mcp') {
+            fetchMcpStatus();
         }
     }, [activeTab]);
 
@@ -240,10 +294,29 @@ const Settings = () => {
         }
     };
 
+    const handleCompressPersonality = async () => {
+        if (!config?.agent?.personality) {
+            toast.error("Please enter a natural text personality first.");
+            return;
+        }
+        setIsCompressing(true);
+        try {
+            const data = await api.post('/system/compress-personality', { text: config.agent.personality });
+            if (data?.compressed) {
+                updateNestedValue('agent.personality_compressed', data.compressed);
+                toast.success("Personality successfully compressed!");
+            }
+        } catch (err) {
+            toast.error(err.response?.data?.detail || "Failed to compress personality");
+        } finally {
+            setIsCompressing(false);
+        }
+    };
+
     const fetchConfig = async () => {
         try {
             const data = await api.get('/system/config');
-            const normalized = withExternalAccountsDefaults(data);
+            const normalized = withMcpDefaults(withExternalAccountsDefaults(data));
             setConfig(normalized);
             setRawJson(JSON.stringify(normalized, null, 2));
         } catch (err) {
@@ -308,13 +381,32 @@ const Settings = () => {
         }
     };
 
+    const fetchMcpStatus = async () => {
+        setMcpLoading(true);
+        try {
+            const data = await api.get('/system/mcp/status');
+            setMcpStatus({
+                servers: Array.isArray(data?.servers) ? data.servers : [],
+                resources: Array.isArray(data?.resources) ? data.resources : [],
+                refresh: data?.refresh && typeof data.refresh === 'object' ? data.refresh : {},
+            });
+        } catch (err) {
+            console.error(err);
+            setMcpStatus({ servers: [], resources: [], refresh: {} });
+        } finally {
+            setMcpLoading(false);
+        }
+    };
+
     const handleSave = async () => {
         setSaving(true);
         try {
             await api.post('/system/config', config);
             toast.success("Settings updated.");
+            return true;
         } catch (err) { toast.error(err.message); }
         finally { setSaving(false); }
+        return false;
     };
 
     const handleReload = async () => {
@@ -324,6 +416,24 @@ const Settings = () => {
             toast.success("System hot-reloaded successfully!", { id: loadingToast });
         } catch (err) {
             toast.error(`Hot Reload Failed: ${err.message}`, { id: loadingToast });
+        }
+    };
+
+    const refreshMcpRuntime = async () => {
+        const loadingToast = toast.loading("Refreshing MCP runtime...");
+        try {
+            await api.post('/system/mcp/refresh', {});
+            await fetchMcpStatus();
+            toast.success("MCP runtime refreshed.", { id: loadingToast });
+        } catch (err) {
+            toast.error(`MCP refresh failed: ${err.message}`, { id: loadingToast });
+        }
+    };
+
+    const saveMcpServerAndCollapse = async (server, index) => {
+        const saved = await handleSave();
+        if (saved) {
+            setMcpServerCollapsed(server, index, true);
         }
     };
 
@@ -417,6 +527,86 @@ const Settings = () => {
         setRawJson(JSON.stringify(newConfig, null, 2));
     };
 
+    const updateMcpServers = (nextServers) => {
+        const next = { ...(config || {}) };
+        next.mcp = {
+            ...(next.mcp || {}),
+            enabled: next.mcp?.enabled ?? false,
+            servers: nextServers,
+        };
+        setConfig(next);
+        setRawJson(JSON.stringify(next, null, 2));
+    };
+
+    const getMcpServerKey = (server, index = 0) => String(server?.id || `server_${index + 1}`).trim().toLowerCase();
+
+    const setMcpServerCollapsed = (server, index, collapsed) => {
+        const key = getMcpServerKey(server, index);
+        setMcpCollapsedServers((prev) => ({
+            ...prev,
+            [key]: collapsed,
+        }));
+    };
+
+    const isMcpServerCollapsed = (server, index) => Boolean(mcpCollapsedServers[getMcpServerKey(server, index)]);
+
+    const updateMcpValue = (path, value) => {
+        const next = { ...(config || {}) };
+        const parts = String(path || '').split('.');
+        let current = next;
+        for (let i = 0; i < parts.length - 1; i++) {
+            const key = parts[i];
+            if (!current[key] || typeof current[key] !== 'object') {
+                current[key] = {};
+            }
+            current = current[key];
+        }
+        current[parts[parts.length - 1]] = value;
+        if (!next.mcp || typeof next.mcp !== 'object') {
+            next.mcp = { enabled: false, servers: [] };
+        }
+        setConfig(next);
+        setRawJson(JSON.stringify(next, null, 2));
+    };
+
+    const updateMcpServer = (index, updater) => {
+        const servers = Array.isArray(config?.mcp?.servers) ? [...config.mcp.servers] : [];
+        const current = normalizeMcpServer(servers[index], index);
+        const nextServer = typeof updater === 'function' ? updater(current) : current;
+        servers[index] = nextServer;
+        updateMcpServers(servers);
+        const previousKey = getMcpServerKey(current, index);
+        const nextKey = getMcpServerKey(nextServer, index);
+        if (previousKey !== nextKey) {
+            setMcpCollapsedServers((prev) => {
+                if (!(previousKey in prev)) return prev;
+                const next = { ...prev, [nextKey]: prev[previousKey] };
+                delete next[previousKey];
+                return next;
+            });
+        }
+    };
+
+    const addMcpServer = () => {
+        const servers = Array.isArray(config?.mcp?.servers) ? [...config.mcp.servers] : [];
+        const nextServer = normalizeMcpServer({}, servers.length);
+        servers.push(nextServer);
+        updateMcpServers(servers);
+        setMcpServerCollapsed(nextServer, servers.length, false);
+    };
+
+    const removeMcpServer = (index) => {
+        const servers = Array.isArray(config?.mcp?.servers) ? [...config.mcp.servers] : [];
+        const removedServer = normalizeMcpServer(servers[index], index);
+        servers.splice(index, 1);
+        updateMcpServers(servers);
+        setMcpCollapsedServers((prev) => {
+            const next = { ...prev };
+            delete next[getMcpServerKey(removedServer, index)];
+            return next;
+        });
+    };
+
     const downloadLogs = () => {
         window.open(`/api/system/logs/download?filename=${activeLogSource}`, '_blank');
     };
@@ -436,6 +626,7 @@ const Settings = () => {
         { id: 'llm', label: 'Intelligence', icon: Cpu },
         { id: 'stt', label: 'Voice', icon: Mic },
         { id: 'capabilities', label: 'Capabilities', icon: Puzzle },
+        { id: 'mcp', label: 'MCP', icon: Server },
         { id: 'weather', label: 'Environment', icon: CloudSun },
         { id: 'security', label: 'Secrets', icon: Shield },
         { id: 'debug', label: 'Debug/Logs', icon: Terminal },
@@ -505,7 +696,7 @@ const Settings = () => {
 
     const renderGeneral = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
+            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
 
                 <h3 className="section-title">
                     <UserIcon size={20} /> Persona Settings
@@ -530,7 +721,40 @@ const Settings = () => {
                             onChange={(e) => updateNestedValue('agent.personality', e.target.value)}
                             placeholder="Describe how the agent should behave..."
                         />
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+                            <button
+                                className="action-button primary"
+                                onClick={handleCompressPersonality}
+                                disabled={isCompressing || !config.agent?.personality}
+                                style={{ padding: '6px 12px', fontSize: '0.85rem' }}
+                            >
+                                {isCompressing ? <Loader className="spin" size={14} /> : <Zap size={14} />}
+                                <span>{isCompressing ? 'Compressing...' : '✨ Auto-Compress (Save Tokens)'}</span>
+                            </button>
+                        </div>
                     </div>
+
+                    {config.agent?.personality_compressed && (
+                        <div className="form-group animate-fade-in" style={{ marginTop: '-8px' }}>
+                            <label style={{ color: 'var(--text-muted)' }}>
+                                <Bot size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} />
+                                Compressed Mirror (System View)
+                            </label>
+                            <textarea
+                                className="input-field"
+                                style={{ 
+                                    minHeight: '80px', 
+                                    opacity: 0.8,
+                                    fontSize: '0.85rem',
+                                    fontFamily: 'monospace',
+                                    backgroundColor: 'rgba(0,0,0,0.2)'
+                                }}
+                                value={config.agent.personality_compressed}
+                                readOnly
+                                title="This highly dense string is what the agent actually reads to save context window space."
+                            />
+                        </div>
+                    )}
                 </div>
             </section>
 
@@ -539,7 +763,7 @@ const Settings = () => {
 
     const renderNetwork = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
+            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
                 <h3 className="section-title">
                     <Globe size={20} /> Connectivity
                 </h3>
@@ -584,12 +808,33 @@ const Settings = () => {
                     </div>
                 </div>
             </section>
+
+            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                    <h3 className="section-title" style={{ margin: 0 }}>
+                        <Cloud size={20} /> Remote Access
+                    </h3>
+                    <Link to="/capabilities" className="btn-primary" style={{ padding: '8px 16px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Settings2 size={16} /> Manage in Hub
+                    </Link>
+                </div>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '16px' }}>
+                    Remote access is now powered by dedicated capabilities (plugins). 
+                    Install and configure Ngrok or Cloudflare Tunnel directly from the Capabilities Hub.
+                </p>
+                <div style={{ background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '13px' }}>
+                        <CheckCircle size={16} color="var(--accent-color)" /> 
+                        Check the top-right Cloud icon when tunnels are active to view QR codes and public links.
+                    </div>
+                </div>
+            </section>
         </div>
     );
 
     const renderMedia = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
+            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
                 <h3 className="section-title">
                     <Play size={20} /> Media & Content
                 </h3>
@@ -622,7 +867,7 @@ const Settings = () => {
                         </div>
                     </div>
 
-                    <div style={{ background: 'rgba(255,255,255,0.02)', padding: '20px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div style={{ background: 'rgba(255,255,255,0.02)', padding: '20px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
                         <h4 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '16px', color: 'var(--accent-color)' }}>Persistence Strategy</h4>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             <div className="flex-between">
@@ -689,7 +934,7 @@ const Settings = () => {
         const options = Array.from(new Set([...(envKeys || []), ...(currentValue ? [currentValue] : [])]));
 
         return (
-            <div className="form-group" style={{ background: 'rgba(var(--accent-rgb), 0.05)', padding: '14px', borderRadius: '10px', border: '1px solid rgba(var(--accent-rgb), 0.2)' }}>
+            <div className="form-group" style={{ background: 'rgba(var(--accent-rgb), 0.05)', padding: '14px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(var(--accent-rgb), 0.2)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                     <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <Shield size={14} color="var(--accent-color)" /> Bot Token
@@ -717,7 +962,7 @@ const Settings = () => {
                 )}
 
                 {creating && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '8px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: 'var(--radius-md)' }}>
                         <input
                             type="text"
                             className="input-field"
@@ -747,12 +992,12 @@ const Settings = () => {
 
     const renderInterfaces = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
+            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
                 <h3 className="section-title">
                     <Monitor size={20} /> Messaging Bridges
                 </h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-                    <div style={{ background: 'rgba(255,255,255,0.02)', padding: '24px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div style={{ background: 'rgba(255,255,255,0.02)', padding: '24px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
                             <div>
                                 <h4 style={{ fontSize: '18px', fontWeight: '700' }}>Telegram</h4>
@@ -776,7 +1021,7 @@ const Settings = () => {
 
     const renderCapabilities = () => (
         <div className="animate-fade-in">
-            <section className="glass" style={{ padding: '32px', borderRadius: '8px', textAlign: 'center' }}>
+            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
                 <Puzzle size={48} style={{ margin: '0 auto 20px', color: 'var(--accent-color)' }} />
                 <h3 style={{ fontSize: '24px', fontWeight: '800', marginBottom: '16px' }}>Cognitive Capabilities</h3>
                 <p style={{ color: '#94a3b8', marginBottom: '32px' }}>
@@ -791,9 +1036,236 @@ const Settings = () => {
         </div>
     );
 
+    const renderMcp = () => {
+        const mcp = config?.mcp || { enabled: false, servers: [] };
+        const servers = Array.isArray(mcp.servers) ? mcp.servers : [];
+        const enabledServers = servers.filter((s) => s?.enabled).length;
+        const resourceCount = Array.isArray(mcpStatus.resources) ? mcpStatus.resources.length : 0;
+
+        return (
+            <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '18px' }}>
+                        <div>
+                            <h3 className="section-title" style={{ marginBottom: '4px' }}>
+                                <Server size={20} /> MCP Runtime
+                            </h3>
+                            <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Configure MCP servers and inspect live discovery status.</div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            <button onClick={fetchMcpStatus} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <RefreshCw size={16} /> Refresh Status
+                            </button>
+                            <button onClick={refreshMcpRuntime} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <Zap size={16} /> Refresh Runtime
+                            </button>
+                            <button onClick={addMcpServer} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <FolderOpen size={16} /> Add Server
+                            </button>
+                        </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : 'repeat(4, minmax(0, 1fr))', gap: '12px', marginBottom: '20px' }}>
+                        <div className="glass" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>MCP Enabled</div>
+                            <div style={{ fontSize: '22px', fontWeight: '800', marginTop: '6px' }}>{mcp.enabled ? 'Yes' : 'No'}</div>
+                        </div>
+                        <div className="glass" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Servers</div>
+                            <div style={{ fontSize: '22px', fontWeight: '800', marginTop: '6px' }}>{servers.length}</div>
+                        </div>
+                        <div className="glass" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Active</div>
+                            <div style={{ fontSize: '22px', fontWeight: '800', marginTop: '6px' }}>{enabledServers}</div>
+                        </div>
+                        <div className="glass" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Resources</div>
+                            <div style={{ fontSize: '22px', fontWeight: '800', marginTop: '6px' }}>{resourceCount}</div>
+                        </div>
+                    </div>
+
+                    <div className="toggle-item luxury" style={{ marginBottom: '20px' }}>
+                        <div className="toggle-info">
+                            <span className="toggle-label">MCP Integration Enabled</span>
+                            <span className="toggle-desc">Enable discovery, registration, and resource retrieval from configured MCP servers.</span>
+                        </div>
+                        <input
+                            type="checkbox"
+                            className="luxury-checkbox"
+                            checked={Boolean(mcp.enabled)}
+                            onChange={(e) => updateMcpValue('mcp.enabled', e.target.checked)}
+                        />
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                        {servers.length === 0 && (
+                            <div style={{ padding: '20px', border: '1px dashed rgba(148, 163, 184, 0.25)', borderRadius: 'var(--radius-md)', color: 'var(--text-muted)' }}>
+                                No MCP servers configured yet. Add one for Obsidian or any other compatible server.
+                            </div>
+                        )}
+
+                        {servers.map((server, index) => {
+                            const transport = server.transport || {};
+                            const policy = server.policy || {};
+                            const statusServer = (mcpStatus.servers || []).find((item) => String(item?.id || '') === String(server.id || '').trim().toLowerCase());
+                            const statusLabel = statusServer ? `${statusServer.resource_count || 0} resources` : 'No live status';
+                            const serverKey = getMcpServerKey(server, index);
+                            const collapsed = isMcpServerCollapsed(server, index);
+
+                            return (
+                                <div key={`${serverKey}_${index}`} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148,163,184,0.15)', borderRadius: 'var(--radius-md)', padding: '16px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                                        <div>
+                                            <strong style={{ fontSize: '14px' }}>{server.title || `Server ${index + 1}`}</strong>
+                                            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{server.id || `server_${index + 1}`} - {statusLabel}</div>
+                                        </div>
+                                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                            <button onClick={() => setMcpServerCollapsed(server, index, !collapsed)} className="btn-ghost" style={{ fontSize: '12px', padding: '6px 10px' }}>
+                                                {collapsed ? <><ChevronDown size={14} /> Expand</> : <><ChevronUp size={14} /> Collapse</>}
+                                            </button>
+                                            <button onClick={() => saveMcpServerAndCollapse(server, index)} className="btn-primary" style={{ fontSize: '12px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                <Save size={14} /> Save & Collapse
+                                            </button>
+                                            <button onClick={() => updateMcpServer(index, (current) => ({ ...current, enabled: !current.enabled }))} className="btn-ghost" style={{ fontSize: '12px', padding: '6px 10px' }}>
+                                                {server.enabled ? 'Disable' : 'Enable'}
+                                            </button>
+                                            <button onClick={() => removeMcpServer(index)} className="btn-ghost" style={{ fontSize: '12px', padding: '6px 10px', color: '#f87171' }}>
+                                                <Trash2 size={14} /> Remove
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {collapsed ? (
+                                        <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : 'repeat(4, minmax(0, 1fr))', gap: '10px' }}>
+                                            <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
+                                                <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Transport</div>
+                                                <div style={{ fontSize: '13px', fontWeight: '700', marginTop: '4px' }}>{transport.kind || 'http'}</div>
+                                            </div>
+                                            <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
+                                                <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Endpoint</div>
+                                                <div style={{ fontSize: '13px', fontWeight: '700', marginTop: '4px', wordBreak: 'break-word' }}>{transport.endpoint || transport.command || 'Not set'}</div>
+                                            </div>
+                                            <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
+                                                <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Discovery</div>
+                                                <div style={{ fontSize: '13px', fontWeight: '700', marginTop: '4px' }}>{policy.allow_tool_discovery ? 'On' : 'Off'}</div>
+                                            </div>
+                                            <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
+                                                <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Resources</div>
+                                                <div style={{ fontSize: '13px', fontWeight: '700', marginTop: '4px' }}>{policy.allow_resources ? 'On' : 'Off'}</div>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : '1fr 1fr', gap: '14px' }}>
+                                            <div className="form-group">
+                                                <label>Server ID</label>
+                                                <input className="input-field" value={server.id || ''} onChange={(e) => updateMcpServer(index, (current) => ({ ...current, id: e.target.value }))} placeholder="obsidian" />
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Title</label>
+                                                <input className="input-field" value={server.title || ''} onChange={(e) => updateMcpServer(index, (current) => ({ ...current, title: e.target.value }))} placeholder="Obsidian Vault" />
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Transport Kind</label>
+                                                <select className="input-field" value={transport.kind || 'http'} onChange={(e) => updateMcpServer(index, (current) => ({ ...current, transport: { ...current.transport, kind: e.target.value } }))}>
+                                                    <option value="http">http</option>
+                                                    <option value="stdio">stdio</option>
+                                                </select>
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Trust Tier</label>
+                                                <select className="input-field" value={policy.trust_tier || 'partner'} onChange={(e) => updateMcpServer(index, (current) => ({ ...current, policy: { ...current.policy, trust_tier: e.target.value } }))}>
+                                                    <option value="trusted">trusted</option>
+                                                    <option value="partner">partner</option>
+                                                    <option value="untrusted">untrusted</option>
+                                                </select>
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Endpoint</label>
+                                                <input className="input-field" value={transport.endpoint || ''} onChange={(e) => updateMcpServer(index, (current) => ({ ...current, transport: { ...current.transport, endpoint: e.target.value } }))} placeholder="http://127.0.0.1:8765/mcp" />
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Command</label>
+                                                <input className="input-field" value={transport.command || ''} onChange={(e) => updateMcpServer(index, (current) => ({ ...current, transport: { ...current.transport, command: e.target.value } }))} placeholder="npx -y ..." />
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Namespace</label>
+                                                <input className="input-field" value={policy.namespace || 'mcp'} onChange={(e) => updateMcpServer(index, (current) => ({ ...current, policy: { ...current.policy, namespace: e.target.value } }))} placeholder="mcp" />
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Startup Timeout (s)</label>
+                                                <input type="number" className="input-field" value={transport.startup_timeout_s ?? 20} onChange={(e) => updateMcpServer(index, (current) => ({ ...current, transport: { ...current.transport, startup_timeout_s: parseFloat(e.target.value || '0') || 20 } }))} />
+                                            </div>
+                                            <div className="toggle-item luxury" style={{ gridColumn: (isMobile || isTablet) ? 'auto' : '1 / -1' }}>
+                                                <div className="toggle-info">
+                                                    <span className="toggle-label">Allow Tool Discovery</span>
+                                                    <span className="toggle-desc">Register tools from this server as dynamic Atlas capabilities.</span>
+                                                </div>
+                                                <input type="checkbox" className="luxury-checkbox" checked={Boolean(policy.allow_tool_discovery)} onChange={(e) => updateMcpServer(index, (current) => ({ ...current, policy: { ...current.policy, allow_tool_discovery: e.target.checked } }))} />
+                                            </div>
+                                            <div className="toggle-item luxury" style={{ gridColumn: (isMobile || isTablet) ? 'auto' : '1 / -1' }}>
+                                                <div className="toggle-info">
+                                                    <span className="toggle-label">Allow Resources</span>
+                                                    <span className="toggle-desc">Expose resources so Atlas can read vault content as evidence.</span>
+                                                </div>
+                                                <input type="checkbox" className="luxury-checkbox" checked={Boolean(policy.allow_resources)} onChange={(e) => updateMcpServer(index, (current) => ({ ...current, policy: { ...current.policy, allow_resources: e.target.checked } }))} />
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Tool Allowlist</label>
+                                                <textarea className="input-field" style={{ minHeight: '84px' }} value={Array.isArray(policy.tool_allowlist) ? policy.tool_allowlist.join(', ') : ''} onChange={(e) => updateMcpServer(index, (current) => ({ ...current, policy: { ...current.policy, tool_allowlist: e.target.value.split(',').map(s => s.trim()).filter(Boolean) } }))} placeholder="search_notes, read_note" />
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Tool Denylist</label>
+                                                <textarea className="input-field" style={{ minHeight: '84px' }} value={Array.isArray(policy.tool_denylist) ? policy.tool_denylist.join(', ') : ''} onChange={(e) => updateMcpServer(index, (current) => ({ ...current, policy: { ...current.policy, tool_denylist: e.target.value.split(',').map(s => s.trim()).filter(Boolean) } }))} placeholder="delete_vault" />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </section>
+
+                <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+                        <div>
+                            <h3 style={{ fontSize: '18px', fontWeight: '800', margin: 0 }}>Live MCP Resources</h3>
+                            <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>What the backend discovered from configured servers.</div>
+                        </div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                            {mcpLoading ? 'Refreshing...' : `${resourceCount} discovered resource(s)`}
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {resourceCount === 0 && (
+                            <div style={{ color: 'var(--text-muted)', padding: '16px', border: '1px dashed rgba(148,163,184,0.2)', borderRadius: 'var(--radius-md)' }}>
+                                No live resources yet. Enable a server and refresh runtime.
+                            </div>
+                        )}
+                        {(mcpStatus.resources || []).slice(0, 24).map((resource) => (
+                            <div key={`${resource.server_id || 'server'}_${resource.uri}`} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+                                    <div>
+                                        <strong style={{ fontSize: '13px' }}>{resource.title || resource.uri}</strong>
+                                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{resource.uri}</div>
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                                        {resource.server_id} · {resource.mime_type || 'unknown'}
+                                    </div>
+                                </div>
+                                {resource.description && (
+                                    <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--text-secondary)' }}>{resource.description}</div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </section>
+            </div>
+        );
+    };
+
     const renderDebug = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '20px', height: '100%', minHeight: '600px', paddingBottom: '40px' }}>
-            <div className="glass" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 24px', borderRadius: '8px' }}>
+            <div className="glass" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 24px', borderRadius: 'var(--radius-md)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <select
                         className="input-field"
@@ -806,7 +1278,7 @@ const Settings = () => {
                     >
                         {logSources.map(src => <option key={src} value={src}>{src}</option>)}
                     </select>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(0,0,0,0.2)', padding: '4px 12px', borderRadius: '20px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(0,0,0,0.2)', padding: '4px 12px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
                         <div className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
                         <span style={{ fontSize: '11px', fontWeight: '800', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
                             {isStreaming ? 'Live Stream' : 'Paused'}
@@ -832,7 +1304,7 @@ const Settings = () => {
                 style={{
                     flex: 1,
                     background: '#050505',
-                    borderRadius: '8px',
+                    borderRadius: 'var(--radius-md)',
                     padding: '24px',
                     overflowY: 'auto',
                     fontFamily: '"Fira Code", monospace',
@@ -971,7 +1443,7 @@ const Settings = () => {
 
         return (
             <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
+                <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
                     <h3 className="section-title">
                         <CloudSun size={20} /> Environmental Data
                     </h3>
@@ -1088,7 +1560,7 @@ const Settings = () => {
 
     const renderSecurity = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
+            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '24px', flexWrap: 'wrap' }}>
                     <div>
                         <h3 className="section-title" style={{ marginBottom: '6px' }}>
@@ -1106,7 +1578,7 @@ const Settings = () => {
 
                 <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : '1.1fr 1.4fr', gap: '20px' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                        <div className="form-group" style={{ background: 'rgba(255,255,255,0.03)', padding: '16px', borderRadius: '10px', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
+                        <div className="form-group" style={{ background: 'rgba(255,255,255,0.03)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
                             <label style={{ fontSize: '12px', color: '#94a3b8' }}>{editingVaultKey ? 'Edit Secret' : 'Create Secret'}</label>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px' }}>
                                 <input
@@ -1135,7 +1607,7 @@ const Settings = () => {
 
 
                         {envAudit && (
-                            <div style={{ background: 'rgba(255,255,255,0.03)', padding: '16px', borderRadius: '10px', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
+                            <div style={{ background: 'rgba(255,255,255,0.03)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
                                     <AlertCircle size={16} color="#fbbf24" />
                                     <strong>Import Audit</strong>
@@ -1152,10 +1624,10 @@ const Settings = () => {
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                         {(vaultEntries || []).length === 0 ? (
-                            <div style={{ padding: '24px', border: '1px dashed rgba(148, 163, 184, 0.2)', borderRadius: '10px', color: '#94a3b8' }}>No secrets stored in the vault.</div>
+                            <div style={{ padding: '24px', border: '1px dashed rgba(148, 163, 184, 0.2)', borderRadius: 'var(--radius-md)', color: '#94a3b8' }}>No secrets stored in the vault.</div>
                         ) : (
                             (vaultEntries || []).map((entry) => (
-                                <div key={entry.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '14px 16px', borderRadius: '10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
+                                <div key={entry.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '14px 16px', borderRadius: 'var(--radius-md)', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
                                     <div style={{ minWidth: 0 }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 }}>
                                             <CheckCircle size={14} color={entry.has_value ? '#34d399' : '#f59e0b'} />
@@ -1285,7 +1757,7 @@ const Settings = () => {
             const creating = externalSecretEditor.target === targetPath;
 
             return (
-                <div key={`${providerKey}_${fieldKey}`} className="form-group" style={{ background: 'rgba(var(--accent-rgb), 0.05)', padding: '14px', borderRadius: '10px', border: '1px solid rgba(var(--accent-rgb), 0.2)' }}>
+                <div key={`${providerKey}_${fieldKey}`} className="form-group" style={{ background: 'rgba(var(--accent-rgb), 0.05)', padding: '14px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(var(--accent-rgb), 0.2)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <Shield size={14} color="var(--accent-color)" /> {fieldMeta.title}
@@ -1313,7 +1785,7 @@ const Settings = () => {
                     )}
 
                     {creating && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '8px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: 'var(--radius-md)' }}>
                             <input
                                 type="text"
                                 className="input-field"
@@ -1418,7 +1890,7 @@ const Settings = () => {
 
         return (
             <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
+                <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                         <h3 className="section-title" style={{ marginBottom: 0 }}>
                             <Link2 size={20} /> External Accounts
@@ -1456,7 +1928,7 @@ const Settings = () => {
 
                     {externalTab === 'accounts' && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px', padding: '14px' }}>
+                            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 'var(--radius-md)', padding: '14px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                                     <strong style={{ fontSize: '13px' }}>Connect New Account</strong>
                                     <button
@@ -1492,7 +1964,7 @@ const Settings = () => {
                                                         justifyContent: 'space-between',
                                                         gap: '10px',
                                                         padding: '10px 12px',
-                                                        borderRadius: '8px'
+                                                        borderRadius: 'var(--radius-md)'
                                                     }}
                                                 >
                                                     <span style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
@@ -1520,7 +1992,7 @@ const Settings = () => {
                             {accounts.length > 0 && (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                                     {accounts.map((account, idx) => (
-                                        <div key={account?.id || `acc_${idx}`} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px', padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <div key={account?.id || `acc_${idx}`} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 'var(--radius-md)', padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                                 {account?.profile?.picture && (
                                                     <img
@@ -1562,7 +2034,7 @@ const Settings = () => {
 
                     {externalTab === 'providers' && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px', padding: '14px', marginBottom: '4px' }}>
+                            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 'var(--radius-md)', padding: '14px', marginBottom: '4px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                                     <strong style={{ fontSize: '13px' }}>Provider Plugins</strong>
                                     <button onClick={fetchExternalProviders} className="btn-ghost" style={{ fontSize: '11px', padding: '4px 8px' }}>
@@ -1576,7 +2048,7 @@ const Settings = () => {
                                 {!externalCatalogLoading && visibleExternalCatalog.length > 0 && (
                                     <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
                                         {visibleExternalCatalog.map((plugin) => (
-                                            <div key={plugin.key} style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', padding: '10px' }}>
+                                            <div key={plugin.key} style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 'var(--radius-md)', padding: '10px' }}>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
                                                     <div>
                                                         <strong style={{ fontSize: '12px' }}>{plugin.display_name || plugin.key}</strong>
@@ -1605,7 +2077,7 @@ const Settings = () => {
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                                 {entries.map(([providerKey, provider]) => (
-                                    <div key={providerKey} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '10px', padding: '12px 14px' }}>
+                                    <div key={providerKey} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
                                         <div style={{ minWidth: 0 }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                 <span style={{ width: '8px', height: '8px', borderRadius: '999px', background: provider?.enabled ? '#22c55e' : '#ef4444', display: 'inline-block' }} />
@@ -1644,7 +2116,7 @@ const Settings = () => {
                                 ))}
 
                                 {editingProviderKey && providers?.[editingProviderKey] && (
-                                    <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '16px' }}>
+                                    <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 'var(--radius-md)', padding: '16px' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                                             <strong style={{ textTransform: 'capitalize' }}>
                                                 Edit Provider: {editingProviderKey.replace(/_/g, ' ')}
@@ -1702,7 +2174,7 @@ const Settings = () => {
 
     const renderLLM = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
+            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
                 <h3 className="section-title">
                     <Cpu size={20} /> Chat & Reasoning (Cortex)
                 </h3>
@@ -1713,7 +2185,7 @@ const Settings = () => {
                 />
             </section>
 
-            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '8px' }}>
+            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
                 <h3 className="section-title">
                     <Monitor size={20} /> Vision & Perception
                 </h3>
@@ -1727,7 +2199,7 @@ const Settings = () => {
     );
 
     return (
-        <div className="animate-fade-in flex-1" style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', height: '100%', gap: '16px', maxHeight: '100%', overflow: 'hidden' }}>
+        <div className="animate-fade-in flex-1" style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', height: '100%', gap: 0, maxHeight: '100%', overflow: 'hidden' }}>
             {/* Sidebar Navigation */}
             <aside className="glass custom-scrollbar" style={{
                 width: isMobile ? '100%' : (isTabsCollapsed ? '60px' : '260px'),
@@ -1737,7 +2209,7 @@ const Settings = () => {
                 overflowX: isMobile ? 'auto' : 'hidden',
                 overflowY: isMobile ? 'hidden' : 'auto',
                 transition: 'var(--transition)',
-                borderRadius: '8px',
+                borderRadius: 'var(--radius-md)',
                 flexShrink: 0,
                 padding: isMobile ? '4px' : '0'
             }}>
@@ -1745,7 +2217,7 @@ const Settings = () => {
                     <div className="glass" style={{
                         margin: '12px 12px 12px 12px',
                         padding: isTabsCollapsed ? '8px 0' : '8px 14px',
-                        borderRadius: '8px',
+                        borderRadius: 'var(--radius-md)',
                         display: 'flex',
                         flexDirection: isTabsCollapsed ? 'column' : 'row',
                         alignItems: 'center',
@@ -1783,7 +2255,7 @@ const Settings = () => {
                                 justifyContent: (isTabsCollapsed && !isMobile) ? 'center' : 'flex-start',
                                 padding: (isTabsCollapsed && !isMobile) ? '12px' : '10px 16px',
                                 minHeight: isMobile ? '36px' : '44px',
-                                borderRadius: '10px',
+                                borderRadius: 'var(--radius-md)',
                                 width: isMobile ? 'auto' : '100%',
                                 whiteSpace: 'nowrap'
                             }}
@@ -1803,7 +2275,7 @@ const Settings = () => {
                 flexDirection: 'column',
                 position: 'relative',
                 overflow: 'hidden',
-                borderRadius: '16px'
+                borderRadius: 'var(--radius-md)'
             }}>
                 {renderHeader()}
 
@@ -1815,9 +2287,10 @@ const Settings = () => {
                     {activeTab === 'external_accounts' && renderExternalAccounts()}
                     {activeTab === 'llm' && renderLLM()}
                     {activeTab === 'capabilities' && renderCapabilities()}
+                    {activeTab === 'mcp' && renderMcp()}
                     {activeTab === 'stt' && (
                         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '16px' }}>
+                            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
                                 <h3 className="section-title"><Mic size={20} /> Speech Recognition (STT)</h3>
                                 <ModelPoolManager
                                     modality="stt"
@@ -1826,7 +2299,7 @@ const Settings = () => {
                                 />
                             </section>
 
-                            <section className="glass" style={{ padding: isMobile ? '20px' : '32px', borderRadius: '16px' }}>
+                            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
                                 <h3 className="section-title"><Play size={20} /> Speech Synthesis (TTS)</h3>
                                 <ModelPoolManager
                                     modality="tts"
@@ -1841,7 +2314,7 @@ const Settings = () => {
                     {activeTab === 'debug' && renderDebug()}
                     {activeTab === 'advanced' && (
                         <div className="animate-fade-in" style={{ height: '100%', minHeight: '600px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                            <div className="glass" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 24px', borderRadius: '16px' }}>
+                            <div className="glass" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 24px', borderRadius: 'var(--radius-md)' }}>
                                 <h3 className="section-title" style={{ marginBottom: 0 }}>
                                     <FileJson size={20} /> Master Schema
                                 </h3>
@@ -1875,7 +2348,7 @@ const Settings = () => {
                             <div className="glass" style={{
                                 flex: 1,
                                 display: 'flex',
-                                borderRadius: '20px',
+                                borderRadius: 'var(--radius-md)',
                                 overflow: 'hidden',
                                 border: '1px solid rgba(255,255,255,0.05)',
                                 background: '#050505'
@@ -1959,17 +2432,17 @@ const Settings = () => {
                 .input-field {
                     width: 100%;
                     padding: 12px 16px;
-                    background: var(--bg-color);
-                    border: 1px solid var(--card-border);
-                    border-radius: 8px;
+                    background: rgba(0, 0, 0, 0.25);
+                    border: 1px solid rgba(255, 255, 255, 0.06);
+                    border-radius: 6px;
                     color: var(--text-main);
                     font-size: 14px;
-                    transition: all 0.2s;
+                    transition: all 0.2s ease;
                 }
                 .input-field:focus {
                     outline: none;
-                    border-color: var(--accent-color);
-                    box-shadow: 0 0 0 4px var(--accent-glow);
+                    border-color: rgba(0, 242, 255, 0.3);
+                    box-shadow: 0 0 15px rgba(0, 242, 255, 0.05), inset 0 0 0 1px rgba(0, 242, 255, 0.1);
                 }
                 .nav-item {
                     display: flex;
@@ -2006,10 +2479,10 @@ const Settings = () => {
                     display: flex;
                     justify-content: space-between;
                     align-items: center;
-                    padding: 20px;
-                    border-radius: 16px;
-                    background: rgba(255,255,255,0.02);
-                    border: 1px solid rgba(255,255,255,0.05);
+                    padding: 16px 20px;
+                    border-radius: 10px;
+                    background: rgba(0, 0, 0, 0.15);
+                    border: 1px solid rgba(255, 255, 255, 0.04);
                 }
                 .toggle-label {
                     display: block;

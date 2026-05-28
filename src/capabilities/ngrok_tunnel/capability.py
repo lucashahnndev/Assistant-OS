@@ -1,0 +1,100 @@
+import logging
+from ..base import CapabilityBase
+from typing import Dict, Any, List
+from pyngrok import ngrok, conf
+from server.core.secret_manager import resolve_secret_ref
+
+logger = logging.getLogger("NgrokTunnelCapability")
+
+class NgrokTunnelCapability(CapabilityBase):
+    def __init__(self, kernel=None, config=None):
+        self.kernel = kernel
+        self.config = config or {}
+        self._namespace = "ngrok.tunnel"
+        self._tunnel = None
+        self._public_url = None
+        self._is_running = False
+
+    @property
+    def name(self) -> str:
+        return "ngrok_tunnel"
+
+    @property
+    def actions(self) -> List[str]:
+        return ["start", "stop", "status"]
+
+    def _start_tunnel(self):
+        if self._is_running:
+            return
+        
+        try:
+            auth_token = resolve_secret_ref(self.config.get("auth_token"))
+            if not auth_token:
+                logger.error("Ngrok auth_token is not configured or resolved.")
+                return
+
+            # Assuming frontend runs on port 5173
+            port = 5173
+            if self.kernel and hasattr(self.kernel, 'config_manager'):
+                frontend_config = self.kernel.config_manager.get("frontend", {})
+                port = frontend_config.get("port", 5173)
+
+            ngrok.set_auth_token(auth_token)
+            
+            # Create tunnel
+            self._tunnel = ngrok.connect(port, bind_tls=True)
+            self._public_url = self._tunnel.public_url
+            self._is_running = True
+            
+            logger.info(f"Ngrok Tunnel started at {self._public_url}")
+        except Exception as e:
+            logger.error(f"Failed to start Ngrok Tunnel: {e}")
+            self._is_running = False
+            self._public_url = None
+
+    def _stop_tunnel(self):
+        if not self._is_running:
+            return
+        
+        try:
+            if self._public_url:
+                ngrok.disconnect(self._public_url)
+            self._tunnel = None
+            self._public_url = None
+            self._is_running = False
+            logger.info("Ngrok Tunnel stopped")
+        except Exception as e:
+            logger.error(f"Failed to stop Ngrok Tunnel: {e}")
+
+    def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
+        action = action_id.split(".")[-1]
+
+        if action == "start":
+            self._start_tunnel()
+            return {
+                "ok": self._is_running,
+                "status": "running" if self._is_running else "error",
+                "public_url": self._public_url
+            }
+
+        if action == "stop":
+            self._stop_tunnel()
+            return {
+                "ok": True,
+                "status": "stopped"
+            }
+
+        if action == "status":
+            return {
+                "ok": True,
+                "provider": "ngrok",
+                "status": "running" if self._is_running else "stopped",
+                "public_url": self._public_url
+            }
+
+        return {
+            "ok": False,
+            "status": "error",
+            "error_code": "UNKNOWN_ACTION",
+            "error_details": f"Unknown action: {action_id}",
+        }

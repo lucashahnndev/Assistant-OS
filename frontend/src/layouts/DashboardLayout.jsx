@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import ThemeToggle from '../components/ThemeToggle';
+import RemoteAccessIndicator from '../components/RemoteAccessIndicator';
 import { useI18n } from '../i18n';
 import {
     LayoutDashboard,
@@ -22,7 +23,8 @@ import {
     PanelLeftClose,
     Menu,
     X as CloseIcon,
-    Sparkles
+    Sparkles,
+    Orbit
 } from 'lucide-react';
 
 const DashboardLayout = () => {
@@ -32,9 +34,9 @@ const DashboardLayout = () => {
     const location = useLocation();
     const isChat = location.pathname === '/chat' || location.pathname === '/chat/';
     const isFullBleedPage =
-        isChat ||
-        location.pathname === '/live_panel' ||
-        location.pathname === '/live_panel/' ||
+        location.pathname === '/' ||
+        location.pathname === '/nexus' ||
+        location.pathname === '/nexus/' ||
         location.pathname === '/capabilities' ||
         location.pathname === '/memory' ||
         location.pathname === '/security' ||
@@ -48,6 +50,15 @@ const DashboardLayout = () => {
     });
     // Breakpoint: Mobile and Tablet (<= 1024px) use the drawer sidebar
     const [isBelowDesktop, setIsBelowDesktop] = useState(window.innerWidth <= 1024);
+
+    const [minTimePassed, setMinTimePassed] = useState(false);
+
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            setMinTimePassed(true);
+        }, 1500);
+        return () => clearTimeout(timer);
+    }, []);
 
     useEffect(() => {
         localStorage.setItem('sidebar-collapsed', isCollapsed);
@@ -79,8 +90,8 @@ const DashboardLayout = () => {
     };
 
     const navItems = [
+        { to: '/nexus', icon: Orbit, label: t('nav.nexus') },
         { to: '/chat', icon: MessageSquare, label: t('nav.console') },
-        { to: '/live_panel', icon: Sparkles, label: t('nav.live_panel') },
         { to: '/tasks', icon: ClipboardCheck, label: t('nav.tasks') },
         { to: '/capabilities', icon: Cpu, label: t('nav.capabilities') },
         { to: '/memory', icon: Database, label: t('nav.memory') },
@@ -100,18 +111,48 @@ const DashboardLayout = () => {
             transition: 'background 0.3s ease',
             overflow: 'hidden'
         }}>
+            {/* Post-Login Cover Overlay */}
+            <div
+                className="flex-center"
+                style={{
+                    position: 'fixed',
+                    inset: 0,
+                    background: 'var(--bg-color)',
+                    zIndex: 2147483647,
+                    opacity: minTimePassed ? 0 : 1,
+                    pointerEvents: minTimePassed ? 'none' : 'all',
+                    transition: 'opacity 0.8s ease-in-out',
+                    overflow: 'hidden'
+                }}
+            >
+                <style>{`
+                    @keyframes loaderGlowLinear {
+                        from { opacity: 0; }
+                        to { opacity: 1; }
+                    }
+                `}</style>
+                <div style={{
+                    position: 'absolute', inset: 0,
+                    background: 'linear-gradient(180deg, #000000 0%, rgba(40, 15, 75, 0.35) 50%, #000000 100%)',
+                    animation: 'loaderGlowLinear 2s ease-in-out forwards'
+                }} />
+                <div className="gradient-text" style={{ fontSize: '42px', fontWeight: '900', letterSpacing: '0.15em', zIndex: 1, filter: 'drop-shadow(0 4px 8px rgba(0, 0, 0, 0.6))' }}>
+                    {agentName}
+                </div>
+            </div>
+
             {/* Global Header */}
             {!isHeaderCollapsed && (
-                <header className="glass" style={{
+                <header className="" style={{
                     height: 'var(--header-height)',
                     minHeight: 'var(--header-height)',
-                    width: 'calc(100% - 1rem)',
-                    margin: '0.5rem 0.5rem 0',
+                    width: '100%',
+                    margin: '0',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
                     padding: '0 1.25rem',
-                    borderRadius: 'var(--radius-md)',
+                    borderRadius: '0',
                     borderBottom: '1px solid var(--card-border)',
                     zIndex: 1000,
                     flexShrink: 0
@@ -153,6 +194,7 @@ const DashboardLayout = () => {
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                        <RemoteAccessIndicator />
                         <ThemeToggle />
                         <button
                             className="btn-ghost"
@@ -197,9 +239,9 @@ const DashboardLayout = () => {
 
             <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
                 {/* Sidebar */}
-                <aside className={`glass ${isBelowDesktop ? 'sidebar-drawer' : ''} ${isDrawerOpen ? 'open' : ''}`} style={{
+                <aside className={`${isBelowDesktop ? 'sidebar-drawer' : ''} ${isDrawerOpen ? 'open' : ''}`} style={{
                     width: isCollapsed && !isBelowDesktop ? '0px' : 'var(--sidebar-width)',
-                    margin: isBelowDesktop ? '0' : (isCollapsed ? '0.5rem 0 0.5rem 0' : '0.5rem 0 0.5rem 0.5rem'),
+                    margin: isBelowDesktop ? '0' : '0',
                     display: 'flex',
                     flexDirection: 'column',
                     padding: (isCollapsed && !isBelowDesktop) ? '0' : '1rem 0.625rem',
@@ -207,7 +249,8 @@ const DashboardLayout = () => {
                     transition: 'var(--transition-base)',
                     position: isBelowDesktop ? 'fixed' : 'relative',
                     overflow: 'hidden',
-                    borderRadius: isBelowDesktop ? '0 var(--radius-md) var(--radius-md) 0' : 'var(--radius-md)',
+                    borderRadius: isBelowDesktop ? '0 var(--radius-md) var(--radius-md) 0' : '0',
+                    borderRight: isBelowDesktop ? 'none' : '1px solid var(--card-border)',
                     zIndex: isBelowDesktop ? 2001 : 1
                 }}>
                     {isBelowDesktop && (
@@ -295,7 +338,7 @@ const DashboardLayout = () => {
                 {/* Main Content */}
                 <main style={{
                     flex: 1,
-                    padding: isBelowDesktop ? '0.5rem' : '0.5rem 1rem 1rem 1rem',
+                    padding: '0',
                     minHeight: 0,
                     display: 'flex',
                     flexDirection: 'column',
@@ -306,12 +349,12 @@ const DashboardLayout = () => {
                         position: 'relative',
                         minHeight: 0,
                         overflowY: isFullBleedPage ? 'hidden' : 'auto',
-                        borderRadius: 'var(--radius-md)',
-                        padding: (isFullBleedPage || isBelowDesktop) ? '0' : '0 var(--space-2)',
+                        borderRadius: '0',
+                        padding: '0',
                         display: 'flex',
                         flexDirection: 'column',
                         background: isChat ? 'transparent' : 'var(--card-bg)',
-                        border: isChat ? 'none' : '1px solid var(--card-border)'
+                        border: 'none'
                     }}>
                         <Outlet />
                     </div>

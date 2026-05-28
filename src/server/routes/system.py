@@ -4,6 +4,7 @@ from ..auth import get_current_user
 from ..core.models import User, AuditLog
 from ..core.database import get_db
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 import json
 import os
 import asyncio
@@ -14,6 +15,10 @@ import requests
 logger = logging.getLogger("SystemRoutes")
 
 router = APIRouter(prefix="/api/system", tags=["system"])
+
+class CompressRequest(BaseModel):
+    text: str
+
 SENSITIVE_ENV_HINTS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "PASS", "PRIVATE", "JWT", "AUTH")
 
 def get_kernel(request: Request):
@@ -113,6 +118,34 @@ def get_health(request: Request):
         logger.error(f"Health check failed: {e}")
         return {"status": "error", "message": str(e)}
 
+@router.get("/tunnels/status")
+def get_tunnels_status(request: Request):
+    """
+    Returns the status of all active remote access tunnels (ngrok, cloudflare).
+    """
+    try:
+        kernel = get_kernel(request)
+        capabilities = getattr(kernel.capability_registry, "capabilities", {})
+        
+        tunnels = []
+        for name in ["cloudflare_tunnel", "ngrok_tunnel"]:
+            cap = capabilities.get(name)
+            if cap:
+                is_running = getattr(cap, "_is_running", False)
+                if is_running:
+                    tunnels.append({
+                        "provider": name.replace("_tunnel", ""),
+                        "public_url": getattr(cap, "_public_url", None),
+                        "status": "running"
+                    })
+        return {
+            "status": "ok",
+            "active_tunnels": tunnels
+        }
+    except Exception as e:
+        logger.error(f"Failed to get tunnels status: {e}")
+        return {"status": "error", "active_tunnels": []}
+
 @router.get("/deezer/track/{track_id}")
 def get_deezer_track(track_id: str, user: User = Depends(get_current_user)):
     """
@@ -207,6 +240,38 @@ def update_config(config: dict, user: User = Depends(get_current_user), request:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to write config: {str(e)}")
 
+@router.post("/compress-personality")
+async def compress_personality(req: CompressRequest, user: User = Depends(get_current_user), request: Request = None):
+    """
+    Compresses a natural language personality into a highly dense string using the LLM.
+    """
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can compress personality")
+    
+    kernel = get_kernel(request)
+    llm = kernel.llm_manager
+    if not llm:
+        raise HTTPException(status_code=503, detail="LLM Manager not available")
+
+    prompt = (
+        "Re-write the following personality profile into a highly condensed, dense, and telegraphic string of keywords and rules. "
+        "Remove all conversational filler, greetings, and fluff. Preserve ALL constraints, behaviors, roles, and rules accurately. "
+        "Keep it as short as possible without losing semantic instructions.\n\n"
+        f"TEXT TO COMPRESS:\n{req.text}"
+    )
+    
+    try:
+        result = await asyncio.to_thread(
+            llm.generate_text, 
+            prompt=prompt, 
+            system_prompt="You are an expert prompt compressor. Output ONLY the dense compressed text. Do not use conversational openings. Do not use markdown blocks.", 
+            max_tokens=400
+        )
+        return {"compressed": str(result).strip()}
+    except Exception as e:
+        logger.error(f"Error compressing personality: {e}")
+        raise HTTPException(status_code=500, detail="Failed to compress personality")
+
 @router.post("/reload")
 def trigger_reload(user: User = Depends(get_current_user), request: Request = None):
     """
@@ -221,6 +286,79 @@ def trigger_reload(user: User = Depends(get_current_user), request: Request = No
         return {"success": True, "message": "System hot-reloaded successfully."}
     else:
         raise HTTPException(status_code=500, detail="Hot reload failed. Check server logs.")
+
+@router.get("/mcp/status")
+def get_mcp_status(request: Request, user: User = Depends(get_current_user)):
+    kernel = get_kernel(request)
+    service = getattr(getattr(kernel, "orchestrator", None), "mcp_integration_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="MCP integration service not available")
+
+    registry = getattr(service, "server_registry", None)
+    servers = []
+    if registry and hasattr(registry, "list_all"):
+        for server in registry.list_all():
+            resources = getattr(service, "resource_catalog_by_server", {}).get(server.id, {})
+            servers.append(
+                {
+                    "id": server.id,
+                    "title": server.title,
+                    "enabled": bool(server.enabled),
+                    "transport": {
+                        "kind": str(server.transport.kind or ""),
+                        "endpoint": str(server.transport.endpoint or ""),
+                        "command": str(server.transport.command or ""),
+                        "startup_timeout_s": float(server.transport.startup_timeout_s or 0),
+                    },
+                    "policy": {
+                        "trust_tier": str(server.policy.trust_tier or ""),
+                        "namespace": str(server.policy.namespace or ""),
+                        "allow_tool_discovery": bool(server.policy.allow_tool_discovery),
+                        "allow_resources": bool(server.policy.allow_resources),
+                        "allow_prompts": bool(server.policy.allow_prompts),
+                        "default_requires_approval": server.policy.default_requires_approval,
+                        "tool_allowlist": list(server.policy.tool_allowlist or []),
+                        "tool_denylist": list(server.policy.tool_denylist or []),
+                    },
+                    "resource_count": len(resources),
+                }
+            )
+    return {
+        "enabled": bool(getattr(service, "last_refresh_stats", {}).get("enabled", False)),
+        "refresh": dict(getattr(service, "last_refresh_stats", {}) or {}),
+        "servers": servers,
+        "resources": service.list_discovered_resources() if hasattr(service, "list_discovered_resources") else [],
+    }
+
+@router.post("/mcp/refresh")
+def refresh_mcp(request: Request, user: User = Depends(get_current_user)):
+    kernel = get_kernel(request)
+    service = getattr(getattr(kernel, "orchestrator", None), "mcp_integration_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="MCP integration service not available")
+    try:
+        return service.refresh()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to refresh MCP integration: {e}")
+
+@router.get("/mcp/resources")
+def get_mcp_resources(request: Request, user: User = Depends(get_current_user), server_id: str = "", query: str = "", limit: int = 100):
+    kernel = get_kernel(request)
+    service = getattr(getattr(kernel, "orchestrator", None), "mcp_integration_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="MCP integration service not available")
+    rows = service.list_discovered_resources(server_id=server_id)
+    q = str(query or "").strip().lower()
+    if q:
+        rows = [
+            row for row in rows
+            if q in str(row.get("uri", "")).lower()
+            or q in str(row.get("name", "")).lower()
+            or q in str(row.get("title", "")).lower()
+            or q in str(row.get("description", "")).lower()
+        ]
+    rows = rows[: max(1, min(int(limit or 100), 500))]
+    return {"count": len(rows), "items": rows}
 
 @router.get("/logs/list")
 def list_logs(user: User = Depends(get_current_user)):
