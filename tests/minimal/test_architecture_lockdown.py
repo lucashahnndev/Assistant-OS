@@ -14,10 +14,11 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from core.action_gateway import ActionGateway
-from core.errors import AgentSemanticError, SyntaxError as AgentSyntaxError
+from core.errors import AgentSemanticError, ErrorCode, SyntaxError as AgentSyntaxError
 from core.intent import AgentIntent
 from core.plan_validator import PlanValidator
 from core.resolution.action_plan import ActionPlan
+from core.resolution.llm_resolver import LLMResolver
 from core.output_governor import OutputGovernor
 from services.llm.prompt_composer import PromptComposer
 from src.drivers.providers.gemini import llm as gemini_llm
@@ -37,6 +38,12 @@ class _FakeChoice:
 class _FakeResponse:
     def __init__(self, content: str):
         self.choices = [_FakeChoice(SimpleNamespace(content=content, tool_calls=None))]
+
+
+class _FakeToolCallResponse:
+    def __init__(self, arguments: str):
+        tool_call = SimpleNamespace(function=SimpleNamespace(arguments=arguments))
+        self.choices = [_FakeChoice(SimpleNamespace(content=None, tool_calls=[tool_call]))]
 
 
 class _FakeOpenAIClient:
@@ -206,6 +213,93 @@ def test_action_gateway_rejects_unknown_action_without_correction():
         )
 
 
+def test_action_gateway_rejects_empty_allowed_actions_as_closed_scope():
+    gateway = ActionGateway()
+
+    class _Registry:
+        def get_capability_for_action(self, action_id):
+            return object() if action_id == "allowed.action" else None
+
+        def get_action_metadata(self, action_id):
+            return {}
+
+        def dispatch(self, action_id, params, context):
+            return {"ok": True}
+
+        def resolve_action_id(self, action_id):
+            return action_id
+
+    decision = gateway.resolve(
+        action_id="allowed.action",
+        params={},
+        allowed_actions=[],
+        capability_registry=_Registry(),
+        capability_metadata={},
+        strict_mode=False,
+    )
+    assert decision.outcome == "REJECT"
+
+
+def test_llm_resolver_does_not_infer_tools_by_text():
+    resolver = object.__new__(LLMResolver)
+    resolver.capability_registry = None
+
+    class _Registry:
+        def resolve_action_id(self, action_id):
+            return None
+
+        def list_actions(self):
+            return ["obsidian.vault.create_note"]
+
+        def get_action_metadata(self, action_id):
+            return {
+                "origin": "mcp",
+                "handler": "create_note",
+                "tool_name": "create_note",
+                "server_id": "vault",
+                "capability_id": "obsidian_vault",
+                "namespace": "obsidian.vault",
+            }
+
+    context = {
+        "capability_registry": _Registry(),
+        "user_input": "quero criar uma nota no vault",
+    }
+
+    canonical = LLMResolver._canonicalize_action_id(resolver, "create_note", context)
+    assert canonical == "create_note"
+
+
+def test_action_gateway_accepts_aliases_in_allowed_actions():
+    gateway = ActionGateway(alias_map={"obsidian.note.create": "obsidian.obsidian.create_note"})
+
+    class _Registry:
+        def get_capability_for_action(self, action_id):
+            return object() if action_id == "obsidian.obsidian.create_note" else None
+
+        def get_action_metadata(self, action_id):
+            return {}
+
+        def dispatch(self, action_id, params, context):
+            return {"ok": True, "action_id": action_id}
+
+        def resolve_action_id(self, action_id):
+            aliases = {"obsidian.note.create": "obsidian.obsidian.create_note"}
+            return aliases.get(action_id)
+
+    decision = gateway.resolve(
+        action_id="obsidian.note.create",
+        params={},
+        allowed_actions=["obsidian.note.create"],
+        capability_registry=_Registry(),
+        capability_metadata={},
+        strict_mode=False,
+    )
+
+    assert decision.outcome == "EXECUTE"
+    assert decision.action_id == "obsidian.obsidian.create_note"
+
+
 def test_plan_validator_does_not_mutate_input():
     class _CapRegistry:
         def get_capability_for_action(self, action_id):
@@ -234,6 +328,19 @@ def test_plan_validator_does_not_mutate_input():
     result = PlanValidator.validate(plan=plan, capability_registry=_CapRegistry(), session=_Session(), context={})
     assert result.is_valid is False
     assert plan.args == {"goal": "abrir"}
+
+
+def test_plan_validator_rejects_missing_registry():
+    plan = ActionPlan(action_id="tools.test_action", args={"required_param": "hello"}, confidence=0.9, source="llm")
+
+    class _Session:
+        tool_health = {}
+        drivers_state = {}
+
+    result = PlanValidator.validate(plan=plan, capability_registry=None, session=_Session(), context={})
+    assert result.is_valid is False
+    assert result.error_code == ErrorCode.TOOL_NOT_FOUND
+    assert "registry" in str(result.message).lower()
 
 
 @pytest.mark.parametrize(
@@ -307,6 +414,26 @@ def test_providers_preserve_action_id_without_fallback(monkeypatch, provider_cls
 
     assert isinstance(intent, AgentIntent)
     assert intent.action == expected_action
+
+
+def test_openai_provider_extracts_tool_call_arguments(monkeypatch):
+    monkeypatch.setattr(
+        openai_llm,
+        "OpenAI",
+        lambda **kwargs: SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=lambda **_: _FakeToolCallResponse(
+                        _intent_payload("demo.openai")
+                    )
+                )
+            )
+        ),
+    )
+    provider = openai_llm.OpenAIChatProvider({"base_url": "http://localhost:1", "model": "gpt-4o-mini", "secret_ref": ""})
+    intent = provider.generate_intent("hello", [], "system")
+    assert isinstance(intent, AgentIntent)
+    assert intent.action == "demo.openai"
     assert intent.response_text == "hello"
     assert intent.params == {"text": "hello"}
 

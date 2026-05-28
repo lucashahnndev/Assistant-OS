@@ -45,7 +45,7 @@ Este plano detalha a execucao do roadmap considerando a arquitetura atual do ker
   - Telemetria de `media_singleton_cleanup` emitida via `send_status` para supervisao em tempo real.
   - Retorno estruturado da capability com `metadata` (run/step, inclusive falhas de lock; incluindo cleanup de midia e GC) para analise offline.
   - `metadata.continuation` no `step` com resumo direto de `reattach_to_tab` e `target_recovery`.
-  - Playbook operacional de troubleshooting em `docs/browser_control_playbook.md` com fluxo `health first`.
+  - Playbook operacional de troubleshooting em `docs/guides/browser_control_playbook.md` com fluxo `health first`.
 - Parcial:
   - Singleton de midia fecha no registry, mas ainda sem garantia de encerramento de processo externo em todos os casos.
   - Roteamento ainda pode evoluir para regras mais finas por tipo de dominio/fluxo, mas `reuse_tab/new_tab` base ja esta ativo.

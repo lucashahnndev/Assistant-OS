@@ -22,6 +22,9 @@ import {
     Thermometer,
     Wind,
     X,
+    Mountain,
+    ThumbsUp,
+    ThumbsDown,
 } from 'lucide-react';
 
 export const WEATHER_CARD_CACHE = new Map();
@@ -1223,6 +1226,112 @@ export const YouTubeAssistCard = memo(({ data, isStage = false }) => {
                             Open video <ExternalLink size={11} />
                         </a>
                     )}
+                </div>
+                {description && (
+                    <div style={{ marginTop: '9px', fontSize: '11px', color: 'var(--text-primary)', lineHeight: 1.45 }}>
+                        {description}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+});
+
+export const WegenaAssistCard = memo(({ data, isStage = false }) => {
+    const title = String(data?.title || 'Visual Scene');
+    const description = String(data?.description || 'Wegena Engine Scene');
+    const [feedback, setFeedback] = useState(null);
+
+    useEffect(() => {
+        if (data?.id) {
+            const saved = localStorage.getItem(`wegena-fb-${data.id}`);
+            if (saved) setFeedback(saved);
+        }
+    }, [data?.id]);
+
+    const handleFeedback = (type) => {
+        if (!data?.id) return;
+        setFeedback(type);
+        localStorage.setItem(`wegena-fb-${data.id}`, type);
+    };
+
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
+            <div
+                style={{
+                    border: isStage ? '1px solid rgba(var(--accent-rgb), 0.2)' : '1px solid var(--card-border)',
+                    borderRadius: '12px',
+                    padding: isStage ? '20px' : '10px',
+                    background: isStage
+                        ? 'radial-gradient(circle at 0% 0%, rgba(139, 92, 246, 0.1), transparent 60%)'
+                        : 'radial-gradient(circle at 0% 0%, rgba(139, 92, 246, 0.16), transparent 45%), linear-gradient(120deg, rgba(76, 29, 149, 0.24), rgba(139, 92, 246, 0.12))',
+                    boxShadow: isStage ? 'none' : 'inset 0 1px 0 rgba(255,255,255,0.05)',
+                    backdropFilter: isStage ? 'blur(10px)' : 'none',
+                }}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Mountain size={16} color="#c084fc" />
+                        <div>
+                            <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-primary)' }}>{title}</div>
+                            <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
+                                Wegena Engine
+                            </div>
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '5px' }}>
+                        <button
+                            type="button"
+                            onClick={() => handleFeedback('like')}
+                            style={{
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                padding: '4px', borderRadius: '6px', border: '1px solid var(--card-border)',
+                                background: feedback === 'like' ? 'rgba(52, 211, 153, 0.2)' : 'rgba(255,255,255,0.03)',
+                                color: feedback === 'like' ? '#34d399' : 'var(--text-muted)',
+                                cursor: 'pointer', transition: 'all 0.2s'
+                            }}
+                            title="Gostei dessa cena"
+                        >
+                            <ThumbsUp size={14} />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => handleFeedback('dislike')}
+                            style={{
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                padding: '4px', borderRadius: '6px', border: '1px solid var(--card-border)',
+                                background: feedback === 'dislike' ? 'rgba(248, 113, 113, 0.2)' : 'rgba(255,255,255,0.03)',
+                                color: feedback === 'dislike' ? '#f87171' : 'var(--text-muted)',
+                                cursor: 'pointer', transition: 'all 0.2s'
+                            }}
+                            title="Não gostei"
+                        >
+                            <ThumbsDown size={14} />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                window.dispatchEvent(new CustomEvent('app_action_play_wegena', { detail: { data } }));
+                            }}
+                            style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                                fontSize: '10px',
+                                fontWeight: 700,
+                                color: '#c084fc',
+                                textDecoration: 'none',
+                                border: '1px solid rgba(192, 132, 252, 0.4)',
+                                borderRadius: '999px',
+                                padding: '4px 12px',
+                                background: 'rgba(192, 132, 252, 0.1)',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s'
+                            }}
+                        >
+                            Renderizar no Orb <PlayCircle size={11} />
+                        </button>
+                    </div>
                 </div>
                 {description && (
                     <div style={{ marginTop: '9px', fontSize: '11px', color: 'var(--text-primary)', lineHeight: 1.45 }}>

@@ -55,15 +55,19 @@ def normalize_cognitive_outcome(raw_outcome: Optional[Dict[str, Any]]) -> Normal
         "approval_pending",
         "approval_cancelled",
         "approval_forwarded",
+        "action_executed",
+        "action_failed",
         "blocker_detected",
         "fallback_used",
         "handoff_or_escalation",
         "recovery_path_used",
+        "reply_only",
         "task_completed",
         "task_paused",
         "task_progressed",
         "turn_complete",
     }
+    generic_fallback_signal = bool(explicit) and explicit not in known_explicit_types
 
     clarification_required = bool(
         final_response.endswith("?")
@@ -82,11 +86,16 @@ def normalize_cognitive_outcome(raw_outcome: Optional[Dict[str, Any]]) -> Normal
     blocker_cleared = bool(raw.get("blocker_cleared"))
     task_paused = approval_pending or explicit == "task_paused"
     task_completed = explicit == "task_completed" or (
-        status == "success"
+        status in {"success", "completed"}
         and action_id
+        and not generic_fallback_signal
         and not any(isinstance(step, dict) and step.get("status") in {"pending", "in_progress", "blocked"} for step in planner_tree)
     )
-    task_progressed = explicit == "task_progressed" or (status == "success" and bool(action_id))
+    task_progressed = explicit == "task_progressed" or (
+        status in {"success", "completed"}
+        and bool(action_id)
+        and not generic_fallback_signal
+    )
     recovery_path_used = explicit == "recovery_path_used" or (status == "failure" and replans_used > 0)
     if fallback_used and replans_used > 0:
         recovery_path_used = True
@@ -121,7 +130,7 @@ def normalize_cognitive_outcome(raw_outcome: Optional[Dict[str, Any]]) -> Normal
     elif status in {"cancelled", "canceled"} and "approval" in reason_lower:
         outcome_type = "handoff_or_escalation"
         coverage_label = "derived_approval_cancelled"
-    elif status == "success" and action_id:
+    elif status in {"success", "completed"} and action_id and (not explicit or explicit == "action_executed"):
         outcome_type = "action_executed"
         coverage_label = "derived_action_success"
     elif explicit:

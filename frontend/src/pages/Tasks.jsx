@@ -227,7 +227,7 @@ const Tasks = () => {
                         style={{
                             height: '34px',
                             padding: '0 12px',
-                            borderRadius: '9px',
+                            borderRadius: 'var(--radius-md)',
                             display: 'inline-flex',
                             alignItems: 'center',
                             gap: '8px',
@@ -256,7 +256,7 @@ const Tasks = () => {
                         flexWrap: 'nowrap',
                     }}
                 >
-                    <div style={{ display: 'flex', gap: '4px', padding: '3px', borderRadius: '9px', border: '1px solid var(--card-border)', background: 'rgba(255,255,255,0.02)', flexShrink: 0 }}>
+                    <div style={{ display: 'flex', gap: '4px', padding: '3px', borderRadius: 'var(--radius-md)', border: '1px solid var(--card-border)', background: 'rgba(255,255,255,0.02)', flexShrink: 0 }}>
                         {['live', 'archive'].map(tab => (
                             <button
                                 key={tab}
@@ -284,7 +284,7 @@ const Tasks = () => {
                         alignItems: 'center',
                         gap: '4px',
                         border: '1px solid var(--card-border)',
-                        borderRadius: '10px',
+                        borderRadius: 'var(--radius-md)',
                         padding: '3px',
                         background: 'rgba(255,255,255,0.02)',
                         flexShrink: 0,
@@ -295,7 +295,7 @@ const Tasks = () => {
                             title="Grid view"
                             style={{
                                 padding: '6px 8px',
-                                borderRadius: '8px',
+                                borderRadius: 'var(--radius-md)',
                                 background: layoutMode === 'grid' ? 'var(--accent-glow)' : 'transparent',
                                 color: layoutMode === 'grid' ? 'var(--accent-color)' : 'var(--text-muted)'
                             }}
@@ -308,7 +308,7 @@ const Tasks = () => {
                             title="List view"
                             style={{
                                 padding: '6px 8px',
-                                borderRadius: '8px',
+                                borderRadius: 'var(--radius-md)',
                                 background: layoutMode === 'list' ? 'var(--accent-glow)' : 'transparent',
                                 color: layoutMode === 'list' ? 'var(--accent-color)' : 'var(--text-muted)'
                             }}
@@ -329,7 +329,7 @@ const Tasks = () => {
                                 width: '100%',
                                 paddingLeft: '32px',
                                 fontSize: '13px',
-                                borderRadius: '8px',
+                                borderRadius: 'var(--radius-md)',
                                 height: '34px',
                             }}
                         />
@@ -345,7 +345,7 @@ const Tasks = () => {
                             minWidth: '34px',
                             height: '34px',
                             padding: '0',
-                            borderRadius: '8px',
+                            borderRadius: 'var(--radius-md)',
                             display: 'inline-flex',
                             alignItems: 'center',
                             justifyContent: 'center',
@@ -412,7 +412,7 @@ const Tasks = () => {
             return (
                 <div className="glass" style={{
                     padding: '16px',
-                    borderRadius: '8px',
+                    borderRadius: 'var(--radius-md)',
                     background: 'rgba(255,255,255,0.01)',
                     border: '1px solid var(--card-border)',
                     display: 'flex',
@@ -476,7 +476,7 @@ const Tasks = () => {
                 display: 'flex',
                 alignItems: 'center',
                 padding: '12px 16px',
-                borderRadius: '8px',
+                borderRadius: 'var(--radius-md)',
                 background: 'rgba(255,255,255,0.01)',
                 border: '1px solid var(--card-border)',
                 gap: '16px'
@@ -500,7 +500,7 @@ const Tasks = () => {
                     display: 'flex',
                     alignItems: 'center',
                     padding: '10px 12px',
-                    borderRadius: '8px',
+                    borderRadius: 'var(--radius-md)',
                     background: 'rgba(255,255,255,0.01)',
                     border: '1px solid var(--card-border)',
                     gap: '12px'
@@ -552,7 +552,7 @@ const Tasks = () => {
                             layoutMode === 'grid' ? (
                                 <div key={work.work_id} className="glass" style={{
                                     padding: '14px',
-                                    borderRadius: '8px',
+                                    borderRadius: 'var(--radius-md)',
                                     background: 'rgba(255,255,255,0.01)',
                                     border: '1px solid var(--card-border)',
                                     display: 'flex',
@@ -716,10 +716,9 @@ const Tasks = () => {
         return (
             <div
                 className="modal-overlay"
-                style={{ background: 'rgba(15, 23, 42, 0.08)', backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)' }}
                 onClick={() => { setSelectedWorkId(null); setWorkOverwatch(null); }}
             >
-                <div className="modal-content glass" onClick={e => e.stopPropagation()} style={{ width: isMobile ? '95vw' : 'min(90vw, 840px)', height: isMobile ? 'min(88vh, 660px)' : 'min(86vh, 760px)', maxHeight: '90vh', overflow: 'hidden', padding: 0, display: 'flex', flexDirection: 'column', borderRadius: isMobile ? '9px' : '10px' }}>
+                <div className="modal-content glass" onClick={e => e.stopPropagation()} style={{ width: isMobile ? '95vw' : 'min(90vw, 840px)', height: isMobile ? 'min(88vh, 660px)' : 'min(86vh, 760px)', maxHeight: '90vh', overflow: 'hidden', padding: 0, display: 'flex', flexDirection: 'column', borderRadius: '0' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: isMobile ? '10px 10px' : '10px 12px', gap: '8px', borderBottom: '1px solid var(--card-border)' }}>
                         <div style={{ minWidth: 0 }}>
                             <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: '700', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -784,23 +783,23 @@ const Tasks = () => {
 
                     <div className="custom-scrollbar" style={{ overflowY: 'auto', flex: 1, minHeight: 0, padding: isMobile ? '8px' : '10px' }}>
                     {overwatchTab === 'overview' && (
-                        <div className="glass" style={{ padding: '12px', borderRadius: '8px' }}>
+                        <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
                             <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, minmax(0, 1fr))', gap: '8px', marginBottom: '10px' }}>
-                                <div style={{ border: '1px solid var(--card-border)', borderRadius: '8px', padding: '8px' }}>
+                                <div style={{ border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', padding: '8px' }}>
                                     <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700 }}>Summary</div>
                                     <div style={{ fontSize: '13px', fontWeight: 700, marginTop: '2px' }}>{summary.goal || '-'}</div>
                                 </div>
-                                <div style={{ border: '1px solid var(--card-border)', borderRadius: '8px', padding: '8px' }}>
+                                <div style={{ border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', padding: '8px' }}>
                                     <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700 }}>Cursor</div>
                                     <div style={{ fontSize: '13px', fontWeight: 700, marginTop: '2px' }}>{summary.cursor || '-'}</div>
                                 </div>
-                                <div style={{ border: '1px solid var(--card-border)', borderRadius: '8px', padding: '8px' }}>
+                                <div style={{ border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', padding: '8px' }}>
                                     <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700 }}>Planner Steps</div>
                                     <div style={{ fontSize: '13px', fontWeight: 700, marginTop: '2px' }}>{Array.isArray(planner.steps) ? planner.steps.length : 0}</div>
                                 </div>
                             </div>
 
-                            <div style={{ border: '1px solid var(--card-border)', borderRadius: '8px', padding: '8px', marginBottom: '10px' }}>
+                            <div style={{ border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', padding: '8px', marginBottom: '10px' }}>
                                 <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: '4px' }}>Last Thought</div>
                                 <div
                                     style={{
@@ -836,7 +835,7 @@ const Tasks = () => {
                                     ['Owner Identity', origin.owner_sender_id || '-'],
                                     ['Favorite Identity', origin.favorite_sender_id || '-'],
                                 ].map(([label, value]) => (
-                                    <div key={label} style={{ border: '1px solid var(--card-border)', borderRadius: '8px', padding: '8px' }}>
+                                    <div key={label} style={{ border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', padding: '8px' }}>
                                         <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700 }}>{label}</div>
                                         <div style={{ fontSize: '13px', marginTop: '2px', overflowWrap: 'anywhere' }}>{value}</div>
                                     </div>
@@ -845,10 +844,10 @@ const Tasks = () => {
                         </div>
                     )}
                     {overwatchTab === 'planner' && (
-                        <div className="glass" style={{ padding: '12px', borderRadius: '8px' }}>
+                        <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
                                 <div><b>Planner</b></div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', border: '1px solid var(--card-border)', borderRadius: '8px', padding: '2px', background: 'rgba(255,255,255,0.02)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', padding: '2px', background: 'rgba(255,255,255,0.02)' }}>
                                     <button
                                         className="btn-ghost"
                                         onClick={() => setPlannerViewMode('checklist')}
@@ -926,14 +925,14 @@ const Tasks = () => {
                                 <div style={{ marginTop: '10px', color: 'var(--text-muted)' }}>No planner steps available for this worker.</div>
                             )
                             ) : (
-                                <pre className="custom-scrollbar" style={{ whiteSpace: 'pre-wrap', fontSize: '11px', margin: 0, maxHeight: isMobile ? '44vh' : '52vh', overflow: 'auto', border: '1px solid var(--card-border)', borderRadius: '8px', padding: '10px' }}>
+                                <pre className="custom-scrollbar" style={{ whiteSpace: 'pre-wrap', fontSize: '11px', margin: 0, maxHeight: isMobile ? '44vh' : '52vh', overflow: 'auto', border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', padding: '10px' }}>
                                     {JSON.stringify(planner, null, 2)}
                                 </pre>
                             )}
                         </div>
                     )}
                     {overwatchTab === 'flow' && (
-                        <div className="glass" style={{ padding: '12px', borderRadius: '8px', height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                        <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)', height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                             {events.length > 0 ? (
                                 <div className="custom-scrollbar" style={{ position: 'relative', paddingLeft: '22px', display: 'grid', gap: '10px', overflowY: 'auto', minHeight: 0, flex: 1 }}>
                                     <div style={{ position: 'absolute', left: '7px', top: 0, bottom: 0, width: '1px', background: 'rgba(148,163,184,0.26)' }} />
@@ -955,7 +954,7 @@ const Tasks = () => {
                                                 </div>
                                                 <div style={{
                                                     border: isErrorEvent ? '1px solid rgba(239,68,68,0.35)' : '1px solid var(--card-border)',
-                                                    borderRadius: '8px',
+                                                    borderRadius: 'var(--radius-md)',
                                                     padding: '8px 10px',
                                                     background: isErrorEvent ? 'rgba(239,68,68,0.06)' : 'rgba(255,255,255,0.01)'
                                                 }}>
@@ -988,15 +987,15 @@ const Tasks = () => {
                         </div>
                     )}
                     {overwatchTab === 'errors' && (
-                        <div className="glass" style={{ padding: '12px', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                             <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
-                                <div style={{ border: '1px solid var(--card-border)', borderRadius: '8px', padding: '8px' }}>
+                                <div style={{ border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', padding: '8px' }}>
                                     <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700 }}>Worker Errors</div>
                                     <div style={{ fontSize: '14px', fontWeight: 800, marginTop: '2px', color: workerErrors.length > 0 ? 'var(--error)' : 'var(--success)' }}>
                                         {workerErrors.length}
                                     </div>
                                 </div>
-                                <div style={{ border: '1px solid var(--card-border)', borderRadius: '8px', padding: '8px' }}>
+                                <div style={{ border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', padding: '8px' }}>
                                     <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700 }}>Execution Log</div>
                                     <div style={{ fontSize: '11px', marginTop: '2px', color: executionLogs.available ? 'var(--text-primary)' : 'var(--text-muted)', fontFamily: 'monospace' }}>
                                         {executionLogs.execution_id || 'not available'}
@@ -1007,7 +1006,7 @@ const Tasks = () => {
                             {workerErrors.length > 0 ? (
                                 <div style={{ display: 'grid', gap: '8px' }}>
                                     {workerErrors.slice(-12).reverse().map((entry, idx) => (
-                                        <div key={`worker-error-${idx}`} style={{ border: '1px solid rgba(239,68,68,0.35)', borderRadius: '8px', background: 'rgba(239,68,68,0.06)', padding: '8px' }}>
+                                        <div key={`worker-error-${idx}`} style={{ border: '1px solid rgba(239,68,68,0.35)', borderRadius: 'var(--radius-md)', background: 'rgba(239,68,68,0.06)', padding: '8px' }}>
                                             <div style={{ fontSize: '12px', fontWeight: '800' }}>{entry.event || 'worker_error'}</div>
                                             <div style={{ marginTop: '2px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                                                 {entry.component && <span style={{ fontSize: '10px', color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '1px 6px' }}>{String(entry.component)}</span>}
@@ -1038,7 +1037,7 @@ const Tasks = () => {
                         </div>
                     )}
                     {overwatchTab === 'capabilities' && (
-                        <div className="glass" style={{ padding: '12px', borderRadius: '8px' }}>
+                        <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
                             <div><b>Capabilities Used:</b></div>
                             <ul>
                                 {capabilities.map(s => (
@@ -1057,21 +1056,21 @@ const Tasks = () => {
                         </div>
                     )}
                     {overwatchTab === 'media' && (
-                        <div className="glass" style={{ padding: '12px', borderRadius: '8px' }}>
+                        <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
                             <div><b>Media Used:</b></div>
                             <ul>{media.map((m, i) => <li key={`${m}-${i}`}>{m}</li>)}</ul>
                             {media.length === 0 && <div style={{ color: 'var(--text-muted)' }}>No media captured.</div>}
                         </div>
                     )}
                     {overwatchTab === 'triggers' && (
-                        <div className="glass" style={{ padding: '12px', borderRadius: '8px' }}>
+                        <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
                             <div><b>Task ID:</b> {task.task_id || '-'}</div>
                             <div><b>Triggers:</b> {task.trigger_count || 0}</div>
                             <pre style={{ whiteSpace: 'pre-wrap', fontSize: '11px' }}>{JSON.stringify(task.triggers || [], null, 2)}</pre>
                         </div>
                     )}
                     {overwatchTab === 'executions' && (
-                        <div className="glass" style={{ padding: '12px', borderRadius: '8px' }}>
+                        <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
                             <div><b>Execution Count:</b> {task.execution_count || 0}</div>
                             <div><b>Status:</b> {work.status}</div>
                             <div style={{ marginTop: '12px' }}><b>Recent Executions:</b></div>
@@ -1080,7 +1079,7 @@ const Tasks = () => {
                             ) : (
                                 <div style={{ marginTop: '8px', display: 'grid', gap: '8px' }}>
                                     {recentExecutions.map((row) => (
-                                        <div key={row.execution_id} style={{ border: '1px solid var(--card-border)', borderRadius: '8px', padding: '8px 10px' }}>
+                                        <div key={row.execution_id} style={{ border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', padding: '8px 10px' }}>
                                             <div style={{ fontSize: '12px', fontWeight: '800' }}>{row.execution_id}</div>
                                             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                                                 {row.status} · start {row.start_time || '-'} · end {row.end_time || '-'}
@@ -1093,7 +1092,7 @@ const Tasks = () => {
                         </div>
                     )}
                     {overwatchTab === 'notes' && (
-                        <div className="glass" style={{ padding: '12px', borderRadius: '8px' }}>
+                        <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
                             <textarea className="input-field" style={{ minHeight: '100px' }} value={workNote} onChange={e => setWorkNote(e.target.value)} placeholder="Add notes/context for AI..." />
                             <div style={{ marginTop: '8px' }}>
                                 <button className="btn-primary" onClick={saveNote}>Save Note</button>
@@ -1109,7 +1108,7 @@ const Tasks = () => {
                         </div>
                     )}
                     {overwatchTab === 'queue' && (
-                        <div className="glass" style={{ padding: '12px', borderRadius: '8px' }}>
+                        <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
                             <textarea className="input-field" style={{ minHeight: '100px' }} value={queuedMessage} onChange={e => setQueuedMessage(e.target.value)} placeholder="Message to worker queue..." />
                             <div style={{ marginTop: '8px', display: 'flex', gap: '8px' }}>
                                 <button className="btn-ghost" onClick={() => queueMsg(false)}>Queue Message</button>
@@ -1135,7 +1134,7 @@ const Tasks = () => {
                 flexDirection: 'column',
                 position: 'relative',
                 overflow: 'hidden',
-                borderRadius: '8px'
+                borderRadius: 'var(--radius-md)'
             }}>
                 {renderHeader()}
                 {renderWorksMonitor()}

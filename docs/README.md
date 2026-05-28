@@ -26,7 +26,7 @@ Este diretorio centraliza a documentacao humana do projeto por papel.
 
 - `agent/specs/` e a fonte canônica das specs normativas.
 - `architecture/` guarda explicacoes e referencias humanas de arquitetura.
-- `contracts/` guarda apontamentos humanos sobre contratos operacionais estaveis.
+- `contracts/` guarda apontamentos humanos sobre contratos operacionais estaveis e aponta para `agent/specs/`.
 - `guides/` guarda playbooks e checklists.
 - `policies/` guarda regras estaveis de governanca.
 - `plans/` guarda planejamento e migracoes.

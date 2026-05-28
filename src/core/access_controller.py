@@ -849,17 +849,29 @@ class AccessController:
 
     def _is_high_risk(self, action: str, capability_registry: Any = None) -> bool:
         if not (capability_registry and hasattr(capability_registry, "get_action_metadata")):
-            raise RuntimeError("Capability registry with canonical metadata is required for risk checks.")
-        metadata = capability_registry.get_action_metadata(action)
+            logger.warning("Risk check failed closed | action=%s reason=registry_unavailable", action)
+            return True
+        try:
+            metadata = capability_registry.get_action_metadata(action) or {}
+        except Exception:
+            logger.warning("Risk check failed closed | action=%s reason=metadata_lookup_error", action)
+            return True
         if not metadata:
-            raise RuntimeError(f"Action metadata not found for '{action}'.")
+            logger.warning("Risk check failed closed | action=%s reason=metadata_missing", action)
+            return True
         return str(metadata.get("risk_level", "")).lower() == "high"
 
     def _allow_anyone(self, action: str, capability_registry: Any = None) -> bool:
         if not (capability_registry and hasattr(capability_registry, "get_action_metadata")):
-            raise RuntimeError("Capability registry with canonical metadata is required for permission checks.")
-        metadata = capability_registry.get_action_metadata(action)
+            logger.warning("Anyone-mode permission check failed closed | action=%s reason=registry_unavailable", action)
+            return False
+        try:
+            metadata = capability_registry.get_action_metadata(action) or {}
+        except Exception:
+            logger.warning("Anyone-mode permission check failed closed | action=%s reason=metadata_lookup_error", action)
+            return False
         if not metadata:
-            raise RuntimeError(f"Action metadata not found for '{action}'.")
+            logger.warning("Anyone-mode permission check failed closed | action=%s reason=metadata_missing", action)
+            return False
         permissions = metadata.get("permissions") if isinstance(metadata.get("permissions"), dict) else {}
         return bool(permissions.get("allow_anyone", False))

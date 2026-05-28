@@ -2056,11 +2056,24 @@ class WegenaEngine {
                 const bs=data.size||{x:50,y:50,z:50}, bo=data.offset||{x:0,y:0,z:0};
                 let bnx = 1, bny = 1, bnz = 1;
                 if (aligned && total > 0) {
-                    const vol = bs.x * bs.y * bs.z || 1;
-                    const k = Math.pow(total / vol, 1/3);
-                    bnx = Math.max(1, Math.round(bs.x * k));
-                    bny = Math.max(1, Math.round(bs.y * k));
-                    bnz = Math.max(1, Math.round(bs.z * k));
+                    const activeDims = (bs.x > 0.001 ? 1 : 0) + (bs.y > 0.001 ? 1 : 0) + (bs.z > 0.001 ? 1 : 0);
+                    if (activeDims === 1) {
+                        bnx = bs.x > 0.001 ? total : 1;
+                        bny = bs.y > 0.001 ? total : 1;
+                        bnz = bs.z > 0.001 ? total : 1;
+                    } else if (activeDims === 2) {
+                        const area = (bs.x || 1) * (bs.y || 1) * (bs.z || 1);
+                        const k = Math.sqrt(total / area);
+                        bnx = bs.x > 0.001 ? Math.max(1, Math.round(bs.x * k)) : 1;
+                        bny = bs.y > 0.001 ? Math.max(1, Math.round(bs.y * k)) : 1;
+                        bnz = bs.z > 0.001 ? Math.max(1, Math.round(bs.z * k)) : 1;
+                    } else {
+                        const vol = bs.x * bs.y * bs.z || 1;
+                        const k = Math.pow(total / vol, 1/3);
+                        bnx = Math.max(1, Math.round(bs.x * k));
+                        bny = Math.max(1, Math.round(bs.y * k));
+                        bnz = Math.max(1, Math.round(bs.z * k));
+                    }
                     while (bnx * bny * bnz < total) {
                         if (bnx <= bny && bnx <= bnz) bnx++;
                         else if (bny <= bnx && bny <= bnz) bny++;
@@ -2325,11 +2338,24 @@ class WegenaEngine {
         } else {
             if (aligned && total > 0) {
                 if (shape !== 'sphere') {
-                    const volume = sx * sy * sz || 1;
-                    const k = Math.pow(total / volume, 1/3);
-                    nx = Math.max(1, Math.round(sx * k));
-                    ny = Math.max(1, Math.round(sy * k));
-                    nz = Math.max(1, Math.round(sz * k));
+                    const activeDims = (sx > 0.001 ? 1 : 0) + (sy > 0.001 ? 1 : 0) + (sz > 0.001 ? 1 : 0);
+                    if (activeDims === 1) {
+                        nx = sx > 0.001 ? total : 1;
+                        ny = sy > 0.001 ? total : 1;
+                        nz = sz > 0.001 ? total : 1;
+                    } else if (activeDims === 2) {
+                        const area = (sx || 1) * (sy || 1) * (sz || 1);
+                        const k = Math.sqrt(total / area);
+                        nx = sx > 0.001 ? Math.max(1, Math.round(sx * k)) : 1;
+                        ny = sy > 0.001 ? Math.max(1, Math.round(sy * k)) : 1;
+                        nz = sz > 0.001 ? Math.max(1, Math.round(sz * k)) : 1;
+                    } else {
+                        const volume = sx * sy * sz || 1;
+                        const k = Math.pow(total / volume, 1/3);
+                        nx = Math.max(1, Math.round(sx * k));
+                        ny = Math.max(1, Math.round(sy * k));
+                        nz = Math.max(1, Math.round(sz * k));
+                    }
                     while (nx * ny * nz < total) {
                         if (nx <= ny && nx <= nz) nx++;
                         else if (ny <= nx && ny <= nz) ny++;
@@ -2476,6 +2502,9 @@ class WegenaEngine {
         this.setParticleRangeMaterial(start, end, material);
         this.setParticleRangeShape(start, end, shape);
         this.registerSceneNode(name, { kind: 'volume', shape, material, notes: options.notes });
+        if (options.animation) {
+            this._registerLocalAnimation(options.animation, start, end);
+        }
         return { name, start, end };
     }
 
@@ -2552,6 +2581,9 @@ class WegenaEngine {
         this.setParticleRangeMaterial(start, end, material);
         this.setParticleRangeShape(start, end, 'square');
         this.registerSceneNode(name, { kind: 'terrain', shape: 'square', material, notes: options.notes });
+        if (options.animation) {
+            this._registerLocalAnimation(options.animation, start, end);
+        }
         return { name, start, end };
     }
 

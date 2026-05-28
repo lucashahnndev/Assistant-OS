@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Lock, User, Sun, Moon, Monitor, Eye, EyeOff } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
+import WegenaParticleCanvas from '../components/WegenaParticleCanvas';
 
 const Login = () => {
     const [username, setUsername] = useState('');
@@ -10,289 +11,13 @@ const Login = () => {
     const [showPassword, setShowPassword] = useState(false);
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
-    const sceneRef = useRef(null);
-    const meshCanvasRef = useRef(null);
-    const mouseRef = useRef({ x: 0, y: 0, vx: 0, vy: 0, speed: 0, active: false, enabled: false });
-    const lagMouseRef = useRef({ x: 0, y: 0, ready: false });
-    const fieldPersistenceRef = useRef(0);
-    const trailRef = useRef([]);
-    const rippleRef = useRef([]);
+    const [sceneLoaded, setSceneLoaded] = useState(false);
 
     const { login, agentName } = useAuth();
     const { theme, setTheme } = useTheme();
     const navigate = useNavigate();
     const location = useLocation();
     const from = location.state?.from?.pathname || '/';
-
-    useEffect(() => {
-        if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
-        const media = window.matchMedia('(pointer: fine)');
-        const update = () => {
-            mouseRef.current.enabled = media.matches;
-            mouseRef.current.active = false;
-        };
-        update();
-        if (typeof media.addEventListener === 'function') {
-            media.addEventListener('change', update);
-            return () => media.removeEventListener('change', update);
-        }
-        media.addListener(update);
-        return () => media.removeListener(update);
-    }, []);
-
-    useEffect(() => {
-        const canvas = meshCanvasRef.current;
-        if (!canvas) return undefined;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return undefined;
-
-        let rafId;
-
-        const resize = () => {
-            const rect = canvas.getBoundingClientRect();
-            const dpr = window.devicePixelRatio || 1;
-            canvas.width = Math.floor(rect.width * dpr);
-            canvas.height = Math.floor(rect.height * dpr);
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        };
-
-        const render = () => {
-            const rect = canvas.getBoundingClientRect();
-            ctx.clearRect(0, 0, rect.width, rect.height);
-
-            const mouse = mouseRef.current;
-            const trailNow = performance.now();
-            const lag = lagMouseRef.current;
-            if (!lag.ready) {
-                lag.x = mouse.x;
-                lag.y = mouse.y;
-                lag.ready = true;
-            }
-            // Particle inertia: delayed tracking toward cursor.
-            lag.x += (mouse.x - lag.x) * 0.14;
-            lag.y += (mouse.y - lag.y) * 0.14;
-            // Field persistence: slower fade-out after mouse stops/leaves.
-            fieldPersistenceRef.current += ((mouse.enabled && mouse.active) ? 1 : 0 - fieldPersistenceRef.current) * 0.08;
-
-            trailRef.current = trailRef.current.filter(p => trailNow - p.t < 620);
-            rippleRef.current = rippleRef.current.filter(r => trailNow - r.t < 1300);
-
-            const spacing = 20;
-            const radius = 230;
-            const edgeFade = 500;
-            const outerRadius = radius + edgeFade;
-            const outerRadiusSq = outerRadius * outerRadius;
-            const influenceBoost = theme === 'light' ? 0.34 : 0.46;
-            const now = trailNow;
-            // Ping-pong cycle (forward/backward) avoids hard reset jumps.
-            const cycle = (now % 12000) / 12000;
-            const pingPong = cycle < 0.5 ? (cycle * 2) : (2 - cycle * 2);
-            // Constrain to the stable upper-half profile window.
-            const phase = 0.58 + pingPong * 0.34;
-            const clamp01 = (n) => Math.max(0, Math.min(1, n));
-            const smoothstep = (a, b, x) => {
-                const t = clamp01((x - a) / (b - a));
-                return t * t * (3 - 2 * t);
-            };
-            const repelWeight = 1 - smoothstep(0.03, 0.28, phase);
-            const ringIn = smoothstep(0.20, 0.40, phase);
-            const ringOut = 1 - smoothstep(0.56, 0.78, phase);
-            const ringWeight = clamp01(ringIn * ringOut);
-            const magneticWeight = smoothstep(0.60, 0.92, phase);
-            const coreHoleRadius = 14;
-            const repelRadius = 58;
-            const guardRadius = 26;
-            const shieldAhead = 96;
-            const shieldHalfWidth = 64;
-            const ringRadius = 92 + (pingPong - 0.5) * 8;
-            const rippleSpeed = 0.58; // px/ms
-            const rippleBand = 46;
-            const rippleFadeMs = 1300;
-            const baseAlpha = theme === 'light' ? 0.18 : 0.22;
-            const baseDotSize = theme === 'light' ? 0.95 : 1.0;
-
-            for (let y = 0; y <= rect.height + spacing; y += spacing) {
-                for (let x = 0; x <= rect.width + spacing; x += spacing) {
-                    const dx = lag.x - x;
-                    const dy = lag.y - y;
-                    const distSq = dx * dx + dy * dy;
-                    const inMouseField = fieldPersistenceRef.current > 0.02 && distSq <= outerRadiusSq;
-
-                    let px = x;
-                    let py = y;
-                    let alpha = baseAlpha;
-                    let dotSize = baseDotSize;
-
-                    if (inMouseField) {
-                        const dist = Math.sqrt(distSq) || 0.0001;
-                        const coreT = clamp01(1 - dist / radius);
-                        const edgeT = clamp01(1 - Math.max(0, dist - radius) / edgeFade);
-                        // Fade profile:
-                        // - starts fading earlier (smaller core radius)
-                        // - keeps a long tail to farther distances
-                        // Stronger near cursor + smoother long-tail fade.
-                        const edgeNearDrop = Math.pow(edgeT, 2.1);
-                        const edgeLongTail = Math.pow(edgeT, 0.46);
-                        const edgeProfile = clamp01(edgeNearDrop * 0.48 + edgeLongTail * 0.52);
-                        const t = clamp01(coreT * 0.82 + edgeProfile * 0.18);
-                        const persistence = fieldPersistenceRef.current;
-                        const pull = t * t * (9 + magneticWeight * 8) * (0.75 + persistence * 0.25);
-                        const swirl = t * (2.4 + magneticWeight * 4.8) * (0.75 + persistence * 0.25);
-                        const nx = dx / dist;
-                        const ny = dy / dist;
-
-                        // Hard exclusion zone: no dots under/overlapping cursor.
-                        if (dist <= coreHoleRadius) continue;
-
-                        px = x + nx * pull + (-ny) * swirl;
-                        py = y + ny * pull + nx * swirl;
-                        alpha = Math.max(alpha, (0.14 + t * (influenceBoost + ringWeight * 0.12 + repelWeight * 0.08)) * edgeProfile * (0.55 + persistence * 0.45));
-                        dotSize = Math.max(dotSize, 1.1 + t * (1.0 + ringWeight * 0.62 + repelWeight * 0.44) * edgeProfile);
-
-                        if (dist < repelRadius) {
-                            const rt = 1 - dist / repelRadius;
-                            const repel = rt * rt * (18 + (coreHoleRadius / Math.max(dist, 0.1)) * 6) * repelWeight;
-                            px -= nx * repel;
-                            py -= ny * repel;
-                        }
-                            // Dense protective collar around cursor, preventing touch and shaping a guard ring.
-                        if (dist < guardRadius) {
-                            const guardPush = (guardRadius - dist) * 1.8;
-                            px -= nx * guardPush;
-                            py -= ny * guardPush;
-                            alpha += 0.08;
-                        }
-
-                            // Anticipatory shield in movement direction:
-                            // particles are deflected to front + sides before reaching cursor.
-                        if (mouse.speed > 0.35) {
-                                const vlen = Math.hypot(mouse.vx, mouse.vy) || 0.0001;
-                                const dirX = mouse.vx / vlen;
-                                const dirY = mouse.vy / vlen;
-                                const relX = x - lag.x;
-                                const relY = y - lag.y;
-                                const ahead = relX * dirX + relY * dirY;
-                                const sideProj = relX * (-dirY) + relY * dirX;
-                                const lateral = Math.abs(sideProj);
-
-                                if (ahead > 0 && ahead < shieldAhead && lateral < shieldHalfWidth) {
-                                    const aheadT = 1 - ahead / shieldAhead;
-                                    const latT = 1 - lateral / shieldHalfWidth;
-                                    const st = aheadT * latT;
-                                    const sideSign = sideProj >= 0 ? 1 : -1;
-                                    const sidePush = st * (8.5 + mouse.speed * 0.24);
-                                    const forwardPush = st * (6.2 + mouse.speed * 0.2);
-                                    const radialPush = st * (7.5 + mouse.speed * 0.18);
-
-                                    // push forward and sideways to form an arc/shield in front of cursor
-                                    px += dirX * forwardPush + (-dirY) * sideSign * sidePush;
-                                    py += dirY * forwardPush + dirX * sideSign * sidePush;
-                                    // additional away-from-cursor component
-                                    px -= nx * radialPush;
-                                    py -= ny * radialPush;
-                                    alpha += st * 0.1;
-                                }
-                        }
-
-                        if (ringWeight > 0.001) {
-                            const ringSign = Math.sign(dist - ringRadius);
-                            const ringMag = Math.min(Math.abs(dist - ringRadius), 24) * 0.44 * t * ringWeight;
-                            px += nx * ringSign * ringMag;
-                            py += ny * ringSign * ringMag;
-                        }
-                    }
-
-                    // Laminar wake trail: aligns dots behind cursor path (no chaotic turbulence).
-                    if (inMouseField && trailRef.current.length > 0) {
-                            const wakeHalfWidth = 44;
-                            const wakeLength = 140;
-                            for (let i = trailRef.current.length - 1; i >= 0; i--) {
-                                const p = trailRef.current[i];
-                                const age = (trailNow - p.t) / 620;
-                                if (age >= 1) continue;
-                                const vlen = Math.hypot(p.vx, p.vy);
-                                if (vlen < 0.001) continue;
-                                const dirX = p.vx / vlen;
-                                const dirY = p.vy / vlen;
-
-                                // Vector from trail sample to this dot.
-                                const rx = x - p.x;
-                                const ry = y - p.y;
-                                const longitudinal = rx * dirX + ry * dirY;
-
-                                // Keep wake mostly behind movement direction, with tiny lead allowance.
-                                if (longitudinal > 18 || longitudinal < -wakeLength) continue;
-
-                                const latX = rx - dirX * longitudinal;
-                                const latY = ry - dirY * longitudinal;
-                                const lateralDist = Math.hypot(latX, latY);
-                                if (lateralDist > wakeHalfWidth) continue;
-
-                                const behindT = longitudinal < 0 ? Math.min(1, -longitudinal / wakeLength) : 0.2;
-                                const lateralT = 1 - lateralDist / wakeHalfWidth;
-                                const ageT = 1 - age;
-                                const wt = behindT * lateralT * ageT;
-                                if (wt <= 0.001) continue;
-
-                                // Pull toward trail centerline and gently advect forward to realign.
-                                const latNx = lateralDist > 0.0001 ? latX / lateralDist : 0;
-                                const latNy = lateralDist > 0.0001 ? latY / lateralDist : 0;
-                                const centerPull = wt * 6.2;
-                                const flowPush = wt * 2.8;
-
-                                px -= latNx * centerPull;
-                                py -= latNy * centerPull;
-                                px += dirX * flowPush;
-                                py += dirY * flowPush;
-                                alpha += wt * 0.1;
-                            }
-                    }
-
-                    // Propagating ripple waves: travel outward and fade.
-                    for (let i = rippleRef.current.length - 1; i >= 0; i--) {
-                            const r = rippleRef.current[i];
-                            const ageMs = now - r.t;
-                            if (ageMs <= 0 || ageMs > rippleFadeMs) continue;
-                            const rx = x - r.x;
-                            const ry = y - r.y;
-                            const rd = Math.sqrt(rx * rx + ry * ry) || 0.0001;
-                            const front = ageMs * rippleSpeed;
-                            const delta = Math.abs(rd - front);
-                            if (delta > rippleBand) continue;
-
-                            const dirx = rx / rd;
-                            const diry = ry / rd;
-                            const bandFalloff = 1 - delta / rippleBand;
-                            const ageFalloff = 1 - ageMs / rippleFadeMs;
-                            const osc = Math.sin((rd - front) * 0.22);
-                            const amp = bandFalloff * ageFalloff * (3.4 + r.p * 2.6);
-
-                            px += dirx * amp * osc;
-                            py += diry * amp * osc;
-                            alpha = Math.max(alpha, 0.11 + bandFalloff * ageFalloff * (0.18 + r.p * 0.12));
-                            dotSize = Math.max(dotSize, 1.0 + bandFalloff * (0.72 + r.p * 0.34));
-                    }
-
-                    ctx.fillStyle = theme === 'light'
-                        ? `rgba(34, 52, 88, ${alpha.toFixed(3)})`
-                        : `rgba(168, 191, 235, ${alpha.toFixed(3)})`;
-                    ctx.beginPath();
-                    ctx.arc(px, py, dotSize, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-            }
-            rafId = requestAnimationFrame(render);
-        };
-
-        resize();
-        rafId = requestAnimationFrame(render);
-        window.addEventListener('resize', resize);
-
-        return () => {
-            cancelAnimationFrame(rafId);
-            window.removeEventListener('resize', resize);
-        };
-    }, [theme]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -310,75 +35,61 @@ const Login = () => {
 
     return (
         <div
-            ref={sceneRef}
             className="flex-center"
             style={{
-            width: '100vw',
-            height: '100vh',
-            background: theme === 'light'
-                ? 'radial-gradient(120% 90% at 16% 18%, #eef3fb 0%, #dce5f2 54%, #cfd9ea 100%)'
-                : 'radial-gradient(120% 100% at 18% 18%, rgba(46, 92, 198, 0.30) 0%, rgba(13, 31, 78, 0.12) 46%, rgba(0,0,0,0) 70%), radial-gradient(96% 86% at 86% 84%, rgba(58, 132, 224, 0.22) 0%, rgba(11, 34, 86, 0.10) 44%, rgba(0,0,0,0) 72%), linear-gradient(138deg, #020817 0%, #07142e 46%, #0d2b5b 100%)',
-            position: 'relative',
-            overflow: 'hidden'
-        }}
-            onMouseMove={(e) => {
-                if (!mouseRef.current.enabled || !meshCanvasRef.current) return;
-                const rect = meshCanvasRef.current.getBoundingClientRect();
-                const nx = e.clientX - rect.left;
-                const ny = e.clientY - rect.top;
-                const prevX = mouseRef.current.x;
-                const prevY = mouseRef.current.y;
-                const vx = nx - prevX;
-                const vy = ny - prevY;
-                const speed = Math.hypot(vx, vy);
-                mouseRef.current.x = nx;
-                mouseRef.current.y = ny;
-                mouseRef.current.vx = vx;
-                mouseRef.current.vy = vy;
-                mouseRef.current.speed = speed;
-                mouseRef.current.active = true;
-                trailRef.current.push({
-                    x: nx,
-                    y: ny,
-                    vx,
-                    vy,
-                    t: performance.now()
-                });
-                if (trailRef.current.length > 18) {
-                    trailRef.current.splice(0, trailRef.current.length - 18);
-                }
-            }}
-            onMouseDown={(e) => {
-                if (!mouseRef.current.enabled || !meshCanvasRef.current) return;
-                const rect = meshCanvasRef.current.getBoundingClientRect();
-                const x = e.clientX - rect.left;
-                const y = e.clientY - rect.top;
-                const now = performance.now();
-                rippleRef.current.push({ x, y, t: now, p: 0.95 });
-                rippleRef.current.push({ x, y, t: now + 58, p: 0.62 });
-                if (rippleRef.current.length > 28) {
-                    rippleRef.current.splice(0, rippleRef.current.length - 28);
-                }
-            }}
-            onMouseLeave={() => {
-                mouseRef.current.active = false;
-                trailRef.current = [];
+                width: '100vw',
+                height: '100vh',
+                background: theme === 'light'
+                    ? 'radial-gradient(120% 90% at 16% 18%, #eef3fb 0%, #dce5f2 54%, #cfd9ea 100%)'
+                    : 'radial-gradient(120% 100% at 18% 18%, rgba(46, 92, 198, 0.15) 0%, rgba(13, 31, 78, 0.05) 46%, rgba(0,0,0,0) 70%), linear-gradient(138deg, #020817 0%, #050a14 46%, #050a14 100%)',
+                position: 'relative',
+                overflow: 'hidden'
             }}
         >
-            <canvas
-                ref={meshCanvasRef}
-                aria-hidden="true"
+            <div style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                zIndex: 1,
+                opacity: 0.8
+            }}>
+                <WegenaParticleCanvas
+                    defaultPresetId="neon-waves"
+                    onSceneLoaded={() => setTimeout(() => setSceneLoaded(true), 1500)}
+                />
+            </div>
+
+            {/* Scene Loader Cover */}
+            <div
+                className="flex-center"
                 style={{
-                    position: 'absolute',
-                    top: '-5vh',
-                    left: '-5vw',
-                    width: '110vw',
-                    height: '110vh',
-                    zIndex: 1,
-                    pointerEvents: 'none',
-                    opacity: 1
+                    position: 'fixed',
+                    inset: 0,
+                    background: 'var(--bg-color)',
+                    zIndex: 2147483647,
+                    opacity: sceneLoaded ? 0 : 1,
+                    pointerEvents: sceneLoaded ? 'none' : 'all',
+                    transition: 'opacity 0.8s ease-in-out',
+                    overflow: 'hidden'
                 }}
-            />
+            >
+                <style>{`
+                    @keyframes loaderGlow {
+                        from { opacity: 0; }
+                        to { opacity: 1; }
+                    }
+                `}</style>
+                <div style={{
+                    position: 'absolute', inset: 0,
+                    background: 'linear-gradient(180deg, #000000 0%, rgba(40, 15, 75, 0.35) 50%, #000000 100%)',
+                    animation: 'loaderGlow 2s ease-in-out forwards'
+                }} />
+                <div className="gradient-text" style={{ fontSize: '42px', fontWeight: '900', letterSpacing: '0.15em', zIndex: 1, filter: 'drop-shadow(0 4px 8px rgba(0, 0, 0, 0.6))' }}>
+                    {agentName}
+                </div>
+            </div>
 
             {/* Ambient glows */}
             <div className="login-ambient login-ambient--a" style={{
@@ -390,9 +101,9 @@ const Login = () => {
                 borderRadius: '50%',
                 background: theme === 'light'
                     ? 'radial-gradient(circle, rgba(90, 122, 188, 0.12) 0%, rgba(90,122,188,0.03) 42%, rgba(0,0,0,0) 75%)'
-                    : 'radial-gradient(circle, rgba(90, 132, 216, 0.16) 0%, rgba(90,132,216,0.05) 44%, rgba(0,0,0,0) 76%)',
+                    : 'radial-gradient(circle, rgba(37, 99, 235, 0.08) 0%, rgba(37,99,235,0.02) 44%, rgba(0,0,0,0) 76%)',
                 filter: 'blur(78px)',
-                zIndex: 1,
+                zIndex: 2,
             }} />
             <div className="login-ambient login-ambient--b" style={{
                 position: 'absolute',
@@ -403,9 +114,9 @@ const Login = () => {
                 borderRadius: '50%',
                 background: theme === 'light'
                     ? 'radial-gradient(circle, rgba(108, 146, 205, 0.10) 0%, rgba(108,146,205,0.02) 40%, rgba(0,0,0,0) 74%)'
-                    : 'radial-gradient(circle, rgba(78, 196, 220, 0.12) 0%, rgba(78,196,220,0.04) 40%, rgba(0,0,0,0) 74%)',
+                    : 'radial-gradient(circle, rgba(14, 165, 233, 0.06) 0%, rgba(14,165,233,0.02) 40%, rgba(0,0,0,0) 74%)',
                 filter: 'blur(90px)',
-                zIndex: 1,
+                zIndex: 2,
                 pointerEvents: 'none'
             }} />
 
@@ -417,7 +128,7 @@ const Login = () => {
                     ? 'radial-gradient(circle at center, rgba(255,255,255,0) 10%, rgba(226,233,245,0.52) 66%, rgba(214,222,238,0.86) 100%)'
                     : 'radial-gradient(circle at center, rgba(0,0,0,0.0) 10%, rgba(7,12,24,0.12) 62%, rgba(3,7,14,0.30) 100%)',
                 pointerEvents: 'none',
-                zIndex: 2
+                zIndex: 3
             }} />
 
             {/* Vignette */}
@@ -426,9 +137,9 @@ const Login = () => {
                 inset: 0,
                 background: theme === 'light'
                     ? 'radial-gradient(circle at center, transparent 44%, rgba(168,178,197,0.22) 100%)'
-                    : 'radial-gradient(circle at center, transparent 48%, rgba(0,0,0,0.42) 100%)',
+                    : 'radial-gradient(circle at center, transparent 48%, rgba(0,0,0,0.6) 100%)',
                 pointerEvents: 'none',
-                zIndex: 3
+                zIndex: 4
             }} />
 
             <form onSubmit={handleSubmit} style={{
@@ -439,12 +150,13 @@ const Login = () => {
                 flexDirection: 'column',
                 gap: '14px',
                 borderRadius: '16px',
-                background: theme === 'light' ? 'rgba(244, 247, 253, 0.66)' : 'rgba(20, 22, 32, 0.55)',
-                backdropFilter: 'blur(16px)',
-                border: theme === 'light' ? '1px solid rgba(20, 28, 46, 0.14)' : '1px solid rgba(255, 255, 255, 0.12)',
+                background: theme === 'light' ? 'rgba(244, 247, 253, 0.66)' : 'rgba(10, 12, 16, 0.6)',
+                backdropFilter: 'blur(32px)',
+                WebkitBackdropFilter: 'blur(32px)',
+                border: theme === 'light' ? '1px solid rgba(20, 28, 46, 0.14)' : '1px solid rgba(255, 255, 255, 0.05)',
                 boxShadow: theme === 'light'
                     ? '0 30px 84px rgba(28, 42, 68, 0.24), 0 0 38px rgba(94,122,178,0.08)'
-                    : '0 40px 120px rgba(0,0,0,0.65), 0 0 60px rgba(100,130,190,0.08)',
+                    : '0 40px 120px rgba(0,0,0,0.65), 0 0 60px rgba(37,99,235,0.08)',
                 zIndex: 10,
                 position: 'relative',
                 animation: 'loginCardIn 250ms ease forwards'
@@ -610,22 +322,22 @@ const Login = () => {
                     transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease !important;
                 }
                 .login-input:focus {
-                    border-color: rgba(120, 150, 200, 0.45) !important;
-                    box-shadow: 0 0 18px rgba(120, 150, 200, 0.12) !important;
+                    border-color: rgba(37, 99, 235, 0.45) !important;
+                    box-shadow: 0 0 18px rgba(37, 99, 235, 0.12) !important;
                 }
                 .login-submit {
-                    background: linear-gradient(135deg, rgba(110,130,190,0.90), rgba(80,100,160,0.90)) !important;
+                    background: var(--accent-color) !important;
                     transition: transform 180ms ease, filter 180ms ease, box-shadow 180ms ease !important;
                     box-shadow: 0 8px 20px rgba(28, 40, 66, 0.26);
                 }
                 .login-submit:hover:not(:disabled) {
                     transform: translateY(-1px);
-                    filter: brightness(1.04);
-                    box-shadow: 0 10px 24px rgba(28, 40, 66, 0.32);
+                    filter: brightness(1.1);
+                    box-shadow: 0 10px 24px rgba(37, 99, 235, 0.32);
                 }
                 .login-submit:active:not(:disabled) {
                     transform: translateY(0);
-                    filter: brightness(0.98);
+                    filter: brightness(0.95);
                 }
                 @keyframes loginCardIn {
                     from {

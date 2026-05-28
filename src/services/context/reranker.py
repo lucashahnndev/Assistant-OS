@@ -63,6 +63,65 @@ class ContextReranker:
         "capability_knowledge": 2,
         "user_memory": 2,
     }
+    _DOMAIN_CAP_OVERRIDES = {
+        ContextIntent.TROUBLESHOOTING.value: {
+            "agent_experience": 2,
+            "procedures": 2,
+            "capability_knowledge": 2,
+        },
+        ContextIntent.TASK_EXECUTION.value: {
+            "procedures": 2,
+            "capability_knowledge": 2,
+        },
+        ContextIntent.CAPABILITY_LOOKUP.value: {
+            "capability_knowledge": 3,
+        },
+        ContextIntent.POLICY_LOOKUP.value: {
+            "policies": 2,
+        },
+        ContextIntent.GENERAL_KNOWLEDGE.value: {
+            "external_knowledge": 2,
+            "custom_knowledge": 2,
+            "mcp_resources": 2,
+        },
+    }
+    _INTENT_HINT_DOMAIN_BOOSTS = {
+        ContextIntent.TASK_EXECUTION.value: {
+            "procedures": 0.18,
+            "capability_knowledge": 0.12,
+            "custom_knowledge": 0.12,
+            "mcp_resources": 0.1,
+            "policies": 0.04,
+        },
+        ContextIntent.TROUBLESHOOTING.value: {
+            "agent_experience": 0.22,
+            "procedures": 0.14,
+            "mcp_resources": 0.08,
+            "examples": -0.04,
+        },
+        ContextIntent.CAPABILITY_LOOKUP.value: {
+            "capability_knowledge": 0.18,
+            "examples": 0.06,
+            "mcp_resources": 0.12,
+            "policies": -0.06,
+        },
+        ContextIntent.POLICY_LOOKUP.value: {
+            "policies": 0.2,
+            "procedures": 0.04,
+        },
+        ContextIntent.GENERAL_KNOWLEDGE.value: {
+            "custom_knowledge": 0.16,
+            "external_knowledge": -0.02,
+            "mcp_resources": 0.14,
+        },
+    }
+    _HINT_BOOSTS = {
+        "agent_experience": ("troubleshooting_active", 0.18),
+        "policies": ("approval_pending", 0.18),
+        "capability_knowledge": ("hot_action_namespace", 0.12),
+        "procedures": ("primary_task_id", 0.1),
+        "blocker_active": (("procedures", "agent_experience"), 0.08),
+    }
 
     def rank(
         self,
@@ -186,77 +245,38 @@ class ContextReranker:
         hints = broker_hints if isinstance(broker_hints, dict) else {}
         scope = str((metadata or {}).get("knowledge_scope") or "").strip().lower()
         boost = 0.5
-        if intent == ContextIntent.TASK_EXECUTION.value:
-            if domain in {"procedures", "capability_knowledge"}:
-                boost += 0.18
-            if domain == "custom_knowledge":
-                boost += 0.12
-            if domain == "mcp_resources":
-                boost += 0.1
-            if domain == "examples":
-                boost -= 0.08
-            if domain == "policies" and not bool(hints.get("approval_pending")):
-                boost -= 0.08
-        elif intent == ContextIntent.TROUBLESHOOTING.value:
-            if domain == "agent_experience" and bool(hints.get("troubleshooting_active")):
-                boost += 0.22
-            if domain == "procedures":
-                boost += 0.14
-            if domain == "mcp_resources":
-                boost += 0.08
-            if domain == "examples":
-                boost -= 0.04
-        elif intent == ContextIntent.CAPABILITY_LOOKUP.value:
-            if domain == "capability_knowledge":
-                boost += 0.18
-            if domain == "examples":
-                boost += 0.06
-            if domain == "mcp_resources":
-                boost += 0.12
-            if domain == "policies":
-                boost -= 0.06
-        elif intent == ContextIntent.POLICY_LOOKUP.value:
-            if domain == "policies":
-                boost += 0.2
-            if domain == "procedures":
-                boost += 0.04
-        elif intent == ContextIntent.GENERAL_KNOWLEDGE.value:
-            if domain == "custom_knowledge" and scope in {"workspace", "tenant", "principal"}:
-                boost += 0.16
-            if domain == "external_knowledge":
-                boost -= 0.02
-            if domain == "mcp_resources":
-                boost += 0.14
+        for boost_domain, delta in self._INTENT_HINT_DOMAIN_BOOSTS.get(intent, {}).items():
+            if boost_domain == domain:
+                if boost_domain == "policies" and intent == ContextIntent.TASK_EXECUTION.value and not bool(hints.get("approval_pending")):
+                    boost -= 0.08
+                elif boost_domain == "custom_knowledge" and intent == ContextIntent.GENERAL_KNOWLEDGE.value and scope not in {"workspace", "tenant", "principal"}:
+                    continue
+                else:
+                    boost += delta
+        if intent == ContextIntent.TASK_EXECUTION.value and domain == "examples":
+            boost -= 0.08
+        if intent == ContextIntent.TROUBLESHOOTING.value and domain == "examples":
+            boost -= 0.04
         return round(min(1.0, max(0.1, boost)), 4)
 
     @staticmethod
     def _hint_factor(*, domain: str, broker_hints: Dict[str, object] | None) -> float:
         hints = broker_hints if isinstance(broker_hints, dict) else {}
         boost = 0.45
-        if domain == "agent_experience" and bool(hints.get("troubleshooting_active")):
-            boost += 0.18
-        if domain == "policies" and bool(hints.get("approval_pending")):
-            boost += 0.18
-        if domain == "capability_knowledge" and str(hints.get("hot_action_namespace") or "").strip():
-            boost += 0.12
-        if domain == "procedures" and str(hints.get("primary_task_id") or "").strip():
-            boost += 0.1
-        if domain in {"procedures", "agent_experience"} and bool(hints.get("blocker_active")):
-            boost += 0.08
+        for rule_domain, (hint_name, delta) in ContextReranker._HINT_BOOSTS.items():
+            if rule_domain in {"blocker_active"}:
+                if bool(hints.get("blocker_active")) and domain in hint_name:
+                    boost += delta
+                continue
+            if rule_domain != domain:
+                continue
+            value = str(hints.get(hint_name) or "").strip() if hint_name in {"hot_action_namespace", "primary_task_id"} else bool(hints.get(hint_name))
+            if value:
+                boost += delta
         return round(min(1.0, boost), 4)
 
     def _domain_cap(self, *, domain: str, intent: str) -> int:
-        if intent == ContextIntent.TROUBLESHOOTING.value:
-            if domain == "agent_experience":
-                return 2
-            if domain in {"procedures", "capability_knowledge"}:
-                return 2
-        if intent == ContextIntent.TASK_EXECUTION.value and domain in {"procedures", "capability_knowledge"}:
-            return 2
-        if intent == ContextIntent.CAPABILITY_LOOKUP.value and domain == "capability_knowledge":
-            return 3
-        if intent == ContextIntent.POLICY_LOOKUP.value and domain == "policies":
-            return 2
-        if intent == ContextIntent.GENERAL_KNOWLEDGE.value and domain in {"external_knowledge", "custom_knowledge", "mcp_resources"}:
-            return 2
+        intent_caps = self._DOMAIN_CAP_OVERRIDES.get(intent, {})
+        if domain in intent_caps:
+            return intent_caps[domain]
         return self._DOMAIN_CAPS.get(domain, 2)

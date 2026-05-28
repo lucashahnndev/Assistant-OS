@@ -68,6 +68,35 @@ class RetrievalRouter:
         "govern",
         "risco",
     )
+    _HINT_RULES = {
+        "policies": {
+            "active": ("approval_pending",),
+            "priority": ("approval_pending", -1),
+            "note": ("approval_pending", "hint:approval"),
+        },
+        "agent_experience": {
+            "active": ("troubleshooting_active",),
+            "priority": ("troubleshooting_active", -1),
+            "note": ("troubleshooting_active", "hint:troubleshooting"),
+        },
+        "external_knowledge": {
+            "active_relevance": ("documentation_relevant",),
+        },
+        "custom_knowledge": {
+            "active_relevance": ("custom_relevant",),
+        },
+        "mcp_resources": {
+            "active_relevance_any": ("documentation_relevant", "custom_relevant"),
+        },
+        "capability_knowledge": {
+            "priority": ("hot_action_namespace", -1),
+            "note": ("hot_action_namespace", "hint:namespace"),
+        },
+        "procedures": {
+            "priority": ("primary_task_id", -1),
+            "note": ("primary_task_id", "hint:focus"),
+        },
+    }
 
     _ROUTES: Dict[ContextIntent, List[RetrievalTarget]] = {
         ContextIntent.TASK_EXECUTION: [
@@ -143,8 +172,7 @@ class RetrievalRouter:
 
     @classmethod
     def _is_policy_relevant(cls, user_input: str) -> bool:
-        text = (user_input or "").lower()
-        return any(marker in text for marker in cls._POLICY_HINTS)
+        return cls._matches_query_hint(user_input, cls._POLICY_HINTS)
 
     @staticmethod
     def _is_troubleshooting_relevant(user_input: str) -> bool:
@@ -169,13 +197,34 @@ class RetrievalRouter:
 
     @staticmethod
     def _is_documentation_relevant(user_input: str) -> bool:
-        text = (user_input or "").lower()
-        return any(marker in text for marker in RetrievalRouter._DOCUMENTATION_HINTS)
+        return RetrievalRouter._matches_query_hint(user_input, RetrievalRouter._DOCUMENTATION_HINTS)
 
     @staticmethod
     def _is_custom_knowledge_relevant(user_input: str) -> bool:
+        return RetrievalRouter._matches_query_hint(user_input, RetrievalRouter._CUSTOM_KNOWLEDGE_HINTS)
+
+    @staticmethod
+    def _matches_query_hint(user_input: str, markers: tuple[str, ...]) -> bool:
         text = (user_input or "").lower()
-        return any(marker in text for marker in RetrievalRouter._CUSTOM_KNOWLEDGE_HINTS)
+        return any(marker in text for marker in markers)
+
+    @staticmethod
+    def _resolve_hint_value(
+        *,
+        name: str,
+        hints: Dict[str, object],
+        policy_relevant: bool,
+        troubleshooting_relevant: bool,
+        documentation_relevant: bool,
+        custom_relevant: bool,
+    ) -> bool:
+        return bool(
+            policy_relevant if name == "policy_relevant" else
+            troubleshooting_relevant if name == "troubleshooting_relevant" else
+            documentation_relevant if name == "documentation_relevant" else
+            custom_relevant if name == "custom_relevant" else
+            hints.get(name)
+        )
 
     @staticmethod
     def _resolve_active(
@@ -188,30 +237,54 @@ class RetrievalRouter:
         broker_hints: Dict[str, object] | None = None,
     ) -> bool:
         hints = broker_hints if isinstance(broker_hints, dict) else {}
-        if target.domain == "policies" and not target.active:
-            return policy_relevant or bool(hints.get("approval_pending"))
-        if target.domain == "agent_experience" and not target.active:
-            return troubleshooting_relevant or bool(hints.get("troubleshooting_active"))
-        if target.domain == "external_knowledge" and not target.active:
-            return documentation_relevant
-        if target.domain == "custom_knowledge" and not target.active:
-            return custom_relevant
-        if target.domain == "mcp_resources" and not target.active:
-            return documentation_relevant or custom_relevant
-        return target.active
+        if target.active:
+            return True
+        rule = RetrievalRouter._HINT_RULES.get(target.domain, {})
+        if not rule:
+            return False
+        active_hint = rule.get("active")
+        if active_hint:
+            return any(bool(hints.get(name)) for name in active_hint)
+        active_relevance = rule.get("active_relevance")
+        if active_relevance:
+            return any(
+                RetrievalRouter._resolve_hint_value(
+                    name=name,
+                    hints=hints,
+                    policy_relevant=policy_relevant,
+                    troubleshooting_relevant=troubleshooting_relevant,
+                    documentation_relevant=documentation_relevant,
+                    custom_relevant=custom_relevant,
+                )
+                for name in active_relevance
+            )
+        active_any = rule.get("active_relevance_any")
+        if active_any:
+            return any(
+                RetrievalRouter._resolve_hint_value(
+                    name=name,
+                    hints=hints,
+                    policy_relevant=policy_relevant,
+                    troubleshooting_relevant=troubleshooting_relevant,
+                    documentation_relevant=documentation_relevant,
+                    custom_relevant=custom_relevant,
+                )
+                for name in active_any
+            )
+        return False
+        
 
     @staticmethod
     def _hinted_priority(target: RetrievalTarget, broker_hints: Dict[str, object] | None) -> int:
         hints = broker_hints if isinstance(broker_hints, dict) else {}
         priority = int(target.priority)
-        if target.domain == "agent_experience" and bool(hints.get("troubleshooting_active")):
-            priority -= 1
-        if target.domain == "policies" and bool(hints.get("approval_pending")):
-            priority -= 1
-        if target.domain == "capability_knowledge" and str(hints.get("hot_action_namespace") or "").strip():
-            priority -= 1
-        if target.domain == "procedures" and str(hints.get("primary_task_id") or "").strip():
-            priority -= 1
+        rule = RetrievalRouter._HINT_RULES.get(target.domain, {})
+        delta_rule = rule.get("priority")
+        if delta_rule:
+            hint_name, delta = delta_rule
+            value = str(hints.get(hint_name) or "").strip() if hint_name in {"hot_action_namespace", "primary_task_id"} else hints.get(hint_name)
+            if value:
+                priority += int(delta)
         return max(1, priority)
 
     @staticmethod
@@ -219,14 +292,19 @@ class RetrievalRouter:
         hints = broker_hints if isinstance(broker_hints, dict) else {}
         notes = str(target.notes or "").strip()
         applied = []
-        if target.domain == "agent_experience" and bool(hints.get("troubleshooting_active")):
-            applied.append("hint:troubleshooting")
-        if target.domain == "policies" and bool(hints.get("approval_pending")):
-            applied.append("hint:approval")
-        if target.domain == "capability_knowledge" and str(hints.get("hot_action_namespace") or "").strip():
-            applied.append("hint:namespace")
-        if target.domain == "procedures" and str(hints.get("primary_task_id") or "").strip():
-            applied.append("hint:focus")
+        rule = RetrievalRouter._HINT_RULES.get(target.domain, {})
+        note_rule = rule.get("note")
+        if note_rule:
+            hint_name, note_tag = note_rule
+            if RetrievalRouter._resolve_hint_value(
+                name=hint_name,
+                hints=hints,
+                policy_relevant=False,
+                troubleshooting_relevant=False,
+                documentation_relevant=False,
+                custom_relevant=False,
+            ):
+                applied.append(note_tag)
         if not applied:
             return notes
         if notes:

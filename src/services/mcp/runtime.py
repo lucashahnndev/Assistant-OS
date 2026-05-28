@@ -145,6 +145,28 @@ class MCPIntegrationService:
         namespace = str(server.policy.namespace or "mcp").strip().lower()
         return f"{namespace}.{server.id}.read_resource"
 
+    @staticmethod
+    def _build_tool_aliases(server: MCPServerConfig, tool_name: str, canonical_action_id: str) -> List[str]:
+        namespace = str(server.policy.namespace or "mcp").strip().lower()
+        server_token = re.sub(r"[^a-z0-9_]+", "_", str(server.id or "").strip().lower()).strip("_") or "tool"
+        tool_name = str(tool_name or "").strip().lower()
+        if not tool_name:
+            return []
+
+        tool_token = re.sub(r"[^a-z0-9_]+", "_", tool_name).strip("_") or "tool"
+        tool_dot = tool_token.replace("_", ".")
+        tool_parts = [part for part in tool_token.split("_") if part]
+        reversed_parts = ".".join(reversed(tool_parts)) if len(tool_parts) > 1 else tool_dot
+
+        aliases = {
+            f"{namespace}.{server_token}.{tool_dot}",
+            f"{namespace}.{server_token}.{reversed_parts}",
+            f"{namespace}.{tool_dot}",
+            f"{namespace}.{reversed_parts}",
+        }
+        canonical = str(canonical_action_id or "").strip().lower()
+        return sorted(alias for alias in aliases if alias and alias != canonical)
+
     def refresh(self) -> Dict[str, Any]:
         raw_cfg = self.config_manager.get_mcp_config() if hasattr(self.config_manager, "get_mcp_config") else {}
         cfg = raw_cfg if isinstance(raw_cfg, dict) else {}
@@ -174,6 +196,7 @@ class MCPIntegrationService:
                 errors.append(f"{server.id}:tool_discovery_failed:{exc}")
                 continue
             for descriptor in self.tool_adapter.build_action_descriptors(server, tools):
+                aliases = self._build_tool_aliases(server, descriptor.tool_name, descriptor.action_id)
                 descriptor_by_action[descriptor.action_id] = descriptor
                 server_by_action[descriptor.action_id] = server
                 actions_payload.append(
@@ -208,7 +231,9 @@ class MCPIntegrationService:
                             "side_effect": "none" if descriptor.read_only else "mutation",
                             "capability_id": f"mcp.{server.id}",
                             "capability": self._dynamic_capability.name,
+                            "aliases": aliases,
                         },
+                        "aliases": aliases,
                     }
                 )
             if bool(server.policy.allow_resources):
@@ -284,7 +309,15 @@ class MCPIntegrationService:
                                 "side_effect": "none",
                                 "capability_id": f"mcp.{server.id}",
                                 "capability": self._dynamic_capability.name,
+                                "aliases": [
+                                    f"{server.policy.namespace}.{server.id}.read.resource",
+                                    f"{server.policy.namespace}.read.resource",
+                                ],
                             },
+                            "aliases": [
+                                f"{server.policy.namespace}.{server.id}.read.resource",
+                                f"{server.policy.namespace}.read.resource",
+                            ],
                         }
                     )
 

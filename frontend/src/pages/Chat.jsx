@@ -1287,7 +1287,7 @@ def monitor_system():
     const shouldUseFullProfileDesktop = !isMobile && showChatProfile && chatPaneWidth > 0 && chatPaneWidth < DESKTOP_PROFILE_SPLIT_MIN_WIDTH;
 
     return (
-        <div className={`animate-fade-in flex-1 ${isMobile ? 'mobile-nav-active' : ''}`} style={{ display: 'flex', flex: 1, minHeight: 0, gap: isMobile ? '0' : '16px', overflow: 'hidden' }}>
+        <div className={`animate-fade-in flex-1 ${isMobile ? 'mobile-nav-active' : ''}`} style={{ display: 'flex', flex: 1, minHeight: 0, gap: '0', overflow: 'hidden' }}>
             <input
                 type="file"
                 multiple
@@ -1311,7 +1311,9 @@ def monitor_system():
                     flexDirection: 'column',
                     overflow: 'hidden',
                     transition: 'var(--transition)',
-                    borderRadius: isMobile ? '0' : '8px'
+                    borderRadius: '0',
+                    borderRight: '1px solid var(--card-border)',
+                    borderLeft: 'none'
                 }}>
                     <div className="glass" style={{
                         padding: (isSessionsCollapsed && !isMobile) ? '8px 0' : '8px 14px',
@@ -1413,7 +1415,9 @@ def monitor_system():
                     flexDirection: 'column',
                     position: 'relative',
                     overflow: 'hidden',
-                    borderRadius: isMobile ? '0' : '8px'
+                    borderRadius: '0',
+                    borderLeft: 'none',
+                    borderRight: 'none'
                 }}>
                     <PreviewModal />
 

@@ -61,6 +61,23 @@ class ActionValidator:
     Structural + capability validation only. No repair, no fallback.
     """
 
+    @staticmethod
+    def _normalize_allowed_actions(allowed_actions: Optional[List[str]], capability_registry: Any) -> set[str]:
+        normalized: set[str] = set()
+        if allowed_actions is None:
+            return normalized
+        for item in allowed_actions:
+            raw = str(item or "").strip()
+            if not raw:
+                continue
+            candidate = raw.lower()
+            if capability_registry is not None and hasattr(capability_registry, "resolve_action_id"):
+                resolved = capability_registry.resolve_action_id(raw)
+                if resolved:
+                    candidate = str(resolved).strip().lower()
+            normalized.add(candidate)
+        return normalized
+
     def validate(
         self,
         *,
@@ -70,8 +87,9 @@ class ActionValidator:
         capability_registry: Any,
         capability_metadata: Optional[Dict[str, Any]] = None,
     ) -> ActionValidationResult:
-        allowed = {str(x).strip() for x in (allowed_actions or []) if str(x or "").strip()}
-        if allowed and action_id not in allowed:
+        allowed = self._normalize_allowed_actions(allowed_actions, capability_registry)
+        normalized_action = str(action_id or "").strip().lower()
+        if allowed_actions is not None and normalized_action not in allowed:
             return ActionValidationResult(False, error_code=ErrorCode.TOOL_NOT_FOUND, message=f"Action '{action_id}' is outside the allowed set.", details={"action_id": action_id})
         capability = capability_registry.get_capability_for_action(action_id) if capability_registry else None
         if not capability:

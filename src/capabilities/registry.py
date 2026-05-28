@@ -230,6 +230,37 @@ class CapabilityRegistry:
             filtered.append(dict(offer))
         return sorted(filtered, key=lambda row: str(row.get("capability_id") or ""))
 
+    def list_discovery_offers(
+        self,
+        *,
+        intent: Optional[str] = None,
+        domain: Optional[str] = None,
+        role: Optional[str] = None,
+        entity_type: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        offers = self.list_retrieval_offers(intent=intent, domain=domain, role=role, entity_type=entity_type)
+        rows: List[Dict[str, Any]] = []
+        for offer in offers:
+            actions = [str(x).strip() for x in list(offer.get("actions") or []) if str(x or "").strip()]
+            if not actions:
+                continue
+            rows.append(
+                {
+                    "capability_id": offer.get("capability_id") or "",
+                    "namespace": offer.get("namespace") or "",
+                    "kind": "discoverability",
+                    "roles": list(offer.get("roles") or []),
+                    "domains": list(offer.get("domains") or []),
+                    "entity_types": list(offer.get("entity_types") or []),
+                    "keywords": list((offer.get("routing_hints") or {}).get("keywords") or []),
+                    "actions": actions,
+                    "setup_ready": bool(offer.get("setup_ready", True)),
+                    "title": str(offer.get("capability_id") or offer.get("namespace") or "").strip(),
+                    "description": str((offer.get("output_contract") or {}).get("summary") or "").strip(),
+                }
+            )
+        return rows
+
     def get_capability_for_action(self, action_id: str) -> Optional[CapabilityBase]:
         return self.action_map.get(action_id)
 

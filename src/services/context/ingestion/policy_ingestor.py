@@ -50,10 +50,10 @@ class PolicyIngestor:
 
     def _iter_sources(self) -> Iterable[str]:
         for rel in (
-            ("docs", "worker_task_contract.md"),
-            ("docs", "permission_groups_planner.md"),
-            ("docs", "driver_ioc_restructure_approval.md"),
-            ("docs", "skill_contract.md"),
+            ("agent", "specs", "worker_task_contract.spec.md"),
+            ("docs", "plans", "permission_groups_planner.md"),
+            ("docs", "decisions", "driver_ioc_restructure_approval.md"),
+            ("agent", "specs", "skill_contract.spec.md"),
         ):
             path = os.path.join(self.repo_root, *rel)
             if os.path.exists(path):
@@ -164,13 +164,13 @@ class PolicyIngestor:
     @staticmethod
     def _classify_source(path: str) -> str:
         normalized = path.replace("\\", "/")
-        if normalized.endswith("worker_task_contract.md"):
+        if normalized.endswith("worker_task_contract.spec.md"):
             return "worker_contract"
         if normalized.endswith("permission_groups_planner.md"):
             return "permission_planner"
         if normalized.endswith("driver_ioc_restructure_approval.md"):
             return "approval_doc"
-        if normalized.endswith("skill_contract.md"):
+        if normalized.endswith("skill_contract.spec.md"):
             return "skill_contract"
         return "policy_doc"
 

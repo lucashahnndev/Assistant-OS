@@ -42,7 +42,9 @@ import {
     Trash2,
     ChevronUp,
     ChevronDown,
-    Settings
+    Settings,
+    ThumbsUp,
+    ThumbsDown
 } from 'lucide-react';
 import {
     WeatherAssistCard,
@@ -315,14 +317,28 @@ const useMediaStackManager = (preferredStageSignatures = [], sessionId = null) =
         try {
             const toSave = mediaList.filter(m => !['TERMINAL', 'APPROVAL', 'PLAYBACK', 'CODE'].includes(String(m.type).toUpperCase()));
             localStorage.setItem('atlas_media_workstation', JSON.stringify(toSave));
-        } catch {}
+        } catch { }
     }, [mediaList]);
 
-    const addMedia = (itemPayload, type = 'IMAGE') => {
-        const id = `media_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-        const isPersistent = type === 'APPROVAL';
-        const now = Date.now();
+    const addMedia = (itemPayload, type = 'IMAGE', isPersistent = false) => {
         const incomingSignature = mediaSignatureFromItem({ type, payload: itemPayload });
+        
+        // Generate a deterministic ID based on the signature to prevent backend duplication
+        let id;
+        if (incomingSignature) {
+            // Simple string hashing function for deterministic ID
+            let hash = 0;
+            for (let i = 0; i < incomingSignature.length; i++) {
+                const char = incomingSignature.charCodeAt(i);
+                hash = ((hash << 5) - hash) + char;
+                hash = hash & hash;
+            }
+            id = `media_${Math.abs(hash)}_${type.substring(0,4)}`;
+        } else {
+            id = `media_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+        }
+        
+        const now = Date.now();
 
         if (incomingSignature) {
             const existingBySignature = mediaList.find((m) => mediaSignatureFromItem(m) === incomingSignature);
@@ -379,9 +395,9 @@ const useMediaStackManager = (preferredStageSignatures = [], sessionId = null) =
             remainingTime: isPersistent ? null : HERO_CONSTANTS.MEDIA_EXPIRE_DURATION_MS,
             isPinned: isPersistent
         };
-        
+
         // POST to backend for persistent cards (Cognitive Audit Trail)
-        if (sessionId && ['WEATHER', 'SYSTEM_HEALTH', 'WIKI', 'MAP', 'CHART', 'YOUTUBE', 'DEEZER', 'IMAGE', 'CODE'].includes(type)) {
+        if (sessionId && ['WEATHER', 'SYSTEM_HEALTH', 'WIKI', 'MAP', 'CHART', 'YOUTUBE', 'DEEZER', 'IMAGE', 'CODE', 'WEGENA'].includes(type)) {
             api.post(`/sessions/${sessionId}/cards`, newItem).catch(err => console.error('Failed to sync card', err));
         }
 
@@ -661,7 +677,7 @@ const HeroTranscriptRenderer = ({ history, isSending, executionStatus }) => {
                     <ChevronDown size={14} />
                 </button>
                 <div ref={scrollRef} className="custom-scrollbar" style={{
-                    width: '100%', height: 'auto', maxHeight: '35vh', overflowY: 'auto', 
+                    width: '100%', height: 'auto', maxHeight: '35vh', overflowY: 'auto',
                     padding: '16px 20px', paddingRight: '40px',
                     display: 'flex', flexDirection: 'column', gap: '8px',
                     fontFamily: "'Fira Code', monospace", fontSize: '11px', lineHeight: '1.5',
@@ -676,76 +692,76 @@ const HeroTranscriptRenderer = ({ history, isSending, executionStatus }) => {
                     WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 15%)'
                 }}>
                     {displayHistory.map((msg, i) => {
-                    const isAtlas = msg.role === 'atlas' || msg.role === 'assistant';
-                    const rawContent = msg.content;
-                    const cleanContent = rawContent
-                        .replace(/\{[\s\S]*?\}/g, '')
-                        .replace(/\[[A-Z_]+(:.*?)?\]/g, '')
-                        .replace(/\/[a-zA-Z0-9\._\- \/]*\/[a-zA-Z0-9\._\- \/]*/g, '[RESOURCE]')
-                        .replace(/```[\s\S]*?```/g, '[CODE_BLOCK]')
-                        .replace(/^#+.*$/gm, '')
-                        .replace(/!\[.*?\]\(.*?\)/g, '[MEDIA]')
-                        .trim();
+                        const isAtlas = msg.role === 'atlas' || msg.role === 'assistant';
+                        const rawContent = msg.content;
+                        const cleanContent = rawContent
+                            .replace(/\{[\s\S]*?\}/g, '')
+                            .replace(/\[[A-Z_]+(:.*?)?\]/g, '')
+                            .replace(/\/[a-zA-Z0-9\._\- \/]*\/[a-zA-Z0-9\._\- \/]*/g, '[RESOURCE]')
+                            .replace(/```[\s\S]*?```/g, '[CODE_BLOCK]')
+                            .replace(/^#+.*$/gm, '')
+                            .replace(/!\[.*?\]\(.*?\)/g, '[MEDIA]')
+                            .trim();
 
-                    const pureLabels = cleanContent.match(/^(\[RESOURCE\]|\[CODE_BLOCK\]|\[MEDIA\])+$/);
-                    const isRichAnnouncement = (cleanContent.length < 180 && (
-                        cleanContent.includes('[RESOURCE]') ||
-                        cleanContent.includes('[MEDIA]') ||
-                        cleanContent.includes('[CODE_BLOCK]') ||
-                        cleanContent.toLowerCase().includes('capturing') ||
-                        cleanContent.toLowerCase().includes('please wait') ||
-                        cleanContent.toLowerCase().includes('attachment')
-                    )) || (
-                            cleanContent.toLowerCase().includes('capturando a tela') ||
-                            cleanContent.toLowerCase().includes('aguarde um momento')
-                        );
+                        const pureLabels = cleanContent.match(/^(\[RESOURCE\]|\[CODE_BLOCK\]|\[MEDIA\])+$/);
+                        const isRichAnnouncement = (cleanContent.length < 180 && (
+                            cleanContent.includes('[RESOURCE]') ||
+                            cleanContent.includes('[MEDIA]') ||
+                            cleanContent.includes('[CODE_BLOCK]') ||
+                            cleanContent.toLowerCase().includes('capturing') ||
+                            cleanContent.toLowerCase().includes('please wait') ||
+                            cleanContent.toLowerCase().includes('attachment')
+                        )) || (
+                                cleanContent.toLowerCase().includes('capturando a tela') ||
+                                cleanContent.toLowerCase().includes('aguarde um momento')
+                            );
 
-                    if (!cleanContent || pureLabels || isRichAnnouncement) return null;
+                        if (!cleanContent || pureLabels || isRichAnnouncement) return null;
 
-                    return (
-                        <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '6px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <span style={{
-                                    color: isAtlas ? 'var(--accent-color, #00f2ff)' : 'rgba(255, 255, 255, 0.55)',
-                                    fontWeight: '900', fontSize: '10px', textShadow: '0 1px 3px rgba(0,0,0,0.8)', letterSpacing: '0.05em'
-                                }}>
-                                    {isAtlas ? 'ATLAS' : 'USER'}
-                                </span>
-                                {isAtlas && msg.model_info && (
-                                    <span style={{ fontSize: '8px', opacity: 0.35, fontWeight: 'normal', textTransform: 'uppercase', letterSpacing: '0.02em', background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                                        {msg.model_info}
+                        return (
+                            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '6px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span style={{
+                                        color: isAtlas ? 'var(--accent-color, #00f2ff)' : 'rgba(255, 255, 255, 0.55)',
+                                        fontWeight: '900', fontSize: '10px', textShadow: '0 1px 3px rgba(0,0,0,0.8)', letterSpacing: '0.05em'
+                                    }}>
+                                        {isAtlas ? 'ATLAS' : 'USER'}
                                     </span>
-                                )}
+                                    {isAtlas && msg.model_info && (
+                                        <span style={{ fontSize: '8px', opacity: 0.35, fontWeight: 'normal', textTransform: 'uppercase', letterSpacing: '0.02em', background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                            {msg.model_info}
+                                        </span>
+                                    )}
+                                </div>
+                                <span
+                                    style={{ color: '#ffffff', wordBreak: 'break-word', textShadow: '0 1px 3px rgba(0,0,0,0.8)', paddingLeft: '8px', borderLeft: isAtlas ? '1px solid rgba(0, 242, 255, 0.2)' : '1px solid rgba(255, 255, 255, 0.1)' }}
+                                    dangerouslySetInnerHTML={{ __html: renderContent(cleanContent) }}
+                                />
                             </div>
-                            <span
-                                style={{ color: '#ffffff', wordBreak: 'break-word', textShadow: '0 1px 3px rgba(0,0,0,0.8)', paddingLeft: '8px', borderLeft: isAtlas ? '1px solid rgba(0, 242, 255, 0.2)' : '1px solid rgba(255, 255, 255, 0.1)' }}
-                                dangerouslySetInnerHTML={{ __html: renderContent(cleanContent) }}
-                            />
+                        );
+                    })}
+                    {(isSending || ['thinking', 'executing', 'responding'].includes(executionStatus)) && (
+                        <div style={{ display: 'flex', gap: '8px', opacity: 0.85, textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}>
+                            <span style={{ color: 'var(--accent-color, #00f2ff)', fontWeight: '900' }}>ATLAS &gt;</span>
+                            <span className="pulse-slow" style={{ color: '#a855f7' }}>THINKING...</span>
                         </div>
-                    );
-                })}
-                {(isSending || ['thinking', 'executing', 'responding'].includes(executionStatus)) && (
-                    <div style={{ display: 'flex', gap: '8px', opacity: 0.85, textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}>
-                        <span style={{ color: 'var(--accent-color, #00f2ff)', fontWeight: '900' }}>ATLAS &gt;</span>
-                        <span className="pulse-slow" style={{ color: '#a855f7' }}>THINKING...</span>
-                    </div>
-                )}
+                    )}
                 </div>
             </div>
         </div>
     );
 };
 
-const OverlayPopupStack = ({ popups, onFocus, onClose, onPause, onResume, onPin, sessionId }) => {
+const OverlayPopupStack = ({ popups, onFocus, onClose, onPause, onResume, onPin, sessionId, topOffset = '76px' }) => {
     if (popups.length === 0) return null;
 
     return (
         <div
             className="hide-scrollbar"
             style={{
-                position: 'fixed', top: '76px', right: '16px',
+                position: 'fixed', top: topOffset, right: '16px',
                 zIndex: DASHBOARD_Z.POPUP_STACK,
-                maxHeight: 'calc(100vh - 160px)',
+                maxHeight: `calc(100vh - ${parseInt(topOffset) + 80}px)`,
                 overflowY: 'auto',
                 pointerEvents: 'none',
                 display: 'flex',
@@ -791,11 +807,11 @@ const OverlayPopupStack = ({ popups, onFocus, onClose, onPause, onResume, onPin,
                                 item.type === 'MAP' ? 'Location Map' :
                                     item.type === 'CHART' ? 'Data Analytics' :
                                         item.type === 'DEEZER' ? 'Music Player' :
-                                        item.type === 'TERMINAL' ? 'Terminal Stream' :
-                                        item.type === 'THOUGHT_INSPECTOR' ? 'Thought Inspector' :
-                                        item.type === 'HISTORY_INSPECTOR' ? 'History Inspector' :
-                                        item.type === 'WORKER_INSPECTOR' ? 'Worker Inspector' :
-                                                'System Asset'
+                                            item.type === 'TERMINAL' ? 'Terminal Stream' :
+                                                item.type === 'THOUGHT_INSPECTOR' ? 'Thought Inspector' :
+                                                    item.type === 'HISTORY_INSPECTOR' ? 'History Inspector' :
+                                                        item.type === 'WORKER_INSPECTOR' ? 'Worker Inspector' :
+                                                            'System Asset'
                 );
                 const displayTitle = item.type === 'DEEZER'
                     ? (deezerMeta.title || itemTitle || 'Music Player')
@@ -912,22 +928,22 @@ const OverlayPopupStack = ({ popups, onFocus, onClose, onPause, onResume, onPin,
                             {((item.type === 'YOUTUBE' && !!ytExternalUrl)
                                 || (item.type === 'DEEZER' && !!deezerExternalUrl)
                                 || (item.type !== 'YOUTUBE' && item.type !== 'DEEZER' && !!item.payload?.url)) && (
-                                <a
-                                    href={
-                                        item.type === 'YOUTUBE'
-                                            ? ytExternalUrl
-                                            : item.type === 'DEEZER'
-                                                ? deezerExternalUrl
-                                                : item.payload.url
-                                    }
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="btn-ghost"
-                                    style={{ padding: '4px', display: 'flex', color: '#e2e8f0' }}
-                                >
-                                    <ExternalLink size={12} strokeWidth={2.4} />
-                                </a>
-                            )}
+                                    <a
+                                        href={
+                                            item.type === 'YOUTUBE'
+                                                ? ytExternalUrl
+                                                : item.type === 'DEEZER'
+                                                    ? deezerExternalUrl
+                                                    : item.payload.url
+                                        }
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="btn-ghost"
+                                        style={{ padding: '4px', display: 'flex', color: '#e2e8f0' }}
+                                    >
+                                        <ExternalLink size={12} strokeWidth={2.4} />
+                                    </a>
+                                )}
                             {item.type !== 'APPROVAL' && (
                                 <button onClick={() => onClose(item.id)} className="btn-ghost" style={{ padding: '4px' }}><X size={12} /></button>
                             )}
@@ -1040,7 +1056,7 @@ const DashboardApprovalCard = ({ item, sessionId, onResolved }) => {
 const StageMediaLayer = ({ mediaState, onDockMedia, onResolveApproval, onOpenTerminalFullscreen, sessionId, isMobile = false }) => {
     const stageItems = Array.isArray(mediaState?.stageItems) ? mediaState.stageItems : [];
     const item = mediaState.focusedItem || stageItems[0] || null;
-    if (!item) return null;
+    if (!item || item?.type === 'WEGENA') return null;
     const isSingleStage = stageItems.length <= 1;
     const isAssistCard = ['WEATHER', 'SYSTEM_HEALTH', 'WIKI', 'MAP', 'CHART'].includes(item?.type);
     const isInspector = ['THOUGHT_INSPECTOR', 'HISTORY_INSPECTOR', 'WORKER_INSPECTOR'].includes(item?.type);
@@ -1079,8 +1095,8 @@ const StageMediaLayer = ({ mediaState, onDockMedia, onResolveApproval, onOpenTer
                                             item?.type === 'IMAGE' ? 'Image' :
                                                 item?.type === 'PLAYBACK' ? 'Playback' :
                                                     item?.type === 'FILE' ? 'File' :
-                                                    item?.type === 'LINK' ? 'Link' :
-                                                        'Asset'
+                                                        item?.type === 'LINK' ? 'Link' :
+                                                            'Asset'
     ).toUpperCase();
     const shellFavicon = isYouTube
         ? '/api/favicon?url=https%3A%2F%2Fyoutube.com'
@@ -1135,7 +1151,7 @@ const StageMediaLayer = ({ mediaState, onDockMedia, onResolveApproval, onOpenTer
     return (
         <div className="glass" style={{
             width: '100%', maxWidth: frameMaxWidth, maxHeight: frameMaxHeight,
-            borderRadius: HERO_CONSTANTS.RADIUS.CARD, 
+            borderRadius: HERO_CONSTANTS.RADIUS.CARD,
             border: '1px solid rgba(255, 255, 255, 0.15)',
             boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.8), 0 0 40px rgba(0, 242, 255, 0.05)',
             display: 'flex', flexDirection: 'column', overflow: 'hidden',
@@ -1170,20 +1186,20 @@ const StageMediaLayer = ({ mediaState, onDockMedia, onResolveApproval, onOpenTer
             )}
 
             {/* Inner Content Slot */}
-            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
+            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative', display: 'flex', flexDirection: 'column' }}>
                 {isImage && (
-                    <div className="flex-center" style={{ width: '100%', height: '100%', padding: '16px', background: 'var(--bg-color)' }}>
+                    <div className="flex-center" style={{ flex: 1, width: '100%', padding: '16px', background: 'var(--bg-color)' }}>
                         <img src={getFileUrl(item.payload, sessionId)} alt="" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.06)' }} />
                     </div>
                 )}
                 {isYouTube && (
-                    <div style={{ width: '100%', height: '100%', aspectRatio: '16 / 9', background: '#000' }}>
+                    <div style={{ flex: 1, width: '100%', aspectRatio: '16 / 9', background: '#000' }}>
                         <iframe src={`https://www.youtube.com/embed/${resolvedYouTubeId}?autoplay=1`} title="YouTube video player" frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen style={{ width: '100%', height: '100%' }}></iframe>
                     </div>
                 )}
                 {isDeezer && <DeezerMiniPlayerCard payload={item.payload} showHeader={false} />}
                 {isCode && (
-                    <div className="custom-scrollbar" style={{ width: '100%', height: '100%', overflowY: 'auto', padding: '16px', background: 'rgba(2, 6, 18, 0.96)' }}>
+                    <div className="custom-scrollbar" style={{ flex: 1, width: '100%', overflowY: 'auto', padding: '16px', background: 'rgba(2, 6, 18, 0.96)' }}>
                         <pre style={{ margin: 0, fontSize: '11px', fontFamily: '"JetBrains Mono","Fira Code",monospace', color: '#d9e1ff', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                             <code>{item.payload?.code}</code>
                         </pre>
@@ -1495,7 +1511,7 @@ const extractWegScript = (history) => {
     if (assistantMessages.length === 0) return '';
     const latestMsg = assistantMessages[assistantMessages.length - 1];
     const content = latestMsg.content || '';
-    
+
     // 1. Tenta capturar o bloco completo ```weg ... ``` (caso esteja finalizado)
     const wegBlockMatch = content.match(/```weg\s*([\s\S]*?)```/i);
     if (wegBlockMatch) return wegBlockMatch[1].trim();
@@ -1601,8 +1617,8 @@ const StageAssistCard = ({ type, payload, sessionId, isMobile = false }) => {
     return null;
 };
 
-// Main Painel Vivo Component
-const PainelVivo = () => {
+// Main Nexus Component
+const Nexus = () => {
     const [state, dispatch] = useReducer(dashboardReducer, initialState);
     const [preferredStageSignatures, setPreferredStageSignatures] = useState([]);
     const { theme } = useTheme();
@@ -1626,11 +1642,12 @@ const PainelVivo = () => {
     const [fullscreenTerminalMediaId, setFullscreenTerminalMediaId] = useState(null);
     const [wegScript, setWegScript] = useState('');
     const [sceneStreamActive, setSceneStreamActive] = useState(false);
-    
+
     // UI Engine & Wegena Controls
     const [visualEngine, setVisualEngine] = useState('WEGENA_3D');
+    const [wegenaFeedback, setWegenaFeedback] = useState(null);
     const [wegenaConfig, setWegenaConfig] = useState({
-        preset: 'atlas-live-default',
+        preset: 'aether-minimal',
         particleCount: 120000,
         particleSize: 0.05,
         materialType: 'orb-default'
@@ -1680,7 +1697,7 @@ const PainelVivo = () => {
             setPreferredStageSignatures([]);
             return;
         }
-        const key = `live_panel_stage_layout_${sid}`;
+        const key = `nexus_stage_layout_${sid}`;
         try {
             const raw = localStorage.getItem(key);
             if (!raw) {
@@ -1710,7 +1727,7 @@ const PainelVivo = () => {
             return signatures;
         });
         try {
-            localStorage.setItem(`live_panel_stage_layout_${sid}`, JSON.stringify({
+            localStorage.setItem(`nexus_stage_layout_${sid}`, JSON.stringify({
                 signatures,
                 updatedAt: Date.now(),
             }));
@@ -1999,8 +2016,8 @@ const PainelVivo = () => {
                 title: String(
                     attachment.name
                     || attachment.filename
-                    || attachment.path?.split?.('/')?.pop?.()
-                    || attachment.file_path?.split?.('/')?.pop?.()
+                    || (typeof attachment.path === 'string' ? attachment.path.split('/').pop() : null)
+                    || (typeof attachment.file_path === 'string' ? attachment.file_path.split('/').pop() : null)
                     || 'Attachment'
                 ),
             };
@@ -2152,14 +2169,14 @@ const PainelVivo = () => {
                         dispatch({ type: 'SET_SESSION', payload: { id: activeId, name: historyData.name } });
                         if (historyData.history) {
                             dispatch({ type: 'SET_HISTORY', payload: historyData.history });
-                            
+
                             // Load deeper history for proper reasoning timeline reconstruction
                             try {
                                 const extHistory = await api.get(`/sessions/${activeId}/history?limit=100`);
                                 if (extHistory && extHistory.history) {
                                     dispatch({ type: 'SET_HISTORY', payload: extHistory.history });
                                 }
-                            } catch(e) {
+                            } catch (e) {
                                 console.error("Failed to load extended history", e);
                             }
                         }
@@ -2199,7 +2216,7 @@ const PainelVivo = () => {
 
         ws.onopen = () => {
             dispatch({ type: 'SET_CONNECTED', payload: true });
-            toast.success("Assistant Link Active", { id: 'live-panel-ws' });
+            toast.success("Assistant Link Active", { id: 'nexus-ws' });
         };
 
         ws.onclose = () => dispatch({ type: 'SET_CONNECTED', payload: false });
@@ -2244,7 +2261,7 @@ const PainelVivo = () => {
                     agentThoughtTimeoutRef.current = setTimeout(() => setIsThinking(false), 6000);
                     return;
                 }
-                
+
                 // ── Typing / Generation stream ────────────────────────────
                 if (data.type === 'typing') {
                     setAgentThought(`[Transceptor]: Sintetizando resposta verbal/textual...`);
@@ -2257,17 +2274,17 @@ const PainelVivo = () => {
                     const phase = String(data.payload?.status || data.phase || '').toLowerCase();
                     const isTerminal = ['complete', 'idle', 'succeeded', 'failed'].includes(phase);
                     const isExecuting = !isTerminal && (['running', 'thinking', 'executing', 'tool_use', 'responding'].includes(phase) || !!data.payload?.work_id);
-                    
+
                     if (isExecuting) {
                         const msg = data.payload?.message || data.message;
                         if (msg) setAgentThought(`[Sistema]: ${msg}`);
                         else if (phase) setAgentThought(`[Sistema]: Engajando protocolo '${phase}'...`);
-                        
+
                         setIsThinking(true);
                         if (agentThoughtTimeoutRef.current) clearTimeout(agentThoughtTimeoutRef.current);
                         agentThoughtTimeoutRef.current = setTimeout(() => setIsThinking(false), 6000);
                     }
-                    
+
                     const statusWorkId = data.payload?.work_id || data.work_id || null;
                     const approvalReq = (data.payload?.approval_request && typeof data.payload.approval_request === 'object') ? data.payload.approval_request : null;
 
@@ -2355,6 +2372,7 @@ const PainelVivo = () => {
                         setSceneStreamActive(true);
                         toast.success("Cenário 3D atualizado pelo subagente!", { id: 'weg-scene-toast' });
                         setWegScript(data.script);
+                        msm.addMedia({ script: data.script, title: data.meta?.label || 'Cena Wegena' }, 'WEGENA', true);
                     }
                 }
                 else if (data.type === 'weg_scene_init') {
@@ -2707,11 +2725,50 @@ const PainelVivo = () => {
     const clearWegScene = () => {
         setWegScript('');
         setSceneStreamActive(false);
+        setWegenaFeedback(null);
         if (particleRef.current) {
             particleRef.current.clearScene();
         }
         toast.success("Cena limpa, orbe em idle!");
     };
+
+    const handleWegenaFeedback = async (type) => {
+        setWegenaFeedback(type);
+        try {
+            await api.post(`/sessions/${state.textState.sessionId}/wegena/feedback`, { feedback_type: type });
+            toast.success(`Feedback '${type}' registrado para cena!`);
+        } catch (err) {
+            console.error("Falha ao registrar feedback", err);
+            toast.error("Falha ao salvar o feedback da cena");
+        }
+    };
+
+    useEffect(() => {
+        const handlePlayWegena = async (e) => {
+            const { data } = e.detail || {};
+            if (data && data.scriptUrl) {
+                try {
+                    const res = await fetch(data.scriptUrl);
+                    if (res.ok) {
+                        const scriptText = await res.text();
+                        setVisualEngine('WEGENA_3D');
+                        setWegScript(scriptText);
+                        setSceneStreamActive(true);
+                        toast.success("Cena ativada no Orb!");
+                    } else {
+                        toast.error("Falha ao carregar a cena.");
+                    }
+                } catch (err) {
+                    toast.error("Erro ao fazer download da cena.");
+                }
+            } else {
+                toast.error("URL da cena não encontrada no Card.");
+            }
+        };
+
+        window.addEventListener('app_action_play_wegena', handlePlayWegena);
+        return () => window.removeEventListener('app_action_play_wegena', handlePlayWegena);
+    }, []);
 
     return (
         <div className="dashboard-root" style={{
@@ -2726,7 +2783,14 @@ const PainelVivo = () => {
                 isMobile={isMobile}
                 sessionId={state.textState.sessionId}
                 history={state.textState.history}
-                onAddMedia={msm.addMedia}
+                onAddMedia={(payload, type) => {
+                    if (type === 'WEGENA') {
+                        setWegScript(payload.script);
+                        setSceneStreamActive(true);
+                    } else {
+                        msm.addMedia(payload, type);
+                    }
+                }}
                 onReload={handleReload}
                 onToggleFullscreen={toggleFullscreen}
                 isFullscreen={isFullscreen}
@@ -2781,12 +2845,12 @@ const PainelVivo = () => {
                 }}>
                     {theme === 'dark' && <StitchBackground />}
                     {visualEngine === 'WEGENA_3D' ? (
-                        <WegenaParticleCanvas 
+                        <WegenaParticleCanvas
                             ref={particleRef}
-                            state={state} 
-                            voice={voice} 
-                            ttsIntensity={ttsIntensity} 
-                            theme={theme} 
+                            state={state}
+                            voice={voice}
+                            ttsIntensity={ttsIntensity}
+                            theme={theme}
                             wegScript={wegScript}
                             sceneStreamActive={sceneStreamActive}
                             defaultPresetId={wegenaConfig.preset}
@@ -2801,9 +2865,9 @@ const PainelVivo = () => {
                         />
                     )}
                 </div>
-                
+
                 {/* Floating Canvas Settings Button */}
-                <div style={{ position: 'absolute', top: '20px', right: '20px', zIndex: 11000, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
+                <div style={{ position: 'absolute', bottom: '20px', right: '20px', zIndex: 11000, display: 'flex', flexDirection: 'column-reverse', alignItems: 'flex-end', gap: '10px' }}>
                     <button
                         onClick={() => setSettingsOpen(!settingsOpen)}
                         style={{
@@ -2817,7 +2881,7 @@ const PainelVivo = () => {
                     >
                         <Settings size={18} />
                     </button>
-                    
+
                     {settingsOpen && (
                         <div style={{
                             background: 'rgba(10, 12, 22, 0.85)', backdropFilter: 'blur(20px)',
@@ -2827,64 +2891,63 @@ const PainelVivo = () => {
                             animation: 'fadeIn 0.2s ease-out'
                         }}>
                             <h4 style={{ margin: 0, fontSize: '12px', fontWeight: '800', color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Visual Engine</h4>
-                            
+
                             <div style={{ display: 'flex', gap: '8px', background: 'rgba(255,255,255,0.03)', padding: '4px', borderRadius: '6px' }}>
-                                <button 
+                                <button
                                     onClick={() => setVisualEngine('ATLAS_2D')}
                                     style={{ flex: 1, padding: '6px', borderRadius: '4px', border: 'none', background: visualEngine === 'ATLAS_2D' ? 'rgba(0,242,255,0.15)' : 'transparent', color: visualEngine === 'ATLAS_2D' ? 'var(--accent-color)' : 'var(--text-muted)', fontSize: '10px', fontWeight: '700', cursor: 'pointer' }}
                                 >
                                     2D ORB
                                 </button>
-                                <button 
+                                <button
                                     onClick={() => setVisualEngine('WEGENA_3D')}
                                     style={{ flex: 1, padding: '6px', borderRadius: '4px', border: 'none', background: visualEngine === 'WEGENA_3D' ? 'rgba(0,242,255,0.15)' : 'transparent', color: visualEngine === 'WEGENA_3D' ? 'var(--accent-color)' : 'var(--text-muted)', fontSize: '10px', fontWeight: '700', cursor: 'pointer' }}
                                 >
                                     WEGENA 3D
                                 </button>
                             </div>
-                            
+
                             {visualEngine === 'WEGENA_3D' && (
                                 <>
                                     <div style={{ height: '1px', background: 'rgba(255,255,255,0.05)' }} />
                                     <h4 style={{ margin: 0, fontSize: '10px', fontWeight: '700', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Configuração da Cena</h4>
-                                    
+
                                     <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
                                         Preset Base
-                                        <select 
+                                        <select
                                             value={wegenaConfig.preset}
                                             onChange={e => setWegenaConfig(p => ({ ...p, preset: e.target.value }))}
                                             style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-primary)', padding: '6px', borderRadius: '4px', fontSize: '11px', outline: 'none' }}
                                         >
-                                            <option value="atlas-live-default">AI Orb (Padrão)</option>
-                                            <option value="atlas-live-default-v2">AI Orb v2</option>
-                                            <option value="atlas-live-brain">Neural Network Brain</option>
-                                            <option value="atlas-live-stitch">Ondas Neon (Stitch)</option>
-                                            <option value="atlas-live-hex">HexaCube (Tesseract)</option>
-                                            <option value="atlas-live-aether">Aether Minimal</option>
+                                            <option value="aether-minimal">minimal-orb</option>
+                                            <option value="ai-orb-classic">ai-orb</option>
+                                            <option value="neural-network">neural-network</option>
+                                            <option value="neon-waves">neon-waves</option>
+                                            <option value="hexa-cube">hexa-cube</option>
                                         </select>
                                     </label>
-                                    
+
                                     <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                                             <span>Contagem de Partículas</span>
                                             <span style={{ color: 'var(--accent-color)' }}>{wegenaConfig.particleCount.toLocaleString()}</span>
                                         </div>
-                                        <input 
-                                            type="range" min="5000" max="150000" step="5000" 
-                                            defaultValue={wegenaConfig.particleCount} 
-                                            onPointerUp={e => setWegenaConfig(p => ({ ...p, particleCount: parseInt(e.target.value, 10) }))} 
+                                        <input
+                                            type="range" min="5000" max="150000" step="5000"
+                                            defaultValue={wegenaConfig.particleCount}
+                                            onPointerUp={e => setWegenaConfig(p => ({ ...p, particleCount: parseInt(e.target.value, 10) }))}
                                         />
                                     </label>
-                                    
+
                                     <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                                             <span>Tamanho Base</span>
                                             <span style={{ color: 'var(--accent-color)' }}>{wegenaConfig.particleSize}</span>
                                         </div>
-                                        <input 
-                                            type="range" min="0.01" max="0.30" step="0.01" 
-                                            defaultValue={wegenaConfig.particleSize} 
-                                            onPointerUp={e => setWegenaConfig(p => ({ ...p, particleSize: parseFloat(e.target.value) }))} 
+                                        <input
+                                            type="range" min="0.01" max="0.30" step="0.01"
+                                            defaultValue={wegenaConfig.particleSize}
+                                            onPointerUp={e => setWegenaConfig(p => ({ ...p, particleSize: parseFloat(e.target.value) }))}
                                         />
                                     </label>
                                 </>
@@ -2896,7 +2959,7 @@ const PainelVivo = () => {
                 {/* Float HUD controls for Wegena scenes */}
                 {(wegScript || sceneStreamActive) && (
                     <div style={{
-                        position: 'absolute', top: '76px', left: '16px', zIndex: DASHBOARD_Z.HUD,
+                        position: 'fixed', top: '76px', right: '16px', zIndex: DASHBOARD_Z.HUD,
                         display: 'flex', flexDirection: 'column', gap: '8px'
                     }}>
                         <div className="glass" style={{
@@ -2905,9 +2968,36 @@ const PainelVivo = () => {
                             display: 'flex', alignItems: 'center', gap: '10px',
                             animation: 'fadeIn 0.3s ease'
                         }}>
-                            <Sparkles size={14} color="#00f2ff" className="animate-pulse" />
+                            <Globe size={14} color="#00f2ff" className="animate-pulse" />
                             <span style={{ fontSize: '11px', fontWeight: 800 }}>Cena Wegena Ativa</span>
-                            <button 
+                            <button
+                                onClick={() => handleWegenaFeedback('like')}
+                                style={{
+                                    background: wegenaFeedback === 'like' ? 'rgba(52, 211, 153, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                                    borderRadius: '6px', color: wegenaFeedback === 'like' ? '#34d399' : 'var(--text-primary)',
+                                    padding: '4px 6px', cursor: 'pointer',
+                                    display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s'
+                                }}
+                                title="Gostei dessa cena"
+                            >
+                                <ThumbsUp size={12} />
+                            </button>
+                            <button
+                                onClick={() => handleWegenaFeedback('dislike')}
+                                style={{
+                                    background: wegenaFeedback === 'dislike' ? 'rgba(248, 113, 113, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                                    borderRadius: '6px', color: wegenaFeedback === 'dislike' ? '#f87171' : 'var(--text-primary)',
+                                    padding: '4px 6px', cursor: 'pointer',
+                                    display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s'
+                                }}
+                                title="Não gostei"
+                            >
+                                <ThumbsDown size={12} />
+                            </button>
+                            <div style={{ width: '1px', height: '14px', background: 'rgba(255,255,255,0.2)', margin: '0 2px' }} />
+                            <button
                                 onClick={clearWegScene}
                                 style={{
                                     background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)',
@@ -2944,12 +3034,13 @@ const PainelVivo = () => {
                             onFocus={msm.focusMedia} onClose={handlePopupClose}
                             onPause={msm.pauseMediaExpiry} onResume={msm.resumeMediaExpiry}
                             onPin={msm.togglePinMedia} sessionId={state.textState.sessionId}
+                            topOffset={(wegScript || sceneStreamActive) ? '132px' : '76px'}
                         />
                     </div>
 
                     <div style={{
                         display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%',
-                        paddingBottom: isMobile ? '8px' : '16px', zIndex: DASHBOARD_Z.HUD + 10,
+                        paddingBottom: isMobile ? '4px' : '0px', zIndex: DASHBOARD_Z.HUD + 10,
                         position: 'relative'
                     }}>
                         {!isMobile && <div style={{ width: '100%', maxWidth: '800px', padding: '0 40px', pointerEvents: 'auto', marginBottom: '8px' }}>
@@ -3038,11 +3129,11 @@ const PainelVivo = () => {
                                     <div className="glass" style={{
                                         width: '100%', height: isMobile ? '48px' : '54px', borderRadius: isMobile ? '22px' : '27px',
                                         display: 'flex', alignItems: 'center', padding: isMobile ? '0 12px' : '0 20px', gap: isMobile ? '10px' : '16px',
-                                        border: '1px solid rgba(255, 255, 255, 0.18)', 
+                                        border: '1px solid rgba(255, 255, 255, 0.18)',
                                         backdropFilter: 'blur(30px)',
                                         WebkitBackdropFilter: 'blur(30px)',
                                         background: 'rgba(15, 18, 32, 0.82)',
-                                        boxShadow: '0 20px 40px rgba(0, 0, 0, 0.6), 0 0 30px rgba(0, 242, 255, 0.03)', 
+                                        boxShadow: '0 20px 40px rgba(0, 0, 0, 0.6), 0 0 30px rgba(0, 242, 255, 0.03)',
                                         transition: 'all 0.3s ease'
                                     }}>
                                         <div style={{ color: 'var(--accent-color)', opacity: 0.8 }}><Activity size={isMobile ? 16 : 20} /></div>
@@ -3163,9 +3254,9 @@ class ErrorBoundary extends React.Component {
                             }}>
                                 <span style={{ color: '#ef4444', fontSize: '20px', fontWeight: 'bold' }}>!</span>
                             </div>
-                            <div>
-                                <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#fca5a5' }}>Painel Vivo Runtime Exception</h2>
-                                <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>An error occurred during component mounting or execution.</p>
+                            <div style={{ padding: '24px', textAlign: 'center', maxWidth: '400px' }}>
+                                <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#fca5a5' }}>Nexus Runtime Exception</h2>
+                                <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: '12px', lineHeight: 1.5, wordBreak: 'break-word' }}>An error occurred during component mounting or execution.</p>
                             </div>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -3205,10 +3296,10 @@ class ErrorBoundary extends React.Component {
     }
 }
 
-const PainelVivoWithErrorBoundary = (props) => (
+const NexusWithErrorBoundary = (props) => (
     <ErrorBoundary>
-        <PainelVivo {...props} />
+        <Nexus {...props} />
     </ErrorBoundary>
 );
 
-export { PainelVivoWithErrorBoundary as default };
+export { NexusWithErrorBoundary as default };

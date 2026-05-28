@@ -8,7 +8,7 @@ import { api } from '../../hooks/api';
 import { useAssistCards } from '../../hooks/useAssistCards';
 import {
     WeatherAssistCard, SystemHealthAssistCard, DataChartAssistCard,
-    WikiAssistCard, MapAssistCard
+    WikiAssistCard, MapAssistCard, WegenaAssistCard
 } from '../AssistCards';
 import PlaybackCard from '../PlaybackCard';
 import LinkPreviewCard from '../LinkPreviewCard';
@@ -380,6 +380,7 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
     }, [msg?.sources_used, msg?.context?.data?.sources_used]);
     const {
         anchorId,
+        shouldTryWegenaCard,
         shouldTryWeatherCard,
         shouldTrySystemHealthCard,
         shouldTryWikiCard,
@@ -391,6 +392,7 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
         weatherCardData,
         systemHealthLoading,
         systemHealthData,
+        wegenaMediaUrl
     } = useAssistCards({
         sessionId,
         workId: msg?.work_id,
@@ -598,6 +600,18 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
                         approvalRequest={msg.approvalRequest}
                         statusMessage={msg.statusMessage}
                     />
+                )}
+
+                {!isUser && shouldTryWegenaCard && (
+                    <ChatCollapsibleAssistCard
+                        sessionId={sessionId}
+                        anchorId={anchorId}
+                        cardType="wegena"
+                        title="Visual Scene"
+                        defaultOpen={true}
+                    >
+                        <WegenaAssistCard data={{ id: msg?.id || anchorId, title: "Cena Gerada", description: "Wegena Engine Visual", scriptUrl: wegenaMediaUrl }} />
+                    </ChatCollapsibleAssistCard>
                 )}
 
                 {!isUser && shouldTryWeatherCard && (

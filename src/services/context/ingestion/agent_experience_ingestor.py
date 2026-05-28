@@ -53,6 +53,60 @@ class AgentExperienceIngestor:
         "success",
         "completed",
     )
+    _NEGATED_FAILURE_MARKERS = (
+        "no failure",
+        "no failures",
+        "without failure",
+        "not failed",
+        "not fail",
+        "no error",
+        "no errors",
+        "without error",
+        "without errors",
+    )
+    _POSITIVE_TRACE_TYPES = (
+        "completed",
+        "success",
+        "done",
+        "ok",
+        "success_path",
+        "task_completed",
+        "action_executed",
+        "turn_complete",
+    )
+    _ERROR_TYPE_RULES = (
+        (("permission", "denied", "approval"), "permission_denied"),
+        (("timeout", "stalled"), "timeout"),
+        (("auth", "credential", "api key"), "configuration"),
+        (("path", "not found"), "path_resolution"),
+        (("path", "normalize"), "path_resolution"),
+        (("missing",), "missing_input"),
+    )
+    _RECOVERY_TYPE_RULES = (
+        (("restart",), "restart"),
+        (("fallback",), "fallback"),
+        (("replan",), "replan"),
+        (("approval", "configuration guidance"), "escalate_guidance"),
+        (("retry",), "retry"),
+    )
+    _ENVIRONMENT_HINT_RULES = (
+        (("browser",), "browser_runtime"),
+        (("shell", "path"), "shell_runtime"),
+        (("api key", "credential", "config"), "configured_capability"),
+        (("permission", "approval"), "governance"),
+    )
+    _TAG_RULES = (
+        "retry",
+        "fallback",
+        "replan",
+        "approval",
+        "permission",
+        "browser",
+        "shell",
+        "config",
+        "timeout",
+        "path",
+    )
 
     def __init__(
         self,
@@ -147,10 +201,13 @@ class AgentExperienceIngestor:
     def _from_decision_trace(self, *, payload: Dict[str, Any], session) -> ExperienceCandidate | None:
         assessment = payload.get("recovery_assessment") if isinstance(payload.get("recovery_assessment"), dict) else {}
         event_type = str(payload.get("event_type") or payload.get("decision_type") or "").strip()
+        selected_outcome = str(payload.get("selected_outcome") or "").strip().lower()
         reason = str(assessment.get("reason") or "").strip()
         recommendation = str(assessment.get("recommendation") or payload.get("selected_outcome") or "").strip()
         error_type = str(assessment.get("error_code") or "").strip()
         task_role = str(payload.get("task_role") or payload.get("task_id") or "operation").strip()
+        if event_type.lower() in self._POSITIVE_TRACE_TYPES or selected_outcome in self._POSITIVE_TRACE_TYPES:
+            return None
         if not self._has_future_value(" ".join((event_type, reason, recommendation, error_type, task_role))):
             return None
         condition = self._summarize_condition(reason or event_type or error_type)
@@ -380,6 +437,8 @@ class AgentExperienceIngestor:
             return False
         if any(marker in clean for marker in cls._NOISE_MARKERS):
             return False
+        if any(marker in clean for marker in cls._NEGATED_FAILURE_MARKERS):
+            return False
         if any(marker in clean for marker in cls._FAILURE_MARKERS):
             return True
         if any(marker in clean for marker in ("configure", "approval path", "normalize path", "restart", "retry loop")):
@@ -407,20 +466,21 @@ class AgentExperienceIngestor:
     def _summarize_recovery(cls, *, recommendation: str, reason: str, task_role: str) -> str:
         rec = recommendation.strip().upper()
         reason_l = reason.lower()
-        if "permission" in reason_l or "approval" in reason_l or "denied" in reason_l:
-            return "surface the approval or configuration path instead of retrying the same action"
-        if "auth" in reason_l or "credential" in reason_l or "api key" in reason_l:
-            return "surface configuration guidance before attempting another execution"
-        if "timeout" in reason_l or "stalled" in reason_l:
-            return f"reduce scope and retry {task_role} once after refreshing runtime state"
-        if rec == "FALLBACK":
-            return f"prefer a fallback capability for {task_role} instead of repeating the failing path"
-        if rec == "REPLAN":
-            return "replan the task instead of retrying the same failing sequence"
-        if rec == "ESCALATE":
-            return "escalate for approval or human review instead of continuing autonomous retries"
-        if rec == "RETRY":
-            return f"retry {task_role} only after refreshing environment state"
+        for markers, message in (
+            (("permission", "approval", "denied"), "surface the approval or configuration path instead of retrying the same action"),
+            (("auth", "credential", "api key"), "surface configuration guidance before attempting another execution"),
+            (("timeout", "stalled"), f"reduce scope and retry {task_role} once after refreshing runtime state"),
+        ):
+            if any(marker in reason_l for marker in markers):
+                return message
+        for marker, message in (
+            ("FALLBACK", f"prefer a fallback capability for {task_role} instead of repeating the failing path"),
+            ("REPLAN", "replan the task instead of retrying the same failing sequence"),
+            ("ESCALATE", "escalate for approval or human review instead of continuing autonomous retries"),
+            ("RETRY", f"retry {task_role} only after refreshing environment state"),
+        ):
+            if rec == marker:
+                return message
         return ""
 
     @classmethod
@@ -428,18 +488,19 @@ class AgentExperienceIngestor:
         text = " ".join((summary or "", error_code or "", task_role or "")).lower()
         if not cls._has_future_value(text):
             return ""
-        if "permission" in text or "denied" in text or "approval" in text:
-            return "surface the approval path instead of retrying the blocked action"
-        if "auth" in text or "api key" in text or "credential" in text or "config" in text:
-            return "surface configuration guidance before attempting another execution"
-        if "browser" in text and ("stale" in text or "session" in text or "target" in text):
-            return "restart browser control before retrying the extraction sequence"
-        if "path" in text and ("normalize" in text or "not found" in text):
-            return "normalize the target path before the next retry"
-        if "timeout" in text or "stalled" in text:
-            return f"retry {task_role or 'the operation'} once after reducing scope or refreshing state"
-        if "missing" in text or "not found" in text:
-            return "validate inputs and environment prerequisites before repeating the action"
+        recovery_rules = (
+            (("permission", "denied", "approval"), None, "surface the approval path instead of retrying the blocked action"),
+            (("auth", "api key", "credential", "config"), None, "surface configuration guidance before attempting another execution"),
+            (("browser",), ("stale", "session", "target"), "restart browser control before retrying the extraction sequence"),
+            (("path",), ("normalize", "not found"), "normalize the target path before the next retry"),
+            (("timeout", "stalled"), None, f"retry {task_role or 'the operation'} once after reducing scope or refreshing state"),
+            (("missing", "not found"), None, "validate inputs and environment prerequisites before repeating the action"),
+        )
+        for required_any, companion_any, message in recovery_rules:
+            if any(marker in text for marker in required_any) and (
+                companion_any is None or any(marker in text for marker in companion_any)
+            ):
+                return message
         return ""
 
     @staticmethod
@@ -450,51 +511,32 @@ class AgentExperienceIngestor:
     @classmethod
     def _infer_error_type(cls, text: str) -> str:
         lowered = str(text or "").lower()
-        if "permission" in lowered or "denied" in lowered or "approval" in lowered:
-            return "permission_denied"
-        if "timeout" in lowered or "stalled" in lowered:
-            return "timeout"
-        if "auth" in lowered or "credential" in lowered or "api key" in lowered:
-            return "configuration"
-        if "path" in lowered and ("not found" in lowered or "normalize" in lowered):
-            return "path_resolution"
-        if "missing" in lowered:
-            return "missing_input"
+        for markers, label in cls._ERROR_TYPE_RULES:
+            if all(marker in lowered for marker in markers):
+                return label
         return "operational_error"
 
     @classmethod
     def _infer_recovery_type(cls, text: str) -> str:
         lowered = str(text or "").lower()
-        if "restart" in lowered:
-            return "restart"
-        if "fallback" in lowered:
-            return "fallback"
-        if "replan" in lowered:
-            return "replan"
-        if "approval" in lowered or "configuration guidance" in lowered:
-            return "escalate_guidance"
-        if "retry" in lowered:
-            return "retry"
+        for markers, label in cls._RECOVERY_TYPE_RULES:
+            if all(marker in lowered for marker in markers):
+                return label
         return "advisory"
 
     @classmethod
     def _environment_hint(cls, text: str) -> str:
         lowered = str(text or "").lower()
-        if "browser" in lowered:
-            return "browser_runtime"
-        if "shell" in lowered or "path" in lowered:
-            return "shell_runtime"
-        if "api key" in lowered or "credential" in lowered or "config" in lowered:
-            return "configured_capability"
-        if "permission" in lowered or "approval" in lowered:
-            return "governance"
+        for markers, label in cls._ENVIRONMENT_HINT_RULES:
+            if any(marker in lowered for marker in markers):
+                return label
         return "general_runtime"
 
     @classmethod
     def _infer_tags(cls, text: str) -> str:
         lowered = str(text or "").lower()
         tags = []
-        for tag in ("retry", "fallback", "replan", "approval", "permission", "browser", "shell", "config", "timeout", "path"):
+        for tag in cls._TAG_RULES:
             if tag in lowered:
                 tags.append(tag)
         return ",".join(tags)

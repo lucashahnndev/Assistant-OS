@@ -1,25 +1,23 @@
 # Agent Start Here
 
-Leia este arquivo primeiro.
+Este é o ponto de entrada do agente neste projeto.
 
-Este guia tambem esta espelhado em `docs/agent-start-here.md` para ficar acessivel dentro do indice de documentacao.
+Leia este arquivo primeiro.
+Depois siga a ordem abaixo.
 
 ## Ordem de leitura
 
 1. `README.md` do projeto.
-2. `agent-start-here.md`.
-3. `.spec` relevante em `agent/specs/`.
-4. `.stat` correspondente.
-5. documentação humana relevante em `docs/`.
-6. testes relacionados.
+2. `.spec` relevante em `agent/specs/`, incluindo specs de sistema, arquitetura, contrato ou domínio que governem a mudança.
+3. `.stat` correspondente.
+4. documentação humana, operacional ou de arquitetura relevante em `docs/`, quando existir.
+5. testes relacionados.
 
 ## Regra básica
 
 - `.spec` é contrato durável.
 - `.stat` é estado vivo.
 - `agent/` é workspace operacional.
-- `agent/specs/` é a fonte canônica das specs normativas.
-- `docs/` é documentação humana, explicativa e de navegação.
 - as regras detalhadas ficam em `agent/policy/`.
 
 ## Regra de abstração
@@ -33,5 +31,6 @@ Se fizer sentido formalizar, crie uma `.spec` com nome abstrato e estável.
 - mantenha mudanças pequenas e coerentes;
 - valide antes de avançar;
 - registre evidência no workspace apropriado;
+- não reorganize arquivos existentes sem aprovação;
 - atualize `.stat` quando houver progresso real;
 - atualize docs oficiais apenas quando contrato ou uso mudar.

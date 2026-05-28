@@ -195,7 +195,7 @@ def compute_commit_signal_strength(
         score += 1
 
     if score >= 4:
-        return "high"
+        return "medium" if generic_outcome else "high"
     if score >= 2:
         return "medium"
     if score == 1:

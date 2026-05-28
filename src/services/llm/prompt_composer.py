@@ -119,7 +119,7 @@ class PromptComposer:
         "capabilities_summary": 2200,
         "relevant_memory": 2500,
         "context_evidence": 2200,
-        "response_persona": 220,
+        "response_persona": 1500,
         "specialist_prompt": 220,
     }
 
@@ -194,7 +194,8 @@ class PromptComposer:
                 "pass": "pass4",
             }
         scoped_persona = str(response_persona or "").strip()
-        if scoped_persona:
+        include_response_persona = scoped_persona and str(capability_scope or "").strip().lower() == "principal-filtered"
+        if include_response_persona:
             response_persona_block = self._build_response_persona_block(scoped_persona)
             _append(
                 "response_persona",
@@ -260,7 +261,14 @@ class PromptComposer:
             f"Location: {location} | Channel: {channel} | User Name: {user_name}"
         )
 
+        _append(
+            "user_input",
+            "[USER INPUT]\n"
+            f"{str(user_input or '').strip()}"
+        )
+
         toon_state_block = (
+            "[TOON STATE]\n"
             "[INTERNAL STATE (TOON)]\n"
             f"{self._clip_state_block('toon_state', toon_state, active_prompt_profile, bool(context_bundle and getattr(context_bundle, 'evidence_items', None)), bool(session_summary))}"
         )
@@ -389,7 +397,7 @@ class PromptComposer:
             _append("broker_guidance", broker_anchor)
 
         actions_block = (
-            "[ACTIONS]\n"
+            "[DISCOVERY]\n"
             f"s={capability_scope}\n"
             f"{self._clip_block('capabilities_summary', capabilities_summary or '- No actions available for this principal.')}"
         )
@@ -493,26 +501,26 @@ class PromptComposer:
             return (
                 "[BROKER GUIDANCE]\n"
                 "- Use broker evidence for capability semantics, procedures, examples, policies, experience, and reference knowledge when relevant.\n"
-                "- If evidence is partial, combine it with live state and action availability."
+                "- If evidence is partial, combine it with live state and action availability without treating the evidence as absolute."
             )
         return (
             "[BROKER GUIDANCE]\n"
-            "- If broker evidence is absent, rely on live state, session context, and action availability."
+            "- If broker evidence is absent, rely on live state, session context, and action availability as the primary signal."
         )
 
     def _build_assistive_directive(self) -> str:
-        return (
-            "[ASSISTIVE MODE DIRECTIVE]\n"
-            "- You have tool-based vision; do not claim lack of screen visibility.\n"
-            "- Prefer `overlay.assist.highlight_target` for marking and `vision.locate_screen` for bbox lookup.\n"
-            "- Use the UI target as `label` and end with an overlay result or a grounded failure."
-        )
+        rules = [
+            "Use vision and overlay tools when the task depends on what is on screen; do not claim lack of screen visibility when those tools are available.",
+            "Prefer `overlay.assist.highlight_target` for marking and `vision.locate_screen` for bbox lookup.",
+            "Use the UI target as `label` and end with an overlay result or a grounded failure.",
+        ]
+        return "[ASSISTIVE MODE DIRECTIVE]\n" + "\n".join(f"- {rule}" for rule in rules)
 
     @staticmethod
     def _legacy_assistive_directive() -> str:
         return (
             "[ASSISTIVE MODE DIRECTIVE]\n"
-            "- CRITICAL OVERRIDE: YOU HAVE VISION CAPABILITIES VIA TOOLS. NEVER say you cannot see the screen or lack direct visibility. Do not apologize.\n"
+            "- Use vision capabilities via tools when available; avoid framing the task as if screen visibility were unavailable.\n"
             "- User asked for visual guidance on their screen.\n"
             "- Prefer `overlay.assist.highlight_target` when visual marking is needed.\n"
             "- Prefer `vision.locate_screen` as a locator step when you need bbox for overlay.\n"
@@ -523,22 +531,22 @@ class PromptComposer:
         )
 
     def _build_execution_policy(self) -> str:
-        return (
-            "[EXECUTION POLICY]\n"
-            "- Use exact namespaced action ids; prefer read/discovery before destructive actions.\n"
-            "- Use browser actions only for explicit browser/UI interaction or when a page must truly be manipulated/verified visually.\n"
-            "- Do NOT choose browser.control.run just because the request mentions web/site/search/browser/open. Prefer native API, retrieval, or specialized capabilities for lookup, reading, discovery, metadata, and other non-interactive tasks.\n"
-            "- Ask at most one concise clarification only if completion criteria are truly ambiguous.\n"
-            "- On failure, be honest, choose a grounded alternative, and avoid retry loops.\n"
-            "- CRITICAL 3D VISUALIZATION DIRECTIVE: When the user asks for a visual display, 3D scene, particle simulation, server/data flow visualization, dynamic charts, particle compositor, or drawing, ALWAYS prioritize choosing action: 'reply' with a highly rich, vivid, multi-layered conceptual scene description in response_text.\n"
-            "- You have a dedicated visual subagent available. When visualization would help, include `params.visualization` on the `reply` action with:\n"
-            "  - `enabled`: true\n"
-            "  - `mode`: one of `data_flow`, `cloud_rain`, `neural_mesh`, `concept_orbit`\n"
-            "  - `intent`: short semantic description of what should appear\n"
-            "  - `background_policy`: `adaptive`, `locked`, or `narrative`\n"
-            "- Use this visual delegation for spatial, structural, process-oriented, or metaphorical explanations. Do NOT use it for greetings or trivial chat.\n"
-            "- Do NOT look for external drawing tools or return action: 'error'; the system has a dedicated 3D particle engine (Wegena) that can render and animate these concepts in real time."
-        )
+        rules = [
+            "CRITICAL CAPABILITY RULE: rely on the available tools for screen observation, capture, browser control, and system interaction instead of claiming a lack of visibility or a text-only limitation.",
+            "Use exact namespaced action ids; prefer discovery before execution and never invent a tool that was not returned by discovery.",
+            "Use browser actions only for explicit browser/UI interaction or when a page must truly be manipulated or verified visually.",
+            "Ask at most one concise clarification only if completion criteria are truly ambiguous.",
+            "On failure, be honest, choose a grounded alternative, and avoid retry loops.",
+            "When the user asks for a visual display, 3D scene, particle simulation, server/data flow visualization, dynamic charts, particle compositor, or drawing, prefer `reply` with a rich conceptual scene description when that preserves the task intent better than a direct tool call.",
+            "When the project exposes a dedicated visual subagent and visualization would help, include `params.visualization` on the `reply` action with:",
+            "  - `enabled`: true",
+            "  - `mode`: one of `data_flow`, `cloud_rain`, `neural_mesh`, `concept_orbit`",
+            "  - `intent`: short semantic description of what should appear",
+            "  - `background_policy`: `adaptive`, `locked`, or `narrative`",
+            "Use this visual delegation for spatial, structural, process-oriented, or metaphorical explanations. Do not use it for greetings or trivial chat.",
+            "Prefer the built-in 3D particle engine when it is a better fit than an external drawing tool, and keep the plan grounded rather than forcing an error outcome.",
+        ]
+        return "[EXECUTION POLICY]\n" + "\n".join(f"- {rule}" for rule in rules)
 
     def _build_response_persona_block(self, scoped_persona: str) -> str:
         return (
@@ -612,24 +620,17 @@ class PromptComposer:
     def _legacy_execution_policy() -> str:
         return (
             "[EXECUTION POLICY]\n"
-            "- Use full namespaced action ids exactly.\n"
-            "- Prefer read/discovery before destructive actions.\n"
+            "- Use full namespaced action ids.\n"
+            "- Prefer discovery before execution and never invent a tool that was not returned by discovery.\n"
             "- Browser actions only for real UI interaction.\n"
-            "- For browser.control.run, set intent_class deterministically when implied by user goal:\n"
-            "  controlar_midia (play/listen/stream on YouTube/Spotify/Deezer),\n"
-            "  realizar_pesquisa (browse/search/read websites),\n"
-            "  automacao_ui (fill forms/click workflow),\n"
-            "  validacao_visual (verify/check if element/result is visible),\n"
-            "  manutencao (inspect/close/gc/health operations).\n"
-            "- Do not ask the user to choose intent_class when intent is already inferable from their request.\n"
             "- On failure: report honestly and choose an alternative.\n"
             "- Use memory.recall only when older context is needed.\n"
-            "- Never ask user to restart/send a new context; ask only for specific missing data.\n"
+            "- Avoid asking the user to restart or send a new context; ask only for specific missing data.\n"
             "- Suggest next step only when grounded in current result.\n"
-            "- Be proactively helpful without over-asking:\n"
+            "- Stay proactively helpful without over-asking:\n"
             "  - If user request is ambiguous (especially completion criteria), ask one concise clarification in persona.\n"
             "  - If request is clear, execute directly and avoid unnecessary clarification.\n"
-            "  - After a meaningful result, propose 1-2 concrete continuity actions (no generic filler).\n"
+            "  - After a meaningful result, propose 1-2 concrete continuity actions.\n"
             "- Artifact mindset:\n"
             "  - If user asks for report/summary/audit, prefer producing a structured deliverable when tools allow (e.g., markdown/json file) and offer it naturally.\n"
             "  - If user did not explicitly ask for a file but the task benefits from one, offer the option in one sentence.\n"
@@ -643,18 +644,7 @@ class PromptComposer:
 
     @staticmethod
     def _legacy_browser_intent_classes_block(capabilities_summary: str) -> str:
-        if "browser.control.run" not in str(capabilities_summary or ""):
-            return ""
-        return (
-            "[BROWSER INTENT CLASSES]\n"
-            "- browser.control.run requires intent_class.\n"
-            "- Allowed values:\n"
-            "  controlar_midia: media playback/stream control.\n"
-            "  realizar_pesquisa: browse/search/read web content.\n"
-            "  automacao_ui: form filling/click-through UI workflows.\n"
-            "  validacao_visual: visual verification/checks on page state.\n"
-            "  manutencao: inspect/health/gc/administrative browser operations."
-        )
+        return ""
 
     def _legacy_response_persona_block(self, scoped_persona: str) -> str:
         return (
@@ -670,7 +660,7 @@ class PromptComposer:
 
     def _legacy_actions_block(self, capability_scope: str, capabilities_summary: str) -> str:
         return (
-            "[ACTIONS]\n"
+            "[DISCOVERY]\n"
             f"scope={capability_scope}\n"
             f"{self._clip_block('capabilities_summary', capabilities_summary or '- No actions available for this principal.')}"
         )

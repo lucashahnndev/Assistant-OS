@@ -3,6 +3,8 @@ import re
 import logging
 from typing import Dict, Any, Optional
 
+from core.errors import SyntaxError as AgentSyntaxError
+
 logger = logging.getLogger("OpenRouterParser")
 
 def repair_json(s: str) -> str:
@@ -42,7 +44,7 @@ def repair_json(s: str) -> str:
         
     return repaired
 
-def extract_and_parse_json(content: str) -> Dict[str, Any]:
+def extract_and_parse_json(content: str, strict: bool = False) -> Dict[str, Any]:
     """
     Extracts and parses the first JSON object found in model output, with repair heuristic.
     """
@@ -104,4 +106,6 @@ def extract_and_parse_json(content: str) -> Dict[str, Any]:
                         return obj
                 except:
                     continue
+    if strict:
+        raise AgentSyntaxError("OpenRouter structured output is not valid JSON.")
     return {}

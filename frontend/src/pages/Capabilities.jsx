@@ -301,7 +301,7 @@ const Capabilities = () => {
                 marginBottom: '12px',
                 padding: '12px',
                 background: 'rgba(255,255,255,0.02)',
-                borderRadius: '10px',
+                borderRadius: 'var(--radius-md)',
                 border: '1px solid rgba(148,163,184,0.15)'
             }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
@@ -329,7 +329,7 @@ const Capabilities = () => {
                                 key={source.id}
                                 style={{
                                     padding: '10px',
-                                    borderRadius: '8px',
+                                    borderRadius: 'var(--radius-md)',
                                     border: active ? '1px solid rgba(var(--accent-rgb), 0.35)' : '1px solid rgba(148,163,184,0.12)',
                                     background: active ? 'rgba(var(--accent-rgb), 0.07)' : 'rgba(255,255,255,0.02)'
                                 }}
@@ -428,7 +428,7 @@ const Capabilities = () => {
             const currentRef = typeof currentValue === 'string' ? currentValue : '';
             const options = Array.from(new Set([...(envKeys || []), ...(currentRef && currentRef !== '********' ? [currentRef] : [])]));
             return (
-                <div key={fullPath} className="form-group" style={{ marginBottom: '10px', background: 'rgba(var(--accent-rgb), 0.05)', padding: '10px', borderRadius: '8px', border: '1px solid rgba(var(--accent-rgb), 0.18)' }}>
+                <div key={fullPath} className="form-group" style={{ marginBottom: '10px', background: 'rgba(var(--accent-rgb), 0.05)', padding: '10px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(var(--accent-rgb), 0.18)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: 0, fontSize: '11px', fontWeight: '700', color: 'var(--text-main)' }}>
                             <Shield size={12} color="var(--accent-color)" />
@@ -465,7 +465,7 @@ const Capabilities = () => {
                             ))}
                         </select>
                     ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '7px', background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '8px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '7px', background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: 'var(--radius-md)' }}>
                             <input
                                 type="text"
                                 className="glass-input"
@@ -640,12 +640,7 @@ const Capabilities = () => {
         border: '1px solid rgba(148,163,184,0.24)',
         boxShadow: '0 12px 42px rgba(2,6,23,0.18)',
     };
-    const modalOverlayStyle = {
-        background: 'rgba(15, 23, 42, 0.10)',
-        backdropFilter: 'blur(6px)',
-        WebkitBackdropFilter: 'blur(6px)',
-        padding: isMobile ? '6px' : '8px',
-    };
+    // Using global modal-overlay
 
     return (
         <div className="animate-fade-in" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -684,7 +679,7 @@ const Capabilities = () => {
                         alignItems: 'center',
                         gap: '4px',
                         border: '1px solid var(--card-border)',
-                        borderRadius: '10px',
+                        borderRadius: 'var(--radius-md)',
                         padding: '3px',
                         background: 'rgba(255,255,255,0.02)',
                         alignSelf: isMobile ? 'flex-end' : 'auto',
@@ -695,7 +690,7 @@ const Capabilities = () => {
                             title="Grid view"
                             style={{
                                 padding: '6px 8px',
-                                borderRadius: '8px',
+                                borderRadius: 'var(--radius-md)',
                                 background: viewMode === 'grid' ? 'var(--accent-glow)' : 'transparent',
                                 color: viewMode === 'grid' ? 'var(--accent-color)' : 'var(--text-muted)'
                             }}
@@ -708,7 +703,7 @@ const Capabilities = () => {
                             title="List view"
                             style={{
                                 padding: '6px 8px',
-                                borderRadius: '8px',
+                                borderRadius: 'var(--radius-md)',
                                 background: viewMode === 'list' ? 'var(--accent-glow)' : 'transparent',
                                 color: viewMode === 'list' ? 'var(--accent-color)' : 'var(--text-muted)'
                             }}
@@ -745,7 +740,7 @@ const Capabilities = () => {
                             display: 'flex',
                             flexDirection: 'column',
                             gap: '8px',
-                            borderRadius: '12px',
+                            borderRadius: 'var(--radius-md)',
                             border: hasIssues
                                 ? '1px solid rgba(239, 68, 68, 0.3)'
                                 : (!capability.enabled ? '1px solid rgba(148, 163, 184, 0.28)' : '1px solid var(--card-border)'),
@@ -835,7 +830,7 @@ const Capabilities = () => {
                                     style={{
                                         background: capability.enabled ? 'rgba(16,185,129,0.12)' : 'rgba(148,163,184,0.14)',
                                         border: capability.enabled ? '1px solid rgba(16,185,129,0.35)' : '1px solid rgba(148,163,184,0.28)',
-                                        borderRadius: '10px',
+                                        borderRadius: 'var(--radius-md)',
                                         cursor: 'pointer',
                                         transition: 'transform 0.2s',
                                         width: '36px',
@@ -860,7 +855,7 @@ const Capabilities = () => {
                                         height: '28px',
                                         padding: '0',
                                         justifyContent: 'center',
-                                        borderRadius: '8px',
+                                        borderRadius: 'var(--radius-md)',
                                     }}
                                 >
                                     <SlidersHorizontal size={13} />
@@ -876,7 +871,7 @@ const Capabilities = () => {
                                         height: '28px',
                                         padding: '0',
                                         justifyContent: 'center',
-                                        borderRadius: '8px',
+                                        borderRadius: 'var(--radius-md)',
                                     }}
                                 >
                                     <Settings2 size={13} />
@@ -884,7 +879,7 @@ const Capabilities = () => {
                             </div>
 
                             {hasIssues && (
-                                <div style={{ background: 'rgba(239, 68, 68, 0.08)', padding: '7px 8px', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.18)', width: '100%' }}>
+                                <div style={{ background: 'rgba(239, 68, 68, 0.08)', padding: '7px 8px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(239, 68, 68, 0.18)', width: '100%' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#f87171', fontSize: '10px', fontWeight: '700', marginBottom: '2px' }}>
                                         <AlertCircle size={11} /> Configuration issue
                                     </div>
@@ -903,7 +898,7 @@ const Capabilities = () => {
                                 flexDirection: isMobile ? 'column' : 'row',
                                 alignItems: isMobile ? 'stretch' : 'center',
                                 gap: isMobile ? '10px' : '12px',
-                                borderRadius: '12px',
+                                borderRadius: 'var(--radius-md)',
                                 border: hasIssues
                                     ? '1px solid rgba(239, 68, 68, 0.3)'
                                     : (!capability.enabled ? '1px solid rgba(148, 163, 184, 0.28)' : '1px solid var(--card-border)'),
@@ -977,7 +972,7 @@ const Capabilities = () => {
                                         style={{
                                             background: capability.enabled ? 'rgba(16,185,129,0.12)' : 'rgba(148,163,184,0.14)',
                                             border: capability.enabled ? '1px solid rgba(16,185,129,0.35)' : '1px solid rgba(148,163,184,0.28)',
-                                            borderRadius: '10px',
+                                            borderRadius: 'var(--radius-md)',
                                             cursor: 'pointer',
                                             transition: 'transform 0.2s',
                                             width: '36px',
@@ -1002,7 +997,7 @@ const Capabilities = () => {
                                             height: '28px',
                                             padding: '0',
                                             justifyContent: 'center',
-                                            borderRadius: '8px',
+                                            borderRadius: 'var(--radius-md)',
                                         }}
                                     >
                                         <SlidersHorizontal size={13} />
@@ -1018,7 +1013,7 @@ const Capabilities = () => {
                                             height: '28px',
                                             padding: '0',
                                             justifyContent: 'center',
-                                            borderRadius: '8px',
+                                            borderRadius: 'var(--radius-md)',
                                         }}
                                     >
                                         <Settings2 size={13} />
@@ -1039,7 +1034,7 @@ const Capabilities = () => {
 
             {/* Modal - Unified Standard */}
             {detailCapability && (
-                <div className="modal-overlay" style={modalOverlayStyle} onClick={() => setDetailCapability(null)}>
+                <div className="modal-overlay" onClick={() => setDetailCapability(null)}>
                     <div className="modal-content glass" onClick={e => e.stopPropagation()} style={modalShellStyle}>
                         <div style={{ padding: isMobile ? '10px 10px' : '12px 14px', borderBottom: '1px solid var(--card-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -1096,17 +1091,17 @@ const Capabilities = () => {
                                 <span className="badge badge-slate">{(detailCapability.actions || []).length} actions</span>
                             </div>
 
-                            <div style={{ border: '1px solid var(--card-border)', borderRadius: '10px', padding: '12px' }}>
+                            <div style={{ border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', padding: '12px' }}>
                                 <div style={{ fontSize: '11px', fontWeight: '900', letterSpacing: '0.08em', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>Description</div>
                                 <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-main)', lineHeight: '1.5' }}>{detailCapability.description || 'No description provided.'}</p>
                             </div>
 
-                            <div style={{ border: '1px solid var(--card-border)', borderRadius: '10px', padding: '12px' }}>
+                            <div style={{ border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', padding: '12px' }}>
                                 <div style={{ fontSize: '11px', fontWeight: '900', letterSpacing: '0.08em', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '8px' }}>Actions</div>
                                 {(detailCapability.actions || []).length > 0 ? (
                                     <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))', gap: '6px' }}>
                                         {(detailCapability.actions || []).map((action) => (
-                                            <div key={action} style={{ fontSize: '12px', color: '#cbd5e1', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--card-border)', borderRadius: '8px', padding: '6px 8px', fontFamily: 'monospace' }}>
+                                            <div key={action} style={{ fontSize: '12px', color: '#cbd5e1', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', padding: '6px 8px', fontFamily: 'monospace' }}>
                                                 {action}
                                             </div>
                                         ))}
@@ -1117,7 +1112,7 @@ const Capabilities = () => {
                             </div>
 
                             {detailCapability.retrieval_profile?.enabled && (
-                                <div style={{ border: '1px solid var(--card-border)', borderRadius: '10px', padding: '12px' }}>
+                                <div style={{ border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', padding: '12px' }}>
                                     <div style={{ fontSize: '11px', fontWeight: '900', letterSpacing: '0.08em', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '8px' }}>Retrieval Runtime</div>
                                     <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
                                         <div style={{ fontSize: '12px', color: '#cbd5e1' }}>
@@ -1142,7 +1137,7 @@ const Capabilities = () => {
                                         </div>
                                     </div>
                                     {(getRetrievalRuntime(detailCapability)?.missing_required_fields || []).length > 0 && (
-                                        <div style={{ marginTop: '10px', background: 'rgba(239, 68, 68, 0.08)', padding: '8px 10px', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.18)' }}>
+                                        <div style={{ marginTop: '10px', background: 'rgba(239, 68, 68, 0.08)', padding: '8px 10px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(239, 68, 68, 0.18)' }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#f87171', fontSize: '11px', fontWeight: '700', marginBottom: '4px' }}>
                                                 <AlertCircle size={12} /> Missing retrieval fields
                                             </div>
@@ -1157,7 +1152,7 @@ const Capabilities = () => {
                             )}
 
                             {detailCapability.id === 'research_retrieve' && (
-                                <div style={{ border: '1px solid var(--card-border)', borderRadius: '10px', padding: '12px' }}>
+                                <div style={{ border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', padding: '12px' }}>
                                     <div style={{ fontSize: '11px', fontWeight: '900', letterSpacing: '0.08em', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '8px' }}>Retrieval Control Plane</div>
                                     {retrievalControlPlaneLoading ? (
                                         <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>Loading control plane...</p>
@@ -1186,7 +1181,7 @@ const Capabilities = () => {
                                                                         alignItems: 'center',
                                                                         gap: '6px',
                                                                         padding: '5px 6px',
-                                                                        borderRadius: '10px',
+                                                                        borderRadius: 'var(--radius-md)',
                                                                         border: '1px solid var(--card-border)',
                                                                         background: 'rgba(255,255,255,0.03)',
                                                                     }}
@@ -1300,7 +1295,7 @@ const Capabilities = () => {
                                 </div>
                             )}
 
-                            <div style={{ border: '1px solid var(--card-border)', borderRadius: '10px', padding: '12px' }}>
+                            <div style={{ border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', padding: '12px' }}>
                                 <div style={{ fontSize: '11px', fontWeight: '900', letterSpacing: '0.08em', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '8px' }}>Config Snapshot</div>
                                 <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: '11px', color: '#cbd5e1', lineHeight: '1.4' }}>
                                     {JSON.stringify(detailCapability.config || {}, null, 2)}
@@ -1308,7 +1303,7 @@ const Capabilities = () => {
                             </div>
 
                             {(detailCapability.validation_errors?.length > 0 || detailCapability.missing_required?.length > 0 || getRetrievalSetupIssues(detailCapability).length > 0) && (
-                                <div style={{ background: 'rgba(239, 68, 68, 0.08)', padding: '10px 12px', borderRadius: '10px', border: '1px solid rgba(239, 68, 68, 0.18)' }}>
+                                <div style={{ background: 'rgba(239, 68, 68, 0.08)', padding: '10px 12px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(239, 68, 68, 0.18)' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#f87171', fontSize: '11px', fontWeight: '700', marginBottom: '4px' }}>
                                         <AlertCircle size={12} /> Validation details
                                     </div>
@@ -1326,7 +1321,7 @@ const Capabilities = () => {
 
             {/* Modal - Unified Standard */}
             {configuringCapability && (
-                <div className="modal-overlay" style={modalOverlayStyle} onClick={() => setConfiguringCapability(null)}>
+                <div className="modal-overlay" onClick={() => setConfiguringCapability(null)}>
                     <div className="modal-content glass" onClick={e => e.stopPropagation()} style={configModalShellStyle}>
                         <div style={{ padding: isMobile ? '12px 12px' : '14px 16px', borderBottom: '1px solid var(--card-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -1356,7 +1351,7 @@ const Capabilities = () => {
                                 onClick={handleSaveConfig}
                                 className="btn-primary"
                                 disabled={isSaving}
-                                style={{ padding: isMobile ? '7px 10px' : '8px 12px', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' }}
+                                style={{ padding: isMobile ? '7px 10px' : '8px 12px', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' }}
                             >
                                 {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
                                 <span>Save Changes</span>

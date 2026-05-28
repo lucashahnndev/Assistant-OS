@@ -8,7 +8,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from src.drivers.llm.gemini_driver import GeminiProvider
+from src.drivers.providers.gemini.llm import GeminiProvider
 
 
 def test_normalize_response_text_dict_to_string():

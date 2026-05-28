@@ -283,7 +283,7 @@ const Memory = () => {
 
                 {/* Modals */}
                 {editingItem && (
-                    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(15, 23, 42, 0.08)', backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+                    <div className="modal-overlay" onClick={() => setEditingItem(null)}>
                         <div className="glass animate-fade-in" style={{ width: 'min(92%, 560px)', minHeight: '420px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.1rem' }}><Edit3 size={18} /> Edit Memory</h3>
@@ -305,7 +305,7 @@ const Memory = () => {
                 )}
 
                 {showAddModal && (
-                    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+                    <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
                         <div className="glass animate-fade-in" style={{ width: 'min(90%, 500px)', padding: '32px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '10px' }}><PlusCircle size={20} /> Add New Fact</h3>

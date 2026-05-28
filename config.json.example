@@ -360,6 +360,12 @@
         ]
     },
     "capabilities": {
+        "wegena": {
+            "enabled": true,
+            "budget_limit": 1.0,
+            "max_particles": 70000,
+            "composition_fidelity": "high"
+        },
         "system_logs": {
             "enabled": true
         },
@@ -577,6 +583,14 @@
         },
         "reflex_capability": {
             "enabled": true
+        },
+        "wegena": {
+            "enabled": true,
+            "composition_fidelity": "high",
+            "agent_level": 5,
+            "max_particles": 70000,
+            "budget_limit": 1.0,
+            "learning_enabled": true
         }
     },
     "agentic_web": {

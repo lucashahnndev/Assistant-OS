@@ -1,3 +1,4 @@
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
@@ -18,18 +19,31 @@ import Tasks from './pages/Tasks';
 import MessagingAccess from './pages/MessagingAccess';
 import Security from './pages/Security';
 import NotFound from './pages/NotFound';
-import PainelVivo from './pages/PainelVivo';
-import LivePanelScenePreview from './pages/LivePanelScenePreview';
+import Nexus from './pages/Nexus';
+import NexusScenePreview from './pages/NexusScenePreview';
 
 import { Toaster } from 'react-hot-toast';
 
 const AppRoutes = () => {
     const { initialized, loading, agentName } = useAuth();
 
+    const showLoader = loading;
+
     if (loading) {
         return (
-            <div className="flex-center" style={{ height: '100vh', width: '100vw', background: 'var(--bg-color)' }}>
-                <div className="gradient-text animate-pulse" style={{ fontSize: '32px', fontWeight: '900', letterSpacing: '-0.02em' }}>
+            <div className="flex-center" style={{ height: '100vh', width: '100vw', background: 'var(--bg-color)', position: 'fixed', zIndex: 2147483647, inset: 0, overflow: 'hidden' }}>
+                <style>{`
+                    @keyframes loaderGlow {
+                        from { opacity: 0; }
+                        to { opacity: 1; }
+                    }
+                `}</style>
+                <div style={{
+                    position: 'absolute', inset: 0,
+                    background: 'linear-gradient(180deg, #000000 0%, rgba(40, 15, 75, 0.35) 50%, #000000 100%)',
+                    animation: 'loaderGlow 2s ease-in-out forwards'
+                }} />
+                <div className="gradient-text" style={{ fontSize: '42px', fontWeight: '900', letterSpacing: '0.15em', zIndex: 1, filter: 'drop-shadow(0 4px 8px rgba(0, 0, 0, 0.6))' }}>
                     {agentName}
                 </div>
             </div>
@@ -37,11 +51,13 @@ const AppRoutes = () => {
     }
 
     return (
-        <Routes>
+
+
+            <Routes>
             <Route path="/login" element={<Login />} />
             <Route
-                path="/__dev/live-panel-scene"
-                element={import.meta.env.DEV ? <LivePanelScenePreview /> : <Navigate to="/" replace />}
+                path="/__dev/nexus-scene"
+                element={import.meta.env.DEV ? <NexusScenePreview /> : <Navigate to="/" replace />}
             />
 
             {/* Setup is only available if not initialized */}
@@ -56,9 +72,9 @@ const AppRoutes = () => {
                     <DashboardLayout />
                 </ProtectedRoute>
             }>
-                <Route index element={<PainelVivo />} />
+                <Route index element={<Nexus />} />
                 <Route path="chat" element={<Chat />} />
-                <Route path="live_panel" element={<PainelVivo />} />
+                <Route path="nexus" element={<Nexus />} />
                 <Route path="capabilities" element={<Capabilities />} />
                 <Route path="memory" element={<Memory />} />
                 <Route path="cognition" element={<CognitionDiagnostics />} />

@@ -62,6 +62,27 @@ def test_worker_event_deduplication():
     assert len(events) == 1
     assert events[0]["summary"] == "Original"
 
+
+def test_non_memory_event_with_memory_id_is_not_suppressed_by_candidate_store():
+    session = Session(session_id="test_session")
+
+    session.publish_event({
+        "event_id": "cand-1",
+        "event_type": "MEMORY_CANDIDATE",
+        "memory_id": "memory-1",
+        "summary": "candidate",
+    })
+    session.publish_event({
+        "event_id": "evt-1",
+        "event_type": "PROGRESS",
+        "memory_id": "memory-1",
+        "summary": "normal event",
+    })
+
+    events = session.drain_events()
+    assert len(events) == 1
+    assert events[0]["summary"] == "normal event"
+
 def test_session_event_history_ring_buffer():
     session = Session(session_id="test_session")
     # Fill beyond default ring buffer (assuming small for test or just checking limit)

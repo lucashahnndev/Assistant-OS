@@ -62,5 +62,5 @@ def test_retrieval_limit_recent():
     
     memory = orchestrator._retrieve_relevant_memory(session, "Recall everything.")
     assert len(memory) == 5
-    assert memory[-1]["memory_id"] == "m9"
-    assert memory[0]["memory_id"] == "m5"
+    assert memory[0]["memory_id"] == "m9"
+    assert memory[-1]["memory_id"] == "m5"

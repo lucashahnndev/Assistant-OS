@@ -29,7 +29,7 @@ class InternalDriver:
             "supports_multimodal": True
         }
 
-    def send_status(self, session_id: str, phase: str, payload: Optional[Dict] = None):
+    def send_status(self, session_id: str, phase: str, payload: Optional[Dict] = None, model_info: Optional[Dict] = None, **kwargs):
         # Internal status updates can be logged or ignored depending on the need
         logger.debug(f"Internal Status for {session_id}: {phase} | {payload}")
 

@@ -2,6 +2,7 @@ import datetime
 import logging
 import os
 import platform
+import re
 from typing import Any, Dict, List
 
 from ..base import CapabilityBase
@@ -31,6 +32,7 @@ class SystemCapability(CapabilityBase):
         return [
             "status",
             "cancel",
+            "consult_tools",
             "capabilities.list",
             "capabilities.list.ai",
             "capabilities.list.ui",
@@ -159,6 +161,251 @@ class SystemCapability(CapabilityBase):
             return True
         return False
 
+    @staticmethod
+    def _tokenize(text: str) -> List[str]:
+        return [token for token in re.findall(r"[a-zA-Z0-9_]+", str(text or "").lower()) if len(token) > 1]
+
+    @classmethod
+    def _score_text(cls, query_tokens: List[str], *parts: Any) -> float:
+        haystack = " ".join(str(part or "") for part in parts if str(part or "").strip()).lower()
+        if not haystack:
+            return 0.0
+        tokens = list(dict.fromkeys(query_tokens))
+        if not tokens:
+            return 0.0
+        overlap = sum(1 for token in tokens if token in haystack)
+        score = overlap / max(1, len(tokens))
+        if any(token in haystack for token in tokens[:2]):
+            score += 0.15
+        return min(1.0, score)
+
+    @staticmethod
+    def _candidate_namespace(action_id: str) -> str:
+        return ".".join(str(action_id or "").split(".")[:-1]) if "." in str(action_id or "") else str(action_id or "")
+
+    def _build_consult_candidates(
+        self,
+        *,
+        query: str,
+        domain: str,
+        intent: str,
+        limit: int,
+        context: Dict[str, Any],
+        registry: Any,
+    ) -> List[Dict[str, Any]]:
+        allowed_actions = context.get("allowed_actions")
+        allowed_set = set(allowed_actions) if isinstance(allowed_actions, list) else None
+        query_text = str(query or context.get("user_input") or "").strip()
+        query_tokens = self._tokenize(query_text)
+        domain_text = str(domain or "").strip().lower()
+        intent_text = str(intent or "").strip().lower()
+
+        broker = None
+        orch = getattr(self.kernel, "orchestrator", None) if self.kernel else None
+        if orch is not None:
+            broker = getattr(orch, "context_broker", None)
+
+        evidence_items: List[Any] = []
+        if broker is not None and hasattr(broker, "build_bundle"):
+            try:
+                bundle = broker.build_bundle(
+                    user_input=query_text,
+                    session=context.get("session"),
+                    capability_registry=registry,
+                    allowed_actions=allowed_actions if isinstance(allowed_actions, list) else None,
+                    situational_context=context.get("situational_context") if isinstance(context.get("situational_context"), dict) else {},
+                    session_context=context.get("session_context") if isinstance(context.get("session_context"), dict) else {},
+                    broker_hints={
+                        "primary_task_id": context.get("primary_task_id"),
+                        "hot_action_namespace": domain_text or context.get("hot_action_namespace") or "",
+                    },
+                )
+                evidence_items = list(getattr(bundle, "evidence_items", None) or [])
+                diagnostics = getattr(bundle, "diagnostics", None)
+            except Exception:
+                evidence_items = []
+                diagnostics = None
+        else:
+            diagnostics = None
+
+        focus_rows = []
+        if registry and hasattr(registry, "get_focus_actions"):
+            try:
+                focus_rows = list(registry.get_focus_actions(query_text, allowed_actions=allowed_actions if isinstance(allowed_actions, list) else None, limit=max(1, int(limit or 1))))
+            except Exception:
+                focus_rows = []
+        focus_action_ids = {str(row.get("id") or "").strip() for row in focus_rows if isinstance(row, dict) and str(row.get("id") or "").strip()}
+
+        candidates_by_action: Dict[str, Dict[str, Any]] = {}
+
+        def _add_candidate(row: Dict[str, Any], score: float, source: str, reason: str, source_rank: int) -> None:
+            action_id = str(row.get("action_id") or row.get("id") or "").strip()
+            if not action_id:
+                return
+            if allowed_set is not None and action_id.lower() not in {item.lower() for item in allowed_set}:
+                return
+            if not score and source != "capability_knowledge_rag":
+                return
+            candidate = {
+                "action_id": action_id,
+                "capability_id": str(row.get("capability_id") or "").strip(),
+                "namespace": str(row.get("namespace") or self._candidate_namespace(action_id)).strip(),
+                "title": str(row.get("title") or row.get("name") or action_id).strip(),
+                "summary": str(row.get("summary") or row.get("description") or "").strip(),
+                "description": str(row.get("description") or row.get("summary") or "").strip(),
+                "risk_level": str(row.get("risk_level") or "low").strip(),
+                "setup_ready": bool(row.get("setup_ready", True)),
+                "source": source,
+                "reason": reason,
+                "score": round(max(0.0, min(1.0, score)), 4),
+                "_source_rank": source_rank,
+            }
+            current = candidates_by_action.get(action_id)
+            if current is None or candidate["score"] > float(current.get("score") or 0.0) or (
+                candidate["score"] == float(current.get("score") or 0.0) and candidate["_source_rank"] < int(current.get("_source_rank") or 99)
+            ):
+                candidates_by_action[action_id] = candidate
+
+        # 1) Evidence-backed candidates from capability knowledge RAG.
+        for item in evidence_items:
+            if str(getattr(item, "domain", "")).strip().lower() != "capability_knowledge":
+                continue
+            metadata = getattr(item, "metadata", {}) if isinstance(getattr(item, "metadata", {}), dict) else {}
+            action_id = str(metadata.get("action_id") or "").strip()
+            if not action_id:
+                continue
+            meta_text = " ".join(
+                [
+                    str(getattr(item, "title", "") or ""),
+                    str(getattr(item, "content", "") or ""),
+                    str(metadata.get("title", "") or ""),
+                    str(metadata.get("description", "") or ""),
+                    str(metadata.get("namespace", "") or ""),
+                    str(metadata.get("capability_id", "") or ""),
+                ]
+            )
+            score = 0.85 + self._score_text(query_tokens, meta_text, domain_text, intent_text)
+            row = {
+                "action_id": action_id,
+                "capability_id": str(metadata.get("capability_id") or "").strip(),
+                "namespace": str(metadata.get("namespace") or self._candidate_namespace(action_id)).strip(),
+                "title": str(metadata.get("title") or getattr(item, "title", "") or action_id).strip(),
+                "summary": str(metadata.get("description") or getattr(item, "content", "")).strip()[:180],
+                "description": str(metadata.get("description") or getattr(item, "content", "")).strip(),
+                "risk_level": str(metadata.get("risk_level") or "low").strip(),
+                "setup_ready": True,
+            }
+            if domain_text and domain_text in " ".join([row["namespace"], row["capability_id"], action_id]).lower():
+                score += 0.1
+            _add_candidate(row, score, "capability_knowledge_rag", "evidence-backed action", 0)
+
+        # 2) Discovery offers from the registry, if available.
+        discovery_offers = []
+        if registry and hasattr(registry, "list_discovery_offers"):
+            try:
+                discovery_offers = list(registry.list_discovery_offers(intent=intent_text or None, domain=domain_text or None, role=None, entity_type=None))
+            except TypeError:
+                try:
+                    discovery_offers = list(registry.list_discovery_offers())
+                except Exception:
+                    discovery_offers = []
+            except Exception:
+                discovery_offers = []
+
+        if discovery_offers:
+            for offer in discovery_offers:
+                if not isinstance(offer, dict):
+                    continue
+                actions = [str(a or "").strip() for a in list(offer.get("actions") or []) if str(a or "").strip()]
+                keywords = " ".join(str(x or "") for x in list(offer.get("keywords") or []))
+                offer_text = " ".join(
+                    [
+                        str(offer.get("capability_id") or ""),
+                        str(offer.get("namespace") or ""),
+                        keywords,
+                        " ".join(str(x or "") for x in list(offer.get("domains") or [])),
+                        " ".join(str(x or "") for x in list(offer.get("entity_types") or [])),
+                    ]
+                )
+                offer_score = self._score_text(query_tokens, offer_text, query_text, domain_text, intent_text)
+                if bool(offer.get("setup_ready", True)):
+                    offer_score += 0.05
+                if domain_text and domain_text in offer_text.lower():
+                    offer_score += 0.08
+                if diagnostics and domain_text and domain_text in " ".join(getattr(diagnostics, "evidence_domains", []) or []).lower():
+                    offer_score += 0.06
+                for action_id in actions:
+                    if allowed_set is not None and action_id.lower() not in {item.lower() for item in allowed_set}:
+                        continue
+                    meta = registry.get_action_metadata(action_id) if registry and hasattr(registry, "get_action_metadata") else {}
+                    row = {
+                        "action_id": action_id,
+                        "capability_id": str(offer.get("capability_id") or meta.get("capability_id") or "").strip(),
+                        "namespace": str(offer.get("namespace") or meta.get("namespace") or self._candidate_namespace(action_id)).strip(),
+                        "title": str(meta.get("title") or offer.get("title") or action_id).strip(),
+                        "summary": str(meta.get("description") or offer.get("description") or "").strip(),
+                        "description": str(meta.get("description") or offer.get("description") or "").strip(),
+                        "risk_level": str(meta.get("risk_level") or offer.get("risk_level") or "low").strip(),
+                        "setup_ready": bool(offer.get("setup_ready", True)),
+                    }
+                    score = offer_score + self._score_text(query_tokens, action_id, row["title"], row["summary"])
+                    if action_id in focus_action_ids:
+                        score += 0.08
+                    _add_candidate(row, score, "retrieval_offer", "registry discovery offer", 1)
+
+        # 3) Focus-ranked actions as a final conservative fallback.
+        for focus_row in focus_rows:
+            if not isinstance(focus_row, dict):
+                continue
+            action_id = str(focus_row.get("id") or "").strip()
+            if not action_id:
+                continue
+            if allowed_set is not None and action_id.lower() not in {item.lower() for item in allowed_set}:
+                continue
+            meta = registry.get_action_metadata(action_id) if registry and hasattr(registry, "get_action_metadata") else {}
+            row = {
+                "action_id": action_id,
+                "capability_id": str(meta.get("capability_id") or "").strip(),
+                "namespace": str(meta.get("namespace") or self._candidate_namespace(action_id)).strip(),
+                "title": str(meta.get("title") or action_id).strip(),
+                "summary": str(meta.get("description") or focus_row.get("description") or "").strip(),
+                "description": str(meta.get("description") or focus_row.get("description") or "").strip(),
+                "risk_level": str(meta.get("risk_level") or "low").strip(),
+                "setup_ready": True,
+            }
+            score = float(focus_row.get("score") or 0.0) + self._score_text(query_tokens, action_id, row["title"], row["summary"])
+            if domain_text and domain_text in " ".join([row["namespace"], row["capability_id"], action_id]).lower():
+                score += 0.05
+            _add_candidate(row, score, "focus_ranker", "focus-ranked fallback", 2)
+
+        # Conservative fallback: consult the canonical catalog only if discovery offers did not produce candidates.
+        if not candidates_by_action and registry and hasattr(registry, "list_actions"):
+            for action_id in list(registry.list_actions())[: max(10, int(limit or 10) * 2)]:
+                action_id = str(action_id or "").strip()
+                if not action_id:
+                    continue
+                if allowed_set is not None and action_id.lower() not in {item.lower() for item in allowed_set}:
+                    continue
+                meta = registry.get_action_metadata(action_id) if hasattr(registry, "get_action_metadata") else {}
+                row = {
+                    "action_id": action_id,
+                    "capability_id": str(meta.get("capability_id") or "").strip(),
+                    "namespace": str(meta.get("namespace") or self._candidate_namespace(action_id)).strip(),
+                    "title": str(meta.get("title") or action_id).strip(),
+                    "summary": str(meta.get("description") or "").strip(),
+                    "description": str(meta.get("description") or "").strip(),
+                    "risk_level": str(meta.get("risk_level") or "low").strip(),
+                    "setup_ready": True,
+                }
+                score = self._score_text(query_tokens, action_id, row["title"], row["summary"], query_text, domain_text, intent_text)
+                _add_candidate(row, score, "catalog_fallback", "canonical catalog fallback", 3)
+
+        candidates = list(candidates_by_action.values())
+        candidates.sort(key=lambda row: (-float(row.get("score") or 0.0), int(row.get("_source_rank") or 99), str(row.get("action_id") or "")))
+        for item in candidates:
+            item.pop("_source_rank", None)
+        return candidates[: max(1, int(limit or 1))]
+
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         local = self._local_action(action_id)
 
@@ -205,6 +452,104 @@ class SystemCapability(CapabilityBase):
                     time=now,
                 )
             return self._result(ok=True, status="success", message=f"Current time is {now}.", date=today, time=now)
+
+        if local == "consult_tools":
+            orch = getattr(self.kernel, "orchestrator", None) if self.kernel else None
+            registry = getattr(orch, "capability_registry", None)
+            if not registry:
+                return self._result(
+                    ok=False,
+                    status="error",
+                    message="Capability registry not available.",
+                    error_code="SKILL_REGISTRY_UNAVAILABLE",
+                )
+
+            query = str(params.get("query") or context.get("user_input") or "").strip()
+            domain = str(params.get("domain") or "").strip()
+            intent = str(params.get("intent") or "").strip()
+            role = str(params.get("role") or "").strip()
+            entity_type = str(params.get("entity_type") or "").strip()
+            output_format = str(params.get("format") or "legacy").strip().lower()
+            limit = self._to_int(params.get("limit"), default=5, min_value=1, max_value=20)
+
+            candidates = self._build_consult_candidates(
+                query=query,
+                domain=domain,
+                intent=intent,
+                limit=limit,
+                context=context,
+                registry=registry,
+            )
+
+            diagnostics = None
+            broker_domains: List[str] = []
+            if orch is not None and hasattr(orch, "context_broker") and orch.context_broker is not None:
+                broker = orch.context_broker
+                if hasattr(broker, "build_bundle"):
+                    try:
+                        bundle = broker.build_bundle(
+                            user_input=query,
+                            session=context.get("session"),
+                            capability_registry=registry,
+                            allowed_actions=context.get("allowed_actions"),
+                            situational_context=context.get("situational_context") if isinstance(context.get("situational_context"), dict) else {},
+                            session_context=context.get("session_context") if isinstance(context.get("session_context"), dict) else {},
+                            broker_hints=context.get("broker_hints") if isinstance(context.get("broker_hints"), dict) else {},
+                        )
+                        diagnostics = getattr(bundle, "diagnostics", None)
+                        broker_domains = list(getattr(diagnostics, "evidence_domains", []) or [])
+                    except Exception:
+                        diagnostics = None
+                        broker_domains = []
+
+            primary = candidates[0] if candidates else {}
+            if output_format == "toon":
+                toon_rows = [
+                    {
+                        "id": row.get("action_id"),
+                        "namespace": row.get("namespace"),
+                        "risk_level": row.get("risk_level"),
+                        "description": row.get("summary") or row.get("description") or "",
+                    }
+                    for row in candidates
+                ]
+                toon = encode_capabilities_list(toon_rows, include_description=True)
+                return self._result(
+                    ok=True,
+                    status="success" if candidates else "empty",
+                    query=query,
+                    intent=intent,
+                    domain=domain,
+                    role=role,
+                    entity_type=entity_type,
+                    count=len(candidates),
+                    primary_action_id=str(primary.get("action_id") or ""),
+                    primary_score=primary.get("score"),
+                    discovery_source=str(primary.get("source") or ""),
+                    broker_domains=broker_domains,
+                    format="toon",
+                    audience="ai",
+                    toon=toon,
+                    items=candidates,
+                )
+
+            return self._result(
+                ok=True,
+                status="success" if candidates else "empty",
+                query=query,
+                intent=intent,
+                domain=domain,
+                role=role,
+                entity_type=entity_type,
+                count=len(candidates),
+                items=candidates,
+                primary_action_id=str(primary.get("action_id") or ""),
+                primary_score=primary.get("score"),
+                discovery_source=str(primary.get("source") or ""),
+                broker_domains=broker_domains,
+                format="legacy",
+                audience="ai",
+            )
 
         if local in {"capabilities.list", "capabilities.list.ai", "capabilities.list.ui"}:
             orch = getattr(self.kernel, "orchestrator", None) if self.kernel else None

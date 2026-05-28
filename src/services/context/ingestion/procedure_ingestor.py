@@ -51,8 +51,8 @@ class ProcedureIngestor:
 
     def _iter_sources(self) -> Iterable[str]:
         explicit = [
-            os.path.join(self.repo_root, "docs", "worker_task_contract.md"),
-            os.path.join(self.repo_root, "docs", "browser_control_playbook.md"),
+            os.path.join(self.repo_root, "agent", "specs", "worker_task_contract.spec.md"),
+            os.path.join(self.repo_root, "docs", "guides", "browser_control_playbook.md"),
         ]
         for path in explicit:
             if os.path.exists(path):
@@ -242,7 +242,7 @@ class ProcedureIngestor:
             return "capability_readme", parts[0]
         if normalized.endswith("browser_control_playbook.md"):
             return "playbook_doc", "browser_control"
-        if normalized.endswith("worker_task_contract.md"):
+        if normalized.endswith("worker_task_contract.spec.md"):
             return "contract_doc", ""
         return "repo_doc", ""
 

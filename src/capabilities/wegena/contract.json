@@ -1,0 +1,47 @@
+{
+    "contract_version": "1.0",
+    "capability": {
+        "id": "wegena",
+        "namespace": "wegena",
+        "version": "1.0.0",
+        "title": "Wegena Engine",
+        "description": "Gera cenas 3D complexas para o motor de partículas Wegena procedimentalmente.",
+        "assets": {
+            "icon_svg": "assets/icon.svg"
+        }
+    },
+    "runtime": {
+        "module": "capabilities.wegena",
+        "factory": "create_capability",
+        "config_schema": "./config.schema.json"
+    },
+    "actions": [
+        {
+            "id": "wegena.generate_scene",
+            "title": "Generate Scene",
+            "description": "Gera uma nova cena Wegena (.weg) a partir de uma descrição textual.",
+            "handler": "generate_scene",
+            "risk_level": "medium",
+            "permissions": {
+                "scopes": ["wegena:generate_scene"],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "Descrição do que deve ser criado (ambiente, luzes, formas)."
+                    }
+                },
+                "required": ["description"],
+                "additionalProperties": false
+            },
+            "side_effect": "none"
+        }
+    ],
+    "auth": {
+        "mode": "none"
+    }
+}

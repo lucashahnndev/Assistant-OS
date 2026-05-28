@@ -1,9 +1,8 @@
 from typing import List, Dict, Any, Optional
-import requests
 import json
+import requests
 from core.intent import AgentIntent
 from drivers.llm.base import ILLMProvider
-import requests
 from utils.logging_config import get_logger
 
 logger = get_logger("OllamaDriver")
@@ -18,6 +17,27 @@ class OllamaProvider(ILLMProvider):
             self.api_url = "http://localhost:11434/api/chat"
             self.model = "llama3"
             self.max_tokens = 4096
+
+    @staticmethod
+    def _normalize_response_text(value: Any, fallback: str = "") -> str:
+        if isinstance(value, str):
+            return value
+        if value is None:
+            return fallback
+        if isinstance(value, dict):
+            candidate = value.get("text") or value.get("response") or value.get("message")
+            if candidate is not None:
+                return str(candidate)
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        if isinstance(value, list):
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        return str(value)
 
     def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] | None = None, **kwargs) -> AgentIntent:
         # Construct messages
@@ -44,23 +64,36 @@ class OllamaProvider(ILLMProvider):
             response = requests.post(self.api_url, json=payload)
             response.raise_for_status()
             result = response.json()
-            
-            content = result.get("message", {}).get("content", "{}")
+            content = ""
+            if isinstance(result, dict):
+                if isinstance(result.get("message"), dict):
+                    content = result.get("message", {}).get("content", "") or ""
+                elif isinstance(result.get("choices"), list) and result["choices"]:
+                    first_choice = result["choices"][0]
+                    if isinstance(first_choice, dict):
+                        message = first_choice.get("message", {})
+                        if isinstance(message, dict):
+                            content = message.get("content", "") or ""
+                    elif hasattr(first_choice, "message"):
+                        content = getattr(first_choice.message, "content", "") or ""
+            content = str(content or "{}")
             
             try:
                 data = json.loads(content)
+                if not isinstance(data, dict):
+                    raise ValueError("Model returned a non-object JSON payload.")
                 attachments = data.get("attachments")
                 if not attachments and isinstance(data.get("params"), dict):
                     attachments = data.get("params", {}).get("attachments")
 
                 return AgentIntent(
-                    thought=data.get("thought", ""),
+                    thought=str(data.get("thought", "") or ""),
                     action=data.get("action", "unknown"),
                     params=data.get("params", {}),
-                    response_text=data.get("response_text", ""),
+                    response_text=self._normalize_response_text(data.get("response_text", data.get("reply", "")), fallback=""),
                     attachments=attachments
                 )
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, ValueError, AttributeError, TypeError):
                 return AgentIntent(
                      thought="Model failed to return JSON",
                      action="unknown",

@@ -39,6 +39,68 @@ logger = get_logger("ContextBroker")
 
 class ContextBroker:
     """Phase 2A broker that classifies, routes, retrieves, reranks, and normalizes context evidence."""
+    _EVIDENCE_TUNING_RULES = {
+        "policy_suppression": {
+            "domains": ("policies",),
+            "intents": (
+                ContextIntent.TASK_EXECUTION.value,
+                ContextIntent.TROUBLESHOOTING.value,
+                ContextIntent.CAPABILITY_LOOKUP.value,
+                ContextIntent.GENERAL_KNOWLEDGE.value,
+                ContextIntent.CONVERSATIONAL.value,
+                ContextIntent.MEMORY_LOOKUP.value,
+            ),
+            "require_hint": "approval_pending",
+            "reason": "policies:suppressed",
+        },
+        "examples_after_procedures": {
+            "domains": ("examples",),
+            "intents": (
+                ContextIntent.TASK_EXECUTION.value,
+                ContextIntent.TROUBLESHOOTING.value,
+            ),
+            "require_any_kept_domain": ("procedures",),
+            "cap": 1,
+            "reason": "examples:suppressed:procedures_present",
+        },
+        "agent_experience_task_execution": {
+            "domains": ("agent_experience",),
+            "intents": (ContextIntent.TASK_EXECUTION.value,),
+            "require_hint_absent": "troubleshooting_active",
+            "reason": "agent_experience:suppressed:no_troubleshooting",
+        },
+        "examples_after_capability": {
+            "domains": ("examples",),
+            "intents": (ContextIntent.CAPABILITY_LOOKUP.value,),
+            "require_min_selected_domain": ("capability_knowledge", 2),
+            "reason": "examples:suppressed:capability_present",
+        },
+        "external_after_custom": {
+            "domains": ("external_knowledge",),
+            "intents": (
+                ContextIntent.TASK_EXECUTION.value,
+                ContextIntent.TROUBLESHOOTING.value,
+                ContextIntent.CAPABILITY_LOOKUP.value,
+                ContextIntent.CONVERSATIONAL.value,
+                ContextIntent.MEMORY_LOOKUP.value,
+            ),
+            "require_kept_domain": "custom_knowledge",
+            "reason": "external:suppressed:custom_present",
+        },
+        "custom_after_external": {
+            "domains": ("custom_knowledge",),
+            "intents": (
+                ContextIntent.TASK_EXECUTION.value,
+                ContextIntent.TROUBLESHOOTING.value,
+                ContextIntent.CAPABILITY_LOOKUP.value,
+                ContextIntent.POLICY_LOOKUP.value,
+                ContextIntent.CONVERSATIONAL.value,
+                ContextIntent.MEMORY_LOOKUP.value,
+            ),
+            "require_kept_domain": "external_knowledge",
+            "reason": "external:suppressed:custom_present",
+        },
+    }
 
     def __init__(
         self,
@@ -153,7 +215,7 @@ class ContextBroker:
                 priorities=baseline_priorities,
                 intent=intent.value,
                 broker_hints=None,
-                max_items=6,
+                max_items=max_items,
             )
         hint_summary = [
             str(item).strip()
@@ -284,6 +346,43 @@ class ContextBroker:
         density_reduced = 0
         low_value_suppressed = 0
 
+        rule_actions = {
+            "policy_suppression": "suppress",
+            "examples_after_procedures": "suppress",
+            "agent_experience_task_execution": "suppress",
+            "examples_after_capability": "suppress",
+            "external_after_custom": "suppress",
+            "custom_after_external": "prefer_external",
+        }
+
+        def _rule_matches(rule: Dict[str, Any], *, domain: str, selected_by_domain: Dict[str, int], kept: List[Any]) -> bool:
+            domains = tuple(rule.get("domains") or ())
+            intents = tuple(rule.get("intents") or ())
+            if domains and domain not in domains:
+                return False
+            if intents and intent not in intents:
+                return False
+            require_hint = str(rule.get("require_hint") or "").strip()
+            if require_hint and not bool(hints.get(require_hint)):
+                return True
+            if require_hint:
+                return False
+            require_hint_absent = str(rule.get("require_hint_absent") or "").strip()
+            if require_hint_absent and bool(hints.get(require_hint_absent)):
+                return False
+            required_any = tuple(rule.get("require_any_kept_domain") or ())
+            if required_any and not any(k.domain in required_any for k in kept):
+                return False
+            min_selected = rule.get("require_min_selected_domain")
+            if isinstance(min_selected, tuple) and len(min_selected) == 2:
+                selected_domain, minimum = min_selected
+                if selected_by_domain.get(str(selected_domain), 0) < int(minimum):
+                    return False
+            require_kept = str(rule.get("require_kept_domain") or "").strip()
+            if require_kept and not any(k.domain == require_kept for k in kept):
+                return False
+            return True
+
         def _fingerprint(item: Any) -> str:
             text = f"{getattr(item, 'title', '')} {getattr(item, 'content', '')}".lower()
             return " ".join("".join(ch if ch.isalnum() or ch.isspace() else " " for ch in text).split())
@@ -306,59 +405,31 @@ class ContextBroker:
                 _suppress(item, f"duplicate:{domain}")
                 continue
 
-            if intent != ContextIntent.POLICY_LOOKUP.value and domain == "policies" and not bool(hints.get("approval_pending")):
-                low_value_suppressed += 1
-                _suppress(item, "policies:suppressed")
-                continue
+            rule_for_domain = None
+            for rule_name, rule in self._EVIDENCE_TUNING_RULES.items():
+                if _rule_matches(rule, domain=domain, selected_by_domain=selected_by_domain, kept=kept):
+                    rule_for_domain = (rule_name, rule)
+                    break
 
-            if intent in {ContextIntent.TASK_EXECUTION.value, ContextIntent.TROUBLESHOOTING.value}:
-                if domain == "examples" and any(k.domain == "procedures" for k in kept) and selected_by_domain.get("examples", 0) >= 1:
+            if rule_for_domain:
+                rule_name, rule = rule_for_domain
+                reason = str(rule.get("reason") or "")
+                rule_action = rule_actions.get(rule_name)
+                if rule_action == "suppress":
                     low_value_suppressed += 1
-                    _suppress(item, "examples:suppressed:procedures_present")
+                    _suppress(item, reason)
                     continue
-                if intent == ContextIntent.TASK_EXECUTION.value and domain == "agent_experience" and not bool(hints.get("troubleshooting_active")):
-                    low_value_suppressed += 1
-                    _suppress(item, "agent_experience:suppressed:no_troubleshooting")
-                    continue
-
-            if intent == ContextIntent.CAPABILITY_LOOKUP.value and domain == "examples":
-                if selected_by_domain.get("capability_knowledge", 0) >= 2:
-                    low_value_suppressed += 1
-                    _suppress(item, "examples:suppressed:capability_present")
-                    continue
-
-            if domain == "external_knowledge" and any(k.domain == "custom_knowledge" for k in kept):
-                if intent != ContextIntent.GENERAL_KNOWLEDGE.value:
-                    low_value_suppressed += 1
-                    _suppress(item, "external:suppressed:custom_present")
-                    continue
-                trust = str(getattr(item, "metadata", {}).get("trust_level") or "").lower()
-                if trust not in {"system", "curated", "high"}:
-                    low_value_suppressed += 1
-                    _suppress(item, "external:suppressed:custom_focus")
-                    continue
-
-            if domain == "custom_knowledge":
-                if any(k.domain == "external_knowledge" for k in kept):
-                    if intent != ContextIntent.GENERAL_KNOWLEDGE.value:
-                        low_value_suppressed += 1
-                        kept = [k for k in kept if k.domain != "external_knowledge"]
-                        if selected_by_domain.get("external_knowledge", 0) > 0:
-                            selected_by_domain["external_knowledge"] = selected_by_domain.get("external_knowledge", 0) - 1
-                        suppressed_by_domain["external_knowledge"] = suppressed_by_domain.get("external_knowledge", 0) + 1
-                        conflict_summary.append("external:suppressed:custom_present")
-                    else:
-                        external_items = [k for k in kept if k.domain == "external_knowledge"]
-                        external_trust = ""
-                        if external_items:
-                            external_trust = str(getattr(external_items[0], "metadata", {}).get("trust_level") or "").lower()
+                if rule_action == "prefer_external":
+                    external_items = [k for k in kept if k.domain == "external_knowledge"]
+                    if external_items:
+                        external_trust = str(getattr(external_items[0], "metadata", {}).get("trust_level") or "").lower()
                         if external_trust not in {"system", "curated", "high"}:
                             low_value_suppressed += 1
                             kept = [k for k in kept if k.domain != "external_knowledge"]
                             if selected_by_domain.get("external_knowledge", 0) > 0:
                                 selected_by_domain["external_knowledge"] = selected_by_domain.get("external_knowledge", 0) - 1
                             suppressed_by_domain["external_knowledge"] = suppressed_by_domain.get("external_knowledge", 0) + 1
-                            conflict_summary.append("external:suppressed:custom_focus")
+                            conflict_summary.append(reason)
 
             per_domain_cap = 2 if domain in {"procedures", "capability_knowledge"} else 1
             if intent == ContextIntent.TROUBLESHOOTING.value and domain == "agent_experience" and bool(hints.get("troubleshooting_active")):

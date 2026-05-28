@@ -3,9 +3,11 @@ import re
 import logging
 from typing import Dict, Any, Optional
 
+from core.errors import SyntaxError as AgentSyntaxError
+
 logger = logging.getLogger("OpenAIParser")
 
-def extract_and_parse_json(content: str) -> Dict[str, Any]:
+def extract_and_parse_json(content: str, strict: bool = False) -> Dict[str, Any]:
     """
     Standardized JSON extraction for OpenAI responses.
     """
@@ -41,4 +43,6 @@ def extract_and_parse_json(content: str) -> Dict[str, Any]:
             except Exception:
                 continue
 
+    if strict:
+        raise AgentSyntaxError("OpenAI structured output is not valid JSON.")
     return {}

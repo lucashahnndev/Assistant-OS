@@ -42,16 +42,30 @@ class PlanValidator:
         if plan.action_id in {"reply", "error"}:
             return ValidationResult(is_valid=True)
 
+        if capability_registry is None or not hasattr(capability_registry, "get_capability_for_action"):
+            return ValidationResult(
+                is_valid=False,
+                error_code=ErrorCode.TOOL_NOT_FOUND,
+                message=f"Action '{plan.action_id}' cannot be validated because the capability registry is unavailable.",
+                diagnostics={"action_id": plan.action_id, "reason": "registry_unavailable"},
+            )
+
         # 1. Action Existence & Registry Integrity
         capability = capability_registry.get_capability_for_action(plan.action_id)
         if not capability:
+            suggestions = []
+            if hasattr(capability_registry, "suggest_actions"):
+                try:
+                    suggestions = capability_registry.suggest_actions(plan.action_id)
+                except Exception:
+                    suggestions = []
             return ValidationResult(
                 is_valid=False,
                 error_code=ErrorCode.TOOL_NOT_FOUND,
                 message=f"Action '{plan.action_id}' not registered.",
                 diagnostics={
                     "action_id": plan.action_id, 
-                    "suggestions": capability_registry.suggest_actions(plan.action_id)
+                    "suggestions": suggestions
                 }
             )
 
@@ -67,7 +81,12 @@ class PlanValidator:
             )
 
         # 3. Argument/Schema Validation (canonical contract only)
-        action_metadata = capability_registry.get_action_metadata(plan.action_id)
+        action_metadata = {}
+        if hasattr(capability_registry, "get_action_metadata"):
+            try:
+                action_metadata = capability_registry.get_action_metadata(plan.action_id) or {}
+            except Exception:
+                action_metadata = {}
         schema = action_metadata.get("parameters")
 
         if schema:
@@ -115,7 +134,12 @@ class PlanValidator:
                 )
 
         # 5. Policy & Side-Effect Safety
-        metadata = capability_registry.get_action_metadata(plan.action_id)
+        metadata = action_metadata
+        if not metadata and hasattr(capability_registry, "get_action_metadata"):
+            try:
+                metadata = capability_registry.get_action_metadata(plan.action_id) or {}
+            except Exception:
+                metadata = {}
         side_effect = metadata.get("side_effect", "none")
         if side_effect == "destructive":
             # Policy: Destructive actions in system turns must be authorized

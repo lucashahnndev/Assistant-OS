@@ -24,8 +24,8 @@ Procedure ingestion is implemented in:
 
 The ingestor scans procedure-like explanatory sources from the repository, including:
 
-- `docs/worker_task_contract.md`
-- `docs/browser_control_playbook.md`
+- `agent/specs/worker_task_contract.spec.md`
+- `docs/guides/browser_control_playbook.md`
 - capability `README.md` files
 
 It explicitly treats only explanatory operational guidance as retrievable procedure knowledge. Enforcement code remains outside retrieval.

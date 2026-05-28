@@ -27,10 +27,10 @@ Policy ingestion is implemented in:
 
 The ingestor scans explanatory policy/governance sources from the repository, including:
 
-- `docs/worker_task_contract.md`
-- `docs/permission_groups_planner.md`
-- `docs/driver_ioc_restructure_approval.md`
-- `docs/skill_contract.md`
+- `agent/specs/worker_task_contract.spec.md`
+- `docs/plans/permission_groups_planner.md`
+- `docs/decisions/driver_ioc_restructure_approval.md`
+- `agent/specs/skill_contract.spec.md`
 
 It explicitly ignores raw enforcement code and only ingests explanatory rule text.
 

@@ -1,6 +1,6 @@
 # Specs
 
-Este diretório guarda os contratos normativos canônicos do agente e do sistema alvo.
+Este diretório guarda os contratos normativos do projeto alvo que o agente deve ler e obedecer ao alterar o sistema.
 
 ## Regras
 
@@ -8,9 +8,9 @@ Este diretório guarda os contratos normativos canônicos do agente e do sistema
 - `.spec` define contrato durável;
 - `.stat` registra estado vivo;
 - não usar `.spec` como diário de progresso;
-- não usar `.stat` para redefinir contrato.
-- `agent/specs/` e a fonte de verdade para specs normativas;
-- `docs/` pode referenciar specs, mas nao compete com este diretorio.
+- não usar `.stat` para redefinir contrato;
+- isso inclui sistema, arquitetura, comportamento de produto, contratos entre módulos, regras de domínio e políticas operacionais;
+- `docs/` é documentação oficial voltada a humanos e pode referenciar specs, mas não é o lugar principal do contrato normativo.
 
 ## Convenção
 
@@ -21,5 +21,3 @@ Este diretório guarda os contratos normativos canônicos do agente e do sistema
 
 - `project.spec.md`
 - `project.stat.md`
-- `agent-heuristics.spec.md`
-- `agent-heuristics.stat.md`

@@ -67,6 +67,12 @@ const VISUAL_CAPTURE_PATTERNS = [
     /\bscreen\b/i,
 ];
 
+const WEGENA_CAPABILITY_PATTERNS = [
+    /\bwegena\b/i,
+    /\bwegena[\._-]?generate[\._-]?scene\b/i,
+    /\bgenerate[\._-]?scene\b/i,
+];
+
 const normalizeSignalList = (items = []) => {
     const out = [];
     const seen = new Set();
@@ -99,13 +105,14 @@ const extractSignalsFromWorkPayload = (payload) => {
     const data = context?.data && typeof context.data === 'object' ? context.data : {};
     const topCapabilities = Array.isArray(payload?.capabilities_used) ? payload.capabilities_used : [];
     const topActions = Array.isArray(payload?.actions_used) ? payload.actions_used : [];
-    const dataCapabilities = Array.isArray(data?.capabilities_used) ? data.capabilities_used : [];
     const dataActions = Array.isArray(data?.actions_used) ? data.actions_used : [];
     const sources = Array.isArray(data?.sources_used) ? data.sources_used : [];
+    const media = Array.isArray(data?.media_used) ? data.media_used : [];
     return {
         capabilities: mergeSignalLists(topCapabilities, dataCapabilities),
         actions: mergeSignalLists(topActions, dataActions),
         sources,
+        media,
     };
 };
 
@@ -284,12 +291,13 @@ export function useAssistCards({
     capabilitiesUsed = [],
     actionsUsed = [],
     sourcesUsed = [],
+    mediaUsed = [],
 }) {
     const [weatherCardLoading, setWeatherCardLoading] = useState(false);
     const [weatherCardData, setWeatherCardData] = useState(null);
     const [systemHealthLoading, setSystemHealthLoading] = useState(false);
     const [systemHealthData, setSystemHealthData] = useState(null);
-    const [workSignals, setWorkSignals] = useState({ capabilities: [], actions: [], sources: [] });
+    const [workSignals, setWorkSignals] = useState({ capabilities: [], actions: [], sources: [], media: [] });
 
     const content = String(text || '').trim();
     const anchorId = String(content.slice(0, 24) || 'msg');
@@ -307,6 +315,10 @@ export function useAssistCards({
         () => normalizeSourceList([...(Array.isArray(sourcesUsed) ? sourcesUsed : []), ...(Array.isArray(workSignals.sources) ? workSignals.sources : [])]),
         [sourcesUsed, workSignals.sources],
     );
+    const mergedMedia = useMemo(
+        () => [...(Array.isArray(mediaUsed) ? mediaUsed : []), ...(Array.isArray(workSignals.media) ? workSignals.media : [])],
+        [mediaUsed, workSignals.media],
+    );
     const weatherByCapability = hasPatternMatch(mergedCapabilities, WEATHER_CAPABILITY_PATTERNS) || hasPatternMatch(mergedActions, WEATHER_CAPABILITY_PATTERNS);
     const systemByCapability = hasPatternMatch(mergedCapabilities, SYSTEM_HEALTH_CAPABILITY_PATTERNS) || hasPatternMatch(mergedActions, SYSTEM_HEALTH_CAPABILITY_PATTERNS);
     const wikiByCapability = hasPatternMatch(mergedCapabilities, WIKIPEDIA_CAPABILITY_PATTERNS) || hasPatternMatch(mergedActions, WIKIPEDIA_CAPABILITY_PATTERNS);
@@ -318,6 +330,11 @@ export function useAssistCards({
     const wikiBySource = !!wikiSource;
     const mapBySource = !!mapSource;
     const youtubeBySource = !!youtubeSource;
+
+    const wegenaByCapability = hasPatternMatch(mergedCapabilities, WEGENA_CAPABILITY_PATTERNS) || hasPatternMatch(mergedActions, WEGENA_CAPABILITY_PATTERNS);
+    const wegenaMediaUrl = mergedMedia.find((m) => String(m).toLowerCase().endsWith('.weg')) || null;
+    const wegenaByMedia = !!wegenaMediaUrl;
+
     const weatherIntent = weatherByCapability || hasWeatherCue(content);
     const captureIntent = hasPatternMatch(mergedCapabilities, VISUAL_CAPTURE_PATTERNS)
         || hasPatternMatch(mergedActions, VISUAL_CAPTURE_PATTERNS)
@@ -327,14 +344,16 @@ export function useAssistCards({
     const wikiIntent = wikiByCapability || wikiBySource || hasWikipediaCue(content);
     const mapIntent = mapByCapability || mapBySource;
     const youtubeIntent = youtubeByCapability || youtubeBySource;
+    const wegenaIntent = wegenaByCapability || wegenaByMedia;
 
     // Global card priority to avoid visual conflicts:
-    // weather > system > knowledge (map/wiki/youtube) > data chart
-    const shouldTryWeatherCard = !isUser && !!sessionId && weatherIntent;
-    const shouldTrySystemHealthCard = !isUser && !!sessionId && !shouldTryWeatherCard && systemIntent;
-    const shouldTryMapCard = !isUser && !shouldTryWeatherCard && !shouldTrySystemHealthCard && mapIntent;
-    const shouldTryWikiCard = !isUser && !shouldTryWeatherCard && !shouldTrySystemHealthCard && wikiIntent;
-    const shouldTryYouTubeCard = !isUser && !shouldTryWeatherCard && !shouldTrySystemHealthCard && youtubeIntent;
+    // wegena > weather > system > knowledge (map/wiki/youtube) > data chart
+    const shouldTryWegenaCard = !isUser && !!sessionId && wegenaIntent;
+    const shouldTryWeatherCard = !isUser && !!sessionId && !shouldTryWegenaCard && weatherIntent;
+    const shouldTrySystemHealthCard = !isUser && !!sessionId && !shouldTryWegenaCard && !shouldTryWeatherCard && systemIntent;
+    const shouldTryMapCard = !isUser && !shouldTryWegenaCard && !shouldTryWeatherCard && !shouldTrySystemHealthCard && mapIntent;
+    const shouldTryWikiCard = !isUser && !shouldTryWegenaCard && !shouldTryWeatherCard && !shouldTrySystemHealthCard && wikiIntent;
+    const shouldTryYouTubeCard = !isUser && !shouldTryWegenaCard && !shouldTryWeatherCard && !shouldTrySystemHealthCard && youtubeIntent;
     const shouldTryKnowledgeCards = shouldTryMapCard || shouldTryWikiCard || shouldTryYouTubeCard;
     const wikiCardData = useMemo(() => {
         if (!shouldTryWikiCard) return null;
@@ -391,9 +410,9 @@ export function useAssistCards({
     }, [shouldTryYouTubeCard, youtubeSource, content]);
     const parsedDataChart = useMemo(() => {
         if (isUser || isStreaming) return null;
-        if (shouldTryWeatherCard || shouldTrySystemHealthCard || shouldTryKnowledgeCards) return null;
+        if (shouldTryWeatherCard || shouldTrySystemHealthCard || shouldTryKnowledgeCards || shouldTryWegenaCard) return null;
         return tryParseMarkdownTable(content);
-    }, [isUser, isStreaming, content, shouldTryWeatherCard, shouldTrySystemHealthCard, shouldTryKnowledgeCards]);
+    }, [isUser, isStreaming, content, shouldTryWeatherCard, shouldTrySystemHealthCard, shouldTryKnowledgeCards, shouldTryWegenaCard]);
 
     useEffect(() => {
         if (isUser || !workId) return undefined;
@@ -423,7 +442,7 @@ export function useAssistCards({
                 WORK_CAPABILITY_SIGNALS_CACHE.set(cacheKey, { ts: Date.now(), signals });
                 setWorkSignals(signals);
             } catch {
-                if (!cancelled) setWorkSignals((prev) => prev || { capabilities: [], actions: [], sources: [] });
+                if (!cancelled) setWorkSignals((prev) => prev || { capabilities: [], actions: [], sources: [], media: [] });
             } finally {
                 if (!pending) WORK_CAPABILITY_SIGNALS_PENDING.delete(cacheKey);
             }
@@ -518,6 +537,7 @@ export function useAssistCards({
 
     return {
         anchorId,
+        shouldTryWegenaCard,
         shouldTryWeatherCard,
         shouldTrySystemHealthCard,
         shouldTryWikiCard,
@@ -531,5 +551,6 @@ export function useAssistCards({
         weatherCardData,
         systemHealthLoading,
         systemHealthData,
+        wegenaMediaUrl,
     };
 }

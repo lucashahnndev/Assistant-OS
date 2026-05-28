@@ -110,6 +110,57 @@
             "side_effect": "idempotent"
         },
         {
+            "id": "system.control.consult_tools",
+            "title": "Consult Tools",
+            "description": "Consulta o bibliotecário de ferramentas e retorna um subconjunto ordenado do catálogo descoberto.",
+            "handler": "consult_tools",
+            "risk_level": "low",
+            "permissions": {
+                "scopes": [
+                    "system:control:consult_tools"
+                ],
+                "allow_anyone": true,
+                "requires_approval": false
+            },
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Pergunta curta para orientar a descoberta."
+                    },
+                    "domain": {
+                        "type": "string",
+                        "description": "Domínio opcional para priorização."
+                    },
+                    "intent": {
+                        "type": "string",
+                        "description": "Intenção de alto nível, usada apenas para descoberta."
+                    },
+                    "role": {
+                        "type": "string",
+                        "description": "Função semântica desejada (search, control, retrieve)."
+                    },
+                    "entity_type": {
+                        "type": "string",
+                        "description": "Tipo de entidade desejado."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Máximo de candidatos retornados.",
+                        "default": 5
+                    },
+                    "format": {
+                        "type": "string",
+                        "description": "Formato de saída: legacy (padrão) ou toon.",
+                        "default": "legacy"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "side_effect": "none"
+        },
+        {
             "id": "system.control.capabilities.list",
             "title": "Capabilities List",
             "description": "Lista a\u00e7\u00f5es dispon\u00edveis para este usu\u00e1rio (descoberta sob demanda).",

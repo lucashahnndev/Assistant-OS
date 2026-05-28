@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 
-const DEFAULT_PRESET_ID = 'atlas-live-default';
+const DEFAULT_PRESET_ID = 'ai-orb-classic';
 
-const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = 'dark', wegScript = '', sceneStreamActive = false, defaultPresetId = DEFAULT_PRESET_ID, overrideConfig = null }, ref) => {
+const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = 'dark', wegScript = '', sceneStreamActive = false, defaultPresetId = DEFAULT_PRESET_ID, overrideConfig = null, onSceneLoaded }, ref) => {
     const containerRef = useRef(null);
     const engineRef = useRef(null);
     const controlsRef = useRef(null);
@@ -99,6 +99,7 @@ const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = '
             appliedDefaultPresetIdRef.current = defaultPresetId;
             syncAtlasSignal();
             scheduleDefaultSceneVerification();
+            if (typeof onSceneLoaded === 'function') onSceneLoaded();
         } catch (e) {
             console.error('Failed to load Atlas default Wegena preset:', e);
         } finally {
@@ -288,7 +289,14 @@ const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = '
             
             // Particle tweaks
             if (overrideConfig.particleCount && typeof engine.setDensity === 'function') {
-                engine.setDensity(overrideConfig.particleCount, true);
+                if (engine.config.particleCount !== overrideConfig.particleCount) {
+                    engine.setDensity(overrideConfig.particleCount, true);
+                    // Re-apply script to fix roles after density resize
+                    window.fetch(`/presets/${overrideConfig.preset || appliedDefaultPresetIdRef.current}/scene-script.weg?v=${Date.now()}`)
+                        .then(res => res.text())
+                        .then(script => engine.applySceneWEG(script))
+                        .catch(console.error);
+                }
             }
             
             if (overrideConfig.particleSize && typeof engine.setParticleSize === 'function') {

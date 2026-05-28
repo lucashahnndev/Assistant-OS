@@ -27,7 +27,7 @@ class UserMemoryIngestor:
     def _chunk_from_entry(self, *, entry: Dict[str, object], principal_id: str, tenant_id: str) -> RAGChunk:
         updated_at = self._coerce_timestamp(entry.get("updated_at") or entry.get("timestamp"))
         created_at = self._coerce_timestamp(entry.get("created_at") or entry.get("timestamp") or updated_at)
-        memory_id = str(entry.get("id") or "")
+        memory_id = str(entry.get("memory_id") or entry.get("id") or "")
         content = str(entry.get("content") or "").strip()
         title = str(entry.get("title") or entry.get("category") or "user_memory").strip()
         trust_level = str(entry.get("trust_level") or self._trust_from_confidence(entry.get("confidence"))).strip()
@@ -59,6 +59,9 @@ class UserMemoryIngestor:
     def _validate_entry(entry: object) -> Tuple[bool, str]:
         if not isinstance(entry, dict):
             return False, "not_dict"
+        status = str(entry.get("status") or "").strip().lower()
+        if status != "accepted":
+            return False, "not_accepted"
         if entry.get("is_deleted"):
             return False, "deleted"
         content = str(entry.get("content") or "").strip()

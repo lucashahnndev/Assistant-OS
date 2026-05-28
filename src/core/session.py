@@ -195,9 +195,11 @@ class Session:
     def apply_memory_patch(self, memory_id: str, patch: dict, author: str, reason: str):
         """Applies a patch to a memory entry. Tombstone-based 'deletion' is patch: {'is_deleted': True}."""
         for entry in self.memory:
-            if entry.get("id") == memory_id:
+            if entry.get("memory_id") == memory_id or entry.get("id") == memory_id:
                 old_value = entry.copy()
                 entry.update(patch)
+                if "memory_id" not in entry and entry.get("id"):
+                    entry["memory_id"] = entry["id"]
                 self.audit_trail.append({
                     "ts": time.time(),
                     "type": "memory_patch",
@@ -254,7 +256,8 @@ class Session:
             "last_cognitive_projection": self.last_cognitive_projection,
             "cognitive_diagnostics": self.cognitive_diagnostics,
             "last_cognitive_frame_snapshot": self.last_cognitive_frame_snapshot,
-            "intent_agenda": self.intent_agenda.to_dict()
+            "intent_agenda": self.intent_agenda.to_dict(),
+            "media_cards": getattr(self, "media_cards", [])
         }
 
     @classmethod
@@ -322,6 +325,7 @@ class Session:
         session.last_cognitive_projection = data.get("last_cognitive_projection")
         session.cognitive_diagnostics = data.get("cognitive_diagnostics")
         session.last_cognitive_frame_snapshot = data.get("last_cognitive_frame_snapshot")
+        session.media_cards = data.get("media_cards", [])
         if "intent_agenda" in data:
             session.intent_agenda = IntentAgenda.from_dict(data["intent_agenda"])
         return session
@@ -335,15 +339,16 @@ class Session:
             event["timestamp"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         event_id = event.get("event_id")
+        e_type = str(event.get("event_type") or "").upper()
 
         # Deduplicate
-        if any(e.get("event_id") == event_id for e in self.event_history) or \
-           any(e.get("memory_id") == event.get("memory_id") for e in self.candidate_store):
+        if any(e.get("event_id") == event_id for e in self.event_history):
             return
 
         # Divert MEMORY_CANDIDATE to candidate_store
-        e_type = str(event.get("event_type") or "").upper()
         if e_type == "MEMORY_CANDIDATE":
+            if any(e.get("memory_id") == event.get("memory_id") for e in self.candidate_store):
+                return
             self.candidate_store.append(event)
             return
 

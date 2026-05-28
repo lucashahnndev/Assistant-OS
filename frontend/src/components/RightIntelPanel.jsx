@@ -193,28 +193,42 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
             ...activeWorkers.filter(w => !works.some(pw => (pw.work_id || pw.id) === (w.work_id || w.id))),
         ];
         
-        if (currentActive.length > 0) {
-            setHistoricalWorkers(prev => {
-                const newHistory = [...prev];
-                let changed = false;
-                currentActive.forEach(w => {
-                    const id = w.work_id || w.id;
-                    if (!id) return;
-                    const existingIndex = newHistory.findIndex(h => (h.work_id || h.id) === id);
-                    if (existingIndex >= 0) {
-                        const updated = { ...newHistory[existingIndex], ...w };
-                        if (JSON.stringify(updated) !== JSON.stringify(newHistory[existingIndex])) {
-                            newHistory[existingIndex] = updated;
-                            changed = true;
-                        }
-                    } else {
-                        newHistory.push(w);
+        setHistoricalWorkers(prev => {
+            const newHistory = [...prev];
+            let changed = false;
+            
+            // Update or add active workers
+            currentActive.forEach(w => {
+                const id = w.work_id || w.id;
+                if (!id) return;
+                const existingIndex = newHistory.findIndex(h => (h.work_id || h.id) === id);
+                if (existingIndex >= 0) {
+                    const updated = { ...newHistory[existingIndex], ...w };
+                    if (JSON.stringify(updated) !== JSON.stringify(newHistory[existingIndex])) {
+                        newHistory[existingIndex] = updated;
                         changed = true;
                     }
-                });
-                return changed ? newHistory.slice(-30) : prev;
+                } else {
+                    newHistory.push(w);
+                    changed = true;
+                }
             });
-        }
+            
+            // Mark orphaned workers as completed
+            newHistory.forEach((hw, i) => {
+                const hwId = hw.work_id || hw.id;
+                const isStillActive = currentActive.some(cw => (cw.work_id || cw.id) === hwId);
+                if (!isStillActive) {
+                    const oldStatus = String(hw.status || '').toLowerCase();
+                    if (['running', 'executing', 'thinking', 'active', 'tool_use', 'waiting', 'waiting_user', 'responding'].includes(oldStatus)) {
+                        newHistory[i] = { ...hw, status: 'completed' };
+                        changed = true;
+                    }
+                }
+            });
+
+            return changed ? newHistory.slice(-30) : prev;
+        });
     }, [sys?.works, activeWorkers]);
 
     const works = Array.isArray(sys?.works) ? sys.works : [];
@@ -236,7 +250,7 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
         background: 'rgba(10, 12, 22, 0.72)',
         backdropFilter: 'blur(20px)',
         WebkitBackdropFilter: 'blur(20px)',
-        borderRight: '1px solid rgba(255, 255, 255, 0.08)',
+        borderRight: '1px solid rgba(255, 255, 255, 0.05)',
         transition: 'width 0.28s cubic-bezier(0.19, 1, 0.22, 1)',
     };
 
@@ -343,11 +357,11 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
                                     const isLast = i === thoughts.length - 1;
                                     
                                     let tag = '';
-                                    let content = t.text;
+                                    let content = typeof t.text === 'string' ? t.text : JSON.stringify(t.text, null, 2);
                                     let tagColor = 'var(--text-muted)';
                                     
                                     // Parse synthetic tags like [Sistema]: or [Worker: xyz]:
-                                    const match = t.text.match(/^\[(.*?)\]:\s*(.*)/);
+                                    const match = typeof t.text === 'string' ? t.text.match(/^\[(.*?)\]:\s*(.*)/) : null;
                                     if (match) {
                                         tag = match[1];
                                         content = match[2];
@@ -453,7 +467,7 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
                                     onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.02)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
                                 >
                                     <span style={{ fontSize: '12px' }}>
-                                        {card.type === 'WEATHER' ? '⛅' : card.type === 'YOUTUBE' ? '▶️' : card.type === 'DEEZER' ? '🎵' : card.type === 'CHART' ? '📊' : '📄'}
+                                        {card.type === 'WEATHER' ? '⛅' : card.type === 'YOUTUBE' ? '▶️' : card.type === 'DEEZER' ? '🎵' : card.type === 'CHART' ? '📊' : card.type === 'WEGENA' ? '🏔️' : '📄'}
                                     </span>
                                     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
                                         <span style={{ fontSize: '9px', fontWeight: '800', color: 'var(--text-primary)', textTransform: 'uppercase' }}>

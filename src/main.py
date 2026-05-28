@@ -779,11 +779,23 @@ class Kernel:
         try:
             # 1. Reload Physical Config
             self.config_manager.load()
+            if getattr(self.orchestrator, "mcp_integration_service", None):
+                try:
+                    self.orchestrator.mcp_integration_service.refresh()
+                except Exception as exc:
+                    logger.warning("MCP refresh failed during hot reload: %s", exc)
             
             # 2. Reload LLM Providers
             if hasattr(self.orchestrator, 'llm_manager'):
                 self.orchestrator.llm_manager.reload()
                 
+            # 3. Reload TTS Manager on active drivers
+            for driver in self.drivers:
+                if hasattr(driver, 'tts_manager') and hasattr(driver.tts_manager, 'reload'):
+                    driver.tts_manager.reload()
+                if hasattr(driver, 'voice_manager') and hasattr(driver.voice_manager, 'tts_manager') and hasattr(driver.voice_manager.tts_manager, 'reload'):
+                    driver.voice_manager.tts_manager.reload()
+                    
             logger.info("✅ Hot Reload Complete.")
             return True
         except Exception as e:

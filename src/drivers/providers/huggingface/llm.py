@@ -45,6 +45,27 @@ class HuggingFaceProvider(ILLMProvider):
         return headers
 
     @staticmethod
+    def _normalize_response_text(value: Any, fallback: str = "") -> str:
+        if isinstance(value, str):
+            return value
+        if value is None:
+            return fallback
+        if isinstance(value, dict):
+            candidate = value.get("text") or value.get("response") or value.get("message")
+            if candidate is not None:
+                return str(candidate)
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        if isinstance(value, list):
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        return str(value)
+
+    @staticmethod
     def _extract_json(content: str) -> Dict[str, Any] | None:
         text = (content or "").strip()
         if not text:
@@ -150,7 +171,7 @@ class HuggingFaceProvider(ILLMProvider):
                 action=action,
                 params=params,
                 task_label=data.get("task_label"),
-                response_text=str(data.get("response_text", "") or ""),
+                response_text=self._normalize_response_text(data.get("response_text", data.get("reply", "")), fallback=""),
                 attachments=out_attachments,
             )
         except Exception as e:

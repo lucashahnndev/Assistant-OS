@@ -77,3 +77,11 @@ class AgentError(Exception):
             "message": self.message,
             "details": self.details
         }
+
+
+class AgentSemanticError(AgentError):
+    """Backward-compatible semantic validation error."""
+
+
+class SyntaxError(AgentError):
+    """Backward-compatible syntax/parse error."""

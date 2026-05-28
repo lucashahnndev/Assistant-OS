@@ -96,7 +96,8 @@ class IntentAgenda:
         """
         for intent in self.intents.values():
             if intent.status == "PAUSED" and intent.linked_task_ids:
-                # Example signal: all linked tasks are COMPLETED
+                # Conservative rule: only explicit completion reopens the intent.
+                # A superseded task may have been replaced, not actually resolved.
                 all_tasks_completed = True
                 has_valid_tasks = False
                 
@@ -104,7 +105,7 @@ class IntentAgenda:
                     task = task_registry.get(tid)
                     if task:
                         has_valid_tasks = True
-                        if task.get("status") not in {"COMPLETED", "SUPERSEDED"}:
+                        if task.get("status") != "COMPLETED":
                             all_tasks_completed = False
                             break
                             

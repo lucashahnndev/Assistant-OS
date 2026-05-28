@@ -51,6 +51,7 @@ from services.mcp import MCPIntegrationService
 # New resolution and capability imports
 from core.resolution.chain_resolver import FallbackChainResolver
 from core.resolution.llm_resolver import LLMResolver
+from core.action_gateway import ActionGateway
 from core.reflex.registry import ReflexRegistry
 from core.reflex.resolver import ReflexResolver
 from core.resolution.action_plan import ActionPlan
@@ -129,6 +130,7 @@ class AgentOrchestrator:
         self.sessions_index: Optional[SessionIndexManager] = None
         self.capability_registry: Optional[CapabilityRegistry] = None
         self.capability_loader: Optional[CapabilityLoader] = None
+        self.action_gateway: Optional[ActionGateway] = None
         self.mcp_integration_service: Optional[MCPIntegrationService] = None
         self.reflex_registry: Optional[ReflexRegistry] = None
         self.reflex_resolver: Optional[ReflexResolver] = None
@@ -161,6 +163,7 @@ class AgentOrchestrator:
         # 1. Capability System
         self.capability_registry = CapabilityRegistry()
         self.capability_loader = CapabilityLoader(self.capability_registry, config_manager=self.config_manager)
+        self.action_gateway = ActionGateway()
         self.mcp_integration_service = MCPIntegrationService(
             config_manager=self.config_manager,
             capability_registry=self.capability_registry,
@@ -3128,9 +3131,23 @@ class AgentOrchestrator:
                             if not allowed:
                                 result = f"NEGADO: {reason}"
                             else:
-                                result = self.capability_registry.dispatch(plan.action_id, plan.args, exec_context)
+                                result = self.action_gateway.execute_action(
+                                    action_id=plan.action_id,
+                                    params=plan.args,
+                                    allowed_actions=exec_context.get("allowed_actions"),
+                                    capability_registry=self.capability_registry,
+                                    capability_metadata=self.capability_registry.get_action_metadata(plan.action_id),
+                                    context=exec_context,
+                                )
                         else:
-                            result = self.capability_registry.dispatch(plan.action_id, plan.args, exec_context)
+                            result = self.action_gateway.execute_action(
+                                action_id=plan.action_id,
+                                params=plan.args,
+                                allowed_actions=exec_context.get("allowed_actions"),
+                                capability_registry=self.capability_registry,
+                                capability_metadata=self.capability_registry.get_action_metadata(plan.action_id),
+                                context=exec_context,
+                            )
 
                         latency_ms = int((time.time() - start_ts) * 1000)
                         logger.info(
@@ -4542,7 +4559,10 @@ class AgentOrchestrator:
             if status in {"error", "failed", "failure"}:
                 return "failure", str(error_code or status)
 
-            if status in {"empty", "success", "ok"}:
+            if status in {"partial", "fallback", "running", "pending", "in_progress"}:
+                return "partial", status
+
+            if status in {"empty", "success", "ok", "completed", "done"}:
                 return "success", status
 
             if ok is True:
@@ -4573,6 +4593,9 @@ class AgentOrchestrator:
         if text.startswith("erro") or text.startswith("error"):
             return "failure", "explicit_error_prefix"
 
+        if text.startswith("fallback"):
+            return "partial", "fallback"
+
         return "success", "ok"
 
     @staticmethod
@@ -4583,7 +4606,6 @@ class AgentOrchestrator:
 
     @staticmethod
     def _summarize_last_success_data(
-        self,
         *,
         action_id: Optional[str],
         structured_result: Optional[Dict[str, Any]],
@@ -4728,152 +4750,13 @@ class AgentOrchestrator:
             
             # If still unsuccessful, yield a structured failure label
             logger.warning(f"Recovery reply empty | session={session.session_id} latency_ms={latency}")
-            return "EMPTY_RESPONSE_TEXT"
+            if str(locale or "").lower().startswith("pt"):
+                return f"Ainda não consegui confirmar a conclusão de {last_action_id or 'esta ação'}. Estou verificando o próximo passo."
+            return f"I can't confirm completion of {last_action_id or 'this action'} yet. I'm checking the next step."
             
         except Exception as e:
             logger.error(f"Error in LLM Recovery Loop: {e}")
             return "SYSTEM_ERROR: Conversational recovery failed."
-
-        generic_list_keys = (
-            "items",
-            "entries",
-            "records",
-            "rows",
-            "tasks",
-            "triggers",
-            "matches",
-            "documents",
-            "docs",
-            "memories",
-            "logs",
-            "files",
-        )
-        for list_key in generic_list_keys:
-            entries = payload.get(list_key)
-            if not isinstance(entries, list):
-                continue
-            total = len(entries)
-            if total == 0:
-                continue
-            header = (
-                f"Encontrei {total} item(ns)."
-                if is_pt
-                else f"I found {total} item(s)."
-            )
-            lines = [header]
-            for idx, item in enumerate(entries[:6], start=1):
-                if isinstance(item, dict):
-                    title = str(
-                        item.get("title")
-                        or item.get("name")
-                        or item.get("label")
-                        or item.get("id")
-                        or item.get("task_id")
-                        or item.get("trigger_id")
-                        or item.get("work_id")
-                        or ""
-                    ).strip()
-                    status = str(item.get("status") or "").strip()
-                    line = f"{idx}. {title or 'item'}"
-                    if status:
-                        line += f" ({status})"
-                    lines.append(line)
-                else:
-                    lines.append(f"{idx}. {str(item)}")
-            if len(lines) > 1:
-                _log_reply_source(f"list:{list_key}", count=total)
-                return "\n".join(lines)
-
-        works = payload.get("works")
-        if isinstance(works, list):
-            count = payload.get("count")
-            total = int(count) if isinstance(count, int) else len(works)
-            if total <= 0:
-                return "Nenhum worker encontrado." if is_pt else "No workers found."
-            lines = [
-                (
-                    f"Encontrei {total} worker(s):"
-                    if is_pt
-                    else f"I found {total} worker(s):"
-                )
-            ]
-            for idx, item in enumerate(works[:8], start=1):
-                if not isinstance(item, dict):
-                    continue
-                work_id = str(item.get("work_id") or "").strip() or "?"
-                status = str(item.get("status") or "").strip() or "unknown"
-                label = str(item.get("label") or "").strip()
-                input_text = str(item.get("input_text") or "").strip()
-                summary = label or input_text
-                line = f"{idx}. {work_id} ({status})"
-                if summary:
-                    line += f": {summary[:90]}"
-                lines.append(line)
-            if len(lines) > 1:
-                _log_reply_source("works", count=total)
-                return "\n".join(lines)
-
-        generic_text = str(payload.get("text") or payload.get("message") or "").strip()
-        if generic_text:
-            # Do not leak worker/tool protocol phrasing to the user-facing chat.
-            technical_overlay_markers = (
-                "highlighted using draw_",
-                "overlay command",
-                "target '",
-            )
-            if any(marker in generic_text.lower() for marker in technical_overlay_markers):
-                if is_pt:
-                    return "Destaque aplicado na tela."
-                return "Highlight applied on screen."
-            _log_reply_source("text_or_message", length=len(generic_text))
-            return generic_text
-
-        results = payload.get("results")
-        if isinstance(results, list) and results:
-            lines = ["Encontrei estes resultados:" if is_pt else "I found these results:"]
-            for idx, item in enumerate(results[:8], start=1):
-                if not isinstance(item, dict):
-                    continue
-                title = str(item.get("title") or item.get("name") or item.get("label") or "Resultado")
-                url = str(item.get("url") or item.get("link") or "").strip()
-                channel = str(item.get("channel") or item.get("artist") or "").strip()
-                line = f"{idx}. {title}"
-                if channel:
-                    line += f" ({channel})"
-                if url:
-                    line += f"\n{url}"
-                lines.append(line)
-            if len(lines) > 1:
-                _log_reply_source("results", count=len(results))
-                return "\n\n".join(lines)
-
-        best = payload.get("best")
-        if isinstance(best, dict):
-            best_url = str(best.get("url") or "").strip()
-            best_title = str(best.get("title") or best.get("name") or "").strip()
-            if best_url or best_title:
-                if best_url and best_title:
-                    _log_reply_source("best", fields="title+url")
-                    if is_pt:
-                        return f"Melhor resultado encontrado: {best_title}\n{best_url}"
-                    return f"Best result found: {best_title}\n{best_url}"
-                _log_reply_source("best", fields="single")
-                if is_pt:
-                    return f"Melhor resultado encontrado:\n{best_url or best_title}"
-                return f"Best result found:\n{best_url or best_title}"
-
-        # Last resort: avoid dumping huge JSON to user.
-        raw = (raw_output or "").strip()
-        if raw and not raw.startswith("{"):
-            excerpt = raw if len(raw) <= 700 else raw[:700] + "..."
-            _log_reply_source("raw_output_excerpt", length=len(excerpt))
-            return excerpt
-
-        action = action_id or "the requested action"
-        _log_reply_source("terminal_fallback")
-        if is_pt:
-            return f"Concluí {action} com sucesso, mas não consegui consolidar automaticamente a resposta final."
-        return f"I completed {action} successfully, but could not automatically consolidate the final response."
 
     @staticmethod
     def _extract_attachment_paths_from_result(structured_result: Optional[Dict[str, Any]]) -> List[str]:
@@ -5073,7 +4956,7 @@ class AgentOrchestrator:
         """
         Prevents success hallucinations when the last tool observation was a failure.
         """
-        if last_action_status != "failure":
+        if last_action_status not in {"failure", "partial", "unknown"}:
             return response_text or ""
         is_pt = str(language or "").lower().startswith("pt")
 
@@ -5181,7 +5064,7 @@ class AgentOrchestrator:
             "lang": f"ta={user_language or 'en'};r={user_language or 'auto'};single",
             "present": presentation_mode + ("+md" if markdown_supported else ""),
             "policy": policy_compact,
-            "browser": "browser.control.run|infer|controlar_midia,realizar_pesquisa,automacao_ui,validacao_visual,manutencao",
+            "discovery": "consult_tools|discover_before_execute|choose_from_returned_candidates",
             "out": "thought,plan,state_summary,action,params,task_label,response_text,attachments",
         }
         if str(personality_scope or "").strip().lower() == "global":
@@ -5221,7 +5104,7 @@ class AgentOrchestrator:
             "[TOON CONTEXT DELTAS]",
             "[SESSION SUMMARY]",
             "[BROKER EVIDENCE]",
-            "[ACTIONS]",
+            "[DISCOVERY]",
             "[STRUCTURED OUTPUT CONTRACT]",
             "[SCRATCHPAD]",
             "[RELEVANT MEMORY]",
@@ -5240,14 +5123,14 @@ class AgentOrchestrator:
         }
         self._prompt_metrics_cache[session_id] = metrics
         logger.info(
-            "Prompt Metrics | Session: %s | TotalTok~%d | InstrTok~%d | SysTok~%d | StateTok~%d | BrokerTok~%d | ActionsTok~%d | ContractTok~%d",
+            "Prompt Metrics | Session: %s | TotalTok~%d | InstrTok~%d | SysTok~%d | StateTok~%d | BrokerTok~%d | DiscoveryTok~%d | ContractTok~%d",
             session_id,
             metrics["prompt_tokens_approx"],
             metrics["block_tokens_approx"].get("[INSTRUCTION PACK]", 0),
             metrics["block_tokens_approx"].get("[SYSTEM CONTEXT]", 0),
             metrics["block_tokens_approx"].get("[INTERNAL STATE (TOON)]", 0),
             metrics["block_tokens_approx"].get("[BROKER EVIDENCE]", 0),
-            metrics["block_tokens_approx"].get("[ACTIONS]", 0),
+            metrics["block_tokens_approx"].get("[DISCOVERY]", 0),
             metrics["block_tokens_approx"].get("[STRUCTURED OUTPUT CONTRACT]", 0),
         )
 
@@ -5440,7 +5323,9 @@ class AgentOrchestrator:
         # Get naming and personality
         agent_config = self.config_manager.get("agent", {})
         agent_name = agent_config.get("agent_name", "Assistant")
-        personality = agent_config.get("personality", "You are a proactive Reasoning Agent.")
+        personality = agent_config.get("personality_compressed")
+        if not personality:
+            personality = agent_config.get("personality", "You are a proactive Reasoning Agent.")
         raw_personality_scope = agent_config.get("personality_scope", "response_text_only")
         personality_scope = str(raw_personality_scope or "response_text_only").strip().lower()
         if personality_scope not in {"global", "response_text_only", "off"}:
@@ -6176,10 +6061,9 @@ class AgentOrchestrator:
 
     def _build_prompt_actions_block(self, user_input: str, allowed_actions: Optional[List[str]]) -> str:
         """
-        Builds a compact, low-token action catalog for prompt injection.
+        Builds a discovery-only prompt anchor.
         """
         prompt_cfg = self.config_manager.get("prompt_context", {}) or {}
-        mode = str(prompt_cfg.get("actions_mode", "on_demand")).strip().lower()
         pack_style = str(prompt_cfg.get("actions_pack_style", "compact_json")).strip().lower()
 
         def _pack(payload: Dict[str, Any], header: str) -> str:
@@ -6187,94 +6071,23 @@ class AgentOrchestrator:
                 return header
             return header + "\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
-        # Legacy compatibility mode
-        if mode == "full":
-            return self.capability_registry.get_summary(allowed_actions)
-
-        manifest = self.capability_registry.get_compact_manifest(allowed_actions)
-        focus_limit = int(prompt_cfg.get("focus_limit", 8))
-        dense_threshold = int(prompt_cfg.get("dense_catalog_threshold", 24) or 24)
-        focus = self.capability_registry.get_focus_actions(
-            user_input=user_input or "",
-            allowed_actions=allowed_actions,
-            limit=focus_limit,
-        )
-        focus_ids = [str(row.get("id") or "") for row in focus if str(row.get("id") or "").strip()]
-
-        if mode in {"on_demand", "catalog_on_demand"}:
-            allowed_set = set(allowed_actions) if allowed_actions is not None else set(self.capability_registry.list_actions())
-            bootstrap = [
-                action_id
-                for action_id in (
-                    "system.control.capabilities.list.ai",
-                    "system.control.capabilities.describe.ai",
-                    "system.control.capabilities.list",
-                    "system.control.capabilities.describe",
-                )
-                if action_id in allowed_set
-            ]
-            if not bootstrap:
-                # Fallback safely when discovery actions are unavailable.
-                mode = "compact_hybrid"
-            else:
-                relevant_seeds = [aid for aid in focus_ids[:4] if aid not in bootstrap]
-                base_payload = {
-                    "v": "ac.v4",
-                    "m": "od",
-                    "d": bootstrap,
-                    "f": relevant_seeds,
-                    "r": ["discover", "prefer_ai", "catalog_only"],
-                }
-                if self._is_conversational_turn(user_input):
-                    return _pack(
-                        {
-                            **base_payload,
-                            "m": "od_chat",
-                            "pr": True,
-                        },
-                        "m=od_chat",
-                    )
-                return _pack(base_payload, "m=od")
-
-        if self._is_conversational_turn(user_input):
-            short_focus_ids = [str(row.get("id") or "") for row in focus[:4] if str(row.get("id") or "").strip()]
-            return _pack(
-                {
-                    "v": "ac.v4",
-                    "m": "chat",
-                    "pr": True,
-                    "f": short_focus_ids,
-                },
-                "m=chat",
-            )
-
-        focus_ids = [str(row.get("id") or "") for row in focus if str(row.get("id") or "").strip()]
-        action_ids = [str(item) for item in list(manifest.get("actions", []))]
-        total_actions = int(manifest.get("count", 0) or len(action_ids))
-        if total_actions > dense_threshold:
-            dense_seed = focus_ids[:10] or action_ids[:12]
-            payload = {
-                "v": "ac.v4",
-                "m": "dense_hybrid" if mode == "compact_hybrid" else "dense",
-                "c": total_actions,
-                "h": str(manifest.get("hash", "none") or "none"),
-                "ns": list(manifest.get("namespaces", [])[:8]),
-                "a": dense_seed,
-                "f": focus_ids[:10],
-                "more": max(0, total_actions - len(dense_seed)),
-            }
-            return _pack(payload, f"m={payload['m']}")
+        if isinstance(allowed_actions, list):
+            allowed_set = set(allowed_actions)
+        else:
+            allowed_set = set(self.capability_registry.list_actions() if hasattr(self.capability_registry, "list_actions") else [])
+        consult_action = "system.control.consult_tools"
+        if consult_action not in allowed_set:
+            return ""
 
         payload = {
             "v": "ac.v4",
-            "m": mode,
-            "c": total_actions,
-            "h": str(manifest.get("hash", "none") or "none"),
-            "ns": list(manifest.get("namespaces", [])[:10]),
-            "a": action_ids,
-            "f": focus_ids,
+            "m": "od_chat" if self._is_conversational_turn(user_input) else "od",
+            "d": [consult_action],
+            "r": ["discover_first", "choose_from_candidates", "no_open_catalog"],
         }
-        return _pack(payload, f"m={mode}")
+        if payload["m"] == "od_chat":
+            payload["pr"] = True
+        return _pack(payload, f"[DISCOVERY]\nm={payload['m']}")
 
 
     @staticmethod
@@ -6624,6 +6437,183 @@ class AgentOrchestrator:
         )
         return any(marker in value for marker in research_markers)
 
+    @staticmethod
+    def _has_capability(capability_registry: Any, action_id: str) -> bool:
+        return bool(capability_registry and capability_registry.get_capability_for_action(action_id))
+
+    def _build_browser_media_override_plan(
+        self,
+        *,
+        plan: ActionPlan,
+        user_input: str,
+        source_suffix: str,
+        min_confidence: float,
+    ) -> ActionPlan:
+        return ActionPlan(
+            action_id="browser.control.run",
+            args={
+                "goal": (user_input or "").strip(),
+                "intent_class": "controlar_midia",
+            },
+            confidence=max(float(plan.confidence or 0.0), min_confidence),
+            source=f"{plan.source}_{source_suffix}",
+            response_text=plan.response_text,
+            thought=plan.thought,
+            metadata=dict(plan.metadata or {}),
+            attachments=plan.attachments,
+        )
+
+    def _maybe_route_non_interactive_browser_query(
+        self,
+        *,
+        plan: ActionPlan,
+        user_input: str,
+        action_id: str,
+        intent_class: str,
+    ) -> Optional[ActionPlan]:
+        if (
+            action_id != "browser.control.run"
+            or intent_class not in {"", "realizar_pesquisa"}
+            or self._is_youtube_playback_request(user_input)
+            or not self._looks_like_knowledge_research_request(user_input)
+            or self._looks_like_interactive_browser_request(user_input)
+        ):
+            return None
+
+        query = str(user_input or "").strip()
+        if not query:
+            return None
+
+        if self._has_capability(self.capability_registry, "research.retrieve.run"):
+            logger.info(
+                "Decision policy guardrail: browser.control.run -> research.retrieve.run for non-interactive knowledge query."
+            )
+            return ActionPlan(
+                action_id="research.retrieve.run",
+                args={"query": query},
+                confidence=max(float(plan.confidence or 0.0), 0.76),
+                source=f"{plan.source}_knowledge_guardrail",
+                response_text=plan.response_text,
+                thought=plan.thought,
+                metadata=dict(plan.metadata or {}),
+                attachments=plan.attachments,
+            )
+
+        if self._has_capability(self.capability_registry, "web.search.discover"):
+            logger.info(
+                "Decision policy guardrail: browser.control.run -> web.search.discover for non-interactive knowledge query."
+            )
+            return ActionPlan(
+                action_id="web.search.discover",
+                args={"query": query, "mode": "links", "limit": 5},
+                confidence=max(float(plan.confidence or 0.0), 0.75),
+                source=f"{plan.source}_knowledge_guardrail",
+                response_text=plan.response_text,
+                thought=plan.thought,
+                metadata=dict(plan.metadata or {}),
+                attachments=plan.attachments,
+            )
+
+        return None
+
+    def _maybe_recover_youtube_playback_request(
+        self,
+        *,
+        plan: ActionPlan,
+        user_input: str,
+        mode: str,
+    ) -> Optional[ActionPlan]:
+        if mode not in {"hard", "on", "strict"}:
+            return None
+        if not self._is_youtube_playback_request(user_input):
+            return None
+
+        if (
+            plan.action_id == "reply"
+            and self._has_capability(self.capability_registry, "browser.control.run")
+            and self._looks_like_browser_capability_refusal(plan.response_text or "")
+        ):
+            logger.info(
+                "Decision policy override: reply(capability_refusal) -> browser.control.run for YouTube playback request."
+            )
+            return self._build_browser_media_override_plan(
+                plan=plan,
+                user_input=user_input,
+                source_suffix="policy_refusal_recover",
+                min_confidence=0.76,
+            )
+
+        metadata_actions = {
+            "youtube.search.find",
+            "youtube.retrieve.get",
+            "web.search.discover",
+            "web.retrieve.read",
+            "web.retrieve.extract",
+            "research.retrieve.run",
+        }
+        if plan.action_id in metadata_actions and self._has_capability(self.capability_registry, "browser.control.run"):
+            logger.info(
+                "Decision policy override: %s -> browser.control.run for YouTube playback request.",
+                plan.action_id,
+            )
+            return self._build_browser_media_override_plan(
+                plan=plan,
+                user_input=user_input,
+                source_suffix="policy",
+                min_confidence=0.75,
+            )
+
+        return None
+
+    def _maybe_repair_youtube_retrieve_action(
+        self,
+        *,
+        plan: ActionPlan,
+        last_action_id: Optional[str],
+        last_action_structured: Optional[Dict[str, Any]],
+    ) -> Optional[ActionPlan]:
+        if plan.action_id != "youtube.retrieve.get":
+            return None
+
+        args = plan.args if isinstance(plan.args, dict) else {}
+        has_url = bool(str(args.get("url") or "").strip())
+        has_video_id = bool(str(args.get("video_id") or "").strip())
+        if has_url or has_video_id or last_action_id != "youtube.search.find":
+            return None
+
+        candidate = last_action_structured if isinstance(last_action_structured, dict) else {}
+        best = candidate.get("best") if isinstance(candidate.get("best"), dict) else None
+        first = None
+        results = candidate.get("results")
+        if isinstance(results, list) and results and isinstance(results[0], dict):
+            first = results[0]
+        chosen = best or first or {}
+        repaired_url = str(chosen.get("url") or "").strip()
+        repaired_video_id = str(chosen.get("videoId") or "").strip()
+        if not repaired_url and not repaired_video_id:
+            return None
+
+        repaired_args = dict(args)
+        if repaired_url:
+            repaired_args["url"] = repaired_url
+        if repaired_video_id:
+            repaired_args["video_id"] = repaired_video_id
+        logger.info(
+            "Auto-repaired youtube.retrieve.get args from previous search result (url=%s, video_id=%s).",
+            bool(repaired_url),
+            bool(repaired_video_id),
+        )
+        return ActionPlan(
+            action_id=plan.action_id,
+            args=repaired_args,
+            confidence=plan.confidence,
+            source=plan.source,
+            response_text=plan.response_text,
+            thought=plan.thought,
+            metadata=dict(plan.metadata or {}),
+            attachments=plan.attachments,
+        )
+
     def _apply_media_decision_policy(
         self,
         *,
@@ -6637,7 +6627,7 @@ class AgentOrchestrator:
         if is_assistive_request:
             action = str(plan.action_id or "").strip().lower()
             render_prefs = self._extract_assistive_render_preferences(user_input)
-            overlay_available = bool(self.capability_registry and self.capability_registry.get_capability_for_action("overlay.assist.highlight_target"))
+            overlay_available = self._has_capability(self.capability_registry, "overlay.assist.highlight_target")
             # Guardrail (non-forcing): only enrich args when the model already chose
             # assistive highlight action. Never rewrite a different action.
             if overlay_available and action == "overlay.assist.highlight_target":
@@ -6668,136 +6658,32 @@ class AgentOrchestrator:
         action_id = str(plan.action_id or "").strip().lower()
         args = plan.args if isinstance(plan.args, dict) else {}
         intent_class = str(args.get("intent_class") or "").strip().lower()
-        if (
-            action_id == "browser.control.run"
-            and intent_class in {"", "realizar_pesquisa"}
-            and not self._is_youtube_playback_request(user_input)
-            and self._looks_like_knowledge_research_request(user_input)
-            and not self._looks_like_interactive_browser_request(user_input)
-        ):
-            query = str(user_input or "").strip()
-            if query:
-                if self.capability_registry.get_capability_for_action("research.retrieve.run"):
-                    logger.info(
-                        "Decision policy guardrail: browser.control.run -> research.retrieve.run for non-interactive knowledge query."
-                    )
-                    return ActionPlan(
-                        action_id="research.retrieve.run",
-                        args={"query": query},
-                        confidence=max(float(plan.confidence or 0.0), 0.76),
-                        source=f"{plan.source}_knowledge_guardrail",
-                        response_text=plan.response_text,
-                        thought=plan.thought,
-                        metadata=dict(plan.metadata or {}),
-                        attachments=plan.attachments,
-                    )
-                if self.capability_registry.get_capability_for_action("web.search.discover"):
-                    logger.info(
-                        "Decision policy guardrail: browser.control.run -> web.search.discover for non-interactive knowledge query."
-                    )
-                    return ActionPlan(
-                        action_id="web.search.discover",
-                        args={"query": query, "mode": "links", "limit": 5},
-                        confidence=max(float(plan.confidence or 0.0), 0.75),
-                        source=f"{plan.source}_knowledge_guardrail",
-                        response_text=plan.response_text,
-                        thought=plan.thought,
-                        metadata=dict(plan.metadata or {}),
-                        attachments=plan.attachments,
-                    )
+        routed_plan = self._maybe_route_non_interactive_browser_query(
+            plan=plan,
+            user_input=user_input,
+            action_id=action_id,
+            intent_class=intent_class,
+        )
+        if routed_plan is not None:
+            return routed_plan
 
         decision_cfg = self.config_manager.get("decision_policy", {}) if hasattr(self, "config_manager") else {}
         mode = str(decision_cfg.get("media_override_mode", "off")).strip().lower()
-        if mode not in {"hard", "on", "strict"}:
-            return plan
+        recovered_plan = self._maybe_recover_youtube_playback_request(
+            plan=plan,
+            user_input=user_input,
+            mode=mode,
+        )
+        if recovered_plan is not None:
+            return recovered_plan
 
-        if not self._is_youtube_playback_request(user_input):
-            return plan
-
-        if (
-            plan.action_id == "reply"
-            and self.capability_registry.get_capability_for_action("browser.control.run")
-            and self._looks_like_browser_capability_refusal(plan.response_text or "")
-        ):
-            logger.info(
-                "Decision policy override: reply(capability_refusal) -> browser.control.run for YouTube playback request."
-            )
-            return ActionPlan(
-                action_id="browser.control.run",
-                args={
-                    "goal": (user_input or "").strip(),
-                    "intent_class": "controlar_midia",
-                },
-                confidence=max(float(plan.confidence or 0.0), 0.76),
-                source=f"{plan.source}_policy_refusal_recover",
-                response_text=plan.response_text,
-                thought=plan.thought,
-                metadata=dict(plan.metadata or {}),
-                attachments=plan.attachments,
-            )
-
-        metadata_actions = {
-            "youtube.search.find",
-            "youtube.retrieve.get",
-            "web.search.discover",
-            "web.retrieve.read",
-            "web.retrieve.extract",
-            "research.retrieve.run",
-        }
-        if plan.action_id in metadata_actions and self.capability_registry.get_capability_for_action("browser.control.run"):
-            logger.info(
-                "Decision policy override: %s -> browser.control.run for YouTube playback request.",
-                plan.action_id,
-            )
-            return ActionPlan(
-                action_id="browser.control.run",
-                args={
-                    "goal": (user_input or "").strip(),
-                    "intent_class": "controlar_midia",
-                },
-                confidence=max(float(plan.confidence or 0.0), 0.75),
-                source=f"{plan.source}_policy",
-                response_text=plan.response_text,
-                thought=plan.thought,
-                metadata=dict(plan.metadata or {}),
-                attachments=plan.attachments,
-            )
-
-        if plan.action_id == "youtube.retrieve.get":
-            args = plan.args if isinstance(plan.args, dict) else {}
-            has_url = bool(str(args.get("url") or "").strip())
-            has_video_id = bool(str(args.get("video_id") or "").strip())
-            if not has_url and not has_video_id and last_action_id == "youtube.search.find":
-                candidate = last_action_structured if isinstance(last_action_structured, dict) else {}
-                best = candidate.get("best") if isinstance(candidate.get("best"), dict) else None
-                first = None
-                results = candidate.get("results")
-                if isinstance(results, list) and results and isinstance(results[0], dict):
-                    first = results[0]
-                chosen = best or first or {}
-                repaired_url = str(chosen.get("url") or "").strip()
-                repaired_video_id = str(chosen.get("videoId") or "").strip()
-                if repaired_url or repaired_video_id:
-                    repaired_args = dict(args)
-                    if repaired_url:
-                        repaired_args["url"] = repaired_url
-                    if repaired_video_id:
-                        repaired_args["video_id"] = repaired_video_id
-                    logger.info(
-                        "Auto-repaired youtube.retrieve.get args from previous search result (url=%s, video_id=%s).",
-                        bool(repaired_url),
-                        bool(repaired_video_id),
-                    )
-                    return ActionPlan(
-                        action_id=plan.action_id,
-                        args=repaired_args,
-                        confidence=plan.confidence,
-                        source=plan.source,
-                        response_text=plan.response_text,
-                        thought=plan.thought,
-                        metadata=dict(plan.metadata or {}),
-                        attachments=plan.attachments,
-                    )
+        repaired_plan = self._maybe_repair_youtube_retrieve_action(
+            plan=plan,
+            last_action_id=last_action_id,
+            last_action_structured=last_action_structured,
+        )
+        if repaired_plan is not None:
+            return repaired_plan
 
         return plan
 
@@ -6963,7 +6849,10 @@ class AgentOrchestrator:
             return []
             
         # Candidates for injection
-        candidates = session.memory[:]
+        candidates = [
+            m for m in session.memory[:]
+            if str(m.get("status") or "accepted").strip().lower() == "accepted"
+        ]
         
         # 1. Context Deduplication
         # Skip if content already appears in history or summary
@@ -7110,7 +6999,6 @@ class AgentOrchestrator:
         return True
 
     def _summarize_last_success_data(
-        self,
         *,
         action_id: Optional[str],
         structured_result: Optional[Dict[str, Any]],

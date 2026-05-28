@@ -19,5 +19,27 @@
       }
     ]
   },
-  "settings_fields": []
+  "settings_fields": [
+    {
+      "key": "language",
+      "type": "string",
+      "title": "Language Code",
+      "required": false,
+      "default": "pt-BR"
+    },
+    {
+      "key": "voice_name",
+      "type": "string",
+      "title": "Voice Name",
+      "required": false,
+      "default": "pt-BR-Neural2-B"
+    },
+    {
+      "key": "ssml_gender",
+      "type": "string",
+      "title": "Gender (MALE, FEMALE, NEUTRAL)",
+      "required": false,
+      "default": "MALE"
+    }
+  ]
 }

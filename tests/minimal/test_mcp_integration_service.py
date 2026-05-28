@@ -98,6 +98,49 @@ def test_mcp_integration_service_registers_dynamic_actions_and_dispatches():
     assert fake_client.calls[0]["tool_name"] == "search_notes"
 
 
+def test_mcp_integration_service_registers_human_friendly_aliases_for_write_actions():
+    registry = CapabilityRegistry()
+    client_manager = MCPClientManager()
+    tool = MCPToolDescriptor.model_validate(
+        {
+            "name": "create_note",
+            "description": "Create a note in the vault",
+            "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+            "annotations": {"readOnlyHint": False},
+        }
+    )
+    fake_client = _FakeTransportClient(tools=[tool])
+    client_manager.register_factory("http", lambda _server: fake_client)
+    service = MCPIntegrationService(
+        config_manager=_ConfigStub(
+            {
+                "enabled": True,
+                "servers": [
+                    {
+                        "id": "obsidian",
+                        "title": "Obsidian Vault",
+                        "enabled": True,
+                        "transport": {"kind": "http", "endpoint": "http://127.0.0.1:8765/mcp"},
+                        "policy": {
+                            "namespace": "obsidian",
+                            "trust_tier": "partner",
+                            "tool_allowlist": ["create_note"],
+                        },
+                    }
+                ],
+            }
+        ),
+        capability_registry=registry,
+        client_manager=client_manager,
+    )
+
+    stats = service.refresh()
+
+    assert stats["registered_actions"] == 1
+    assert registry.resolve_action_id("obsidian.note.create") == "obsidian.obsidian.create_note"
+    assert registry.resolve_action_id("obsidian.create.note") == "obsidian.obsidian.create_note"
+
+
 def test_mcp_integration_service_unregisters_actions_when_disabled():
     registry = CapabilityRegistry()
     client_manager = MCPClientManager()

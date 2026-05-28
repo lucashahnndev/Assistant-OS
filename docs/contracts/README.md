@@ -12,11 +12,11 @@ As specs normativas canônicas vivem em `agent/specs/`.
 ## Indice
 
 ### Active Specs
-- [worker_task_contract.spec.md](worker_task_contract.spec.md)
-- [skill_contract.spec.md](skill_contract.spec.md)
-- [remote.spec.md](remote.spec.md)
+- [worker_task_contract.spec.md](../../agent/specs/worker_task_contract.spec.md)
+- [skill_contract.spec.md](../../agent/specs/skill_contract.spec.md)
+- [remote.spec.md](../../agent/specs/remote.spec.md)
 
 ### State Tracking
-- [remote.stat.md](remote.stat.md)
-- [worker_task_contract.stat.md](worker_task_contract.stat.md)
-- [skill_contract.stat.md](skill_contract.stat.md)
+- [remote.stat.md](../../agent/specs/remote.stat.md)
+- [worker_task_contract.stat.md](../../agent/specs/worker_task_contract.stat.md)
+- [skill_contract.stat.md](../../agent/specs/skill_contract.stat.md)

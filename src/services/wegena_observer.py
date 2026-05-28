@@ -3,48 +3,52 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Optional
 
 from services.llm.manager import LLMManager
+import os
+import uuid
 from utils.event_bus import global_event_bus
 
 logger = logging.getLogger("WegenaObserver")
 
-FINAL_WEG_SYSTEM_PROMPT = """Você é um compositor silencioso de cenas para o motor Wegena.
-Sua única tarefa é ler a explicação do assistente e devolver uma cena `.weg` visualmente rica que ilustre o conceito.
+OBSERVER_PROMPT = """Você é um classificador de intenção visual (Wegena).
+Sua tarefa é analisar a interação (usuário e assistente) e responder APENAS 'YES' ou 'NO'.
+Responda YES se:
+1. O usuário pediu explicitamente para desenhar, mostrar, simular, ou gerar algo visual.
+2. O assistente estiver explicando algo técnico (arquitetura, fluxo de dados, sistemas, conceitos abstratos) que ficaria bem com partículas 3D.
+Responda NO se for apenas uma resposta curta, cumprimento, ou se a cena não agregar valor."""
 
-REGRAS:
-1. Nunca converse. Nunca explique. Nunca escreva texto fora do bloco ```weg.
-2. Se a fala for apenas social, vazia ou sem conteúdo visualizável, responda exatamente: Não visualizar
-3. Se visualizar, produza uma cena rica, coerente e legível para um LLM local de 14B. Prefira clareza sem exagerar na complexidade sintática.
-4. Use a DSL real do Wegena: `@Meta`, `@World`, `@Background`, `@Node`, e as NOVAS FUNCIONALIDADES:
-   - Efeitos especiais (FX): `@FX "name" kind: "burst"`, `kind: "smoke"`, `kind: "fire"`, `kind: "exhaust"`, ou `kind: "water"`.
-   - Inserção em Massa: `[Nodes: name, kind, pos, size, color]` para tabelas CSV.
-   - Lógica Procedural: `@Loop count: N var: v`, `@End`, `@Var name = value` e `@If condition`.
-5. Sempre defina fundo e câmera.
-6. Para explicações técnicas, use de 6 a 14 nós nomeados relevantes, priorizando a identidade estável dos nós principais.
-7. Preserve topologia espacial clara: origem, intermediários, destino, detalhes atmosféricos.
-8. Distinga Fogo: use `kind: "fire"` para chama ascendente (fogueira, tocha) e `kind: "exhaust"` para propulsão (foguetes, turbinas).
+FINAL_WEG_SYSTEM_PROMPT = """Você é um Diretor de Arte e compositor de cenas para o motor de partículas Wegena.
+Sua tarefa é ler a explicação do assistente e devolver uma cena `.weg` EXTREMAMENTE RICA, DENSA E COMPLEXA.
 
-EXEMPLO:
+REGRAS DE COMPLEXIDADE E DENSIDADE (CRÍTICO):
+1. MAXIMALISMO: NUNCA crie cenas vazias ou fracas. Uma cena deve ter múltiplos elementos, camadas e detalhes. Quebre objetos simples em várias partes (ex: uma casa deve ter paredes, janelas, teto, varanda, chaminé). Use no mínimo de 8 a 12 `@Node`s.
+2. DENSIDADE TOTAL (ORÇAMENTO): Você DEVE consumir 100% das partículas disponíveis. A soma de TODOS os `budget`s na cena DEVE ser EXATAMENTE 1.0. Se você usar apenas 0.3 de budget, a cena ficará rala e feia.
+3. MOVIMENTO OBRIGATÓRIO: A cena NÃO PODE ser estática. Use `animation: { type: "orbit", params: { speed: 0.5 } }` ou `pulse` em pássaros, nuvens, sóis, água ou luzes.
+4. ATMOSFERA E FX: Sempre adicione efeitos de partículas no fundo para dar vida (ex: `@FX "nuvens" kind: "smoke" pos: [0, 80, -100] color: "#ffffff"` ou "water" para rios).
+5. ILUMINAÇÃO: Use `@Node "sol" light: { color: "#ffcc00", intensity: 2.0, pos: [0, 150, -100] }` para garantir que o cenário não fique escuro.
+6. TERRENOS: Para chão, SEMPRE use o gerador de relevo: `@Node "ground" terrain: { size: [400, 400], amplitude: 15, color: "#3a5a40", material: 3, budget: 0.4 }`.
+7. @World: Defina sempre `density: 100k` (ou mais) e posicione a câmera para uma visão ampla: `camera: { pan: {y: -20}, rotation: {x: 0.15} }`.
+
+EXEMPLO DE CENA COMPLEXA (Dia Ensolarado):
 ```weg
-@Meta label="Fluxo Distribuído" version="5.0.0"
-@World zoom: 165 fov: 72 density: 42k size: 1.05 shape: point
-@Background type: linear stops: ["#02040a", "#10233d"]
-@Node "server_origin" volume: { shape: box pos: [-52, 0, 0] size: [18, 26, 18] color: "#4cc9f0" material: 2 count: 8200 }
-@Node "gateway_hub" volume: { shape: sphere pos: [0, 6, 0] size: 16 color: "#a855f7" material: 5 count: 6800 }
-@Node "server_target" volume: { shape: box pos: [52, 0, 0] size: [18, 26, 18] color: "#22c55e" material: 2 count: 8200 }
-@FX "packet_burst" kind: "burst" pos: [0, 6, 0] color: "#ffffff" intensity: 2
-@FX "exhaust_main" kind: "exhaust" pos: [-52, -15, 0] color: "#ff8800"
+@Meta label="Vila de Campo Densa" version="3.0"
+@World zoom: 220 fov: 72 density: 100k shape: cube camera: { rotation: {x: 0.15}, pan: {y: -15} }
+@Background type: linear stops: ["#4facfe", "#00f2fe"]
+@Node "sun_light" light: { color: "#ffebb5", intensity: 2.0, pos: [80, 100, -80] }
+@Node "sun" volume: { shape: sphere pos: [80, 100, -80] size: 20 color: "#ffebb5", material: 5, budget: 0.05 } animation: { type: "pulse", params: { speed: 1.0 } }
+@Node "clouds_fx" terrain: { size: [300, 50], amplitude: 5, pos: [0, 120, -100], color: "#ffffff", material: 3, budget: 0.1 } animation: { type: "orbit", params: { speed: 0.2 } }
+@Node "ground" terrain: { size: [500, 500], amplitude: 12, color: "#22c55e", material: 3, budget: 0.4 }
+@Node "house_main" volume: { shape: box pos: [0, 10, 0] size: [40, 20, 30] color: "#f8fafc", material: 2, budget: 0.15 }
+@Node "house_roof" volume: { shape: box pos: [0, 25, 0] size: [42, 8, 32] color: "#dc2626", material: 2, budget: 0.1 }
+@Node "house_door" volume: { shape: box pos: [0, 5, 16] size: [8, 10, 2] color: "#78350f", material: 2, budget: 0.02 }
+@Node "tree_1_trunk" volume: { shape: box pos: [-50, 5, 20] size: [4, 10, 4] color: "#78350f", material: 2, budget: 0.03 }
+@Node "tree_1_leaves" volume: { shape: sphere pos: [-50, 15, 20] size: 14 color: "#15803d", material: 3, budget: 0.1 } animation: { type: "pulse", params: { speed: 0.5, amplitude: 0.05 } }
+@Node "tree_2" volume: { shape: sphere pos: [60, 12, -20] size: 18 color: "#166534", material: 3, budget: 0.05 }
+@FX "wind_dust" kind: "smoke" pos: [0, 5, 50] color: "#ffffff" intensity: 0.5
 ```
 """
-
-VISUAL_KEYWORDS = (
-    "servid", "dados", "pacote", "rede", "network", "api", "request", "response",
-    "gateway", "router", "database", "banco", "cache", "fila", "queue", "cloud",
-    "nuvem", "chuva", "vapor", "pipeline", "fluxo", "transmiss", "sincron", "replica",
-    "telemet", "monitor", "process", "nó", "node", "latência", "stream"
-)
 
 GREETING_RE = re.compile(
     r"^\s*(oi|olá|ola|bom dia|boa tarde|boa noite|tudo bem|como posso ajudar|obrigado|valeu)[\s!.?,:;-]*$",
@@ -54,21 +58,12 @@ GREETING_RE = re.compile(
 WEG_RE = re.compile(r"```weg\s*([\s\S]*?)```", re.IGNORECASE)
 CODE_RE = re.compile(r"```(?:[a-zA-Z0-9_-]+)?\s*([\s\S]*?)```")
 
-
 @dataclass
 class StreamSceneState:
     session_id: str
     buffer: str = ""
     last_user_prompt: str = ""
-    template_id: Optional[str] = None
-    initialized: bool = False
-    emitted_nodes: Set[str] = field(default_factory=set)
-    scene_nodes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    env_state: Dict[str, Any] = field(default_factory=dict)
-    last_template_emit_at: float = 0.0
-    last_chunk_at: float = 0.0
     final_task_started: bool = False
-
 
 class WegenaSceneObserver:
     def __init__(self):
@@ -103,18 +98,12 @@ class WegenaSceneObserver:
                     continue
 
                 event_type = event.get("type")
-                if event_type == "assistant_visual_intent":
-                    session_id = str(event.get("session_id") or "")
-                    payload = event.get("payload", {}) or {}
-                    if session_id:
-                        self._process_visual_intent(session_id, payload)
-                    continue
 
                 if event_type == "assistant_chunk":
                     session_id = str(event.get("session_id") or "")
                     content = str(event.get("content") or "")
                     if session_id and content:
-                        await self._process_chunk(session_id, content)
+                        self._process_chunk(session_id, content)
                     continue
 
                 if event_type == "message_added" and event.get("role") == "user":
@@ -153,146 +142,67 @@ class WegenaSceneObserver:
         if previous_prompt and previous_prompt == next_prompt:
             return
 
-        state = StreamSceneState(session_id=session_id, last_user_prompt=content.strip())
-        self._states[session_id] = state
+        self._states[session_id] = StreamSceneState(session_id=session_id, last_user_prompt=content.strip())
         global_event_bus.emit_threadsafe({
             "type": "weg_scene_reset",
             "session_id": session_id,
             "reason": "new_user_turn",
         })
 
-    def _reset_stream_state(self, state: StreamSceneState, *, keep_user_prompt: bool, emit_reset: bool):
-        user_prompt = state.last_user_prompt if keep_user_prompt else ""
-        session_id = state.session_id
-        self._states[session_id] = StreamSceneState(session_id=session_id, last_user_prompt=user_prompt)
-        if emit_reset:
-            global_event_bus.emit_threadsafe({
-                "type": "weg_scene_reset",
-                "session_id": session_id,
-                "reason": "template_shift",
-            })
-
-    def _process_visual_intent(self, session_id: str, payload: Dict[str, Any]):
-        state = self._state_for(session_id)
-        mode = str(payload.get("mode") or "").strip().lower()
-        if mode not in {"data_flow", "cloud_rain", "neural_mesh", "concept_orbit"}:
-            mode = "concept_orbit"
-        intent = str(payload.get("intent") or "").strip()
-        background_policy = str(payload.get("background_policy") or "adaptive").strip().lower()
-
-        if state.template_id and state.template_id != mode:
-            self._reset_stream_state(state, keep_user_prompt=True, emit_reset=True)
-            state = self._state_for(session_id)
-
-        if intent:
-            state.buffer = (state.buffer + " " + intent).strip()[-5000:]
-        state.template_id = mode
-        if not state.initialized:
-            self._emit_scene_init(session_id, mode)
-            state.initialized = True
-
-        elements = self._build_template_elements(mode, state.buffer or intent or mode)
-        for element in elements:
-            name = str(element.get("name") or "")
-            if not name:
-                continue
-            previous = state.scene_nodes.get(name)
-            if previous is not None and not self._element_changed(previous, element):
-                continue
-            self._emit_scene_patch(session_id, element, mode)
-            state.emitted_nodes.add(name)
-            state.scene_nodes[name] = self._clone_element(element)
-
-        env_update = self._build_env_update(mode, f"{background_policy} {state.buffer or intent or mode}")
-        if env_update and self._env_changed(state.env_state, env_update):
-            self._emit_scene_env(session_id, env_update, mode)
-            state.env_state = self._deep_merge_dicts(state.env_state, env_update)
-
-    async def _process_chunk(self, session_id: str, content: str):
+    def _process_chunk(self, session_id: str, content: str):
         state = self._state_for(session_id)
         cleaned = self._sanitize_chunk(content)
         if not cleaned:
             return
-
         state.buffer = (state.buffer + " " + cleaned).strip()[-5000:]
-        state.last_chunk_at = time.monotonic()
-
-        if not self._should_visualize_fast(state.buffer):
-            return
-
-        template_id = self._choose_template(state.buffer)
-        if not template_id:
-            return
-
-        if state.template_id and state.template_id != template_id:
-            self._reset_stream_state(state, keep_user_prompt=True, emit_reset=True)
-            state = self._state_for(session_id)
-
-        state.template_id = template_id
-        if not state.initialized:
-            self._emit_scene_init(session_id, template_id)
-            state.initialized = True
-
-        elements = self._build_template_elements(template_id, state.buffer)
-        current_names = {str(element.get("name") or "") for element in elements if str(element.get("name") or "")}
-        changed_now = 0
-        for element in elements:
-            name = str(element.get("name") or "")
-            if not name:
-                continue
-            previous = state.scene_nodes.get(name)
-            if previous is not None and not self._element_changed(previous, element):
-                continue
-            self._emit_scene_patch(session_id, element, template_id)
-            state.emitted_nodes.add(name)
-            state.scene_nodes[name] = self._clone_element(element)
-            changed_now += 1
-
-        if changed_now:
-            state.last_template_emit_at = time.monotonic()
-
-        stale_names = [name for name in list(state.scene_nodes.keys()) if name not in current_names]
-        for stale_name in stale_names:
-            self._emit_scene_remove(session_id, stale_name, template_id)
-            state.scene_nodes.pop(stale_name, None)
-            state.emitted_nodes.discard(stale_name)
-
-        env_update = self._build_env_update(template_id, state.buffer)
-        if env_update and self._env_changed(state.env_state, env_update):
-            self._emit_scene_env(session_id, env_update, template_id)
-            state.env_state = self._deep_merge_dicts(state.env_state, env_update)
 
     async def _process_final_message(self, session_id: str, content: str):
         state = self._state_for(session_id)
         if not state.buffer:
             state.buffer = content
 
-        if self._should_visualize_fast(content) and not state.initialized:
-            template_id = self._choose_template(content)
-            if template_id:
-                state.template_id = template_id
-                self._emit_scene_init(session_id, template_id)
-                state.initialized = True
-                for element in self._build_template_elements(template_id, content):
-                    name = str(element.get("name") or "")
-                    if name and name not in state.emitted_nodes:
-                        self._emit_scene_patch(session_id, element, template_id)
-                        state.emitted_nodes.add(name)
-                        state.scene_nodes[name] = self._clone_element(element)
-
         if state.final_task_started:
             return
         state.final_task_started = True
-        asyncio.create_task(self._process_final_weg(session_id, content))
+        
+        asyncio.create_task(self._observe_and_generate(session_id, content))
 
-    async def _process_final_weg(self, session_id: str, content: str):
+    async def _run_turn_observer(self, user_prompt: str, content: str) -> bool:
+        sample = re.sub(r"\s+", " ", str(content or "")).strip().lower()
+        if not sample or GREETING_RE.match(sample) or len(sample) < 10:
+            return False
+
         try:
-            logger.info("Wegena final composer: analyzing session=%s preview=%s", session_id, content[:120])
-            state = self._state_for(session_id)
-            scaffold_summary = self._summarize_state_for_prompt(state)
+            result = await asyncio.to_thread(
+                self.llm.generate_text,
+                prompt=f"USER:\n\"{user_prompt.strip()}\"\n\nASSISTANT:\n\"{content.strip()}\"",
+                system_prompt=OBSERVER_PROMPT,
+                max_tokens=10,
+                temperature=0.0
+            )
+            decision = "YES" in str(result or "").upper()
+            logger.info(f"Turn Observer decision: {'YES' if decision else 'NO'} | User: {user_prompt[:30]}...")
+            return decision
+        except Exception as e:
+            logger.error("Error in turn observer: %s", e)
+            return False
+
+    async def _observe_and_generate(self, session_id: str, content: str):
+        state = self._state_for(session_id)
+        user_prompt = state.last_user_prompt or ""
+        
+        # Step 1: Agentic Observation
+        should_visualize = await self._run_turn_observer(user_prompt, content)
+        
+        if not should_visualize:
+            logger.info("Wegena final composer: Turn Observer decided NO for session=%s", session_id)
+            return
+
+        # Step 2: Agentic Generation
+        try:
+            logger.info("Wegena final composer: Turn Observer decided YES. Generating scene for session=%s", session_id)
             prompt = (
-                "Leia a fala do assistente abaixo e gere uma cena `.weg` final, rica e coerente.\n\n"
-                f"SCAFFOLD ATUAL:\n{scaffold_summary}\n\n"
+                "Leia a fala do assistente abaixo e gere uma cena `.weg` inteira, rica e coerente.\n\n"
                 f"FALA:\n\"{content.strip()}\"\n"
             )
             result = await asyncio.to_thread(
@@ -306,13 +216,24 @@ class WegenaSceneObserver:
                 logger.info("Wegena final composer: no final .weg generated for session=%s", session_id)
                 return
 
+            # Save script to file
+            os.makedirs("data/workspace/wegena", exist_ok=True)
+            filename = f"scene_{uuid.uuid4().hex[:8]}.weg"
+            filepath = os.path.abspath(os.path.join("data/workspace/wegena", filename))
+            try:
+                with open(filepath, "w") as f:
+                    f.write(weg_script)
+            except Exception as e:
+                logger.error("Failed to save weg script to disk: %s", e)
+                filepath = None
+
             global_event_bus.emit_threadsafe({
                 "type": "weg_scene",
                 "session_id": session_id,
                 "script": weg_script,
                 "meta": {
-                    "source": "llm_final",
-                    "template": state.template_id,
+                    "source": "llm_agentic_turn",
+                    "media_path": filepath
                 },
             })
             logger.info("Wegena final composer: dispatched final .weg for session=%s", session_id)
@@ -327,460 +248,6 @@ class WegenaSceneObserver:
         if text.startswith("{") and text.endswith("}"):
             return ""
         return text
-
-    @staticmethod
-    def _should_visualize_fast(text: str) -> bool:
-        sample = re.sub(r"\s+", " ", str(text or "")).strip().lower()
-        if not sample or GREETING_RE.match(sample):
-            return False
-        if len(sample) < 20:
-            return False
-        return any(token in sample for token in VISUAL_KEYWORDS)
-
-    @staticmethod
-    def _choose_template(text: str) -> Optional[str]:
-        lowered = str(text or "").lower()
-        if any(word in lowered for word in ("nuvem", "chuva", "vapor", "condens", "gotas", "tempest")):
-            return "cloud_rain"
-        if any(word in lowered for word in ("server", "servid", "dados", "pacote", "api", "gateway", "database", "cache", "fila", "request", "response", "rede", "pipeline", "fluxo")):
-            return "data_flow"
-        if any(word in lowered for word in ("orb", "núcleo", "neural", "sinapse", "atlas")):
-            return "neural_mesh"
-        return "concept_orbit"
-
-    def _emit_scene_init(self, session_id: str, template_id: str):
-        global_event_bus.emit_threadsafe({
-            "type": "weg_scene_init",
-            "session_id": session_id,
-            "config": self._template_config(template_id),
-            "meta": {"template": template_id, "source": "scaffold"},
-        })
-
-    def _emit_scene_patch(self, session_id: str, element: Dict[str, Any], template_id: str):
-        global_event_bus.emit_threadsafe({
-            "type": "weg_scene_patch",
-            "session_id": session_id,
-            "element": element,
-            "meta": {"template": template_id, "source": "scaffold"},
-        })
-
-    def _emit_scene_remove(self, session_id: str, name: str, template_id: str):
-        global_event_bus.emit_threadsafe({
-            "type": "weg_scene_remove",
-            "session_id": session_id,
-            "name": name,
-            "meta": {"template": template_id, "source": "scaffold"},
-        })
-
-    def _emit_scene_env(self, session_id: str, env: Dict[str, Any], template_id: str):
-        global_event_bus.emit_threadsafe({
-            "type": "weg_scene_env",
-            "session_id": session_id,
-            "env": env,
-            "meta": {"template": template_id, "source": "scaffold"},
-        })
-
-    @staticmethod
-    def _clone_element(element: Dict[str, Any]) -> Dict[str, Any]:
-        import copy
-        return copy.deepcopy(element)
-
-    @staticmethod
-    def _normalize_value(value: Any) -> Any:
-        if isinstance(value, dict):
-            return {k: WegenaSceneObserver._normalize_value(value[k]) for k in sorted(value.keys())}
-        if isinstance(value, list):
-            return [WegenaSceneObserver._normalize_value(v) for v in value]
-        return value
-
-    @classmethod
-    def _element_changed(cls, previous: Dict[str, Any], current: Dict[str, Any]) -> bool:
-        return cls._normalize_value(previous) != cls._normalize_value(current)
-
-    @classmethod
-    def _env_changed(cls, previous: Dict[str, Any], current: Dict[str, Any]) -> bool:
-        merged = cls._deep_merge_dicts(previous, current)
-        return cls._normalize_value(previous) != cls._normalize_value(merged)
-
-    @staticmethod
-    def _deep_merge_dicts(base: Dict[str, Any], update: Dict[str, Any]) -> Dict[str, Any]:
-        merged: Dict[str, Any] = dict(base or {})
-        for key, value in (update or {}).items():
-            if isinstance(value, dict) and isinstance(merged.get(key), dict):
-                merged[key] = WegenaSceneObserver._deep_merge_dicts(merged[key], value)
-            else:
-                merged[key] = value
-        return merged
-
-    @staticmethod
-    def _summarize_state_for_prompt(state: StreamSceneState) -> str:
-        if not state.scene_nodes:
-            return "nenhum scaffold emitido"
-        names = ", ".join(sorted(state.scene_nodes.keys())[:16])
-        env_keys = ", ".join(sorted(state.env_state.keys())) if state.env_state else "nenhum"
-        template = state.template_id or "desconhecido"
-        return f"template={template}; nodes={names}; env={env_keys}"
-
-    @staticmethod
-    def _template_config(template_id: str) -> Dict[str, Any]:
-        configs = {
-            "data_flow": {
-                "particles": {"density": 42000, "size": 0.95, "material": 0},
-                "env": {
-                    "background": {
-                        "type": "linear",
-                        "stops": ["#030611", "#10243b"],
-                    }
-                },
-                "camera": {"zoom": 170, "rotation": {"x": 0.18, "y": -0.32}},
-            },
-            "cloud_rain": {
-                "particles": {"density": 44000, "size": 1.0, "material": 4},
-                "env": {
-                    "background": {
-                        "type": "linear",
-                        "stops": ["#091525", "#284765"],
-                    }
-                },
-                "camera": {"zoom": 168, "rotation": {"x": 0.12, "y": -0.1}},
-            },
-            "neural_mesh": {
-                "particles": {"density": 48000, "size": 0.9, "material": 4},
-                "env": {
-                    "background": {
-                        "type": "radial",
-                        "stops": [
-                            {"color": "#030615", "pos": 0},
-                            {"color": "#0b1730", "pos": 55},
-                            {"color": "#000104", "pos": 100},
-                        ],
-                    }
-                },
-                "camera": {"zoom": 180, "rotation": {"x": 0.22, "y": -0.42}},
-            },
-            "concept_orbit": {
-                "particles": {"density": 36000, "size": 0.95, "material": 0},
-                "env": {
-                    "background": {
-                        "type": "linear",
-                        "stops": ["#04050a", "#101426"],
-                    }
-                },
-                "camera": {"zoom": 175, "rotation": {"x": 0.18, "y": -0.24}},
-            },
-        }
-        return configs.get(template_id, configs["concept_orbit"])
-
-    def _build_template_elements(self, template_id: str, text: str) -> List[Dict[str, Any]]:
-        lowered = str(text or "").lower()
-        if template_id == "data_flow":
-            return self._build_data_flow_elements(lowered)
-        if template_id == "cloud_rain":
-            return self._build_cloud_rain_elements(lowered)
-        if template_id == "neural_mesh":
-            return self._build_neural_mesh_elements(lowered)
-        return self._build_concept_orbit_elements(lowered)
-
-    def _build_env_update(self, template_id: str, text: str) -> Optional[Dict[str, Any]]:
-        lowered = str(text or "").lower()
-        if template_id == "data_flow" and any(word in lowered for word in ("seguro", "criptograf", "encryption", "segurança")):
-            return {
-                "background": {
-                    "type": "linear",
-                    "stops": ["#02040c", "#0f1b45"],
-                }
-            }
-        if template_id == "cloud_rain" and any(word in lowered for word in ("tempest", "trovo", "storm")):
-            return {
-                "background": {
-                    "type": "linear",
-                    "stops": ["#07101c", "#384d6a"],
-                }
-            }
-        if template_id == "data_flow" and any(word in lowered for word in ("distribui", "cluster", "balance", "load balancer", "escalar", "escala")):
-            return {
-                "camera": {"zoom": 182, "rotation": {"x": 0.22, "y": -0.44}}
-            }
-        return None
-
-    @staticmethod
-    def _volume_node(name: str, *, kind: str, budget: float, color: str, offset: Dict[str, float], radius: Optional[float] = None, size: Optional[Dict[str, float]] = None, material: int = 0, modifiers: Optional[List[Dict[str, Any]]] = None, animation: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        data: Dict[str, Any] = {"color": color, "offset": offset}
-        if radius is not None:
-            data["radius"] = radius
-        if size is not None:
-            data["size"] = size
-        return {
-            "name": name,
-            "type": kind,
-            "budget": budget,
-            "material": material,
-            "data": data,
-            "modifiers": modifiers or [],
-            "animation": animation,
-        }
-
-    def _build_data_flow_elements(self, lowered: str) -> List[Dict[str, Any]]:
-        has_security = any(word in lowered for word in ("seguro", "criptograf", "encryption", "tls", "ssl", "segurança"))
-        has_distribution = any(word in lowered for word in ("distribui", "cluster", "balance", "escalar", "escala", "replica"))
-        has_latency = any(word in lowered for word in ("latência", "latencia", "fila", "queue", "buffer", "espera"))
-
-        origin_offset = {"x": -72, "y": 0, "z": -8}
-        hub_offset = {"x": -4, "y": 8, "z": 0}
-        target_offset = {"x": 72, "y": 0, "z": 8}
-        if has_distribution:
-            target_offset = {"x": 82, "y": 8, "z": 18}
-
-        elements: List[Dict[str, Any]] = [
-            self._volume_node(
-                "server_origin",
-                kind="box",
-                budget=0.10,
-                color="#67e8f9" if has_security else "#38bdf8",
-                offset=origin_offset,
-                size={"x": 28, "y": 42, "z": 20},
-                material=2,
-            ),
-            self._volume_node(
-                "gateway_hub",
-                kind="sphere",
-                budget=0.10 if has_distribution else 0.09,
-                color="#22d3ee" if has_security else "#a855f7",
-                offset=hub_offset,
-                radius=24 if has_distribution else 20,
-                material=5,
-                modifiers=[{"type": "jitter", "amount": 3.4 if has_latency else 2.2}],
-                animation={"type": "pulse", "params": {"speed": 1.9 if has_latency else 1.6, "amplitude": 0.12 if has_latency else 0.07}},
-            ),
-            self._volume_node(
-                "server_target",
-                kind="box",
-                budget=0.14 if has_distribution else 0.10,
-                color="#4ade80" if has_distribution else "#22c55e",
-                offset=target_offset,
-                size={"x": 28, "y": 42, "z": 20},
-                material=2,
-            ),
-            {
-                "name": "packet_stream_main",
-                "type": "composition",
-                "budget": 0.18 if has_distribution else 0.12,
-                "elements": [
-                    self._volume_node(
-                        f"packet_main_{idx}",
-                        kind="sphere",
-                        budget=0.1,
-                        color="#a7f3d0" if has_security and idx % 2 == 0 else ("#f8fafc" if idx % 2 == 0 else "#38bdf8"),
-                        offset={
-                            "x": -52 + idx * (11 if has_distribution else 16),
-                            "y": 4 + ((idx % 2) * (7 if has_latency else 4)),
-                            "z": -10 + (idx % 4) * (6 if has_distribution else 3),
-                        },
-                        radius=3.2 if has_distribution else 4.0,
-                        material=4,
-                    )
-                    for idx in range(12 if has_distribution else 8)
-                ],
-                "animation": {"type": "orbit", "params": {"speed": 0.58 if has_latency else 0.35}},
-            },
-        ]
-        if any(word in lowered for word in ("database", "banco", "storage", "armazen")):
-            elements.append(
-                self._volume_node(
-                    "database_cluster",
-                    kind="sphere",
-                    budget=0.08,
-                    color="#f472b6",
-                    offset={"x": 96, "y": -30, "z": 18},
-                    radius=16,
-                    material=3,
-                )
-            )
-        if has_latency:
-            elements.append(
-                self._volume_node(
-                    "buffer_queue",
-                    kind="ring",
-                    budget=0.09,
-                    color="#f59e0b",
-                    offset={"x": 24, "y": 24, "z": 0},
-                    radius=22,
-                    material=4,
-                    animation={"type": "orbit", "params": {"speed": 0.85}},
-                )
-            )
-        if has_distribution:
-            elements.append(
-                self._volume_node(
-                    "distribution_fan",
-                    kind="spiral",
-                    budget=0.10,
-                    color="#60a5fa",
-                    offset={"x": 46, "y": 18, "z": 4},
-                    radius=26,
-                    material=4,
-                )
-            )
-        if any(word in lowered for word in ("monitor", "telemet", "log", "observ")):
-            elements.append(
-                self._volume_node(
-                    "telemetry_field",
-                    kind="spiral",
-                    budget=0.09,
-                    color="#60a5fa",
-                    offset={"x": 0, "y": 42, "z": -18},
-                    radius=34,
-                    material=4,
-                )
-            )
-        return elements
-
-    def _build_cloud_rain_elements(self, lowered: str) -> List[Dict[str, Any]]:
-        has_storm = any(word in lowered for word in ("tempest", "trovo", "storm"))
-        has_sun = any(word in lowered for word in ("sol", "sun", "luz"))
-        elements: List[Dict[str, Any]] = [
-            self._volume_node(
-                "cloud_core",
-                kind="sphere",
-                budget=0.22 if has_storm else 0.18,
-                color="#cbd5e1" if has_storm else "#e2e8f0",
-                offset={"x": 0, "y": 34 if has_storm else 30, "z": 0},
-                radius=40 if has_storm else 34,
-                material=1,
-                modifiers=[{"type": "jitter", "amount": 9.0 if has_storm else 6.0}, {"type": "noise", "amount": 3.8 if has_storm else 2.5, "scale": 0.8}],
-            ),
-            self._volume_node(
-                "vapor_bloom",
-                kind="sphere",
-                budget=0.12,
-                color="#93c5fd" if has_storm else "#7dd3fc",
-                offset={"x": -18, "y": 12, "z": -10},
-                radius=24,
-                material=4,
-                modifiers=[{"type": "jitter", "amount": 9.0}],
-            ),
-            {
-                "name": "rain_column",
-                "type": "composition",
-                "budget": 0.22 if has_storm else 0.16,
-                "elements": [
-                    self._volume_node(
-                        f"rain_drop_{idx}",
-                        kind="sphere",
-                        budget=0.08,
-                        color="#38bdf8",
-                        offset={"x": -24 + (idx % 6) * 10, "y": 8 - idx * (10 if has_storm else 8), "z": -8 + (idx % 4) * 5},
-                        radius=2.2 if has_storm else 2.6,
-                        material=4,
-                    )
-                    for idx in range(26 if has_storm else 18)
-                ],
-                "animation": {"type": "orbit", "params": {"speed": 0.30 if has_storm else 0.18}},
-            },
-        ]
-        if has_sun:
-            elements.append(
-                self._volume_node(
-                    "sunlight_arc",
-                    kind="ring",
-                    budget=0.08,
-                    color="#fde68a",
-                    offset={"x": 46, "y": 54, "z": -14},
-                    radius=24,
-                    material=4,
-                )
-            )
-        if has_storm:
-            elements.append(
-                self._volume_node(
-                    "storm_front",
-                    kind="spiral",
-                    budget=0.12,
-                    color="#93c5fd",
-                    offset={"x": 8, "y": 38, "z": -18},
-                    radius=28,
-                    material=4,
-                )
-            )
-        return elements
-
-    def _build_neural_mesh_elements(self, lowered: str) -> List[Dict[str, Any]]:
-        elements = [
-            self._volume_node(
-                "neural_core",
-                kind="sphere",
-                budget=0.16,
-                color="#22d3ee",
-                offset={"x": 0, "y": 8, "z": 0},
-                radius=22,
-                material=4,
-                animation={"type": "pulse", "params": {"speed": 1.8, "amplitude": 0.09}},
-            ),
-            self._volume_node(
-                "neural_shell",
-                kind="ring",
-                budget=0.12,
-                color="#a78bfa",
-                offset={"x": 0, "y": 8, "z": 0},
-                radius=38,
-                material=5,
-                animation={"type": "orbit", "params": {"speed": 0.42}},
-            ),
-            self._volume_node(
-                "signal_field",
-                kind="spiral",
-                budget=0.14,
-                color="#67e8f9",
-                offset={"x": 0, "y": 10, "z": 0},
-                radius=46,
-                material=4,
-            ),
-        ]
-        if any(word in lowered for word in ("fala", "voz", "voice", "speech")):
-            elements.append(
-                self._volume_node(
-                    "voice_lattice",
-                    kind="ring",
-                    budget=0.09,
-                    color="#f472b6",
-                    offset={"x": 0, "y": -18, "z": 0},
-                    radius=26,
-                    material=4,
-                )
-            )
-        return elements
-
-    def _build_concept_orbit_elements(self, lowered: str) -> List[Dict[str, Any]]:
-        return [
-            self._volume_node(
-                "concept_core",
-                kind="sphere",
-                budget=0.16,
-                color="#60a5fa",
-                offset={"x": 0, "y": 8, "z": 0},
-                radius=24,
-                material=4,
-            ),
-            self._volume_node(
-                "concept_orbit_ring",
-                kind="ring",
-                budget=0.10,
-                color="#c084fc",
-                offset={"x": 0, "y": 8, "z": 0},
-                radius=42,
-                material=5,
-                animation={"type": "orbit", "params": {"speed": 0.32}},
-            ),
-            self._volume_node(
-                "concept_satellite",
-                kind="sphere",
-                budget=0.06,
-                color="#f8fafc",
-                offset={"x": 38, "y": 18, "z": 8},
-                radius=8,
-                material=4,
-            ),
-        ]
 
     @staticmethod
     def _extract_weg_script(result: Any) -> str:

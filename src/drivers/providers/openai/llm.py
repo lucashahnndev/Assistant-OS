@@ -45,6 +45,82 @@ class OpenAIChatProvider(ILLMProvider):
                 max(0, self.max_retries),
             )
 
+    @staticmethod
+    def _normalize_response_text(value: Any, fallback: str = "") -> str:
+        if isinstance(value, str):
+            return value
+        if value is None:
+            return fallback
+        if isinstance(value, dict):
+            candidate = value.get("text") or value.get("response") or value.get("message")
+            if candidate is not None:
+                return str(candidate)
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        if isinstance(value, list):
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        return str(value)
+
+    @staticmethod
+    def _extract_response_content(message: Any) -> str:
+        if message is None:
+            return ""
+        content = getattr(message, "content", None)
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        tool_calls = getattr(message, "tool_calls", None)
+        if isinstance(tool_calls, list) and tool_calls:
+            first_call = tool_calls[0]
+            function_obj = getattr(first_call, "function", None)
+            arguments = getattr(function_obj, "arguments", None)
+            if isinstance(arguments, str) and arguments.strip():
+                return arguments.strip()
+            if isinstance(arguments, dict):
+                try:
+                    return json.dumps(arguments, ensure_ascii=False)
+                except Exception:
+                    return str(arguments)
+            if isinstance(first_call, dict):
+                function_dict = first_call.get("function") if isinstance(first_call.get("function"), dict) else {}
+                arguments = function_dict.get("arguments")
+                if isinstance(arguments, str) and arguments.strip():
+                    return arguments.strip()
+                if isinstance(arguments, dict):
+                    try:
+                        return json.dumps(arguments, ensure_ascii=False)
+                    except Exception:
+                        return str(arguments)
+        return ""
+
+    @staticmethod
+    def _build_response_format(allowed_actions: Optional[List[str]] = None) -> Dict[str, Any]:
+        schema = AgentIntent.model_json_schema()
+        allowed = [str(x).strip() for x in (allowed_actions or []) if str(x or "").strip()]
+        if allowed and isinstance(schema.get("properties"), dict):
+            action_schema = schema["properties"].get("action")
+            if isinstance(action_schema, dict):
+                current_enum = action_schema.get("enum")
+                merged: List[str] = []
+                if isinstance(current_enum, list):
+                    merged.extend(str(item).strip() for item in current_enum if str(item or "").strip())
+                for item in allowed:
+                    if item not in merged:
+                        merged.append(item)
+                action_schema["enum"] = merged
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "agent_intent",
+                "schema": schema,
+                "strict": True,
+            },
+        }
+
     def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] | None = None, **kwargs) -> AgentIntent:
         # Construct messages
         messages = [{"role": "system", "content": system_prompt}]
@@ -90,6 +166,8 @@ class OpenAIChatProvider(ILLMProvider):
                 }
             }
         ]
+        allowed_actions = kwargs.get("allowed_actions")
+        response_format = self._build_response_format(allowed_actions if isinstance(allowed_actions, list) else None)
 
         try:
             t0 = time.time()
@@ -104,16 +182,19 @@ class OpenAIChatProvider(ILLMProvider):
                 messages=messages,
                 tools=tools,
                 tool_choice={"type": "function", "function": {"name": "execute_intent"}},
+                response_format=response_format,
                 max_tokens=kwargs.get("max_tokens", self.max_tokens)
             )
             logger.info("OpenAI intent request end | elapsed=%.2fs", time.time() - t0)
 
-            
-            if not response.choices or not response.choices[0].message.content:
+            if not response.choices:
                 logger.error("OpenAI returned an empty response.")
                 raise ValueError("OpenAI returned an empty response.")
 
-            content = response.choices[0].message.content.strip()
+            content = self._extract_response_content(response.choices[0].message)
+            if not content:
+                logger.error("OpenAI returned an empty response payload.")
+                raise ValueError("OpenAI returned an empty response payload.")
             
             # Use specialized parser
             data = extract_and_parse_json(content)
@@ -126,11 +207,6 @@ class OpenAIChatProvider(ILLMProvider):
             attachments = data.get("attachments")
             if not attachments and isinstance(data.get("params"), dict):
                 attachments = data.get("params", {}).get("attachments")
-
-            # Assuming _normalize_response_text is a method that will be added or defined elsewhere
-            # For now, using a placeholder or direct assignment if no complex normalization is needed
-            # If _normalize_response_text is not defined, this line will cause an error.
-            # For the purpose of this edit, I'll assume it's a valid call or will be implemented.
             response_text = self._normalize_response_text(
                 data.get("response_text", data.get("reply", "")),
                 fallback="",
@@ -152,6 +228,43 @@ class OpenAIChatProvider(ILLMProvider):
             )
 
         except Exception as e:
+            if "response_format" in str(e).lower() or "json_schema" in str(e).lower() or "format" in str(e).lower():
+                logger.warning("OpenAI intent request rejected structured response_format; retrying without it: %s", e)
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice={"type": "function", "function": {"name": "execute_intent"}},
+                    max_tokens=kwargs.get("max_tokens", self.max_tokens),
+                )
+                if not response.choices:
+                    logger.error("OpenAI returned an empty response.")
+                    raise ValueError("OpenAI returned an empty response.")
+                content = self._extract_response_content(response.choices[0].message)
+                if not content:
+                    logger.error("OpenAI returned an empty response payload.")
+                    raise ValueError("OpenAI returned an empty response payload.")
+                data = extract_and_parse_json(content)
+                if not data:
+                    logger.error("Failed to extract valid JSON from OpenAI response.")
+                    raise ProviderContractError("Failed to fulfill AgentIntent contract: Invalid JSON.")
+                attachments = data.get("attachments")
+                if not attachments and isinstance(data.get("params"), dict):
+                    attachments = data.get("params", {}).get("attachments")
+                response_text = self._normalize_response_text(
+                    data.get("response_text", data.get("reply", "")),
+                    fallback="",
+                )
+                thought = str(data.get("thought", "")).strip() or "OpenAI processing turn."
+                return AgentIntent(
+                    thought=thought,
+                    plan=data.get("plan", []),
+                    action=data.get("action", "reply"),
+                    params=data.get("params", {}),
+                    state_summary=data.get("state_summary", {}),
+                    response_text=response_text,
+                    attachments=attachments
+                )
             logger.error(f"OpenAI Error: {e}")
             raise e
 

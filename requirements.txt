@@ -49,3 +49,5 @@ telegramify-markdown
 langchain-openai
 langchain-google-genai
 langchain-anthropic
+pyngrok
+pycloudflared

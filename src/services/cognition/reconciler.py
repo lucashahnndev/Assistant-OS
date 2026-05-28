@@ -10,6 +10,8 @@ class CognitiveReconciler:
     _NON_TERMINAL = {
         "STARTED",
         "PROGRESS",
+        "COMPLETED",
+        "SUCCESS",
         "PAUSED",
         "WAITING_INPUT",
         "WAITING_APPROVAL",
@@ -17,6 +19,21 @@ class CognitiveReconciler:
         "FOREGROUND_BUDGET_EXCEEDED",
     }
     _BLOCKED = {"BLOCKED_BY_DEPENDENCY", "WAITING_INPUT", "WAITING_APPROVAL"}
+    _POSITIVE_PROGRESS_EVENTS = {"PROGRESS", "COMPLETED", "CHECKPOINT", "SCHEDULING_UPDATE"}
+    _RECENT_PROGRESS_STATUSES = {"STARTED", "PROGRESS", "COMPLETED", "SUCCESS"}
+    _NEGATIVE_PROGRESS_MARKERS = (
+        "fail",
+        "failed",
+        "failure",
+        "error",
+        "timeout",
+        "denied",
+        "blocked",
+        "missing",
+        "unavailable",
+        "exception",
+        "stalled",
+    )
 
     def reconcile(
         self,
@@ -297,16 +314,22 @@ class CognitiveReconciler:
     def _derive_recent_progress(self, session: Any, tasks: List[Dict[str, Any]]) -> List[str]:
         progress: List[str] = []
         for task in tasks[:4]:
+            status = str(task.get("status") or "").upper()
+            if status not in self._RECENT_PROGRESS_STATUSES:
+                continue
             outcome = _clip_text(task.get("last_outcome") or task.get("completion_summary") or task.get("last_summary"), 120)
             role = _clip_text(task.get("task_role"), 70) or "task"
-            if outcome:
+            if outcome and not self._looks_like_negative_progress(outcome):
                 progress.append(f"{role}: {outcome}")
         events = getattr(session, "event_history", []) or []
         for event in list(events)[-3:]:
             if not isinstance(event, dict):
                 continue
+            event_type = str(event.get("event_type") or "").upper()
+            if event_type not in self._POSITIVE_PROGRESS_EVENTS:
+                continue
             summary = _clip_text(event.get("summary") or event.get("outcome"), 120)
-            if summary:
+            if summary and not self._looks_like_negative_progress(summary):
                 progress.append(summary)
         return _normalize_lines(progress, max_items=4, max_chars=180)
 
@@ -335,3 +358,8 @@ class CognitiveReconciler:
         ):
             watchpoints.append("Avoid assuming missing broker evidence implies missing capability.")
         return _normalize_lines(watchpoints, max_items=5, max_chars=180)
+
+    @classmethod
+    def _looks_like_negative_progress(cls, text: str) -> bool:
+        lowered = str(text or "").lower()
+        return any(marker in lowered for marker in cls._NEGATIVE_PROGRESS_MARKERS)

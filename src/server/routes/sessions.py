@@ -655,7 +655,7 @@ def get_session_thoughts(session_id: str, message_id: str = None, request: Reque
     
     session = orch.get_session_robust(session_id)
     if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+        return { "id": session_id, "thoughts": [], "total": 0 }
 
     thoughts = getattr(session, "thoughts", [])
     
@@ -678,7 +678,7 @@ def get_session_cards(session_id: str, request: Request = None, user: User = Dep
     
     session = orch.get_session_robust(session_id)
     if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+        return { "id": session_id, "cards": [], "total": 0 }
 
     cards = getattr(session, "media_cards", [])
     
@@ -714,6 +714,32 @@ async def add_session_card(session_id: str, request: Request, user: User = Depen
     orch._save_session(session)
     
     return {"status": "success", "card_id": card_id}
+
+@router.post("/{session_id}/wegena/feedback")
+async def add_wegena_feedback(session_id: str, request: Request, user: User = Depends(get_current_user)):
+    """
+    Registrar feedback (like/dislike) para a cena gerada pelo wegena.
+    No futuro isso será persistido e alimentará a base de treinamento do RAG.
+    """
+    kernel = get_kernel(request)
+    orch = kernel.orchestrator
+    
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    try:
+        data = await request.json()
+        feedback_type = data.get("feedback_type")
+        if feedback_type not in ("like", "dislike"):
+            raise ValueError()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid payload, must contain feedback_type 'like' or 'dislike'")
+        
+    # TODO: Implementar gravação no VectorDB de estilo ou banco SQL 
+    logger.info(f"Wegena Feedback recebido no backend: session={session_id}, type={feedback_type}")
+    
+    return {"status": "success", "feedback_type": feedback_type}
     
     if end_idx <= 0 or start_idx >= total:
         paginated = []
