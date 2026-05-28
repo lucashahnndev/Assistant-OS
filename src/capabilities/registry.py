@@ -27,6 +27,7 @@ class CapabilityRegistry:
         self.capability_contracts: Dict[str, CapabilityContractV1] = {}
         self.dynamic_action_metadata: Dict[str, Dict[str, Any]] = {}
         self.dynamic_action_sources: Dict[str, List[str]] = {}
+        self.dynamic_action_aliases: Dict[str, str] = {}
         self.retrieval_offers: Dict[str, Dict[str, Any]] = {}
         self.schemas: Dict[str, dict] = {}  # capability folder -> config schema
 
@@ -47,6 +48,22 @@ class CapabilityRegistry:
             self.action_map[action.id] = capability
             self.action_models[action.id] = action
             logger.debug("Registered action '%s' for capability '%s'", action.id, capability.name)
+
+    def unregister(self, capability_id: str) -> None:
+        if capability_id not in self.capabilities:
+            return
+            
+        contract = self.capability_contracts.get(capability_id)
+        if contract:
+            for action in contract.actions:
+                self.action_map.pop(action.id, None)
+                self.action_models.pop(action.id, None)
+                logger.debug("Unregistered action '%s' from capability '%s'", action.id, capability_id)
+                
+        self.capabilities.pop(capability_id, None)
+        self.capability_contracts.pop(capability_id, None)
+        self.retrieval_offers.pop(capability_id, None)
+        logger.info("Unregistered capability '%s'", capability_id)
 
     def _index_retrieval_offer(self, capability: CapabilityBase, contract: CapabilityContractV1) -> None:
         profile = contract.retrieval_profile
@@ -112,9 +129,13 @@ class CapabilityRegistry:
             return
         action_ids = list(self.dynamic_action_sources.pop(source_key, []) or [])
         for action_id in action_ids:
+            meta = self.dynamic_action_metadata.pop(action_id, None) or {}
+            for alias in list(meta.get("aliases") or []):
+                alias_key = str(alias or "").strip().lower()
+                if alias_key:
+                    self.dynamic_action_aliases.pop(alias_key, None)
             self.action_map.pop(action_id, None)
             self.action_models.pop(action_id, None)
-            self.dynamic_action_metadata.pop(action_id, None)
 
     def register_dynamic_actions(
         self,
@@ -162,7 +183,12 @@ class CapabilityRegistry:
             metadata.setdefault("capability_id", str(item.get("capability_id") or source_key))
             metadata.setdefault("namespace", str(item.get("namespace") or ".".join(action_id.split(".")[:-1])))
             metadata.setdefault("capability", str(item.get("capability_name") or source_key))
+            aliases = [str(x).strip().lower() for x in list(item.get("aliases") or metadata.get("aliases") or []) if str(x or "").strip()]
+            metadata["aliases"] = aliases
             self.dynamic_action_metadata[action_id] = metadata
+            for alias in aliases:
+                if alias and alias not in self.dynamic_action_aliases:
+                    self.dynamic_action_aliases[alias] = action_id
             registered_action_ids.append(action_id)
         self.dynamic_action_sources[source_key] = registered_action_ids
 
@@ -252,6 +278,9 @@ class CapabilityRegistry:
         normalized = action_id.strip().lower().replace(" ", ".")
         if normalized in self.action_map:
             return normalized
+        alias_target = self.dynamic_action_aliases.get(normalized)
+        if alias_target:
+            return alias_target
         actions = list(self.action_map.keys())
         if not actions:
             return None
@@ -259,6 +288,10 @@ class CapabilityRegistry:
         local_matches = [aid for aid in actions if aid.split(".")[-1] == normalized]
         if len(local_matches) == 1:
             return local_matches[0]
+
+        alias_matches = [aid for alias, aid in self.dynamic_action_aliases.items() if alias == normalized]
+        if len(alias_matches) == 1:
+            return alias_matches[0]
 
         prefix_matches = [aid for aid in actions if aid.startswith(normalized) or normalized.startswith(aid)]
         if len(prefix_matches) == 1:
@@ -308,6 +341,7 @@ class CapabilityRegistry:
                 "assets": dynamic_meta.get("assets"),
                 "origin": dynamic_meta.get("origin") or "dynamic",
                 "source_id": dynamic_meta.get("source_id") or "",
+                "aliases": list(dynamic_meta.get("aliases") or []),
                 "metadata": dynamic_meta,
             }
 

@@ -546,11 +546,26 @@ def update_capability_config(
         if kernel and getattr(kernel, "capability_registry", None):
             registry = kernel.capability_registry
             capability_instance = registry.capabilities.get(capability_id) if hasattr(registry, "capabilities") else None
+            
             if capability_instance is not None:
-                try:
-                    capability_instance.config = dict(capability_config)
-                except Exception:
-                    pass
+                if enabled:
+                    try:
+                        capability_instance.config = dict(capability_config)
+                    except Exception:
+                        pass
+                else:
+                    # Hot-Unload
+                    if hasattr(registry, "unregister"):
+                        registry.unregister(capability_id)
+            else:
+                if enabled and getattr(kernel, "capability_loader", None):
+                    # Hot-Load
+                    try:
+                        folder_path = os.path.join(CAPABILITIES_DIR, capability_id)
+                        kernel.capability_loader._load_from_folder(folder_path)
+                    except Exception as e:
+                        logger.error(f"Failed to hot-load capability {capability_id}: {e}")
+
             if hasattr(registry, "refresh_retrieval_offer"):
                 registry.refresh_retrieval_offer(capability_id)
     except Exception as exc:
