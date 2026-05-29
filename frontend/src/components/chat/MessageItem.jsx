@@ -1,9 +1,10 @@
+import { notify } from '../../utils/notify.jsx';
 import React, { useState, useEffect, useMemo, memo } from 'react';
 import {
     Brain, RefreshCw, Square, CloudSun, HeartPulse, BarChart3,
     BookOpen, Globe, Video, Music, FileText, ChevronUp, ChevronDown, Bot
 } from 'lucide-react';
-import { toast } from 'react-hot-toast';
+
 import { api } from '../../hooks/api';
 import { useAssistCards } from '../../hooks/useAssistCards';
 import {
@@ -67,7 +68,7 @@ export const WorkControlButton = memo(({ workId, sessionId, isStreaming, statusP
             if (isTerminal) {
                 const data = await api.post(`/tasks/works/${workId}/restart`, { requester_session_id: sessionId });
                 const restartedId = data?.restarted_work_id ? ` (${String(data.restarted_work_id).slice(0, 8)})` : '';
-                toast.success(`Worker restarted${restartedId}`);
+                notify.success(`Worker restarted${restartedId}`);
             } else {
                 await api.post(`/tasks/works/${workId}/commands`, {
                     command: 'cancel',
@@ -75,11 +76,11 @@ export const WorkControlButton = memo(({ workId, sessionId, isStreaming, statusP
                     requester_session_id: sessionId,
                     source_session_id: sessionId,
                 });
-                toast.success('Stop signal sent');
+                notify.success('Stop signal sent');
                 setTimeout(() => fetchWorkStatus(), 700);
             }
         } catch (err) {
-            toast.error(err?.message || 'Failed to control worker');
+            notify.error(err?.message || 'Failed to control worker');
         } finally {
             setBusy(false);
         }
@@ -208,7 +209,7 @@ export const InlineApprovalBar = memo(({ workId, sessionId, statusPhase, approva
             setTimeout(() => { fetchSnapshot(); }, 350);
             setTimeout(() => { fetchSnapshot(); }, 1200);
         } catch (err) {
-            toast.error(err?.message || 'Failed to send decision');
+            notify.error(err?.message || 'Failed to send decision');
         } finally {
             setBusy(false);
         }
@@ -610,7 +611,7 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
                         title="Visual Scene"
                         defaultOpen={true}
                     >
-                        <WegenaAssistCard data={{ id: msg?.id || anchorId, title: "Cena Gerada", description: "Wegena Engine Visual", scriptUrl: wegenaMediaUrl }} />
+                        <WegenaAssistCard context="chat" data={{ id: msg?.id || anchorId, title: "Cena Gerada", description: "Wegena Engine Visual", scriptUrl: wegenaMediaUrl }} />
                     </ChatCollapsibleAssistCard>
                 )}
 

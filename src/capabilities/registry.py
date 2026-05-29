@@ -233,16 +233,20 @@ class CapabilityRegistry:
     def list_discovery_offers(
         self,
         *,
+        allowed_actions: Optional[List[str]] = None,
         intent: Optional[str] = None,
         domain: Optional[str] = None,
         role: Optional[str] = None,
         entity_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        allowed = set(allowed_actions) if isinstance(allowed_actions, list) else None
         offers = self.list_retrieval_offers(intent=intent, domain=domain, role=role, entity_type=entity_type)
         rows: List[Dict[str, Any]] = []
         for offer in offers:
             actions = [str(x).strip() for x in list(offer.get("actions") or []) if str(x or "").strip()]
             if not actions:
+                continue
+            if allowed is not None and not any(action in allowed for action in actions):
                 continue
             rows.append(
                 {

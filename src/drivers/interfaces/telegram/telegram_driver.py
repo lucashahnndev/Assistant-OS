@@ -47,7 +47,7 @@ class TelegramDriver(BaseDriver):
         # TelegramInterface might need a stop method explicitly added or just let the daemon die
         pass
 
-    def send_response(self, text, target=None, is_chunk=False, attachments=None):
+    def send_response(self, text, target=None, is_chunk=False, attachments=None, model_info=None):
         """Sends a text message back to the Telegram chat. If attachments exist, sends them natively."""
         if self.bot and target:
             # Strip prefix robustly (handles both telegram_ and telegram- for compatibility)
@@ -127,7 +127,7 @@ class TelegramDriver(BaseDriver):
         else:
             logger.warning(f"TelegramDriver cannot send file. Bot: {self.bot}, Target: {target}")
 
-    def send_status(self, target, phase, payload=None):
+    def send_status(self, target, phase, payload=None, model_info=None):
         """Telegram acknowledgment and status updates. Intercepts errors for custom rendering."""
         if self.bot and target:
             chat_id = target

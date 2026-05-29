@@ -29,13 +29,14 @@ class BaseDriver(ABC):
         pass
 
     @abstractmethod
-    def send_response(self, text, target=None, is_chunk=False, attachments=None):
+    def send_response(self, text, target=None, is_chunk=False, attachments=None, model_info=None):
         """
         Send a response back to the user via this driver.
         :param text: The text message to send.
         :param target: User ID or Channel ID to send to.
         :param is_chunk: Whether this is a partial response or a chunk.
         :param attachments: List of absolute file paths to send with the response.
+        :param model_info: Optional model metadata for UI/status rendering.
         """
         pass
 
@@ -50,12 +51,13 @@ class BaseDriver(ABC):
         pass
 
     @abstractmethod
-    def send_status(self, target, phase, payload=None):
+    def send_status(self, target, phase, payload=None, model_info=None):
         """
         Sends a status update (thinking, planning, error, etc.) to the user.
         :param target: User ID or Channel ID to send to.
         :param phase: The string identifier of the phase ("thinking", "executing", "error").
         :param payload: A dictionary containing structured context about the phase or error.
+        :param model_info: Optional model metadata for UI/status rendering.
         """
         pass
 

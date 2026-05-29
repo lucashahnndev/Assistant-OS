@@ -1,3 +1,4 @@
+import json
 import datetime
 import logging
 import os
@@ -5,6 +6,7 @@ import platform
 import re
 from typing import Any, Dict, List
 
+from config.manager import ConfigManager
 from ..base import CapabilityBase
 from utils.toon_codec import encode_capabilities_list, encode_capabilities_describe
 
@@ -303,7 +305,15 @@ class SystemCapability(CapabilityBase):
         discovery_offers = []
         if registry and hasattr(registry, "list_discovery_offers"):
             try:
-                discovery_offers = list(registry.list_discovery_offers(intent=intent_text or None, domain=domain_text or None, role=None, entity_type=None))
+                discovery_offers = list(
+                    registry.list_discovery_offers(
+                        allowed_actions=allowed_actions if isinstance(allowed_actions, list) else None,
+                        intent=intent_text or None,
+                        domain=domain_text or None,
+                        role=None,
+                        entity_type=None,
+                    )
+                )
             except TypeError:
                 try:
                     discovery_offers = list(registry.list_discovery_offers())
@@ -406,6 +416,351 @@ class SystemCapability(CapabilityBase):
             item.pop("_source_rank", None)
         return candidates[: max(1, int(limit or 1))]
 
+    @staticmethod
+    def _normalize_discovery_mode(value: Any) -> str:
+        mode = str(value or "").strip().lower().replace("-", "_")
+        if not mode:
+            return ""
+        if mode in {"agentic", "agentic_only", "llm", "llm_only"}:
+            return "agentic_only"
+        if mode in {"hybrid", "deterministic", "deterministic_only", "off", "fallback_only"}:
+            return mode
+        return ""
+
+    @staticmethod
+    def _trim_text(value: Any, limit: int = 360) -> str:
+        text = str(value or "").strip()
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3].rstrip() + "..."
+
+    def _resolve_discovery_mode(self) -> str:
+        orch = getattr(self.kernel, "orchestrator", None) if self.kernel else None
+        active_cfg: Dict[str, Any] = {}
+        if orch is not None and hasattr(orch, "llm_manager"):
+            try:
+                active_cfg = orch.llm_manager.get_active_config() or {}
+            except Exception:
+                active_cfg = {}
+
+        cm = ConfigManager()
+        mode = cm.get_tools_discovery_decision_mode(
+            model_name=str(active_cfg.get("model") or ""),
+            provider=str(active_cfg.get("provider") or ""),
+            model_id=str(active_cfg.get("id") or ""),
+        )
+        normalized = self._normalize_discovery_mode(mode)
+        return normalized or "agentic_only"
+
+    def _collect_agentic_discovery_context(
+        self,
+        *,
+        query: str,
+        domain: str,
+        intent: str,
+        role: str,
+        entity_type: str,
+        context: Dict[str, Any],
+        registry: Any,
+    ) -> Dict[str, Any]:
+        allowed_actions = context.get("allowed_actions")
+        allowed_list = allowed_actions if isinstance(allowed_actions, list) else None
+        broker = None
+        orch = getattr(self.kernel, "orchestrator", None) if self.kernel else None
+        if orch is not None:
+            broker = getattr(orch, "context_broker", None)
+
+        evidence_items: List[Any] = []
+        diagnostics = None
+        if broker is not None and hasattr(broker, "build_bundle"):
+            try:
+                bundle = broker.build_bundle(
+                    user_input=query,
+                    session=context.get("session"),
+                    capability_registry=registry,
+                    allowed_actions=allowed_list,
+                    situational_context=context.get("situational_context") if isinstance(context.get("situational_context"), dict) else {},
+                    session_context=context.get("session_context") if isinstance(context.get("session_context"), dict) else {},
+                    broker_hints={
+                        "primary_task_id": context.get("primary_task_id"),
+                        "hot_action_namespace": domain or context.get("hot_action_namespace") or "",
+                    },
+                )
+                evidence_items = list(getattr(bundle, "evidence_items", None) or [])
+                diagnostics = getattr(bundle, "diagnostics", None)
+            except Exception:
+                evidence_items = []
+                diagnostics = None
+
+        catalog_rows = []
+        if registry and hasattr(registry, "get_catalog"):
+            try:
+                catalog_rows = list(
+                    registry.get_catalog(
+                        allowed_actions=allowed_list,
+                        include_descriptions=True,
+                    )
+                )
+            except Exception:
+                catalog_rows = []
+
+        discovery_offers = []
+        if registry and hasattr(registry, "list_discovery_offers"):
+            try:
+                discovery_offers = list(
+                    registry.list_discovery_offers(
+                        allowed_actions=allowed_list,
+                        intent=intent or None,
+                        domain=domain or None,
+                        role=role or None,
+                        entity_type=entity_type or None,
+                    )
+                )
+            except Exception:
+                discovery_offers = []
+
+        evidence_rows: List[Dict[str, Any]] = []
+        for item in evidence_items[:24]:
+            metadata = getattr(item, "metadata", {}) if isinstance(getattr(item, "metadata", {}), dict) else {}
+            evidence_rows.append(
+                {
+                    "domain": str(getattr(item, "domain", "") or "").strip(),
+                    "title": self._trim_text(getattr(item, "title", "") or ""),
+                    "content": self._trim_text(getattr(item, "content", "") or "", limit=520),
+                    "metadata": {
+                        "action_id": str(metadata.get("action_id") or "").strip(),
+                        "capability_id": str(metadata.get("capability_id") or "").strip(),
+                        "namespace": str(metadata.get("namespace") or "").strip(),
+                        "risk_level": str(metadata.get("risk_level") or "").strip(),
+                    },
+                }
+            )
+
+        diagnostics_rows = {}
+        if diagnostics is not None:
+            diagnostics_rows = {
+                "evidence_domains": list(getattr(diagnostics, "evidence_domains", []) or []),
+                "evidence_count": int(getattr(diagnostics, "evidence_count", 0) or 0),
+            }
+
+        return {
+            "query": query,
+            "intent": intent,
+            "domain": domain,
+            "role": role,
+            "entity_type": entity_type,
+            "allowed_actions_count": len(allowed_list or []),
+            "catalog": catalog_rows,
+            "discovery_offers": discovery_offers,
+            "evidence": evidence_rows,
+            "diagnostics": diagnostics_rows,
+        }
+
+    def _normalize_agentic_discovery_result(
+        self,
+        payload: Any,
+        *,
+        registry: Any,
+        limit: int,
+    ) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {}
+
+        candidate_set = payload.get("candidate_set")
+        if not isinstance(candidate_set, list):
+            candidate_set = payload.get("shortlist")
+        if not isinstance(candidate_set, list):
+            candidate_set = payload.get("ranking")
+        if not isinstance(candidate_set, list):
+            candidate_set = []
+
+        known_actions = set()
+        if registry and hasattr(registry, "list_actions"):
+            try:
+                known_actions = {str(action_id or "").strip() for action_id in registry.list_actions()}
+            except Exception:
+                known_actions = set()
+
+        normalized_candidates: List[Dict[str, Any]] = []
+        for idx, item in enumerate(candidate_set[: max(1, int(limit or 1))], start=1):
+            if not isinstance(item, dict):
+                continue
+            action_id = str(item.get("action_id") or item.get("id") or "").strip()
+            if not action_id:
+                continue
+            if known_actions and action_id not in known_actions:
+                continue
+            rank = item.get("rank")
+            try:
+                rank_int = int(rank) if rank is not None else idx
+            except Exception:
+                rank_int = idx
+            normalized_candidates.append(
+                {
+                    "action_id": action_id,
+                    "rank": rank_int,
+                    "why": self._trim_text(item.get("why") or item.get("reason") or item.get("explanation") or "", 220),
+                    "confidence": round(float(item.get("confidence") or item.get("score") or 0.0), 4),
+                    "notes": self._trim_text(item.get("notes") or item.get("detail") or "", 220),
+                }
+            )
+
+        normalized_candidates.sort(key=lambda row: (int(row.get("rank") or 999), str(row.get("action_id") or "")))
+
+        if not normalized_candidates:
+            return {}
+
+        primary_action_id = str(payload.get("primary_action_id") or "").strip()
+        if not primary_action_id and normalized_candidates:
+            primary_action_id = str(normalized_candidates[0].get("action_id") or "")
+        if primary_action_id and known_actions and primary_action_id not in known_actions:
+            primary_action_id = str(normalized_candidates[0].get("action_id") or "")
+
+        ranking = [
+            {
+                "action_id": row["action_id"],
+                "rank": row["rank"],
+                "confidence": row["confidence"],
+            }
+            for row in normalized_candidates
+        ]
+
+        return {
+            "candidate_set": normalized_candidates,
+            "shortlist": normalized_candidates,
+            "ranking": ranking,
+            "primary_action_id": primary_action_id,
+            "decision_summary": self._trim_text(payload.get("decision_summary") or payload.get("summary") or "", 420),
+            "notes": self._trim_text(payload.get("notes") or "", 420),
+            "turns": int(payload.get("turns") or 1),
+        }
+
+    def _agentic_consult_tools(
+        self,
+        *,
+        query: str,
+        domain: str,
+        intent: str,
+        role: str,
+        entity_type: str,
+        limit: int,
+        context: Dict[str, Any],
+        registry: Any,
+    ) -> Dict[str, Any]:
+        orch = getattr(self.kernel, "orchestrator", None) if self.kernel else None
+        llm_manager = getattr(orch, "llm_manager", None) if orch is not None else None
+        if llm_manager is None or not hasattr(llm_manager, "generate_structured_text"):
+            return {}
+
+        discovery_context = self._collect_agentic_discovery_context(
+            query=query,
+            domain=domain,
+            intent=intent,
+            role=role,
+            entity_type=entity_type,
+            context=context,
+            registry=registry,
+        )
+
+        system_prompt = (
+            "Você é o bibliotecário LLM de descoberta de ferramentas.\n"
+            "Sua função é ler o pedido condensado do agente principal, examinar o catálogo de tools e o RAG compartilhado, "
+            "e decidir agenticamente quais tools fazem mais sentido.\n"
+            "Você não executa nenhuma tool.\n"
+            "Você pode considerar custo, latência, confiabilidade, adequação, histórico de uso e detalhes semânticos.\n"
+            "Você pode trabalhar em mais de uma rodada interna antes de responder.\n"
+            "Retorne somente JSON válido, sem markdown.\n"
+            "Contrato da saída:\n"
+            "{\n"
+            '  "candidate_set": [\n'
+            '    {"action_id": "namespace.action", "rank": 1, "why": "curta justificativa", "confidence": 0.0, "notes": "opcional"}\n'
+            "  ],\n"
+            '  "primary_action_id": "namespace.action",\n'
+            '  "decision_summary": "explicação curta do porquê",\n'
+            '  "turns": 1\n'
+            "}\n"
+        )
+
+        first_prompt = json.dumps(
+            {
+                "phase": "exploration",
+                "instruction": "Leia o material e proponha um candidate_set amplo e consciente.",
+                "query": query,
+                "intent": intent,
+                "domain": domain,
+                "role": role,
+                "entity_type": entity_type,
+                "limit": limit,
+                "discovery_context": discovery_context,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        round_one = llm_manager.generate_structured_text(
+            first_prompt,
+            system_prompt=system_prompt,
+            contract="tool_discovery_bibliotecario_v1",
+            contract_max_attempts=2,
+            max_tokens=4096,
+        )
+        if not isinstance(round_one, dict):
+            return {}
+
+        round_one_normalized = self._normalize_agentic_discovery_result(round_one, registry=registry, limit=limit)
+        if not round_one_normalized:
+            return {}
+
+        candidate_ids = [str(row.get("action_id") or "").strip() for row in round_one_normalized.get("candidate_set", []) if str(row.get("action_id") or "").strip()]
+        candidate_details: List[Dict[str, Any]] = []
+        for action_id in candidate_ids[: max(1, int(limit or 1))]:
+            metadata = registry.get_action_metadata(action_id) if registry and hasattr(registry, "get_action_metadata") else {}
+            if not metadata:
+                continue
+            candidate_details.append(
+                {
+                    "id": action_id,
+                    "namespace": str(metadata.get("namespace") or ""),
+                    "title": str(metadata.get("title") or action_id),
+                    "description": self._trim_text(metadata.get("description") or "", 420),
+                    "risk_level": str(metadata.get("risk_level") or "low"),
+                    "capability_id": str(metadata.get("capability_id") or ""),
+                    "side_effect": str(metadata.get("side_effect") or ""),
+                }
+            )
+
+        second_prompt = json.dumps(
+            {
+                "phase": "refinement",
+                "instruction": "Revise o candidate_set anterior com os detalhes finais e devolva a melhor escolha ordenada.",
+                "query": query,
+                "intent": intent,
+                "domain": domain,
+                "role": role,
+                "entity_type": entity_type,
+                "initial_result": round_one_normalized,
+                "candidate_details": candidate_details,
+                "discovery_context": discovery_context,
+                "limit": limit,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        round_two = llm_manager.generate_structured_text(
+            second_prompt,
+            system_prompt=system_prompt,
+            contract="tool_discovery_bibliotecario_v2",
+            contract_max_attempts=2,
+            max_tokens=4096,
+        )
+        if isinstance(round_two, dict):
+            round_two_normalized = self._normalize_agentic_discovery_result(round_two, registry=registry, limit=limit)
+            if round_two_normalized:
+                round_two_normalized["turns"] = max(int(round_two_normalized.get("turns") or 1), 2)
+                return round_two_normalized
+
+        round_one_normalized["turns"] = max(int(round_one_normalized.get("turns") or 1), 1)
+        return round_one_normalized
+
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         local = self._local_action(action_id)
 
@@ -471,15 +826,171 @@ class SystemCapability(CapabilityBase):
             entity_type = str(params.get("entity_type") or "").strip()
             output_format = str(params.get("format") or "legacy").strip().lower()
             limit = self._to_int(params.get("limit"), default=5, min_value=1, max_value=20)
+            decision_mode = self._resolve_discovery_mode()
+            if decision_mode in {"off", "false", "0", "never"}:
+                return self._result(
+                    ok=False,
+                    status="error",
+                    message="Tool discovery is disabled by the active discovery policy.",
+                    error_code="TOOL_DISCOVERY_DISABLED",
+                    decision_mode=decision_mode,
+                    discovery_source="disabled",
+                    query=query,
+                    intent=intent,
+                    domain=domain,
+                    role=role,
+                    entity_type=entity_type,
+                )
 
-            candidates = self._build_consult_candidates(
-                query=query,
-                domain=domain,
-                intent=intent,
-                limit=limit,
-                context=context,
-                registry=registry,
-            )
+            agentic_result = {}
+            if decision_mode in {"agentic_only", "agentic", "hybrid"}:
+                agentic_result = self._agentic_consult_tools(
+                    query=query,
+                    domain=domain,
+                    intent=intent,
+                    role=role,
+                    entity_type=entity_type,
+                    limit=limit,
+                    context=context,
+                    registry=registry,
+                )
+
+            if decision_mode in {"deterministic", "deterministic_only"}:
+                discovery_source = "deterministic"
+                candidates = self._build_consult_candidates(
+                    query=query,
+                    domain=domain,
+                    intent=intent,
+                    limit=limit,
+                    context=context,
+                    registry=registry,
+                )
+            elif agentic_result:
+                discovery_source = "agentic_llm"
+                candidates = list(agentic_result.get("candidate_set") or [])
+            elif decision_mode == "hybrid":
+                discovery_source = "deterministic_fallback"
+                candidates = self._build_consult_candidates(
+                    query=query,
+                    domain=domain,
+                    intent=intent,
+                    limit=limit,
+                    context=context,
+                    registry=registry,
+                )
+            else:
+                return self._result(
+                    ok=False,
+                    status="error",
+                    message="Agentic tool discovery failed to produce a candidate set.",
+                    error_code="TOOL_DISCOVERY_FAILED",
+                    decision_mode=decision_mode,
+                    discovery_source="agentic_llm",
+                    query=query,
+                    intent=intent,
+                    domain=domain,
+                    role=role,
+                    entity_type=entity_type,
+                )
+
+            primary = candidates[0] if candidates else {}
+            if output_format == "toon":
+                if discovery_source == "agentic_llm":
+                    toon_rows = []
+                    for row in candidates:
+                        action_id = str(row.get("action_id") or "")
+                        metadata = registry.get_action_metadata(action_id) if hasattr(registry, "get_action_metadata") else {}
+                        toon_rows.append(
+                            {
+                                "id": action_id,
+                                "namespace": metadata.get("namespace") or "",
+                                "risk_level": metadata.get("risk_level") or "low",
+                                "description": row.get("why") or row.get("notes") or "",
+                            }
+                        )
+                    toon = encode_capabilities_list(toon_rows, include_description=True)
+                    return self._result(
+                        ok=True,
+                        status="success" if candidates else "empty",
+                        query=query,
+                        intent=intent,
+                        domain=domain,
+                        role=role,
+                        entity_type=entity_type,
+                        count=len(candidates),
+                        candidate_set=candidates,
+                        shortlist=candidates,
+                        ranking=list(agentic_result.get("ranking") or []),
+                        primary_action_id=str(agentic_result.get("primary_action_id") or ""),
+                        primary_rank=primary.get("rank"),
+                        primary_confidence=primary.get("confidence"),
+                        decision_summary=agentic_result.get("decision_summary"),
+                        turns=agentic_result.get("turns", 1),
+                        decision_mode=decision_mode,
+                        discovery_mode="agentic_only",
+                        discovery_source=discovery_source,
+                        format="toon",
+                        audience="ai",
+                        toon=toon,
+                        items=candidates,
+                    )
+
+                toon_rows = [
+                    {
+                        "id": row.get("action_id"),
+                        "namespace": row.get("namespace"),
+                        "risk_level": row.get("risk_level"),
+                        "description": row.get("summary") or row.get("description") or "",
+                    }
+                    for row in candidates
+                ]
+                toon = encode_capabilities_list(toon_rows, include_description=True)
+                return self._result(
+                    ok=True,
+                    status="success" if candidates else "empty",
+                    query=query,
+                    intent=intent,
+                    domain=domain,
+                    role=role,
+                    entity_type=entity_type,
+                    count=len(candidates),
+                    primary_action_id=str(primary.get("action_id") or ""),
+                    primary_score=primary.get("score"),
+                    discovery_source=discovery_source,
+                    broker_domains=[],
+                    decision_mode=decision_mode,
+                    discovery_mode="deterministic",
+                    format="toon",
+                    audience="ai",
+                    toon=toon,
+                    items=candidates,
+                )
+
+            if discovery_source == "agentic_llm":
+                return self._result(
+                    ok=True,
+                    status="success" if candidates else "empty",
+                    query=query,
+                    intent=intent,
+                    domain=domain,
+                    role=role,
+                    entity_type=entity_type,
+                    count=len(candidates),
+                    candidate_set=candidates,
+                    shortlist=candidates,
+                    ranking=list(agentic_result.get("ranking") or []),
+                    primary_action_id=str(agentic_result.get("primary_action_id") or ""),
+                    primary_rank=primary.get("rank"),
+                    primary_confidence=primary.get("confidence"),
+                    decision_summary=agentic_result.get("decision_summary"),
+                    turns=agentic_result.get("turns", 1),
+                    decision_mode=decision_mode,
+                    discovery_mode="agentic_only",
+                    discovery_source=discovery_source,
+                    format="legacy",
+                    audience="ai",
+                    items=candidates,
+                )
 
             diagnostics = None
             broker_domains: List[str] = []
@@ -502,37 +1013,6 @@ class SystemCapability(CapabilityBase):
                         diagnostics = None
                         broker_domains = []
 
-            primary = candidates[0] if candidates else {}
-            if output_format == "toon":
-                toon_rows = [
-                    {
-                        "id": row.get("action_id"),
-                        "namespace": row.get("namespace"),
-                        "risk_level": row.get("risk_level"),
-                        "description": row.get("summary") or row.get("description") or "",
-                    }
-                    for row in candidates
-                ]
-                toon = encode_capabilities_list(toon_rows, include_description=True)
-                return self._result(
-                    ok=True,
-                    status="success" if candidates else "empty",
-                    query=query,
-                    intent=intent,
-                    domain=domain,
-                    role=role,
-                    entity_type=entity_type,
-                    count=len(candidates),
-                    primary_action_id=str(primary.get("action_id") or ""),
-                    primary_score=primary.get("score"),
-                    discovery_source=str(primary.get("source") or ""),
-                    broker_domains=broker_domains,
-                    format="toon",
-                    audience="ai",
-                    toon=toon,
-                    items=candidates,
-                )
-
             return self._result(
                 ok=True,
                 status="success" if candidates else "empty",
@@ -545,8 +1025,10 @@ class SystemCapability(CapabilityBase):
                 items=candidates,
                 primary_action_id=str(primary.get("action_id") or ""),
                 primary_score=primary.get("score"),
-                discovery_source=str(primary.get("source") or ""),
+                discovery_source=discovery_source,
                 broker_domains=broker_domains,
+                decision_mode=decision_mode,
+                discovery_mode="deterministic",
                 format="legacy",
                 audience="ai",
             )

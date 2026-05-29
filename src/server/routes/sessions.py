@@ -644,6 +644,18 @@ def get_session_history(session_id: str, offset: int = 0, limit: int = 15, reque
     end_idx = total - offset
     start_idx = max(0, end_idx - limit)
 
+    if end_idx <= 0 or start_idx >= total:
+        paginated = []
+    else:
+        paginated = history[start_idx:end_idx]
+        
+    return {
+        "id": session_id,
+        "history": paginated,
+        "total": total,
+        "has_more": start_idx > 0
+    }
+
 @router.get("/{session_id}/thoughts")
 def get_session_thoughts(session_id: str, message_id: str = None, request: Request = None, user: User = Depends(get_current_user)):
     """
@@ -763,19 +775,6 @@ async def add_wegena_feedback(session_id: str, request: Request, user: User = De
         logger.info(f"Wegena Feedback ignorado (learning disabled): session={session_id}, type={feedback_type}")
     
     return {"status": "success", "feedback_type": feedback_type, "saved_to_rag": learning_enabled}
-    
-    if end_idx <= 0 or start_idx >= total:
-        paginated = []
-    else:
-        paginated = history[start_idx:end_idx]
-        
-    return {
-        "id": session_id,
-        "history": paginated,
-        "total": total,
-        "has_more": start_idx > 0
-    }
-
 @router.post("/{session_id}/message")
 def send_message(session_id: str, payload: dict, request: Request, user: User = Depends(get_current_user)):
     """

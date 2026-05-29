@@ -33,14 +33,20 @@ class InternalDriver:
         # Internal status updates can be logged or ignored depending on the need
         logger.debug(f"Internal Status for {session_id}: {phase} | {payload}")
 
-    def send_response(self, text: str, target: str = None, is_chunk: bool = False, attachments: list = None):
+    def send_response(self, text: str, target: str = None, is_chunk: bool = False, attachments: list = None, model_info=None):
         # Route to the real interface driver when target is a user session.
         # This prevents "notification delivered only in internal logs".
         if target and hasattr(self.kernel, "_resolve_driver_for_session"):
             try:
                 driver = self.kernel._resolve_driver_for_session(target)
                 if driver and driver is not self and hasattr(driver, "send_response"):
-                    driver.send_response(text, target=target, is_chunk=is_chunk, attachments=attachments)
+                    driver.send_response(
+                        text,
+                        target=target,
+                        is_chunk=is_chunk,
+                        attachments=attachments,
+                        model_info=model_info,
+                    )
                     if hasattr(driver, "send_complete"):
                         driver.send_complete(target)
                     logger.info(f"Internal response routed to {target} via {driver.__class__.__name__}.")

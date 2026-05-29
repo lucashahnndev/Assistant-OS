@@ -51,3 +51,8 @@ def test_response_persona_section_is_scoped_to_response_text():
 def test_response_persona_section_absent_when_empty():
     prompt = _compose("")
     assert "[RESPONSE PERSONA]" not in prompt
+
+
+def test_extract_discovery_mode_is_safe_for_empty_capabilities_summary():
+    assert PromptComposer._extract_discovery_mode("") == "unknown"
+    assert PromptComposer._extract_discovery_mode("\n\n") == "unknown"

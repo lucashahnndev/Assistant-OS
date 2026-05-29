@@ -34,7 +34,7 @@ class SystemDriver(BaseDriver):
     def stop(self):
         logger.info("SystemDriver stopped.")
 
-    def send_response(self, text, target=None, is_chunk=False, attachments=None):
+    def send_response(self, text, target=None, is_chunk=False, attachments=None, model_info=None):
         # Implementation to satisfy protocol, though kernel usually handles the back-routing
         pass
 
@@ -42,7 +42,7 @@ class SystemDriver(BaseDriver):
         # SystemDriver doesn't send files directly to users
         pass
 
-    def send_status(self, target, phase, payload):
+    def send_status(self, target, phase, payload, model_info=None):
         """SystemDriver does not support structured status."""
         pass
 
@@ -261,12 +261,21 @@ class SystemDriver(BaseDriver):
             return str(e)
 
     # --- FS Control ---
+    def _resolve_fs_path(self, path):
+        raw_path = os.path.expanduser(os.path.expandvars(str(path or "").strip()))
+        if not raw_path:
+            return ""
+        if os.path.isabs(raw_path):
+            return os.path.abspath(raw_path)
+        ws_dir = self.kernel.workspace_service.get_workspace_dir()
+        return os.path.abspath(os.path.join(ws_dir, raw_path))
+
     def fs_list(self, path):
         try:
-            ws_dir = self.kernel.workspace_service.get_workspace_dir()
-            target_path = os.path.abspath(os.path.join(ws_dir, path))
+            target_path = self._resolve_fs_path(path)
             
-            if not os.path.exists(target_path): return f"Path not found: {path}"
+            if not target_path or not os.path.exists(target_path):
+                return f"Path not found: {path}"
             
             items = []
             for entry in os.scandir(target_path):

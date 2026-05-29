@@ -1,3 +1,4 @@
+import { notify } from '../utils/notify.jsx';
 import React, { useState, useEffect, useMemo } from 'react';
 import {
     Shield,
@@ -28,7 +29,7 @@ import {
     Eye
 } from 'lucide-react';
 import { api } from '../hooks/api';
-import { toast } from 'react-hot-toast';
+
 import ConfirmDialog from '../components/ConfirmDialog';
 import CapabilityIcon from '../components/CapabilityIcon';
 
@@ -161,7 +162,7 @@ const Security = () => {
                 setGroups([]);
             }
             setApprovalAudit([]);
-            toast.error("Failed to load messaging access data");
+            notify.error("Failed to load messaging access data");
         } finally {
             setLoading(false);
         }
@@ -172,16 +173,16 @@ const Security = () => {
             const res = await api.patch(`${API_BASE}/interfaces/${activeInterface}`, update);
             setInterfaces(prev => ({ ...prev, [activeInterface]: res }));
             const label = INTERFACE_META[activeInterface]?.label || activeInterface;
-            toast.success(`Settings saved for ${label}`);
+            notify.success(`Settings saved for ${label}`);
         } catch (error) {
-            toast.error("Failed to update interface settings");
+            notify.error("Failed to update interface settings");
         }
     };
 
     const handleCopyApprovalToInterface = async (targetInterface, approvalPolicy) => {
         const target = String(targetInterface || '').trim().toLowerCase();
         if (!target || target === String(activeInterface || '').toLowerCase()) {
-            toast.error("Select a different interface to copy");
+            notify.error("Select a different interface to copy");
             return;
         }
         try {
@@ -189,9 +190,9 @@ const Security = () => {
             setInterfaces(prev => ({ ...prev, [target]: res }));
             const fromLabel = INTERFACE_META[activeInterface]?.label || activeInterface;
             const toLabel = INTERFACE_META[target]?.label || target;
-            toast.success(`Permission policy copied: ${fromLabel} -> ${toLabel}`);
+            notify.success(`Permission policy copied: ${fromLabel} -> ${toLabel}`);
         } catch (error) {
-            toast.error("Failed to copy permission policy");
+            notify.error("Failed to copy permission policy");
         }
     };
 
@@ -200,7 +201,7 @@ const Security = () => {
             itf => String(itf || '').toLowerCase() !== String(activeInterface || '').toLowerCase()
         );
         if (targets.length === 0) {
-            toast.error("No target interfaces available");
+            notify.error("No target interfaces available");
             return;
         }
         const fromLabel = INTERFACE_META[activeInterface]?.label || activeInterface;
@@ -219,9 +220,9 @@ const Security = () => {
                 });
                 return next;
             });
-            toast.success(`Permission policy copied to ${targets.length} interface(s)`);
+            notify.success(`Permission policy copied to ${targets.length} interface(s)`);
         } catch (error) {
-            toast.error("Failed to copy permission policy to all interfaces");
+            notify.error("Failed to copy permission policy to all interfaces");
         }
     };
 
@@ -229,10 +230,10 @@ const Security = () => {
         const endpoint = type === 'user' ? 'users' : 'chats';
         try {
             await api.post(`${API_BASE}/${endpoint}/${interface_name}/${id}/status`, { status });
-            toast.success(`${type === 'user' ? 'User' : 'Chat'} ${status} successfully`);
+            notify.success(`${type === 'user' ? 'User' : 'Chat'} ${status} successfully`);
             fetchData();
         } catch (error) {
-            toast.error(`Failed to update ${status}`);
+            notify.error(`Failed to update ${status}`);
         }
     };
 
@@ -241,11 +242,11 @@ const Security = () => {
         const endpoint = type === 'user' ? 'users' : 'chats';
         try {
             await api.patch(`${API_BASE}/${endpoint}/${data.interface}/${data.id}/overrides`, data.overrides);
-            toast.success("Overrides saved");
+            notify.success("Overrides saved");
             setEditingOverrides(null);
             fetchData();
         } catch (error) {
-            toast.error("Failed to save overrides");
+            notify.error("Failed to save overrides");
         }
     };
 
@@ -316,16 +317,16 @@ const Security = () => {
         const endpoint = type === 'user' ? 'users' : 'chats';
         try {
             await api.post(`${API_BASE}/${endpoint}/${entity.interface}/${entity.id}/group`, { group_id: groupId });
-            toast.success("ACL profile assignment updated");
+            notify.success("ACL profile assignment updated");
             fetchData();
         } catch (error) {
-            toast.error("Failed to update ACL profile assignment");
+            notify.error("Failed to update ACL profile assignment");
         }
     };
 
     const handleCreateGroup = async () => {
         if (!newGroup.id.trim() || !newGroup.name.trim()) {
-            toast.error("ACL profile id and name are required");
+            notify.error("ACL profile id and name are required");
             return;
         }
         try {
@@ -340,7 +341,7 @@ const Security = () => {
                 worker_view_scope: newGroup.worker_view_scope,
                 worker_control_scope: newGroup.worker_control_scope
             });
-            toast.success("ACL profile created");
+            notify.success("ACL profile created");
             setNewGroup({
                 id: '',
                 name: '',
@@ -357,7 +358,7 @@ const Security = () => {
             setShowCreateProfileModal(false);
             fetchData();
         } catch (error) {
-            toast.error("Failed to create group");
+            notify.error("Failed to create group");
         }
     };
 
@@ -374,12 +375,12 @@ const Security = () => {
                 worker_view_scope: editingGroup.worker_view_scope,
                 worker_control_scope: editingGroup.worker_control_scope
             });
-            toast.success("ACL profile updated");
+            notify.success("ACL profile updated");
             setEditingGroup(null);
             setShowAdvancedEdit(false);
             fetchData();
         } catch (error) {
-            toast.error("Failed to update group");
+            notify.error("Failed to update group");
         }
     };
 
@@ -523,7 +524,7 @@ const Security = () => {
 
     const handleDeleteGroup = async (group) => {
         if (group.is_system) {
-            toast.error("System groups cannot be deleted");
+            notify.error("System groups cannot be deleted");
             return;
         }
         setDeletingGroup(group);
@@ -533,10 +534,10 @@ const Security = () => {
         if (!deletingGroup) return;
         try {
             await api.delete(`${API_BASE}/groups/${deletingGroup.id}`);
-            toast.success("ACL profile deleted");
+            notify.success("ACL profile deleted");
             fetchData();
         } catch (error) {
-            toast.error("Failed to delete group");
+            notify.error("Failed to delete group");
         } finally {
             setDeletingGroup(null);
         }

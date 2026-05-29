@@ -84,6 +84,8 @@ class LocationService:
                     )
                     logger.debug(f"Location from context: {loc.get('city', 'Unknown')}")
                     return {
+                        "source": "context",
+                        "mode": cfg["mode"],
                         "city": loc.get("city") or cached_loc.get("city"),
                         "state": loc.get("state") or cached_loc.get("state"),
                         "country": loc.get("country") or cached_loc.get("country"),
@@ -99,17 +101,29 @@ class LocationService:
         cached_loc = cfg["cached"]
         if self._has_usable_location(cached_loc):
             logger.debug("Location from config cache")
-            return cached_loc
+            return {
+                "source": "config_default",
+                "mode": mode,
+                **cached_loc,
+            }
 
         # 3. Optional IP geolocation complement (only when config is not usable in auto mode)
         if mode == "auto":
             ip_loc = self._get_location_from_ip()
             if ip_loc:
                 logger.debug(f"Location from IP complement: {ip_loc.get('city', 'Unknown')}")
-                return ip_loc
+                return {
+                    "source": "ip",
+                    "mode": mode,
+                    **ip_loc,
+                }
 
         logger.debug("Location fallback: default unknown")
-        return cached_loc
+        return {
+            "source": "fallback_unknown",
+            "mode": mode,
+            **cached_loc,
+        }
 
     @staticmethod
     def _has_usable_location(loc: Dict) -> bool:

@@ -109,7 +109,7 @@ class VoiceDriver(BaseDriver):
         if self.interface:
             self.interface.stop()
 
-    def send_response(self, text, target=None, is_chunk=False, attachments=None):
+    def send_response(self, text, target=None, is_chunk=False, attachments=None, model_info=None):
         if not self.interface or not self.tts_manager:
             self.logger.warning(f"VoiceDriver components not ready to send response: {text}")
             return
@@ -186,7 +186,7 @@ class VoiceDriver(BaseDriver):
         """
         self.logger.warning(f"VoiceDriver received request to send file to {target}: {file_path}. Ignoring.")
 
-    def send_status(self, target, phase, payload=None):
+    def send_status(self, target, phase, payload=None, model_info=None):
         """VoiceDriver does not support structured status."""
         pass
 

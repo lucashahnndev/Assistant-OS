@@ -1,3 +1,4 @@
+import { notify } from '../utils/notify.jsx';
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../hooks/api';
 import {
@@ -35,10 +36,11 @@ import {
     Loader,
     Server,
     FolderOpen,
-    Cloud
+    Cloud,
+    SlidersHorizontal
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import toast from 'react-hot-toast';
+
 import PageHeader from '../components/PageHeader';
 import ModelPoolManager from '../components/ModelPoolManager';
 import { createSecret, deleteSecret, listSecretEntries, listSecretRefs, auditEnvSecrets, importEnvSecrets } from '../utils/secretsApi';
@@ -250,10 +252,10 @@ const Settings = () => {
             });
 
             if (String(data.status || '').toLowerCase() === 'success') {
-                toast.success(`${providerKey} connected successfully.`);
+                notify.success(`${providerKey} connected successfully.`);
                 fetchLinkedAccounts();
             } else {
-                toast.error(`OAuth failed for ${providerKey}: ${data.error || 'unknown error'}`);
+                notify.error(`OAuth failed for ${providerKey}: ${data.error || 'unknown error'}`);
             }
         };
 
@@ -311,7 +313,7 @@ const Settings = () => {
 
     const handleCompressPersonality = async () => {
         if (!config?.agent?.personality) {
-            toast.error("Please enter a natural text personality first.");
+            notify.error("Please enter a natural text personality first.");
             return;
         }
         setIsCompressing(true);
@@ -319,10 +321,10 @@ const Settings = () => {
             const data = await api.post('/system/compress-personality', { text: config.agent.personality });
             if (data?.compressed) {
                 updateNestedValue('agent.personality_compressed', data.compressed);
-                toast.success("Personality successfully compressed!");
+                notify.success("Personality successfully compressed!");
             }
         } catch (err) {
-            toast.error(err.response?.data?.detail || "Failed to compress personality");
+            notify.error(err.response?.data?.detail || "Failed to compress personality");
         } finally {
             setIsCompressing(false);
         }
@@ -336,7 +338,7 @@ const Settings = () => {
             setRawJson(JSON.stringify(normalized, null, 2));
         } catch (err) {
             console.error(err);
-            toast.error("Failed to load configuration");
+            notify.error("Failed to load configuration");
         }
         finally { setLoading(false); }
     };
@@ -373,14 +375,14 @@ const Settings = () => {
             const res = await api.post(`/capabilities/${tunnelId}/actions/${tunnelId}.${action}`, {});
             const result = res?.result || {};
             if (result.ok === false) {
-                toast.error(`Failed to ${action} tunnel: ${result.error_details || 'Unknown error'}`);
+                notify.error(`Failed to ${action} tunnel: ${result.error_details || 'Unknown error'}`);
             } else {
-                toast.success(`Tunnel ${action} signal sent successfully.`);
+                notify.success(`Tunnel ${action} signal sent successfully.`);
             }
             await fetchActiveTunnels();
         } catch (err) {
             console.error(err);
-            toast.error(`Failed to ${action} tunnel: ` + (err.response?.data?.detail || err.message));
+            notify.error(`Failed to ${action} tunnel: ` + (err.response?.data?.detail || err.message));
         } finally {
             setTunnelLoadingState(prev => ({ ...prev, [tunnelId]: false }));
         }
@@ -390,10 +392,10 @@ const Settings = () => {
         try {
             await api.patch(`/capabilities/${tunnelId}/config`, { autostart: nextVal });
             updateNestedValue(`capabilities.${tunnelId}.autostart`, nextVal);
-            toast.success(`Auto-start ${nextVal ? 'enabled' : 'disabled'} for tunnel`);
+            notify.success(`Auto-start ${nextVal ? 'enabled' : 'disabled'} for tunnel`);
         } catch (err) {
             console.error(err);
-            toast.error("Failed to save auto-start preference");
+            notify.error("Failed to save auto-start preference");
         }
     };
 
@@ -473,31 +475,31 @@ const Settings = () => {
         setSaving(true);
         try {
             await api.post('/system/config', config);
-            toast.success("Settings updated.");
+            notify.success("Settings updated.");
             return true;
-        } catch (err) { toast.error(err.message); }
+        } catch (err) { notify.error(err.message); }
         finally { setSaving(false); }
         return false;
     };
 
     const handleReload = async () => {
-        const loadingToast = toast.loading("Applying neural changes (Hot Reload)...");
+        const loadingToast = notify.loading("Applying neural changes (Hot Reload)...");
         try {
             await api.post('/system/reload');
-            toast.success("System hot-reloaded successfully!", { id: loadingToast });
+            notify.success("System hot-reloaded successfully!", { id: loadingToast });
         } catch (err) {
-            toast.error(`Hot Reload Failed: ${err.message}`, { id: loadingToast });
+            notify.error(`Hot Reload Failed: ${err.message}`, { id: loadingToast });
         }
     };
 
     const refreshMcpRuntime = async () => {
-        const loadingToast = toast.loading("Refreshing MCP runtime...");
+        const loadingToast = notify.loading("Refreshing MCP runtime...");
         try {
             await api.post('/system/mcp/refresh', {});
             await fetchMcpStatus();
-            toast.success("MCP runtime refreshed.", { id: loadingToast });
+            notify.success("MCP runtime refreshed.", { id: loadingToast });
         } catch (err) {
-            toast.error(`MCP refresh failed: ${err.message}`, { id: loadingToast });
+            notify.error(`MCP refresh failed: ${err.message}`, { id: loadingToast });
         }
     };
 
@@ -524,16 +526,16 @@ const Settings = () => {
         const key = String(vaultDraft.key || '').trim();
         const value = String(vaultDraft.value || '').trim();
         if (!key || !value) {
-            toast.error('Key and value are required.');
+            notify.error('Key and value are required.');
             return;
         }
         try {
             await createSecret({ key, value, overwrite: Boolean(editingVaultKey) });
-            toast.success(editingVaultKey ? `Secret ${key} updated.` : `Secret ${key} created.`);
+            notify.success(editingVaultKey ? `Secret ${key} updated.` : `Secret ${key} created.`);
             resetVaultEditor();
             await Promise.all([fetchVaultEntries(), fetchEnvKeys()]);
         } catch (err) {
-            toast.error(err.message || 'Failed to save secret');
+            notify.error(err.message || 'Failed to save secret');
         }
     };
 
@@ -541,11 +543,11 @@ const Settings = () => {
         if (!window.confirm(`Delete ${key}?`)) return;
         try {
             await deleteSecret(key);
-            toast.success(`Secret ${key} deleted.`);
+            notify.success(`Secret ${key} deleted.`);
             if (editingVaultKey === key) resetVaultEditor();
             await Promise.all([fetchVaultEntries(), fetchEnvKeys()]);
         } catch (err) {
-            toast.error(err.message || 'Failed to delete secret');
+            notify.error(err.message || 'Failed to delete secret');
         }
     };
 
@@ -553,9 +555,9 @@ const Settings = () => {
         try {
             const data = await auditEnvSecrets();
             setEnvAudit(data);
-            toast.success('Environment source audited.');
+            notify.success('Environment source audited.');
         } catch (err) {
-            toast.error(err.message || 'Failed to audit .env source');
+            notify.error(err.message || 'Failed to audit .env source');
         }
     };
 
@@ -564,9 +566,9 @@ const Settings = () => {
             const data = await importEnvSecrets({ overwrite });
             setEnvAudit(data);
             await Promise.all([fetchVaultEntries(), fetchEnvKeys()]);
-            toast.success(overwrite ? 'Vault synchronized from .env source.' : 'Missing secrets imported from .env source.');
+            notify.success(overwrite ? 'Vault synchronized from .env source.' : 'Missing secrets imported from .env source.');
         } catch (err) {
-            toast.error(err.message || 'Failed to import .env source');
+            notify.error(err.message || 'Failed to import .env source');
         }
     };
 
@@ -596,6 +598,97 @@ const Settings = () => {
         });
         setConfig(newConfig);
         setRawJson(JSON.stringify(newConfig, null, 2));
+    };
+
+    const normalizeToolsDiscoveryMode = (value) => {
+        const mode = String(value || '').trim().toLowerCase().replace(/-/g, '_');
+        if (!mode || mode === 'inherit') return '';
+        if (['agentic', 'agentic_only', 'llm', 'llm_only'].includes(mode)) return 'agentic_only';
+        if (['hybrid', 'deterministic', 'deterministic_only', 'off', 'fallback_only'].includes(mode)) return mode;
+        return '';
+    };
+
+    const getGlobalToolsDiscoveryMode = () => {
+        const raw = config?.agent?.tools_discovery?.decision_mode;
+        return normalizeToolsDiscoveryMode(raw) || 'agentic_only';
+    };
+
+    const getToolDiscoveryLabel = (value) => {
+        const mode = normalizeToolsDiscoveryMode(value) || 'agentic_only';
+        if (mode === 'agentic_only') return 'Agentic only';
+        if (mode === 'hybrid') return 'Hybrid';
+        if (mode === 'deterministic') return 'Deterministic';
+        if (mode === 'off') return 'Off';
+        return mode;
+    };
+
+    const updateGlobalToolsDiscoveryMode = (value) => {
+        const normalized = normalizeToolsDiscoveryMode(value);
+        const next = { ...(config || {}) };
+        const agent = next.agent && typeof next.agent === 'object' ? { ...next.agent } : {};
+        if (!normalized) {
+            if (agent.tools_discovery && typeof agent.tools_discovery === 'object') {
+                const policy = { ...agent.tools_discovery };
+                delete policy.decision_mode;
+                if (Object.keys(policy).length === 0) {
+                    delete agent.tools_discovery;
+                } else {
+                    agent.tools_discovery = policy;
+                }
+            }
+        } else {
+            agent.tools_discovery = {
+                ...(agent.tools_discovery || {}),
+                decision_mode: normalized,
+            };
+        }
+        next.agent = agent;
+        setConfig(next);
+        setRawJson(JSON.stringify(next, null, 2));
+    };
+
+    const getToolsDiscoveryModeForModel = (modelName) => {
+        const key = String(modelName || '').trim();
+        if (!key) return '';
+        const intelligence = config?.intelligence && typeof config.intelligence === 'object' ? config.intelligence : {};
+        const raw = intelligence[key]?.tools_discovery?.decision_mode;
+        return normalizeToolsDiscoveryMode(raw);
+    };
+
+    const updateToolsDiscoveryMode = (modelName, value) => {
+        const key = String(modelName || '').trim();
+        if (!key) return;
+        const normalized = normalizeToolsDiscoveryMode(value);
+        const next = { ...(config || {}) };
+        const intelligence = next.intelligence && typeof next.intelligence === 'object' ? { ...next.intelligence } : {};
+        const current = intelligence[key] && typeof intelligence[key] === 'object' ? { ...intelligence[key] } : {};
+        if (!normalized) {
+            if (current.tools_discovery && typeof current.tools_discovery === 'object') {
+                const toolsDiscovery = { ...current.tools_discovery };
+                delete toolsDiscovery.decision_mode;
+                if (Object.keys(toolsDiscovery).length === 0) {
+                    delete current.tools_discovery;
+                } else {
+                    current.tools_discovery = toolsDiscovery;
+                }
+            }
+            if (Object.keys(current).length === 0) {
+                delete intelligence[key];
+            } else {
+                intelligence[key] = current;
+            }
+        } else {
+            intelligence[key] = {
+                ...current,
+                tools_discovery: {
+                    ...(current.tools_discovery || {}),
+                    decision_mode: normalized,
+                },
+            };
+        }
+        next.intelligence = intelligence;
+        setConfig(next);
+        setRawJson(JSON.stringify(next, null, 2));
     };
 
     const updateMcpServers = (nextServers) => {
@@ -1091,7 +1184,7 @@ const Settings = () => {
         const key = String(externalSecretEditor.key || '').trim();
         const value = String(externalSecretEditor.value || '').trim();
         if (!key || !value) {
-            toast.error("Key and value are required.");
+            notify.error("Key and value are required.");
             return;
         }
         try {
@@ -1101,10 +1194,10 @@ const Settings = () => {
                 updateNestedValue(targetPath, boundKey);
                 await fetchEnvKeys();
                 setExternalSecretEditor({ target: '', key: '', value: '' });
-                toast.success(`Secret ${boundKey} created and linked.`);
+                notify.success(`Secret ${boundKey} created and linked.`);
             }
         } catch (err) {
-            toast.error(err.message || 'Failed to create secret');
+            notify.error(err.message || 'Failed to create secret');
         }
     };
 
@@ -1200,7 +1293,7 @@ const Settings = () => {
     );
 
     const renderCapabilities = () => (
-        <div className="animate-fade-in">
+        <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
             <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
                 <Puzzle size={48} style={{ margin: '0 auto 20px', color: 'var(--accent-color)' }} />
                 <h3 style={{ fontSize: '24px', fontWeight: '800', marginBottom: '16px' }}>Cognitive Capabilities</h3>
@@ -1211,6 +1304,41 @@ const Settings = () => {
                     <Link to="/capabilities" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 24px' }}>
                         <ExternalLink size={18} /> Open Capabilities Hub
                     </Link>
+                </div>
+            </section>
+
+            <section className="glass-card" style={{ padding: '18px 20px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(59,130,246,0.2)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' }}>
+                    <div>
+                        <h3 style={{ margin: 0, fontSize: '15px', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <SlidersHorizontal size={18} /> Discovery Default Mode
+                        </h3>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                            This sets the default discovery mode for the active agent. Execution still goes through the kernel gate.
+                        </div>
+                    </div>
+                    <span className="badge badge-success" style={{ background: 'rgba(59,130,246,0.12)', color: 'var(--accent-color)' }}>
+                        Effective: {getToolDiscoveryLabel(getGlobalToolsDiscoveryMode())}
+                    </span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1fr) auto', gap: '12px', alignItems: 'end' }}>
+                    <div className="form-group">
+                        <label>Global Default</label>
+                        <select
+                            className="glass-input"
+                            value={getGlobalToolsDiscoveryMode()}
+                            onChange={(e) => updateGlobalToolsDiscoveryMode(e.target.value)}
+                            style={{ height: '40px' }}
+                        >
+                            <option value="agentic_only">Agentic only</option>
+                            <option value="hybrid">Hybrid</option>
+                            <option value="deterministic">Deterministic</option>
+                            <option value="off">Off</option>
+                        </select>
+                    </div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', paddingBottom: '6px' }}>
+                        Saved with the page's <strong>Save Changes</strong> button.
+                    </div>
                 </div>
             </section>
         </div>
@@ -1520,10 +1648,10 @@ const Settings = () => {
 
     const getGeolocation = () => {
         if (!navigator.geolocation) {
-            toast.error("Geolocation is not supported by your browser");
+            notify.error("Geolocation is not supported by your browser");
             return;
         }
-        toast.loading("Detecting location...", { id: 'geo' });
+        notify.loading("Detecting location...", { id: 'geo' });
         navigator.geolocation.getCurrentPosition(
             async (position) => {
                 const lat = position.coords.latitude;
@@ -1542,11 +1670,11 @@ const Settings = () => {
                     }
                 } catch (err) { console.warn("Reverse geocode failed", err); }
 
-                toast.success("Location updated!", { id: 'geo' });
+                notify.success("Location updated!", { id: 'geo' });
             },
             (err) => {
                 console.error(err);
-                toast.error("Unable to retrieve location", { id: 'geo' });
+                notify.error("Unable to retrieve location", { id: 'geo' });
             }
         );
     };
@@ -1554,27 +1682,27 @@ const Settings = () => {
     const getBrowserTimezone = () => {
         const tz = Intl?.DateTimeFormat?.().resolvedOptions?.().timeZone;
         if (!tz) {
-            toast.error("Unable to detect timezone");
+            notify.error("Unable to detect timezone");
             return;
         }
         updateNestedValues([
             { path: 'location.default.timezone', value: tz },
             { path: 'environment.timezone', value: tz }
         ]);
-        toast.success("Timezone updated");
+        notify.success("Timezone updated");
     };
 
     const getBrowserLanguage = () => {
         const lang = navigator?.language || (Array.isArray(navigator?.languages) ? navigator.languages[0] : "");
         if (!lang) {
-            toast.error("Unable to detect language");
+            notify.error("Unable to detect language");
             return;
         }
         updateNestedValues([
             { path: 'i18n.default_locale', value: lang },
             { path: 'location.default.language', value: lang }
         ]);
-        toast.success("Language updated");
+        notify.success("Language updated");
     };
 
     const getTimezoneOptions = () => {
@@ -1901,7 +2029,7 @@ const Settings = () => {
         const addProviderFromPlugin = (plugin) => {
             if (!plugin?.key) return;
             if (providers[plugin.key]) {
-                toast.error("Provider already exists.");
+                notify.error("Provider already exists.");
                 return;
             }
             updateNestedValue(`external_accounts.providers.${plugin.key}`, buildProviderDefaults(plugin.key, plugin));
@@ -1996,7 +2124,7 @@ const Settings = () => {
         const startOAuthConnection = async () => {
             const providerKey = String(selectedConnectProvider || '').trim().toLowerCase();
             if (!providerKey) {
-                toast.error("Select a provider first.");
+                notify.error("Select a provider first.");
                 return;
             }
             const providerDraft = providers?.[providerKey] || {};
@@ -2004,11 +2132,11 @@ const Settings = () => {
             const redirectUri = String(providerDraft?.redirect_uri || '').trim();
             const clientRef = String(providerDraft?.client_id || '').trim();
             if (String(providerMeta?.auth?.mode || '').toLowerCase() !== 'oauth2') {
-                toast.error(`Provider ${providerKey} is not OAuth2-enabled.`);
+                notify.error(`Provider ${providerKey} is not OAuth2-enabled.`);
                 return;
             }
             if (!redirectUri || !clientRef) {
-                toast.error(`Configure ${providerKey} client_id and redirect_uri in Providers before connecting.`);
+                notify.error(`Configure ${providerKey} client_id and redirect_uri in Providers before connecting.`);
                 return;
             }
             setConnectingProvider(providerKey);
@@ -2043,9 +2171,9 @@ const Settings = () => {
                     }];
                     updateNestedValue('external_accounts.accounts', next);
                 }
-                toast.success(`OAuth started for ${providerKey}. Complete it in the opened window.`);
+                notify.success(`OAuth started for ${providerKey}. Complete it in the opened window.`);
             } catch (err) {
-                toast.error(err.message || `Failed to start OAuth for ${providerKey}.`);
+                notify.error(err.message || `Failed to start OAuth for ${providerKey}.`);
             } finally {
                 setConnectingProvider('');
             }
@@ -2056,11 +2184,11 @@ const Settings = () => {
                 if (typeof accountId === 'number') {
                     await api.delete(`/external-accounts/connections/${accountId}`);
                     await fetchLinkedAccounts();
-                    toast.success('Linked account removed.');
+                    notify.success('Linked account removed.');
                     return;
                 }
             } catch (err) {
-                toast.error(err.message || 'Failed to remove linked account');
+                notify.error(err.message || 'Failed to remove linked account');
                 return;
             }
 
@@ -2362,6 +2490,9 @@ const Settings = () => {
                     modality="chat"
                     currentPool={config.cortex?.chat || []}
                     onPoolUpdated={(newPool) => updateNestedValue('cortex.chat', newPool)}
+                    getToolsDiscoveryMode={getToolsDiscoveryModeForModel}
+                    onToolsDiscoveryModeChange={updateToolsDiscoveryMode}
+                    getGlobalToolsDiscoveryMode={getGlobalToolsDiscoveryMode}
                 />
             </section>
 
@@ -2375,6 +2506,7 @@ const Settings = () => {
                     onPoolUpdated={(newPool) => updateNestedValue('cortex.vision', newPool)}
                 />
             </section>
+
         </div>
     );
 
@@ -2512,9 +2644,9 @@ const Settings = () => {
                                             try {
                                                 const pretty = JSON.stringify(JSON.parse(rawJson), null, 4);
                                                 setRawJson(pretty);
-                                                toast.success("JSON Formatted");
+                                                notify.success("JSON Formatted");
                                             } catch {
-                                                toast.error("Cannot format: Invalid JSON");
+                                                notify.error("Cannot format: Invalid JSON");
                                             }
                                         }}
                                         className="btn-ghost"

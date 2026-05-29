@@ -600,6 +600,7 @@ def get_work_overwatch(
     ctx = row.get("context") if isinstance(row.get("context"), dict) else {}
     data = ctx.get("data") if isinstance(ctx.get("data"), dict) else {}
     summary = ctx.get("summary") if isinstance(ctx.get("summary"), dict) else {}
+    status_details = row.get("status_details") if isinstance(row.get("status_details"), dict) else {}
     planner = ctx.get("planner") if isinstance(ctx.get("planner"), dict) else {}
     task_id = data.get("task_id")
     executions = scheduler.list_executions(task_id) if task_id else []
@@ -627,8 +628,21 @@ def get_work_overwatch(
 
     return {
         "work": row,
+        "status_details": status_details,
         "summary": summary,
         "planner": planner,
+        "execution_overview": {
+            "status": row.get("status"),
+            "outcome_type": status_details.get("outcome_type") or summary.get("outcome_type"),
+            "execution_state": status_details.get("execution_state") or summary.get("execution_state"),
+            "task_completed": bool(status_details.get("task_completed") or summary.get("task_completed")),
+            "task_progressed": bool(status_details.get("task_progressed") or summary.get("task_progressed")),
+            "approval_pending": bool(status_details.get("approval_pending") or summary.get("approval_pending")),
+            "clarification_required": bool(status_details.get("clarification_required") or summary.get("clarification_required")),
+            "fallback_used": bool(status_details.get("fallback_used") or summary.get("fallback_used")),
+            "final_response": status_details.get("final_response") or summary.get("final_response"),
+            "approval_prompt": status_details.get("approval_prompt") or summary.get("approval_prompt"),
+        },
         "capabilities_used": capabilities_used,
         "capabilities_assets": capabilities_assets,
         "actions_used": data.get("actions_used", []),

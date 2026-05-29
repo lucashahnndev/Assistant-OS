@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import glob
 import json
 import os
 import re
@@ -49,6 +50,15 @@ class PolicyIngestor:
         return digest.hexdigest(), source_files
 
     def _iter_sources(self) -> Iterable[str]:
+        seen: set[str] = set()
+
+        def emit(path: str) -> Iterable[str]:
+            normalized = os.path.abspath(path)
+            if normalized in seen or not os.path.exists(normalized):
+                return []
+            seen.add(normalized)
+            return [normalized]
+
         for rel in (
             ("agent", "specs", "worker_task_contract.spec.md"),
             ("docs", "plans", "permission_groups_planner.md"),
@@ -56,8 +66,14 @@ class PolicyIngestor:
             ("agent", "specs", "skill_contract.spec.md"),
         ):
             path = os.path.join(self.repo_root, *rel)
-            if os.path.exists(path):
-                yield path
+            yield from emit(path)
+
+        for pattern in (
+            os.path.join(self.repo_root, "docs", "policies", "*.policy.md"),
+            os.path.join(self.repo_root, "agent", "policy", "*.policy.md"),
+        ):
+            for path in sorted(glob.glob(pattern)):
+                yield from emit(path)
 
     def _build_chunks(self, source_files: List[str]) -> List[RAGChunk]:
         chunks: List[RAGChunk] = []

@@ -43,5 +43,22 @@
     ],
     "auth": {
         "mode": "none"
+    },
+    "retrieval_profile": {
+        "enabled": true,
+        "roles": ["assistant", "creative", "artist"],
+        "domains": ["ui", "graphics", "3d", "wegena"],
+        "entity_types": ["scene", "particle", "hologram"],
+        "routing_hints": {
+            "keywords": ["wegena", "cena", "3d", "holograma", "particulas", "partículas", "scene"],
+            "preferred_intents": ["create_ui", "generate_media", "visualize"]
+        },
+        "quality": {
+            "reliability_score": 0.9,
+            "latency_ms": 15000
+        },
+        "setup": {
+            "required_fields": []
+        }
     }
 }

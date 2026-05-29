@@ -1,6 +1,7 @@
+import { notify } from '../utils/notify.jsx';
 import { useState, useEffect } from 'react';
 import { api } from '../hooks/api';
-import toast from 'react-hot-toast';
+
 import {
     Activity,
     Plus,
@@ -82,7 +83,7 @@ const Tasks = () => {
             );
         } catch (error) {
             console.error("Error fetching data:", error);
-            // toast.error("Failed to load tasks"); // suppress noise
+            // notify.error("Failed to load tasks"); // suppress noise
         } finally {
             setLoading(false);
         }
@@ -125,7 +126,7 @@ const Tasks = () => {
         const name = String(newTaskName || '').trim();
         const context = String(newTaskContext || '').trim();
         if (!name || !context) {
-            toast.error("Task name and context are required");
+            notify.error("Task name and context are required");
             return;
         }
         try {
@@ -133,7 +134,7 @@ const Tasks = () => {
                 name,
                 context
             });
-            toast.success("Task definition created");
+            notify.success("Task definition created");
             setNewTaskName('');
             setNewTaskContext('');
             setShowNewTaskModal(false);
@@ -150,7 +151,7 @@ const Tasks = () => {
             // Sync with backend in background (works endpoint may fail independently).
             fetchData();
         } catch (error) {
-            toast.error(error?.message || "Failed to create task");
+            notify.error(error?.message || "Failed to create task");
         }
     };
 
@@ -168,7 +169,7 @@ const Tasks = () => {
             setSelectedWorkId(workId);
             if (!preserveTab) setOverwatchTab('overview');
         } catch (error) {
-            if (!silent) toast.error("Failed to load worker overwatch");
+            if (!silent) notify.error("Failed to load worker overwatch");
         }
     };
 
@@ -390,10 +391,10 @@ const Tasks = () => {
         const sendCommand = async (workId, command, payload = {}) => {
             try {
                 await api.post(`/tasks/works/${workId}/commands`, { command, payload });
-                toast.success(`Sent ${command}`);
+                notify.success(`Sent ${command}`);
                 fetchData();
             } catch {
-                toast.error("Failed to send command");
+                notify.error("Failed to send command");
             }
         };
 
@@ -661,11 +662,11 @@ const Tasks = () => {
             const path = direct ? 'direct_message' : 'queue_message';
             try {
                 await api.post(`/tasks/works/${selectedWorkId}/${path}`, { note: queuedMessage.trim() });
-                toast.success(direct ? "Direct message sent" : "Message queued");
+                notify.success(direct ? "Direct message sent" : "Message queued");
                 setQueuedMessage('');
                 loadWorkOverwatch(selectedWorkId);
             } catch {
-                toast.error("Failed to send message");
+                notify.error("Failed to send message");
             }
         };
 
@@ -673,11 +674,11 @@ const Tasks = () => {
             if (!workNote.trim()) return;
             try {
                 await api.post(`/tasks/works/${selectedWorkId}/notes`, { note: workNote.trim() });
-                toast.success("Note saved");
+                notify.success("Note saved");
                 setWorkNote('');
                 loadWorkOverwatch(selectedWorkId);
             } catch {
-                toast.error("Failed to save note");
+                notify.error("Failed to save note");
             }
         };
 

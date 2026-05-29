@@ -687,7 +687,7 @@
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Caminho do diret\u00f3rio relativo ao workspace.",
+                        "description": "Caminho do diret\u00f3rio. Aceita caminho relativo ao workspace, caminho absoluto ou atalhos como ~/Downloads.",
                         "default": "."
                     }
                 },

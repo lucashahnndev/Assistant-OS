@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { api } from '../hooks/api';
 import PlaybackCard from '../components/PlaybackCard';
 import ConfirmDialog from '../components/ConfirmDialog';
-import toast from 'react-hot-toast';
+import { notify } from '../utils/notify.jsx';
 import {
     Plus,
     Trash2,
@@ -133,7 +133,7 @@ const Chat = () => {
             }
         } catch (err) {
             console.error("Error fetching sessions:", err);
-            toast.error("Error loading sessions.");
+            notify.error("Error loading sessions.");
         }
     };
 
@@ -336,9 +336,9 @@ const Chat = () => {
             await api.put(`/sessions/${selectedId}`, { name: editNameValue });
             setSessions(prev => prev.map(s => s.session_id === selectedId ? { ...s, name: editNameValue } : s));
             if (currentSession) setCurrentSession(prev => ({ ...prev, name: editNameValue }));
-            toast.success("Session renamed!");
+            notify.success("Session renamed!");
         } catch (err) {
-            toast.error("Failed to rename session.");
+            notify.error("Failed to rename session.");
         } finally {
             setIsEditingName(false);
         }
@@ -356,10 +356,10 @@ const Chat = () => {
             if (res && res.profile_picture) {
                 setCurrentSession(prev => prev ? { ...prev, profile_picture: res.profile_picture } : prev);
                 setSessions(prev => prev.map(s => s.session_id === selectedId ? { ...s, profile_picture: res.profile_picture } : s));
-                toast.success('Profile image updated!');
+                notify.success('Profile image updated!');
             }
         } catch (err) {
-            toast.error("Error uploading image.");
+            notify.error("Error uploading image.");
         }
 
         if (avatarUploadRef.current) avatarUploadRef.current.value = '';
@@ -978,7 +978,7 @@ const Chat = () => {
             }
             fetchSessions();
         } catch (err) {
-            toast.error("Error deleting session.");
+            notify.error("Error deleting session.");
         } finally {
             setDeletingSessionId(null);
         }
@@ -1011,11 +1011,11 @@ const Chat = () => {
                     setSelectedId(activeId);
                     fetchSessions();
                 } else {
-                    toast.error("Error initializing session.");
+                    notify.error("Error initializing session.");
                     return;
                 }
             } catch (err) {
-                toast.error("Error creating session.");
+                notify.error("Error creating session.");
                 return;
             }
         }
@@ -1081,7 +1081,7 @@ def monitor_system():
                 }
             ];
             setMessages(prev => [...prev, ...demoMsgs]);
-            toast.success("Demonstração Mock injetada com sucesso!");
+            notify.success("Demonstração Mock injetada com sucesso!");
             setTimeout(() => {
                 if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
             }, 100);
@@ -1126,7 +1126,7 @@ def monitor_system():
                 pendingFiles.forEach(item => { if (item.previewUrl) URL.revokeObjectURL(item.previewUrl); });
                 setPendingFiles([]);
             } catch (err) {
-                toast.error("Error sending attachments.");
+                notify.error("Error sending attachments.");
                 setUploading(false);
                 setIsSending(false);
                 setStreamingMessage(null);
@@ -1171,7 +1171,7 @@ def monitor_system():
                     user_data: { location }
                 });
             } catch (err) {
-                toast.error("Failed to send");
+                notify.error("Failed to send");
                 setIsSending(false);
                 setStreamingMessage(null);
             }
@@ -1183,7 +1183,7 @@ def monitor_system():
         if (files.length === 0) return;
 
         if (pendingFiles.length + files.length > 10) {
-            toast.error("Maximum of 10 files allowed.");
+            notify.error("Maximum of 10 files allowed.");
             return;
         }
 

@@ -1,9 +1,10 @@
+import { notify } from '../../utils/notify.jsx';
 import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import rehypeRaw from 'rehype-raw';
-import { toast } from 'react-hot-toast';
+
 
 export const CodeBlock = ({ node, inline, className, children, ...props }) => {
     const [copied, setCopied] = useState(false);
@@ -20,7 +21,7 @@ export const CodeBlock = ({ node, inline, className, children, ...props }) => {
         navigator.clipboard.writeText(text);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
-        toast.success("Code copied!");
+        notify.success("Code copied!");
     };
 
     if (isInline) {

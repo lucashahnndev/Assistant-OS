@@ -949,20 +949,41 @@ class Kernel:
                 
                 elif event_type == "work_status_change":
                     status = event.get("status")
+                    status_details = event.get("status_details")
+                    if not isinstance(status_details, dict):
+                        status_details = {}
                     snapshot = self.scheduler.get_work_snapshot(work_id, include_context=True)
                     summary = (snapshot or {}).get("context", {}).get("summary", {}) if snapshot else {}
+                    if not status_details:
+                        status_details = (snapshot or {}).get("status_details", {})
+                    if not isinstance(status_details, dict):
+                        status_details = {}
+                    if not status_details and isinstance(summary, dict):
+                        status_details = dict(summary)
                     prompt = summary.get("approval_prompt") or "This worker needs your approval to continue."
                     approval_action_id = str(summary.get("approval_action_id") or "").strip()
                     approval_args = summary.get("approval_args") if isinstance(summary.get("approval_args"), dict) else {}
+                    outcome_type = str(status_details.get("outcome_type") or summary.get("outcome_type") or "").strip().lower()
+                    execution_state = str(status_details.get("execution_state") or summary.get("execution_state") or "").strip().lower()
                     status_text = {
                         "queued": "Task queued.",
                         "running": "Task running.",
                         "paused": "Task paused.",
                         "waiting_user": prompt,
-                        "succeeded": "Task completed successfully.",
                         "failed": "Task failed.",
                         "cancelled": "Task cancelled.",
                     }.get(str(status or "").lower(), f"Task status: {status}")
+                    if str(status or "").lower() == "succeeded":
+                        if outcome_type in {"action_executed", "task_completed"} or execution_state == "completed":
+                            status_text = "Task completed successfully."
+                        elif outcome_type in {"approval_pending"} or execution_state == "blocked":
+                            status_text = "Task paused awaiting approval."
+                        elif outcome_type in {"clarification_required"} or execution_state == "clarification":
+                            status_text = "Task ended with a clarification request."
+                        elif outcome_type in {"reply_only"} or execution_state == "reply_only":
+                            status_text = "Reply completed."
+                        elif outcome_type in {"fallback_used", "recovery_path_used"} or execution_state == "fallback":
+                            status_text = "Task ended via recovery."
 
                     if hasattr(driver, "send_status"):
                         try:
@@ -973,6 +994,7 @@ class Kernel:
                                     "status": status,
                                     "message": status_text,
                                     "work_id": work_id,
+                                    "status_details": status_details,
                                     "approval_request": (
                                         {
                                             "prompt": prompt,

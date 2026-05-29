@@ -1,7 +1,8 @@
+import { notify } from '../../utils/notify.jsx';
 import { useState } from 'react';
 import { api } from '../../hooks/api';
 import { Plus, StickyNote, Send, Loader2 } from 'lucide-react';
-import toast from 'react-hot-toast';
+
 
 const NoteManager = ({ taskId, notes = [], onNotesUpdated }) => {
     const [newNote, setNewNote] = useState('');
@@ -14,12 +15,12 @@ const NoteManager = ({ taskId, notes = [], onNotesUpdated }) => {
         setSubmitting(true);
         try {
             await api.post(`/tasks/definitions/${taskId}/notes`, { note: newNote });
-            toast.success("Note added");
+            notify.success("Note added");
             setNewNote('');
             if (onNotesUpdated) onNotesUpdated();
         } catch (error) {
             console.error(error);
-            toast.error("Failed to add note");
+            notify.error("Failed to add note");
         } finally {
             setSubmitting(false);
         }

@@ -868,8 +868,10 @@ class WegenaEngine {
         };
         this.material = new THREE.ShaderMaterial({ uniforms: this.matUniforms, vertexShader, fragmentShader, vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
         this.points = new THREE.Points(this.geometry, this.material);
+        this.points.renderOrder = 2; // Render transparent/glow particles second
         this.materialPhysical = new THREE.ShaderMaterial({ uniforms: this.matUniforms, vertexShader, fragmentShader: fragmentShaderPhysical, vertexColors: true, transparent: true, blending: THREE.NormalBlending, depthWrite: true });
         this.pointsPhysical = new THREE.Points(this.geometry, this.materialPhysical);
+        this.pointsPhysical.renderOrder = 1; // Render solid particles first
         this.scene.add(this.pointsPhysical); this.scene.add(this.points);
     }
 
@@ -907,7 +909,10 @@ class WegenaEngine {
         this.geometry.getAttribute('particleShape').needsUpdate = true;
     }
 
-    setParticleSize(v) { if (this.matUniforms) this.matUniforms.u_size.value = v; }
+    setParticleSize(v) { 
+        this.baseParticleSize = v;
+        if (this.matUniforms) this.matUniforms.u_size.value = v; 
+    }
 
     clearFxFragments() {
         this.visualState.fx.fragments = [];
@@ -1833,23 +1838,22 @@ class WegenaEngine {
     }
 
     _clearUnusedBufferStates() {
-        // Use activeCount, not particleCount — avoids iterating the entire 200k buffer
-        // when only 10k–30k particles are actually in use.
-        const pCount = Math.min(this.config.activeCount, this.config.particleCount);
-        for (let i = 0; i < pCount; i++) {
-            if (this.roles[i] === 0) {
-                const i3 = i * 3;
-                this.targetPositions[i3] = 0; this.targetPositions[i3+1] = 0; this.targetPositions[i3+2] = 0;
-                this.positions[i3] = 0; this.positions[i3+1] = 0; this.positions[i3+2] = 0;
-                this.basePositions[i3] = 0; this.basePositions[i3+1] = 0; this.basePositions[i3+2] = 0;
-                
-                this.targetColors[i3] = 0; this.targetColors[i3+1] = 0; this.targetColors[i3+2] = 0;
-                this.colors[i3] = 0; this.colors[i3+1] = 0; this.colors[i3+2] = 0;
-                
-                this.particleShapes[i] = 0;
-                this.materialTypes[i] = 0;
-                this.transitionAlpha[i] = 0;
-            }
+        // Clear all particles outside the active count to prevent ghost particles from rendering
+        const start = Math.min(this.config.activeCount, this.config.particleCount);
+        const end = this.config.particleCount;
+        for (let i = start; i < end; i++) {
+            const i3 = i * 3;
+            this.targetPositions[i3] = 0; this.targetPositions[i3+1] = 0; this.targetPositions[i3+2] = 0;
+            this.positions[i3] = 0; this.positions[i3+1] = 0; this.positions[i3+2] = 0;
+            this.basePositions[i3] = 0; this.basePositions[i3+1] = 0; this.basePositions[i3+2] = 0;
+            
+            this.targetColors[i3] = 0; this.targetColors[i3+1] = 0; this.targetColors[i3+2] = 0;
+            this.colors[i3] = 0; this.colors[i3+1] = 0; this.colors[i3+2] = 0;
+            
+            this.particleShapes[i] = 0;
+            this.materialTypes[i] = 0;
+            this.transitionAlpha[i] = 0;
+            this.roles[i] = 0;
         }
         if (this.geometry) {
             const transAttr = this.geometry.getAttribute?.('transitionAlpha');
@@ -2181,12 +2185,14 @@ class WegenaEngine {
     _applyAnimation(anim, state) {
         const { type, params: p = {} } = anim; const speed = p.speed || 1.0; const amp = p.amplitude || 0.2;
         const prev = state.onUpdate;
-        const initialSize = this.matUniforms.u_size.value;
+        
+        // Dynamic base size evaluation ensures pulse animation respects real-time slider changes
         state.onUpdate = (time) => {
             if (prev) prev(time);
             if (type === 'pulse') {
                 const b = 1.0 + Math.sin(time * speed) * amp;
-                this.setParticleSize(initialSize * b);
+                const baseSize = this.baseParticleSize !== undefined ? this.baseParticleSize : (this.matUniforms?.u_size?.value || 0.05);
+                if (this.matUniforms) this.matUniforms.u_size.value = baseSize * b;
             }
             else if (type === 'rotate') { const nav = this.visualState.navigation; if (!nav.isDragging && !nav.isPanning) nav.targetRotation.y += speed * 0.01; }
             else if (type === 'orbit') { const r = p.radius || 50, nav = this.visualState.navigation; if (!nav.isDragging && !nav.isPanning) { nav.pan.targetX = Math.cos(time * speed) * r; nav.pan.targetY = Math.sin(time * speed) * r; } }

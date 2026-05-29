@@ -23,6 +23,44 @@ class Worker(threading.Thread):
         self.kwargs = kwargs
         self.name = f"Worker-{work_id}"
 
+    def _build_status_metadata(self, result: Any = None, error: Any = None) -> Dict[str, Any]:
+        metadata: Dict[str, Any] = {
+            "worker": {
+                "work_id": self.work_id,
+                "execution_id": self.execution_id,
+                "thread_name": self.name,
+            }
+        }
+        try:
+            snapshot = self.scheduler.get_work_snapshot(self.work_id, include_context=True) or {}
+            context = snapshot.get("context") if isinstance(snapshot, dict) else {}
+            summary = context.get("summary") if isinstance(context, dict) else {}
+            if isinstance(summary, dict):
+                metadata["worker"]["summary"] = {
+                    key: summary.get(key)
+                    for key in (
+                        "status",
+                        "outcome_type",
+                        "execution_state",
+                        "task_completed",
+                        "task_progressed",
+                        "approval_pending",
+                        "clarification_required",
+                        "fallback_used",
+                        "final_response",
+                        "approval_prompt",
+                        "cursor",
+                    )
+                }
+        except Exception as exc:
+            logger.debug(f"Worker {self.work_id} could not snapshot status metadata: {exc}")
+
+        if result is not None:
+            metadata["worker"]["result_type"] = type(result).__name__
+        if error:
+            metadata["worker"]["error"] = str(error)[:400]
+        return metadata
+
     def run(self):
         logger.info(f"Worker {self.work_id} (Exec: {self.execution_id}) started execution.")
         
@@ -55,18 +93,36 @@ class Worker(threading.Thread):
             if self.execution_id:
                  work = self.scheduler.get_work(self.work_id)
                  if work and work.cancel_requested:
-                     self.scheduler.update_work_status(self.work_id, WorkStatus.CANCELLED)
+                     self.scheduler.update_work_status(
+                         self.work_id,
+                         WorkStatus.CANCELLED,
+                         metadata=self._build_status_metadata(result=result),
+                     )
                  else:
-                     self.scheduler.update_work_status(self.work_id, WorkStatus.SUCCEEDED, result=result)
+                     self.scheduler.update_work_status(
+                         self.work_id,
+                         WorkStatus.SUCCEEDED,
+                         result=result,
+                         metadata=self._build_status_metadata(result=result),
+                     )
                  self.scheduler.update_execution_status(self.execution_id, "succeeded", result=result)
                  logger.info(f"Worker {self.work_id} Finished (Success).")
             else:
                 work = self.scheduler.get_work(self.work_id)
                 if work and work.cancel_requested:
-                    self.scheduler.update_work_status(self.work_id, WorkStatus.CANCELLED)
+                    self.scheduler.update_work_status(
+                        self.work_id,
+                        WorkStatus.CANCELLED,
+                        metadata=self._build_status_metadata(result=result),
+                    )
                     logger.info(f"Worker {self.work_id} Finished (Cancelled).")
                 else:
-                    self.scheduler.update_work_status(self.work_id, WorkStatus.SUCCEEDED, result=result)
+                    self.scheduler.update_work_status(
+                        self.work_id,
+                        WorkStatus.SUCCEEDED,
+                        result=result,
+                        metadata=self._build_status_metadata(result=result),
+                    )
                     logger.info(f"Worker {self.work_id} Finished (Success).")
                 
         except Exception as e:
@@ -91,10 +147,20 @@ class Worker(threading.Thread):
                     logger.error(f"Failed to inject worker error into session: {ex}")
 
             if self.execution_id:
-                self.scheduler.update_work_status(self.work_id, WorkStatus.FAILED, error=error_msg)
+                self.scheduler.update_work_status(
+                    self.work_id,
+                    WorkStatus.FAILED,
+                    error=error_msg,
+                    metadata=self._build_status_metadata(error=error_msg),
+                )
                 self.scheduler.update_execution_status(self.execution_id, "failed", error=error_msg)
             else:
-                self.scheduler.update_work_status(self.work_id, WorkStatus.FAILED, error=error_msg)
+                self.scheduler.update_work_status(
+                    self.work_id,
+                    WorkStatus.FAILED,
+                    error=error_msg,
+                    metadata=self._build_status_metadata(error=error_msg),
+                )
 
 class WorkerManager:
     """

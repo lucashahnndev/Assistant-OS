@@ -182,69 +182,48 @@ const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = '
     }));
 
     useEffect(() => {
-        const initEngine = async () => {
-            const container = containerRef.current;
-            if (!container) return;
+        const container = containerRef.current;
+        if (!container) return;
 
-            const WegenaEngineClass = window.WegenaEngine || (typeof WegenaEngine !== 'undefined' ? WegenaEngine : null);
-            if (!WegenaEngineClass) {
-                console.error('WegenaEngine was not found in the global scope. Verify that the scripts are loaded in index.html.');
-                return;
+        const WegenaEngineClass = window.WegenaEngine || (typeof WegenaEngine !== 'undefined' ? WegenaEngine : null);
+        if (!WegenaEngineClass) {
+            console.error('WegenaEngine was not found in the global scope. Verify that the scripts are loaded in index.html.');
+            return;
+        }
+
+        try {
+            const engine = new WegenaEngineClass(container, {
+                particleCount: 70000,
+                activeCount: 45000,
+                zoom: 165,
+                baseColor: new window.THREE.Color('#3b82f6'),
+                glowColor: new window.THREE.Color('#00f2ff')
+            });
+
+            engine.setSimulatorMode('cpu');
+            engineRef.current = engine;
+            if (import.meta.env.DEV && typeof window !== 'undefined') {
+                window.__atlasWegenaEngine = engine;
             }
+            syncAtlasSignal();
 
-            let maxParticles = 70000;
-            let activeParticles = 45000;
+            loadDefaultScene();
 
-            try {
-                const res = await window.fetch('/api/system/config');
-                if (res.ok) {
-                    const sysConfig = await res.json();
-                    const wegConf = sysConfig.capabilities?.wegena?.config || {};
-                    if (wegConf.initial_particles) {
-                        maxParticles = Number(wegConf.initial_particles);
-                        activeParticles = Number(wegConf.initial_particles);
+            const WegenaCanvasControlsClass = window.WegenaCanvasControls || (typeof WegenaCanvasControls !== 'undefined' ? WegenaCanvasControls : null);
+            if (WegenaCanvasControlsClass) {
+                const controls = new WegenaCanvasControlsClass(engine, {
+                    viewport: window.document.body,
+                    THREE: window.THREE,
+                    shouldIgnoreTarget: (target) => {
+                        return !!target.closest('.chat-input-area, textarea, input, button, .sidebar, .glass, a, label');
                     }
-                }
-            } catch (err) {
-                console.warn('Failed to fetch global wegena config, using defaults.', err);
-            }
-
-            try {
-                const engine = new WegenaEngineClass(container, {
-                    particleCount: maxParticles,
-                    activeCount: activeParticles,
-                    zoom: 165,
-                    baseColor: new window.THREE.Color('#3b82f6'),
-                    glowColor: new window.THREE.Color('#00f2ff')
                 });
-
-                engine.setSimulatorMode('cpu');
-                engineRef.current = engine;
-                if (import.meta.env.DEV && typeof window !== 'undefined') {
-                    window.__atlasWegenaEngine = engine;
-                }
-                syncAtlasSignal();
-
-                loadDefaultScene();
-
-                const WegenaCanvasControlsClass = window.WegenaCanvasControls || (typeof WegenaCanvasControls !== 'undefined' ? WegenaCanvasControls : null);
-                if (WegenaCanvasControlsClass) {
-                    const controls = new WegenaCanvasControlsClass(engine, {
-                        viewport: window.document.body,
-                        THREE: window.THREE,
-                        shouldIgnoreTarget: (target) => {
-                            return !!target.closest('.chat-input-area, textarea, input, button, .sidebar, .glass, a, label');
-                        }
-                    });
-                    engine.setControlsManager(controls);
-                    controlsRef.current = controls;
-                }
-            } catch (err) {
-                console.error('Failed to initialize WegenaEngine host:', err);
+                engine.setControlsManager(controls);
+                controlsRef.current = controls;
             }
-        };
-
-        initEngine();
+        } catch (err) {
+            console.error('Failed to initialize WegenaEngine host:', err);
+        }
 
         return () => {
             clearDefaultRetryTimer();

@@ -1,11 +1,19 @@
+import { notify } from '../utils/notify.jsx';
 import React, { useState, useEffect } from 'react';
 import { api } from '../hooks/api';
-import toast from 'react-hot-toast';
+
 import { Plus, Trash2, ArrowUp, ArrowDown, Settings2, Shield, AlertCircle } from 'lucide-react';
 import ConfirmDialog from './ConfirmDialog';
 import { createSecret, listSecretRefs } from '../utils/secretsApi';
 
-const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
+const ModelPoolManager = ({
+    modality,
+    currentPool,
+    onPoolUpdated,
+    getToolsDiscoveryMode = null,
+    onToolsDiscoveryModeChange = null,
+    getGlobalToolsDiscoveryMode = null,
+}) => {
     const [catalog, setCatalog] = useState({});
     const [envKeys, setEnvKeys] = useState([]);
 
@@ -53,7 +61,7 @@ const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
         try {
             const response = await createSecret({ key: newKeyName, value: newKeyValue });
             if (response.success) {
-                toast.success(`Key ${response.key} saved to vault!`);
+                notify.success(`Key ${response.key} saved to vault!`);
                 const keys = await listSecretRefs();
                 setEnvKeys(keys);
                 if (secretTargetField) {
@@ -65,7 +73,7 @@ const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
                 setSecretTargetField("");
             }
         } catch (err) {
-            toast.error(err.message);
+            notify.error(err.message);
         }
     };
 
@@ -100,11 +108,11 @@ const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
         try {
             const response = await api.post(`/models/pool/${modality}`, updatedPool);
             if (response.success) {
-                toast.success(`Model pool for ${modality} updated and reloaded!`);
+                notify.success(`Model pool for ${modality} updated and reloaded!`);
                 if (onPoolUpdated) onPoolUpdated(response.pool);
             }
         } catch (err) {
-            toast.error(err.message);
+            notify.error(err.message);
         }
     };
 
@@ -140,6 +148,18 @@ const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
     const providerSchema = catalog[selectedProvider];
     const authFields = Array.isArray(providerSchema?.auth?.fields) ? providerSchema.auth.fields : [];
     const settingsFields = Array.isArray(providerSchema?.settings_fields) ? providerSchema.settings_fields : [];
+    const supportsDiscoveryPolicy = modality === 'chat' && typeof onToolsDiscoveryModeChange === 'function';
+    const discoveryModeValue = getToolsDiscoveryMode ? (getToolsDiscoveryMode(formData?.model || '') || 'inherit') : 'inherit';
+    const isDiscoveryInherited = discoveryModeValue === 'inherit';
+    const getDiscoveryModeLabel = (mode) => {
+        const normalized = String(mode || '').trim().toLowerCase();
+        if (normalized === 'agentic_only') return 'Agentic only';
+        if (normalized === 'hybrid') return 'Hybrid';
+        if (normalized === 'deterministic') return 'Deterministic';
+        if (normalized === 'off') return 'Off';
+        if (normalized === 'inherit') return 'Automatic';
+        return normalized || 'Automatic';
+    };
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -324,6 +344,49 @@ const ModelPoolManager = ({ modality, currentPool, onPoolUpdated }) => {
                                 />
                             </div>
                         ))}
+
+                        {supportsDiscoveryPolicy && (
+                            <div style={{ background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.18)', borderRadius: '12px', padding: '16px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                                    <div>
+                                        <div style={{ fontSize: '13px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'rgba(255,255,255,0.75)' }}>
+                                            Tool Discovery
+                                        </div>
+                                        <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.45)', marginTop: '4px' }}>
+                                            Discovery policy for the active chat model. Execution remains gated by the kernel.
+                                        </div>
+                                    </div>
+                                    {getToolsDiscoveryMode && getGlobalToolsDiscoveryMode && (
+                                        <span className="status-pill online" style={{ background: 'rgba(16,185,129,0.12)', color: '#34d399' }}>
+                                            Effective: {getDiscoveryModeLabel(
+                                                getToolsDiscoveryMode(formData?.model || '') ||
+                                                getGlobalToolsDiscoveryMode() ||
+                                                'agentic_only'
+                                            )}
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="form-group">
+                                    <label>Discovery Mode</label>
+                                    <select
+                                        className="input-field"
+                                        value={discoveryModeValue}
+                                        onChange={(e) => onToolsDiscoveryModeChange(formData?.model || '', e.target.value)}
+                                    >
+                                        <option value="inherit">Automatic (inherit global)</option>
+                                        <option value="agentic_only">Agentic only</option>
+                                        <option value="hybrid">Hybrid</option>
+                                        <option value="deterministic">Deterministic</option>
+                                        <option value="off">Off</option>
+                                    </select>
+                                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.42)', marginTop: '6px' }}>
+                                        {isDiscoveryInherited
+                                            ? 'No override is set. This model inherits the global discovery policy.'
+                                            : 'This model overrides the global discovery policy.'}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         <div className="flex-between" style={{ marginTop: '16px' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

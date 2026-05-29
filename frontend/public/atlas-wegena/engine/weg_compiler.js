@@ -457,7 +457,16 @@ class WEGCompiler {
         
         // If it has a volume/shape/budget/count, it's a volume first.
         const hasVolume = p.volume || p.shape || p.budget !== undefined || p.count !== undefined;
-        const kind = p.kind || p.type || (p.terrain ? "terrain" : ((p.light && !hasVolume) ? "light" : "volume"));
+        let kind = p.kind || p.type || (p.terrain ? "terrain" : ((p.light && !hasVolume) ? "light" : "volume"));
+        
+        if (kind === "mesh") {
+            p.mesh = true;
+            kind = "volume";
+        } else if (p.path) {
+            p.shape = "path";
+            kind = "volume";
+        }
+        
         const method = kind === "terrain" ? "createTerrain" : (kind === "light" ? "createLight" : "createVolume");
         
         const hasInterpolation = name.includes("${") || name.includes("{");
@@ -493,6 +502,10 @@ class WEGCompiler {
              return source; 
         }
 
+        // Try to handle multiline block comments correctly before splitting
+        source = source.replace(/\/\*[\s\S]*?\*\//g, '');
+        // Force newlines before @ commands to handle single-line LLM outputs
+        source = source.replace(/\s+(@(?:Node|Meta|Quality|World|Background|Bg|Loop|Var|End|Material|Shape|ForEach|If|Lines|Metaballs|FX)|\[Nodes:)/g, '\n$1');
         const lines = source.split('\n');
         this._parseLines(lines);
 
@@ -598,8 +611,18 @@ class WEGCompiler {
                     }
                 });
 
-                const kind = p.kind || p.type || (p.terrain ? "terrain" : (p.path ? "mesh" : "volume"));
-                const method = kind === "terrain" ? "createTerrain" : (kind === "mesh" ? "createMesh" : "createVolume");
+                const hasVolume = p.volume || p.shape || p.budget !== undefined || p.count !== undefined;
+                let kind = p.kind || p.type || (p.terrain ? "terrain" : ((p.light && !hasVolume) ? "light" : "volume"));
+                
+                if (kind === "mesh") {
+                    p.mesh = true;
+                    kind = "volume";
+                } else if (p.path) {
+                    p.shape = "path";
+                    kind = "volume";
+                }
+                
+                const method = kind === "terrain" ? "createTerrain" : (kind === "light" ? "createLight" : "createVolume");
                 
                 const props = this._prepareNodeProps(p);
                 const name = props.name || `row_${i}`;

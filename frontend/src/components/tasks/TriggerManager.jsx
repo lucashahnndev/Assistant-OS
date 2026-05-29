@@ -1,3 +1,4 @@
+import { notify } from '../../utils/notify.jsx';
 import { useState, useEffect } from 'react';
 import { api } from '../../hooks/api';
 import {
@@ -9,7 +10,7 @@ import {
     CheckCircle,
     XCircle
 } from 'lucide-react';
-import toast from 'react-hot-toast';
+
 import ConfirmDialog from '../ConfirmDialog';
 
 const TriggerManager = ({ taskId }) => {
@@ -45,7 +46,7 @@ const TriggerManager = ({ taskId }) => {
             setTriggers(res);
         } catch (error) {
             console.error("Error fetching triggers:", error);
-            toast.error("Failed to load triggers");
+            notify.error("Failed to load triggers");
         } finally {
             setLoading(false);
         }
@@ -84,7 +85,7 @@ const TriggerManager = ({ taskId }) => {
                 finalType = 'cron'; // Convert to cron for backend
                 finalValue = generateCron();
                 if (!finalValue) {
-                    toast.error("Por favor, selecione os dias.");
+                    notify.error("Por favor, selecione os dias.");
                     return;
                 }
                 finalRules = holidayRules;
@@ -100,13 +101,13 @@ const TriggerManager = ({ taskId }) => {
             };
 
             await api.post('/tasks/triggers', payload);
-            toast.success("Trigger added!");
+            notify.success("Trigger added!");
             setShowAddModal(false);
             setScheduleValue('');
             setSelectedDays([]);
             fetchTriggers();
         } catch (error) {
-            toast.error("Failed to add trigger");
+            notify.error("Failed to add trigger");
         }
     };
 
@@ -118,10 +119,10 @@ const TriggerManager = ({ taskId }) => {
         if (!deletingTriggerId) return;
         try {
             await api.delete(`/tasks/triggers/${deletingTriggerId}`);
-            toast.success("Trigger deleted");
+            notify.success("Trigger deleted");
             fetchTriggers();
         } catch (error) {
-            toast.error("Failed to delete trigger");
+            notify.error("Failed to delete trigger");
         } finally {
             setDeletingTriggerId(null);
         }
@@ -130,10 +131,10 @@ const TriggerManager = ({ taskId }) => {
     const handleToggle = async (triggerId, currentStatus) => {
         try {
             await api.post(`/tasks/triggers/${triggerId}/toggle`, { enabled: !currentStatus });
-            toast.success(currentStatus ? "Trigger disabled" : "Trigger enabled");
+            notify.success(currentStatus ? "Trigger disabled" : "Trigger enabled");
             fetchTriggers();
         } catch (error) {
-            toast.error("Failed to toggle trigger");
+            notify.error("Failed to toggle trigger");
         }
     };
 

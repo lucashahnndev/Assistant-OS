@@ -69,13 +69,13 @@ def normalize_cognitive_outcome(raw_outcome: Optional[Dict[str, Any]]) -> Normal
     }
     generic_fallback_signal = bool(explicit) and explicit not in known_explicit_types
 
-    clarification_required = bool(
+    clarification_required = bool(raw.get("clarification_required")) or bool(
         final_response.endswith("?")
         or "clarification" in reason_lower
         or "need_user_input" in reason_lower
         or "waiting_user" in reason_lower
     )
-    approval_pending = bool(pending_action) or explicit == "approval_pending" or status in {"pending_approval", "pending"} or "approval" in commit_path_lower
+    approval_pending = bool(raw.get("approval_pending")) or bool(pending_action) or explicit == "approval_pending" or status in {"pending_approval", "pending"} or "approval" in commit_path_lower
     handoff_or_escalation = explicit in {"approval_forwarded", "handoff_or_escalation"} or status in {"handoff", "cancelled", "canceled"}
     fallback_signal = bool(raw.get("fallback_used")) or explicit in {"fallback_used", "recovery_path_used"}
     fallback_used = fallback_signal or (replans_used > 0 and status in {"failure", "error"}) or any(token in commit_path_lower for token in ("recovery", "fallback", "no_plan"))
@@ -85,13 +85,13 @@ def normalize_cognitive_outcome(raw_outcome: Optional[Dict[str, Any]]) -> Normal
     blocker_detected = explicit == "blocker_detected" or status == "failure" or approval_pending
     blocker_cleared = bool(raw.get("blocker_cleared"))
     task_paused = approval_pending or explicit == "task_paused"
-    task_completed = explicit == "task_completed" or (
+    task_completed = bool(raw.get("task_completed")) or explicit == "task_completed" or (
         status in {"success", "completed"}
         and action_id
         and not generic_fallback_signal
         and not any(isinstance(step, dict) and step.get("status") in {"pending", "in_progress", "blocked"} for step in planner_tree)
     )
-    task_progressed = explicit == "task_progressed" or (
+    task_progressed = bool(raw.get("task_progressed")) or explicit == "task_progressed" or (
         status in {"success", "completed"}
         and bool(action_id)
         and not generic_fallback_signal

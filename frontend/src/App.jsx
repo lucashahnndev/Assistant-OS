@@ -5,6 +5,7 @@ import { ThemeProvider } from './context/ThemeContext';
 import { VideoPlayerProvider } from './context/VideoPlayerContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import VideoPlayerDock from './components/VideoPlayerDock';
+import WegenaSceneModal from './components/WegenaSceneModal';
 import DashboardLayout from './layouts/DashboardLayout';
 
 // Pages (to be implemented)
@@ -95,23 +96,14 @@ function App() {
             <ThemeProvider>
                 <AuthProvider>
                     <VideoPlayerProvider>
-                        <Toaster position="top-right"
+                        <Toaster
+                            position="top-right"
                             containerStyle={{ zIndex: 12000 }}
-                            toastOptions={{
-                                style: {
-                                    background: 'var(--card-bg)',
-                                    color: 'var(--text-main)',
-                                    border: '1px solid var(--card-border)',
-                                    backdropFilter: 'var(--surface-blur)',
-                                    borderRadius: '12px',
-                                    fontSize: '14px',
-                                    fontWeight: '600',
-                                    boxShadow: 'var(--shadow-lg)',
-                                },
-                            }}
+                            toastOptions={{ style: { background: 'transparent', boxShadow: 'none', padding: 0 } }}
                         />
                         <AppRoutes />
                         <VideoPlayerDock />
+                        <WegenaSceneModal />
                     </VideoPlayerProvider>
                 </AuthProvider>
             </ThemeProvider>

@@ -1,7 +1,8 @@
+import { notify } from '../../utils/notify.jsx';
 import { useState, useEffect } from 'react';
 import { api } from '../../hooks/api';
 import { History, CheckCircle, XCircle, Clock, FileText } from 'lucide-react';
-import toast from 'react-hot-toast';
+
 
 const ExecutionHistory = ({ taskId }) => {
     const [history, setHistory] = useState([]);
@@ -13,7 +14,7 @@ const ExecutionHistory = ({ taskId }) => {
             setHistory(res);
         } catch (error) {
             console.error(error);
-            toast.error("Failed to load history");
+            notify.error("Failed to load history");
         } finally {
             setLoading(false);
         }

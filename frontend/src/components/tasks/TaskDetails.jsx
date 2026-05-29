@@ -1,7 +1,8 @@
+import { notify } from '../../utils/notify.jsx';
 import { useState, useEffect } from 'react';
 import { Play, RotateCw, Clock, Trash2, Power, Terminal, FileText } from 'lucide-react';
 import { api } from '../../hooks/api';
-import toast from 'react-hot-toast';
+
 import NoteManager from './NoteManager';
 import TriggerManager from './TriggerManager';
 import ExecutionHistory from './ExecutionHistory';
@@ -23,7 +24,7 @@ const TaskDetails = ({ taskId, onDelete }) => {
             setTask(res);
         } catch (error) {
             console.error("Error fetching task:", error);
-            // toast.error("Failed to load task details");
+            // notify.error("Failed to load task details");
         } finally {
             setLoading(false);
         }
@@ -99,14 +100,14 @@ const TaskDetails = ({ taskId, onDelete }) => {
     const handleRun = async () => {
         try {
             await api.post(`/tasks/definitions/${taskId}/run`);
-            toast.success("Task execution started");
+            notify.success("Task execution started");
             setActiveTab('live');
             setTimeout(() => {
                 fetchLatestExecution();
                 fetchTaskOverwatch();
             }, 500);
         } catch (error) {
-            toast.error("Failed to start task");
+            notify.error("Failed to start task");
         }
     };
 
@@ -114,9 +115,9 @@ const TaskDetails = ({ taskId, onDelete }) => {
         if (!liveExecution || liveExecution.status !== 'running') return;
         try {
             await api.post(`/tasks/executions/${liveExecution.execution_id}/cancel`);
-            toast.success("Cancellation requested");
+            notify.success("Cancellation requested");
         } catch (error) {
-            toast.error("Failed to stop task");
+            notify.error("Failed to stop task");
         }
     };
 
@@ -127,10 +128,10 @@ const TaskDetails = ({ taskId, onDelete }) => {
     const confirmDeleteTask = async () => {
         try {
             await api.delete(`/tasks/definitions/${taskId}`);
-            toast.success("Task deleted");
+            notify.success("Task deleted");
             if (typeof onDelete === 'function') onDelete(taskId);
         } catch (error) {
-            toast.error("Failed to delete task");
+            notify.error("Failed to delete task");
         } finally {
             setIsDeleting(false);
         }

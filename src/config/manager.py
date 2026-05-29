@@ -139,6 +139,73 @@ class ConfigManager:
         """Returns configuration for a specific capability."""
         return self.get_capabilities_config().get(capability_name, {})
 
+    def get_agent_config(self):
+        """Returns the top-level agent configuration."""
+        agent_cfg = self.get("agent", {})
+        return agent_cfg if isinstance(agent_cfg, dict) else {}
+
+    def get_intelligence_config(self):
+        """Returns model-scoped intelligence configuration overrides."""
+        intelligence_cfg = self.get("intelligence", {})
+        return intelligence_cfg if isinstance(intelligence_cfg, dict) else {}
+
+    @staticmethod
+    def _normalize_tools_discovery_mode(value):
+        """Normalizes discovery decision mode aliases to canonical values."""
+        mode = str(value or "").strip().lower().replace("-", "_")
+        if not mode:
+            return ""
+        if mode in {"agentic", "agentic_only", "llm", "llm_only"}:
+            return "agentic_only"
+        if mode in {"hybrid", "deterministic", "deterministic_only", "off", "fallback_only"}:
+            return mode
+        return ""
+
+    def get_tools_discovery_decision_mode(self, model_name=None, provider=None, model_id=None):
+        """
+        Returns the tools discovery decision mode with precedence:
+        1. intelligence.<model_id>.tools_discovery.decision_mode
+        2. intelligence.<model_name>.tools_discovery.decision_mode
+        3. intelligence.<provider>.tools_discovery.decision_mode
+        4. agent.tools_discovery.decision_mode
+        5. decision_policy.tools_discovery.decision_mode
+        6. default agentic_only
+        """
+        intelligence_cfg = self.get_intelligence_config()
+
+        def _lookup(key):
+            if not key:
+                return ""
+            entry = intelligence_cfg.get(str(key), {})
+            if not isinstance(entry, dict):
+                return ""
+            tools_cfg = entry.get("tools_discovery", {})
+            if not isinstance(tools_cfg, dict):
+                return ""
+            return self._normalize_tools_discovery_mode(tools_cfg.get("decision_mode"))
+
+        for candidate in (model_id, model_name, provider):
+            normalized = _lookup(candidate)
+            if normalized:
+                return normalized
+
+        agent_cfg = self.get_agent_config()
+        tools_cfg = agent_cfg.get("tools_discovery", {}) if isinstance(agent_cfg, dict) else {}
+        if isinstance(tools_cfg, dict):
+            normalized = self._normalize_tools_discovery_mode(tools_cfg.get("decision_mode"))
+            if normalized:
+                return normalized
+
+        decision_policy = self.get("decision_policy", {})
+        if isinstance(decision_policy, dict):
+            tools_cfg = decision_policy.get("tools_discovery", {})
+            if isinstance(tools_cfg, dict):
+                normalized = self._normalize_tools_discovery_mode(tools_cfg.get("decision_mode"))
+                if normalized:
+                    return normalized
+
+        return "agentic_only"
+
     def get_mcp_config(self):
         """Returns generic MCP client/server integration configuration."""
         default_mcp = {

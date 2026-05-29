@@ -1,8 +1,9 @@
+import { notify } from '../utils/notify.jsx';
 import { useState, useEffect, useRef } from 'react';
 import { Cloud, CheckCircle, Copy, Link as LinkIcon } from 'lucide-react';
 import { api } from '../hooks/api';
 import { QRCodeSVG } from 'qrcode.react';
-import toast from 'react-hot-toast';
+
 
 const RemoteAccessIndicator = () => {
     const [tunnels, setTunnels] = useState([]);
@@ -40,7 +41,7 @@ const RemoteAccessIndicator = () => {
 
     const copyToClipboard = (url) => {
         navigator.clipboard.writeText(url);
-        toast.success("Link copiado!");
+        notify.success("Link copiado!");
     };
 
     if (tunnels.length === 0) return null;

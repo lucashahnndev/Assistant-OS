@@ -1237,7 +1237,7 @@ export const YouTubeAssistCard = memo(({ data, isStage = false }) => {
     );
 });
 
-export const WegenaAssistCard = memo(({ data, isStage = false }) => {
+export const WegenaAssistCard = memo(({ data, isStage = false, context = 'nexus' }) => {
     const title = String(data?.title || 'Visual Scene');
     const description = String(data?.description || 'Wegena Engine Scene');
     const [feedback, setFeedback] = useState(null);
@@ -1308,29 +1308,55 @@ export const WegenaAssistCard = memo(({ data, isStage = false }) => {
                         >
                             <ThumbsDown size={14} />
                         </button>
-                        <button
-                            type="button"
-                            onClick={() => {
-                                window.dispatchEvent(new CustomEvent('app_action_play_wegena', { detail: { data } }));
-                            }}
-                            style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '5px',
-                                fontSize: '10px',
-                                fontWeight: 700,
-                                color: '#c084fc',
-                                textDecoration: 'none',
-                                border: '1px solid rgba(192, 132, 252, 0.4)',
-                                borderRadius: '999px',
-                                padding: '4px 12px',
-                                background: 'rgba(192, 132, 252, 0.1)',
-                                cursor: 'pointer',
-                                transition: 'all 0.2s'
-                            }}
-                        >
-                            Renderizar no Orb <PlayCircle size={11} />
-                        </button>
+                        {context === 'chat' ? (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    window.dispatchEvent(new CustomEvent('app_action_view_wegena', { detail: { data } }));
+                                }}
+                                style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '5px',
+                                    fontSize: '10px',
+                                    fontWeight: 700,
+                                    color: '#c084fc',
+                                    textDecoration: 'none',
+                                    border: '1px solid rgba(192, 132, 252, 0.4)',
+                                    borderRadius: '999px',
+                                    padding: '4px 12px',
+                                    background: 'rgba(192, 132, 252, 0.1)',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s'
+                                }}
+                            >
+                                Inspecionar Cena <Maximize2 size={11} />
+                            </button>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    window.dispatchEvent(new CustomEvent('app_action_play_wegena', { detail: { data } }));
+                                }}
+                                style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '5px',
+                                    fontSize: '10px',
+                                    fontWeight: 700,
+                                    color: '#c084fc',
+                                    textDecoration: 'none',
+                                    border: '1px solid rgba(192, 132, 252, 0.4)',
+                                    borderRadius: '999px',
+                                    padding: '4px 12px',
+                                    background: 'rgba(192, 132, 252, 0.1)',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s'
+                                }}
+                            >
+                                Renderizar no Orb <PlayCircle size={11} />
+                            </button>
+                        )}
                     </div>
                 </div>
                 {description && (

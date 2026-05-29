@@ -43,9 +43,9 @@ class SafetyService:
         """
         action = (action or "").lower().strip()
 
-        # File write/delete inside workspace is frictionless.
+        # File read/list/write/delete inside workspace is frictionless.
         # Outside workspace should pause worker in HITL waiting approval.
-        if action in {"system.control.fs.write", "system.control.fs.delete", "fs_write", "fs_delete"}:
+        if action in {"system.control.fs.list", "system.control.fs.write", "system.control.fs.delete", "fs_list", "fs_write", "fs_delete"}:
             target_path = self._resolve_fs_target((params or {}).get("path"))
             if not target_path:
                 return True
@@ -91,7 +91,7 @@ class SafetyService:
             return self.i18n.t("safety.confirm_shell", command=params.get("command"))
         elif "service_" in action or "service.manage" in action:
             return self.i18n.t("safety.confirm_service", unit=params.get("unit"), action=action)
-        elif action in {"system.control.fs.write", "system.control.fs.delete"}:
+        elif action in {"system.control.fs.list", "system.control.fs.write", "system.control.fs.delete"}:
             path = str((params or {}).get("path") or "").strip() or "<empty-path>"
             return self.i18n.t("safety.confirm_fs_outside_workspace", action=action, path=path)
             

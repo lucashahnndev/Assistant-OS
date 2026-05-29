@@ -42,6 +42,7 @@ Conventions:
 - [cognitive-layer-v1.2-effectiveness-report.md](cognitive-layer-v1.2-effectiveness-report.md)
 - [cognitive-tuning-pass1-report.md](cognitive-tuning-pass1-report.md)
 - [cognitive-diagnostics-viewer-telemetry-pass-report.md](cognitive-diagnostics-viewer-telemetry-pass-report.md)
+- [atlas-agent-mode-cognition-deep-audit-2026-05-29.md](atlas-agent-mode-cognition-deep-audit-2026-05-29.md)
 
 ### Prompt and Intent
 - [prompt-reduction-pass1-report.md](prompt-reduction-pass1-report.md)

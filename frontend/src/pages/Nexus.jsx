@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useVoice } from '../hooks/useVoice';
 import { useTheme } from '../context/ThemeContext';
 import { api } from '../hooks/api';
-import toast from 'react-hot-toast';
+import { notify } from '../utils/notify.jsx';
 import {
     Activity,
     Copy,
@@ -979,7 +979,7 @@ const DashboardApprovalCard = ({ item, sessionId, onResolved }) => {
             setDecision({ command, scope, label: label || (command === 'deny' ? 'Denied' : `Allowed (${scope})`) });
             setTimeout(() => onResolved?.(item?.id, workId), 1400);
         } catch (err) {
-            toast.error(err?.message || 'Failed to send approval decision');
+            notify.error(err?.message || 'Failed to send approval decision');
         } finally {
             setBusy(false);
         }
@@ -1142,9 +1142,9 @@ const StageMediaLayer = ({ mediaState, onDockMedia, onResolveApproval, onOpenTer
         if (!shellExternalUrl) return;
         try {
             await navigator.clipboard.writeText(shellExternalUrl);
-            toast.success('Link copiado!');
+            notify.success('Link copiado!');
         } catch (_) {
-            toast.error('Falha ao copiar link');
+            notify.error('Falha ao copiar link');
         }
     };
 
@@ -1412,9 +1412,9 @@ const DeezerMiniPlayerCard = ({ payload, showHeader = true }) => {
         if (!externalUrl) return;
         try {
             await navigator.clipboard.writeText(externalUrl);
-            toast.success('Link copiado');
+            notify.success('Link copiado');
         } catch (_) {
-            toast.error('Falha ao copiar link');
+            notify.error('Falha ao copiar link');
         }
     };
 
@@ -1629,7 +1629,7 @@ const Nexus = () => {
                 wsRef.current.send(JSON.stringify(msg));
             }
         },
-        onError: (err) => toast.error("Microphone error: " + err.message)
+        onError: (err) => notify.error("Microphone error: " + err.message)
     });
     const [sys, setSys] = useState({ status: null, works: [] });
     const [activeWorkers, setActiveWorkers] = useState([]);
@@ -2235,7 +2235,7 @@ const Nexus = () => {
 
         ws.onopen = () => {
             dispatch({ type: 'SET_CONNECTED', payload: true });
-            toast.success("Assistant Link Active", { id: 'nexus-ws' });
+            notify.success("Assistant Link Active", { id: 'nexus-ws' });
         };
 
         ws.onclose = () => dispatch({ type: 'SET_CONNECTED', payload: false });
@@ -2389,7 +2389,7 @@ const Nexus = () => {
                 else if (data.type === 'weg_scene') {
                     if (data.session_id === sessionId) {
                         setSceneStreamActive(true);
-                        toast.success("Cenário 3D atualizado pelo subagente!", { id: 'weg-scene-toast' });
+                        notify.success("Cenário 3D atualizado pelo subagente!", { id: 'weg-scene-toast' });
                         setWegScript(data.script);
                         msm.addMedia({ script: data.script, title: data.meta?.label || 'Cena Wegena' }, 'WEGENA', true);
                     }
@@ -2695,7 +2695,7 @@ const Nexus = () => {
                     localStorage.setItem('dash_session_id', activeId);
                 } else return;
             } catch (err) {
-                toast.error("Bridge failure");
+                notify.error("Bridge failure");
                 return;
             }
         }
@@ -2715,7 +2715,7 @@ const Nexus = () => {
             try {
                 await api.post(`/sessions/${activeId}/message`, { message: input });
             } catch (err) {
-                toast.error("Transmission failed");
+                notify.error("Transmission failed");
             }
         }
         dispatch({ type: 'SET_SENDING', payload: false });
@@ -2727,17 +2727,17 @@ const Nexus = () => {
         dispatch({ type: 'SET_SESSION', payload: null });
         dispatch({ type: 'SET_HISTORY', payload: [] });
         dispatch({ type: 'SET_CONNECTED', payload: false });
-        toast.loading("Provisioning new session...", { id: 'live-reload', duration: 2000 });
+        notify.loading("Provisioning new session...", { id: 'live-reload' });
 
         try {
             const data = await api.post('/sessions', { interface: 'web' });
             if (data && data.id) {
                 dispatch({ type: 'SET_SESSION', payload: { id: data.id, name: data.name } });
                 localStorage.setItem('dash_session_id', data.id);
-                toast.success("New Session Ready", { id: 'live-reload' });
+                notify.success("New Session Ready", { id: 'live-reload' });
             }
         } catch (err) {
-            toast.error("Reload failed", { id: 'live-reload' });
+            notify.error("Reload failed", { id: 'live-reload' });
         }
     };
 
@@ -2748,17 +2748,17 @@ const Nexus = () => {
         if (particleRef.current) {
             particleRef.current.clearScene();
         }
-        toast.success("Cena limpa, orbe em idle!");
+        notify.success("Cena limpa, orbe em idle!");
     };
 
     const handleWegenaFeedback = async (type) => {
         setWegenaFeedback(type);
         try {
             await api.post(`/sessions/${state.textState.sessionId}/wegena/feedback`, { feedback_type: type });
-            toast.success(`Feedback '${type}' registrado para cena!`);
+            notify.success(`Feedback '${type}' registrado para cena!`);
         } catch (err) {
             console.error("Falha ao registrar feedback", err);
-            toast.error("Falha ao salvar o feedback da cena");
+            notify.error("Falha ao salvar o feedback da cena");
         }
     };
 
@@ -2773,15 +2773,15 @@ const Nexus = () => {
                         setVisualEngine('WEGENA_3D');
                         setWegScript(scriptText);
                         setSceneStreamActive(true);
-                        toast.success("Cena ativada no Orb!");
+                        notify.success("Cena ativada no Orb!");
                     } else {
-                        toast.error("Falha ao carregar a cena.");
+                        notify.error("Falha ao carregar a cena.");
                     }
                 } catch (err) {
-                    toast.error("Erro ao fazer download da cena.");
+                    notify.error("Erro ao fazer download da cena.");
                 }
             } else {
-                toast.error("URL da cena não encontrada no Card.");
+                notify.error("URL da cena não encontrada no Card.");
             }
         };
 

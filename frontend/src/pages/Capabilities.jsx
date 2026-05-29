@@ -1,3 +1,4 @@
+import { notify } from '../utils/notify.jsx';
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { api } from '../hooks/api';
 import {
@@ -18,7 +19,7 @@ import {
     List,
     SlidersHorizontal
 } from 'lucide-react';
-import toast from 'react-hot-toast';
+
 import PageHeader from '../components/PageHeader';
 import CapabilityIcon from '../components/CapabilityIcon';
 import { createSecret, listSecretRefs } from '../utils/secretsApi';
@@ -108,7 +109,7 @@ const Capabilities = () => {
             const data = await api.get('/capabilities/');
             setCapabilities(data);
         } catch (err) {
-            toast.error("Failed to load capabilities: " + err.message);
+            notify.error("Failed to load capabilities: " + err.message);
         } finally {
             setLoading(false);
         }
@@ -127,10 +128,10 @@ const Capabilities = () => {
     const handleToggle = async (id, currentStatus) => {
         try {
             await api.patch(`/capabilities/${id}/config`, { enabled: !currentStatus });
-            toast.success(`Capability ${!currentStatus ? 'enabled' : 'disabled'}`);
+            notify.success(`Capability ${!currentStatus ? 'enabled' : 'disabled'}`);
             fetchCapabilities();
         } catch (err) {
-            toast.error(err.message);
+            notify.error(err.message);
         }
     };
 
@@ -203,7 +204,7 @@ const Capabilities = () => {
             const currentRow = (currentOverrides[providerId] && typeof currentOverrides[providerId] === 'object')
                 ? currentOverrides[providerId]
                 : {};
-            const nextValue = !Boolean(currentRow[flag]);
+            const nextValue = !currentRow[flag];
             const payload = {
                 overrides: {
                     [providerId]: {
@@ -214,9 +215,9 @@ const Capabilities = () => {
             };
             const updated = await api.patch('/capabilities/retrieval/control-plane', payload);
             setRetrievalControlPlane(updated || null);
-            toast.success(`${providerId} ${flag}=${nextValue ? 'on' : 'off'}`);
+            notify.success(`${providerId} ${flag}=${nextValue ? 'on' : 'off'}`);
         } catch (err) {
-            toast.error(err.message || 'Failed to update retrieval control plane');
+            notify.error(err.message || 'Failed to update retrieval control plane');
         } finally {
             setRetrievalControlPlaneSaving(false);
         }
@@ -226,12 +227,12 @@ const Capabilities = () => {
         setIsSaving(true);
         try {
             await api.patch(`/capabilities/${configuringCapability.id}/config`, configValues);
-            toast.success("Configuration updated successfully!");
+            notify.success("Configuration updated successfully!");
             setConfiguringCapability(null);
             fetchCapabilities();
         } catch (err) {
             const msg = err.response?.data?.detail?.errors?.join(', ') || err.message;
-            toast.error("Validation Error: " + msg);
+            notify.error("Validation Error: " + msg);
         } finally {
             setIsSaving(false);
         }
@@ -273,7 +274,7 @@ const Capabilities = () => {
         const key = String(secretEditor.key || '').trim();
         const value = String(secretEditor.value || '').trim();
         if (!key || !value) {
-            toast.error("Key and value are required.");
+            notify.error("Key and value are required.");
             return;
         }
         try {
@@ -283,10 +284,10 @@ const Capabilities = () => {
                 updateConfigValue(targetPath, boundKey);
                 setSecretEditor({ target: '', key: '', value: '' });
                 await fetchEnvKeys();
-                toast.success(`Secret ${boundKey} created and linked.`);
+                notify.success(`Secret ${boundKey} created and linked.`);
             }
         } catch (err) {
-            toast.error(err.message || 'Failed to create secret');
+            notify.error(err.message || 'Failed to create secret');
         }
     };
 

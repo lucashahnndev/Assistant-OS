@@ -63,6 +63,7 @@ class Work:
     status_file: Optional[str] = None
     events_file: Optional[str] = None
     controls_media: bool = False
+    status_details: Dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self):
         return {
@@ -89,6 +90,7 @@ class Work:
             "status_file": self.status_file,
             "events_file": self.events_file,
             "controls_media": self.controls_media,
+            "status_details": self.status_details,
         }
 
 @dataclass
@@ -358,6 +360,74 @@ class Scheduler:
             else:
                 merged[key] = value
         return merged
+
+    @staticmethod
+    def _coerce_dict(value: Any) -> Dict[str, Any]:
+        return dict(value) if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _clip_text(value: Any, limit: int = 400) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if len(text) <= limit:
+            return text
+        return text[: max(0, limit - 3)] + "..."
+
+    def _load_context_summary(self, work: Work) -> Dict[str, Any]:
+        if not work.context_file or not os.path.exists(work.context_file):
+            return {}
+        try:
+            with open(work.context_file, "r", encoding="utf-8") as f:
+                current_context = json.load(f)
+        except Exception:
+            return {}
+        summary = current_context.get("summary")
+        return dict(summary) if isinstance(summary, dict) else {}
+
+    def _build_work_status_details(
+        self,
+        work: Work,
+        status: WorkStatus,
+        result: Any = None,
+        error: Any = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        summary = self._load_context_summary(work)
+        details = {
+            "work_status": status.value,
+            "status": self._coerce_dict(summary).get("status") or status.value,
+            "outcome_type": str(summary.get("outcome_type") or "").strip(),
+            "task_completed": bool(summary.get("task_completed")),
+            "task_progressed": bool(summary.get("task_progressed")),
+            "approval_pending": bool(summary.get("approval_pending")),
+            "clarification_required": bool(summary.get("clarification_required")),
+            "fallback_used": bool(summary.get("fallback_used")),
+            "execution_state": str(summary.get("execution_state") or "").strip(),
+            "cursor": summary.get("cursor"),
+            "final_response": self._clip_text(summary.get("final_response"), 400),
+            "approval_prompt": self._clip_text(summary.get("approval_prompt"), 240),
+            "summary": summary,
+        }
+        if result is not None:
+            details["result_preview"] = self._clip_text(result, 400)
+            details["result_type"] = type(result).__name__
+        if error is not None:
+            details["error"] = self._clip_text(error, 400)
+        if isinstance(metadata, dict):
+            details = self._deep_merge_dict(details, metadata)
+        if not str(details.get("execution_state") or "").strip():
+            if details.get("task_completed"):
+                details["execution_state"] = "completed"
+            elif details.get("task_progressed"):
+                details["execution_state"] = "progressed"
+            elif details.get("approval_pending"):
+                details["execution_state"] = "blocked"
+            elif details.get("clarification_required"):
+                details["execution_state"] = "clarification"
+            elif status == WorkStatus.SUCCEEDED:
+                details["execution_state"] = "reply_only"
+        return details
 
     def _append_event(self, work: Work, event_type: str, payload: Dict[str, Any]) -> None:
         if not work.events_file:
@@ -660,8 +730,15 @@ class Scheduler:
             error=f"Forced takeover: {reason}",
         )
 
-    def update_work_status(self, work_id: str, status: WorkStatus, result: str = None, error: str = None):
-         with self._lock:
+    def update_work_status(
+        self,
+        work_id: str,
+        status: WorkStatus,
+        result: str = None,
+        error: str = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ):
+        with self._lock:
             work = self.registry.get(work_id)
             if work:
                 previous = work.status
@@ -685,6 +762,13 @@ class Scheduler:
                     work.started_at = self._now()
                 if result: work.result = result
                 if error: work.error = error
+                work.status_details = self._build_work_status_details(
+                    work,
+                    status,
+                    result=result,
+                    error=error,
+                    metadata=metadata,
+                )
                 self._persist_work_status(work)
                 if work.controls_media:
                     # Preserve existing planner/data blocks when updating media control status.
@@ -715,6 +799,7 @@ class Scheduler:
                         "status": status.value,
                         "result": (result[:400] if isinstance(result, str) else None),
                         "error": error,
+                        "status_details": work.status_details,
                     },
                 )
 
@@ -728,7 +813,8 @@ class Scheduler:
                         "favorite_session_id": work.favorite_session_id,
                         "owner_sender_id": work.owner_sender_id,
                         "favorite_sender_id": work.favorite_sender_id,
-                        "status": status.value
+                        "status": status.value,
+                        "status_details": work.status_details,
                     })
 
     def add_progress(self, work_id: str, message: str):
@@ -849,6 +935,7 @@ class Scheduler:
                 context_file = os.path.join(work_dir, "context.json")
                 events_file = os.path.join(work_dir, "events.jsonl")
 
+                raw_status_details = row.get("status_details")
                 work = Work(
                     work_id=work_id,
                     session_id=str(row.get("session_id") or "default"),
@@ -873,6 +960,7 @@ class Scheduler:
                     status_file=status_path,
                     events_file=events_file,
                     controls_media=bool(row.get("controls_media", False)),
+                    status_details=dict(raw_status_details) if isinstance(raw_status_details, dict) else {},
                 )
                 self.registry[work_id] = work
                 loaded += 1

@@ -1881,9 +1881,11 @@ class AgentOrchestrator:
             if user_data:
                 session.context.update(user_data)
             
-            # Save the very first user request to anchor the language context across long background loops
-            if user_input and not session.context.get("initial_user_request"):
-                session.context["initial_user_request"] = user_input.strip()
+            # Save the first and latest user request to anchor continuity across loops.
+            if user_input:
+                session.context["last_user_request"] = user_input.strip()
+                if not session.context.get("initial_user_request"):
+                    session.context["initial_user_request"] = user_input.strip()
                 
             session.context["user_language"] = self._detect_user_language(
                 user_input,
@@ -2295,9 +2297,12 @@ class AgentOrchestrator:
                                 }
                             )
                         turn_outcome_overrides = {
-                            "outcome_type": "fallback_used",
+                            "outcome_type": "clarification_required",
                             "commit_path": "no_plan_recovery",
                             "fallback_used": True,
+                            "clarification_required": True,
+                            "task_completed": False,
+                            "task_progressed": False,
                         }
                         break
     
@@ -2852,6 +2857,14 @@ class AgentOrchestrator:
                                 )
                             finally:
                                 self._reacquire_lock(lock)
+                            turn_outcome_overrides = {
+                                "outcome_type": "clarification_required",
+                                "commit_path": "no_plan_recovery",
+                                "fallback_used": True,
+                                "clarification_required": True,
+                                "task_completed": False,
+                                "task_progressed": False,
+                            }
                         else:
                             final_response = self._t(
                                 session,
@@ -3702,9 +3715,12 @@ class AgentOrchestrator:
             # This guarantees reload consistency even if session context is compressed.
             if final_response_persisted:
                 self._save_session(session)
-    
+
             # 5. Check for Memory Consolidation (Token-based)
             # Threshold is configurable and intentionally lower to trigger earlier compaction.
+            last_cognitive_outcome = {}
+            if isinstance(session.context, dict) and isinstance(session.context.get("last_cognitive_outcome"), dict):
+                last_cognitive_outcome = dict(session.context.get("last_cognitive_outcome") or {})
             self._append_toon_delta(
                 session=session,
                 user_input=user_input,
@@ -3732,6 +3748,26 @@ class AgentOrchestrator:
                 },
             )
 
+            if isinstance(session.context, dict):
+                clarifying_turn = bool(
+                    last_cognitive_outcome.get("clarification_required")
+                    or turn_outcome_overrides.get("clarification_required")
+                )
+                progressed_turn = bool(
+                    last_cognitive_outcome.get("task_completed")
+                    or last_cognitive_outcome.get("task_progressed")
+                )
+                if clarifying_turn:
+                    session.context["last_clarification"] = {
+                        "question": (final_response or "").strip()[:300],
+                        "user_request": user_input.strip()[:300],
+                        "reason": str(last_action_reason or "").strip()[:120],
+                        "turn_id": int(getattr(session, "turn_id", 0) or 0),
+                        "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    }
+                elif progressed_turn and session.context.get("last_clarification"):
+                    session.context.pop("last_clarification", None)
+
             total_tokens = sum(m.get("tokens", 0) for m in session.history)
             if total_tokens > self._memory_consolidation_threshold():
                 self._consolidate_memory(session)
@@ -3745,6 +3781,20 @@ class AgentOrchestrator:
                         "status": "completed",
                         "cursor": session.state_summary.get("cursor"),
                         "final_response": (final_response or "")[:400],
+                        "outcome_type": str(last_cognitive_outcome.get("outcome_type") or ""),
+                        "task_completed": bool(last_cognitive_outcome.get("task_completed")),
+                        "task_progressed": bool(last_cognitive_outcome.get("task_progressed")),
+                        "approval_pending": bool(last_cognitive_outcome.get("approval_pending")),
+                        "clarification_required": bool(last_cognitive_outcome.get("clarification_required")),
+                        "fallback_used": bool(last_cognitive_outcome.get("fallback_used")),
+                        "execution_state": (
+                            "completed"
+                            if bool(last_cognitive_outcome.get("task_completed"))
+                            else "progressed" if bool(last_cognitive_outcome.get("task_progressed"))
+                            else "blocked" if bool(last_cognitive_outcome.get("approval_pending"))
+                            else "clarification" if bool(last_cognitive_outcome.get("clarification_required"))
+                            else "reply_only"
+                        ),
                     },
                     "planner": {
                         "steps": planner_tree,
@@ -4721,7 +4771,6 @@ class AgentOrchestrator:
             f"User Language: {locale}\n"
             "Rules:\n"
             "- If there is a CONFLICT or STATE guidance, follow it naturally to explain the situation to the user.\n"
-            "- CRITICAL RULE: Unless there is explicit evidence of goal completion in the tool output, you MUST remain neutral. Use progress statements (e.g., 'I am attempting X', 'I have initiated X') instead of success claims (e.g., 'I opened X', 'I completed X').\n"
             "- If the last tool succeeded, summarize the result conversationally, but do not claim final goal completion unless explicitly stated in the output.\n"
             "- If the input was ambiguous, ask for clarification naturally.\n"
             "- Do NOT use deterministic templates.\n"
@@ -4745,8 +4794,21 @@ class AgentOrchestrator:
             latency = int((time.time() - start_ts) * 1000)
             
             if response and response.strip():
+                reply = response.strip()
+                if not last_tool_data and (
+                    self._looks_like_unverified_progress_claim(reply)
+                    or self._looks_like_success_claim(reply)
+                ):
+                    logger.warning(
+                        "Recovery reply contained unverified execution language; falling back to a neutral blocker message | session=%s reason=%s",
+                        session.session_id,
+                        reason,
+                    )
+                    if str(locale or "").lower().startswith("pt"):
+                        return f"Ainda não consegui confirmar que {last_action_id or 'esta ação'} foi iniciada. Preciso de contexto, plano ativo ou aprovação para continuar."
+                    return f"I can't confirm that {last_action_id or 'this action'} has started yet. I need an active plan, context, or approval to continue."
                 logger.info(f"Recovery reply generated | session={session.session_id} latency_ms={latency} source=recovery_llm")
-                return response.strip()
+                return reply
             
             # If still unsuccessful, yield a structured failure label
             logger.warning(f"Recovery reply empty | session={session.session_id} latency_ms={latency}")
@@ -4884,6 +4946,15 @@ class AgentOrchestrator:
             "pronto",
             "sucesso",
             "deu certo",
+            "created",
+            "created the",
+            "i created",
+            "i've created",
+            "i have created",
+            "saved",
+            "saved in",
+            "wrote",
+            "wrote the",
             "done",
             "completed",
             "finished",
@@ -4909,6 +4980,22 @@ class AgentOrchestrator:
             "could not",
         )
         return any(marker in t for marker in failure_markers)
+
+    @staticmethod
+    def _looks_like_unverified_progress_claim(text: str) -> bool:
+        t = (text or "").lower()
+        markers = (
+            "i am attempting",
+            "i'm attempting",
+            "i have initiated",
+            "i started",
+            "i'm starting",
+            "estou tentando",
+            "estou iniciando",
+            "já iniciei",
+            "ja iniciei",
+        )
+        return any(marker in t for marker in markers)
 
     @staticmethod
     def _looks_like_context_reset_request(text: str) -> bool:
@@ -5418,6 +5505,7 @@ class AgentOrchestrator:
 
         location_payload = self.location_service.get_current_location(session.context)
         prompt_location = self._format_prompt_location(location_payload, session=session)
+        situational_context = self._build_situational_context_snapshot(session, location_payload)
 
         cognitive_projection = None
         legacy_cognitive_frame = None
@@ -5609,6 +5697,7 @@ class AgentOrchestrator:
             instruction_pack=instruction_pack,
             sys_info=sys_info,
             location=prompt_location,
+            situational_context=json.dumps(situational_context, ensure_ascii=False, separators=(",", ":")) if situational_context else "",
             channel=session.context.get("channel", "Unknown"),
             user_name=session.context.get("user_name", "Unknown"),
             user_language=session.context.get("user_language", "en"),
@@ -5685,6 +5774,8 @@ class AgentOrchestrator:
             session.cognitive_state = dict(commit_result.get("state") or session.cognitive_state or {})
             session.last_cognitive_projection = commit_result.get("projection")
             session.cognitive_diagnostics = commit_result.get("diagnostics")
+            if isinstance(session.context, dict):
+                session.context["last_cognitive_outcome"] = dict(commit_result.get("normalized_outcome") or {})
             if isinstance(session.context, dict) and session.cognitive_diagnostics is not None:
                 commit_diag = dict(session.cognitive_diagnostics)
                 previous_diag = session.context.get("last_cognitive_layer")
@@ -6030,6 +6121,60 @@ class AgentOrchestrator:
         if extras:
             return "Unknown | " + " | ".join(extras)
         return "Unknown"
+
+    def _build_situational_context_snapshot(self, session: Session, location_payload: Any) -> Dict[str, Any]:
+        if not isinstance(session, Session):
+            return {}
+
+        context = session.context if isinstance(session.context, dict) else {}
+        pending_action = session.pending_action if isinstance(session.pending_action, dict) else None
+        active_intents = []
+        if hasattr(session, "intent_agenda") and session.intent_agenda:
+            try:
+                for intent in session.intent_agenda.get_active_intents():
+                    active_intents.append(
+                        {
+                            "intent_id": intent.intent_id,
+                            "type": intent.intent_type,
+                            "summary": intent.summary,
+                            "status": intent.status,
+                            "blocking_reason": intent.blocking_reason,
+                            "next_expected_action": intent.next_expected_action,
+                            "linked_task_ids": list(intent.linked_task_ids or [])[:4],
+                        }
+                    )
+            except Exception:
+                active_intents = []
+
+        clarification = context.get("last_clarification")
+        if not isinstance(clarification, dict):
+            clarification = {}
+
+        snapshot = {
+            "user_language": context.get("user_language"),
+            "timezone": context.get("timezone") or self._resolve_session_timezone(session),
+            "initial_user_request": context.get("initial_user_request"),
+            "last_user_request": context.get("last_user_request"),
+            "pending_action": pending_action,
+            "last_clarification": clarification,
+            "active_intents": active_intents,
+            "location": {
+                "source": location_payload.get("source") if isinstance(location_payload, dict) else None,
+                "mode": location_payload.get("mode") if isinstance(location_payload, dict) else None,
+                "city": location_payload.get("city") if isinstance(location_payload, dict) else None,
+                "state": location_payload.get("state") if isinstance(location_payload, dict) else None,
+                "country": location_payload.get("country") if isinstance(location_payload, dict) else None,
+                "timezone": location_payload.get("timezone") if isinstance(location_payload, dict) else None,
+                "language": location_payload.get("language") if isinstance(location_payload, dict) else None,
+            },
+            "task_state": {
+                "goal": session.state_summary.get("goal") if isinstance(session.state_summary, dict) else None,
+                "cursor": session.state_summary.get("cursor") if isinstance(session.state_summary, dict) else None,
+                "last_outcome": session.state_summary.get("last_outcome") if isinstance(session.state_summary, dict) else None,
+                "last_error": session.state_summary.get("last_error") if isinstance(session.state_summary, dict) else None,
+            },
+        }
+        return {k: v for k, v in snapshot.items() if v not in (None, "", [], {})}
 
     def _resolve_session_timezone(self, session: Optional[Session]) -> str:
         if session and isinstance(getattr(session, "context", None), dict):
