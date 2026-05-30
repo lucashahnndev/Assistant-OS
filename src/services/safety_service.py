@@ -22,6 +22,7 @@ class SafetyService:
         path_str = str(raw_path or "").strip()
         if not path_str:
             return ""
+        path_str = os.path.expanduser(os.path.expandvars(path_str))
         if os.path.isabs(path_str):
             return os.path.abspath(path_str)
         if self.workspace_dir:
