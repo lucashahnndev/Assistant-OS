@@ -233,6 +233,8 @@ def test_recovery_reply_without_tool_data_does_not_claim_success():
         _t=lambda _session, key, **kwargs: key,
         _looks_like_unverified_progress_claim=AgentOrchestrator._looks_like_unverified_progress_claim,
         _looks_like_success_claim=AgentOrchestrator._looks_like_success_claim,
+        _looks_like_guidance_only_reply=AgentOrchestrator._looks_like_guidance_only_reply,
+        _sanitize_user_facing_response=AgentOrchestrator._sanitize_user_facing_response,
     )
     session = SimpleNamespace(session_id="test-session", get_context_for_llm=lambda *args, **kwargs: "")
 
@@ -247,7 +249,8 @@ def test_recovery_reply_without_tool_data_does_not_claim_success():
 
     assert "attempting" not in reply.lower()
     assert "estou tentando" not in reply.lower()
-    assert "ainda não consegui confirmar" in reply.lower()
+    assert "ainda não houve execução real" in reply.lower()
+    assert "orientação textual" in reply.lower()
 
 
 def test_recovery_reply_without_tool_data_does_not_claim_completion():
@@ -259,6 +262,8 @@ def test_recovery_reply_without_tool_data_does_not_claim_completion():
         _t=lambda _session, key, **kwargs: key,
         _looks_like_unverified_progress_claim=AgentOrchestrator._looks_like_unverified_progress_claim,
         _looks_like_success_claim=AgentOrchestrator._looks_like_success_claim,
+        _looks_like_guidance_only_reply=AgentOrchestrator._looks_like_guidance_only_reply,
+        _sanitize_user_facing_response=AgentOrchestrator._sanitize_user_facing_response,
     )
     session = SimpleNamespace(session_id="test-session", get_context_for_llm=lambda *args, **kwargs: "")
 
@@ -273,4 +278,138 @@ def test_recovery_reply_without_tool_data_does_not_claim_completion():
 
     assert "created" not in reply.lower()
     assert "saved" not in reply.lower()
-    assert "i can't confirm" in reply.lower() or "i cannot confirm" in reply.lower()
+    assert "no real execution has happened" in reply.lower()
+    assert "textual guidance" in reply.lower()
+
+
+def test_recovery_reply_without_tool_data_is_labeled_as_guidance():
+    dummy = SimpleNamespace(
+        llm_manager=SimpleNamespace(generate_text=lambda *args, **kwargs: "Here is a concise suggestion: use the relevant tool."),
+        _session_locale=lambda _session: "en",
+        _t=lambda _session, key, **kwargs: key,
+        _looks_like_unverified_progress_claim=AgentOrchestrator._looks_like_unverified_progress_claim,
+        _looks_like_success_claim=AgentOrchestrator._looks_like_success_claim,
+        _looks_like_guidance_only_reply=AgentOrchestrator._looks_like_guidance_only_reply,
+        _sanitize_user_facing_response=AgentOrchestrator._sanitize_user_facing_response,
+    )
+    session = SimpleNamespace(session_id="test-session", get_context_for_llm=lambda *args, **kwargs: "")
+
+    reply = AgentOrchestrator._generate_recovery_reply(
+        dummy,
+        session=session,
+        user_input="liste os arquivos de imagens da minha pasta Downloads",
+        reason="no_plan_resolved",
+        last_tool_data=None,
+        last_action_id="system.control.fs.list",
+    )
+
+    assert "guidance" in reply.lower()
+    assert "no real execution has happened" in reply.lower()
+
+
+def test_recovery_reply_without_tool_data_blocks_attachment_claim():
+    dummy = SimpleNamespace(
+        llm_manager=SimpleNamespace(generate_text=lambda *args, **kwargs: "Seguem os arquivos anexados à nossa conversa."),
+        _session_locale=lambda _session: "pt-BR",
+        _t=lambda _session, key, **kwargs: key,
+        _looks_like_unverified_progress_claim=AgentOrchestrator._looks_like_unverified_progress_claim,
+        _looks_like_success_claim=AgentOrchestrator._looks_like_success_claim,
+        _looks_like_guidance_only_reply=AgentOrchestrator._looks_like_guidance_only_reply,
+        _looks_like_attachment_claim=AgentOrchestrator._looks_like_attachment_claim,
+        _sanitize_user_facing_response=AgentOrchestrator._sanitize_user_facing_response,
+    )
+    session = SimpleNamespace(session_id="test-session", get_context_for_llm=lambda *args, **kwargs: "")
+
+    reply = AgentOrchestrator._generate_recovery_reply(
+        dummy,
+        session=session,
+        user_input="anexe os arquivos",
+        reason="no_plan_resolved",
+        last_tool_data=None,
+        last_action_id="shell.control.execute",
+    )
+
+    lowered = reply.lower()
+    assert "anexados" not in lowered
+    assert "anexei" not in lowered
+    assert "confirmação de anexo" in lowered
+    assert "orientação textual" in lowered
+
+
+def test_sanitize_user_facing_response_requires_sent_confirmation_for_attachment_claims():
+    reply = AgentOrchestrator._sanitize_user_facing_response(
+        "Seguem os arquivos anexados à nossa conversa.",
+        language="pt-BR",
+        has_fresh_tool_evidence=True,
+        attachment_payload_present=False,
+        attachment_delivery_state={
+            "requested": ["/tmp/a.png"],
+            "resolved": [{"path": "/tmp/a.png", "name": "a.png"}],
+            "prepared": [{"path": "/tmp/a.png", "name": "a.png"}],
+            "sent": [],
+            "errors": [],
+            "status": "prepared",
+            "confirmed": False,
+        },
+    )
+
+    lowered = reply.lower()
+    assert "anexados" not in lowered
+    assert "anexei" not in lowered
+    assert "prepar" in lowered or "validei" in lowered or "encontrei" in lowered
+    assert "confirmação" in lowered
+
+
+def test_sanitize_user_facing_response_blocks_execution_claim_without_fresh_evidence():
+    reply = AgentOrchestrator._sanitize_user_facing_response(
+        "Concluído, verifiquei e atualizei o estado com sucesso.",
+        language="pt-BR",
+        has_fresh_tool_evidence=False,
+        attachment_payload_present=False,
+    )
+
+    lowered = reply.lower()
+    assert "concluído" not in lowered
+    assert "verifiquei" not in lowered
+    assert "atualizei" not in lowered
+    assert "sucesso" not in lowered
+    assert "orientação textual" in lowered
+
+
+def test_sanitize_user_facing_response_blocks_attachment_claim_without_payload():
+    reply = AgentOrchestrator._sanitize_user_facing_response(
+        "Seguem os arquivos anexados à nossa conversa.",
+        language="pt-BR",
+        has_fresh_tool_evidence=True,
+        attachment_payload_present=False,
+    )
+
+    lowered = reply.lower()
+    assert "anexados" not in lowered
+    assert "anexei" not in lowered
+    assert "confirmação de anexo" in lowered
+    assert "orientação textual" in lowered
+
+
+def test_sanitize_user_facing_response_allows_grounded_execution_and_attachment_claims_when_evidence_exists():
+    reply = AgentOrchestrator._sanitize_user_facing_response(
+        "Concluído, anexei os arquivos e verifiquei o resultado com sucesso.",
+        language="pt-BR",
+        has_fresh_tool_evidence=True,
+        attachment_payload_present=False,
+        attachment_delivery_state={
+            "requested": ["/tmp/a.png"],
+            "resolved": [{"path": "/tmp/a.png", "name": "a.png"}],
+            "prepared": [{"path": "/tmp/a.png", "name": "a.png"}],
+            "sent": [{"path": "/tmp/a.png", "status": "sent"}],
+            "errors": [],
+            "status": "sent",
+            "confirmed": True,
+        },
+    )
+
+    lowered = reply.lower()
+    assert "concluído" in lowered
+    assert "anexei" in lowered
+    assert "verifiquei" in lowered
+    assert "sucesso" in lowered

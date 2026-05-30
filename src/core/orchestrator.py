@@ -2519,17 +2519,50 @@ class AgentOrchestrator:
                                 session,
                                 last_generated_attachment_paths,
                             ) if last_generated_attachment_paths else None
-                            session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id, model_info=last_model_used)
+                            final_attachment_delivery_state = self._build_attachment_delivery_state(
+                                requested_attachments=last_generated_attachment_paths,
+                                resolved_attachments=final_structured_attachments,
+                                prepared_attachments=final_structured_attachments,
+                                bridge=(
+                                    str(session.context.get("channel") or "").strip()
+                                    if isinstance(session.context, dict)
+                                    else ""
+                                )
+                                or str(getattr(session, "source", "") or "").strip(),
+                                source_action=plan.action_id,
+                            )
+                            self._persist_attachment_delivery_state(session, final_attachment_delivery_state)
+                            final_response = self._sanitize_user_facing_response(
+                                final_response,
+                                language=self._session_locale(session),
+                                has_fresh_tool_evidence=self._has_fresh_current_turn_observation(session),
+                                attachment_payload_present=bool(final_structured_attachments),
+                                attachment_delivery_state=final_attachment_delivery_state,
+                            )
+                            session.add_message(
+                                "assistant",
+                                final_response,
+                                attachments=final_structured_attachments,
+                                work_id=work_id,
+                                model_info=last_model_used,
+                                attachment_delivery=final_attachment_delivery_state,
+                            )
                             final_response_persisted = True
                             session.scratchpad = ""
                             session.plan = []
                             if callbacks and 'send_response' in callbacks:
-                                callbacks['send_response'](
+                                delivery_report = callbacks['send_response'](
                                     final_response,
                                     is_chunk=True,
                                     attachments=final_structured_attachments,
                                     model_info=last_model_used,
                                 )
+                                if isinstance(delivery_report, dict):
+                                    final_attachment_delivery_state = self._merge_attachment_delivery_report(
+                                        final_attachment_delivery_state,
+                                        delivery_report,
+                                    )
+                                    self._persist_attachment_delivery_state(session, final_attachment_delivery_state)
                                 final_response_streamed = True
                             if callbacks and 'send_complete' in callbacks:
                                 callbacks['send_complete']()
@@ -2575,17 +2608,50 @@ class AgentOrchestrator:
                                     session,
                                     last_generated_attachment_paths,
                                 ) if last_generated_attachment_paths else None
-                                session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id, model_info=last_model_used)
+                                final_attachment_delivery_state = self._build_attachment_delivery_state(
+                                    requested_attachments=last_generated_attachment_paths,
+                                    resolved_attachments=final_structured_attachments,
+                                    prepared_attachments=final_structured_attachments,
+                                    bridge=(
+                                        str(session.context.get("channel") or "").strip()
+                                        if isinstance(session.context, dict)
+                                        else ""
+                                    )
+                                    or str(getattr(session, "source", "") or "").strip(),
+                                    source_action=plan.action_id,
+                                )
+                                self._persist_attachment_delivery_state(session, final_attachment_delivery_state)
+                                final_response = self._sanitize_user_facing_response(
+                                    final_response,
+                                    language=self._session_locale(session),
+                                    has_fresh_tool_evidence=self._has_fresh_current_turn_observation(session),
+                                    attachment_payload_present=bool(final_structured_attachments),
+                                    attachment_delivery_state=final_attachment_delivery_state,
+                                )
+                                session.add_message(
+                                    "assistant",
+                                    final_response,
+                                    attachments=final_structured_attachments,
+                                    work_id=work_id,
+                                    model_info=last_model_used,
+                                    attachment_delivery=final_attachment_delivery_state,
+                                )
                                 final_response_persisted = True
                                 session.scratchpad = ""
                                 session.plan = []
                                 if callbacks and 'send_response' in callbacks:
-                                    callbacks['send_response'](
+                                    delivery_report = callbacks['send_response'](
                                         final_response,
                                         is_chunk=True,
                                         attachments=final_structured_attachments,
                                         model_info=last_model_used,
                                     )
+                                    if isinstance(delivery_report, dict):
+                                        final_attachment_delivery_state = self._merge_attachment_delivery_report(
+                                            final_attachment_delivery_state,
+                                            delivery_report,
+                                        )
+                                        self._persist_attachment_delivery_state(session, final_attachment_delivery_state)
                                     final_response_streamed = True
                                 if callbacks and 'send_complete' in callbacks:
                                     callbacks['send_complete']()
@@ -3754,14 +3820,30 @@ class AgentOrchestrator:
                 final_response = self._sanitize_user_facing_response(
                     final_response,
                     language=self._session_locale(session),
+                    has_fresh_tool_evidence=self._has_fresh_current_turn_observation(session),
+                    attachment_payload_present=bool(final_structured_attachments),
+                    attachment_delivery_state=final_attachment_delivery_state,
                 )
 
             if final_response and not final_response_persisted and not session.pending_action:
-                session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id, model_info=last_model_used)
+                session.add_message(
+                    "assistant",
+                    final_response,
+                    attachments=final_structured_attachments,
+                    work_id=work_id,
+                    model_info=last_model_used,
+                    attachment_delivery=final_attachment_delivery_state,
+                )
                 final_response_persisted = True
-    
+
             if callbacks and 'send_response' in callbacks and final_response and not final_response_streamed and not session.pending_action:
-                callbacks['send_response'](final_response, is_chunk=True, attachments=final_structured_attachments)
+                delivery_report = callbacks['send_response'](final_response, is_chunk=True, attachments=final_structured_attachments)
+                if isinstance(delivery_report, dict):
+                    final_attachment_delivery_state = self._merge_attachment_delivery_report(
+                        final_attachment_delivery_state,
+                        delivery_report,
+                    )
+                    self._persist_attachment_delivery_state(session, final_attachment_delivery_state)
                 final_response_streamed = True
     
             if callbacks and 'send_complete' in callbacks and not stream_completed and not session.pending_action:
@@ -4881,6 +4963,19 @@ class AgentOrchestrator:
         # 1. Prepare context for the recovery prompt
         history = session.get_context_for_llm(limit_msgs=5)
         locale = self._session_locale(session)
+        is_pt = str(locale or "").lower().startswith("pt")
+        guidance_prefix = (
+            "Nota: ainda não houve execução real nesta tentativa; isto é apenas orientação textual."
+            if is_pt
+            else "Note: no real execution has happened in this attempt yet; this is only textual guidance."
+        )
+        execution_blocker = (
+            "Ainda não houve execução real nesta tentativa; isto é apenas orientação textual. "
+            "Preciso acionar a ferramenta correta para confirmar de fato."
+            if is_pt
+            else "No real execution has happened in this attempt yet; this is only textual guidance. "
+            "I need to trigger the appropriate tool to confirm this for real."
+        )
         
         context_block = f"Reason for recovery: {reason}\n"
         if last_action_id:
@@ -4920,7 +5015,10 @@ class AgentOrchestrator:
             "Rules:\n"
             "- If there is a CONFLICT or STATE guidance, follow it naturally to explain the situation to the user.\n"
             "- If the last tool succeeded, summarize the result conversationally, but do not claim final goal completion unless explicitly stated in the output.\n"
-            "- If the input was ambiguous, ask for clarification naturally.\n"
+            "- If no fresh tool/work evidence exists for this turn, label the response as guidance only and do not claim execution, completion, verification, or update.\n"
+            "- If the input was ambiguous, ask for clarification only when the missing information blocks a safe, useful, or correct first step.\n"
+            "- If a safe observation or discovery step can reduce uncertainty, prefer acting and observing before asking the user for manual work.\n"
+            "- Do not tell the user to copy/paste manual output when a capability can produce the result.\n"
             "- Do NOT use deterministic templates.\n"
             "- Be concise and helpful.\n"
         )
@@ -4943,6 +5041,12 @@ class AgentOrchestrator:
             
             if response and response.strip():
                 reply = response.strip()
+                reply = self._sanitize_user_facing_response(
+                    reply,
+                    language=locale,
+                    has_fresh_tool_evidence=bool(last_tool_data) and self._has_fresh_current_turn_observation(session),
+                    attachment_payload_present=False,
+                )
                 if not last_tool_data and (
                     self._looks_like_unverified_progress_claim(reply)
                     or self._looks_like_success_claim(reply)
@@ -4952,17 +5056,15 @@ class AgentOrchestrator:
                         session.session_id,
                         reason,
                     )
-                    if str(locale or "").lower().startswith("pt"):
-                        return f"Ainda não consegui confirmar que {last_action_id or 'esta ação'} foi iniciada. Preciso de contexto, plano ativo ou aprovação para continuar."
-                    return f"I can't confirm that {last_action_id or 'this action'} has started yet. I need an active plan, context, or approval to continue."
+                    return execution_blocker
+                if not last_tool_data and not self._looks_like_guidance_only_reply(reply):
+                    reply = f"{guidance_prefix} {reply}".strip()
                 logger.info(f"Recovery reply generated | session={session.session_id} latency_ms={latency} source=recovery_llm")
                 return reply
             
             # If still unsuccessful, yield a structured failure label
             logger.warning(f"Recovery reply empty | session={session.session_id} latency_ms={latency}")
-            if str(locale or "").lower().startswith("pt"):
-                return f"Ainda não consegui confirmar a conclusão de {last_action_id or 'esta ação'}. Estou verificando o próximo passo."
-            return f"I can't confirm completion of {last_action_id or 'this action'} yet. I'm checking the next step."
+            return execution_blocker
             
         except Exception as e:
             logger.error(f"Error in LLM Recovery Loop: {e}")
@@ -5094,11 +5196,27 @@ class AgentOrchestrator:
             "pronto",
             "sucesso",
             "deu certo",
+            "executed",
+            "executado",
+            "executada",
+            "executados",
+            "executadas",
+            "executei",
             "created",
             "created the",
             "i created",
             "i've created",
             "i have created",
+            "verified",
+            "verificado",
+            "verificada",
+            "verificados",
+            "verificadas",
+            "updated",
+            "atualizado",
+            "atualizada",
+            "atualizados",
+            "atualizadas",
             "saved",
             "saved in",
             "wrote",
@@ -5142,6 +5260,54 @@ class AgentOrchestrator:
             "estou iniciando",
             "já iniciei",
             "ja iniciei",
+        )
+        return any(marker in t for marker in markers)
+
+    @staticmethod
+    def _looks_like_attachment_claim(text: str) -> bool:
+        t = (text or "").lower()
+        attachment_patterns = (
+            "anex",
+            "attached",
+            "attachment",
+            "attachments",
+            "files attached",
+            "seguem anex",
+            "segue anex",
+            "arquivos anex",
+            "enviei os arquivos",
+            "enviados com sucesso",
+            "enviado com sucesso",
+            "sent the files",
+            "sent as attachment",
+        )
+        return any(pattern in t for pattern in attachment_patterns)
+
+    @staticmethod
+    def _has_fresh_current_turn_observation(session: Optional[Session]) -> bool:
+        if not session or not isinstance(getattr(session, "state_summary", None), dict):
+            return False
+        freshness = str(session.state_summary.get("last_observation_freshness") or "").strip().lower()
+        return freshness == "fresh_current_turn"
+
+    @staticmethod
+    def _looks_like_guidance_only_reply(text: str) -> bool:
+        t = (text or "").lower()
+        markers = (
+            "guidance only",
+            "textual guidance",
+            "nota: ainda não executei",
+            "ainda não executei nenhuma ação",
+            "ainda nao executei nenhuma ação",
+            "ainda nao executei nenhuma acao",
+            "ainda não houve execução real",
+            "ainda nao houve execucao real",
+            "i haven't executed",
+            "i have not executed",
+            "no action was executed",
+            "apenas orientação textual",
+            "apenas orientacao textual",
+            "textual guidance",
         )
         return any(marker in t for marker in markers)
 
@@ -5211,7 +5377,15 @@ class AgentOrchestrator:
         return reply
 
     @classmethod
-    def _sanitize_user_facing_response(cls, response_text: str, language: str = "en") -> str:
+    def _sanitize_user_facing_response(
+        cls,
+        response_text: str,
+        language: str = "en",
+        *,
+        has_fresh_tool_evidence: bool = False,
+        attachment_payload_present: bool = False,
+        attachment_delivery_state: Optional[Dict[str, Any]] = None,
+    ) -> str:
         text = str(response_text or "").strip()
         if not text:
             return text
@@ -5224,6 +5398,37 @@ class AgentOrchestrator:
             or lowered.startswith("overlay command")
         ):
             return "Destaque aplicado na tela." if is_pt else "Highlight applied on screen."
+
+        attachment_state = attachment_delivery_state if isinstance(attachment_delivery_state, dict) else {}
+        attachment_confirmed = bool(attachment_state.get("sent")) if attachment_state else bool(attachment_payload_present)
+        attachment_prepared = bool(
+            attachment_state.get("prepared")
+            or attachment_state.get("resolved")
+            or attachment_state.get("requested")
+        ) if attachment_state else bool(attachment_payload_present)
+
+        if cls._looks_like_attachment_claim(text) and not attachment_confirmed:
+            if attachment_prepared:
+                return (
+                    "Encontrei/validei os arquivos, mas ainda não há confirmação de envio/anexo nesta resposta."
+                    if is_pt
+                    else "I found/validated the files, but there is no confirmed attachment in this response yet."
+                )
+            return (
+                "Não há confirmação de anexo nesta tentativa; isto é apenas orientação textual."
+                if is_pt
+                else "There is no confirmed attachment in this attempt; this is only textual guidance."
+            )
+
+        if (
+            (cls._looks_like_success_claim(text) or cls._looks_like_unverified_progress_claim(text))
+            and not has_fresh_tool_evidence
+        ):
+            return (
+                "Ainda não houve execução real nesta tentativa; isto é apenas orientação textual."
+                if is_pt
+                else "No real execution has happened in this attempt yet; this is only textual guidance."
+            )
 
         return text
 
