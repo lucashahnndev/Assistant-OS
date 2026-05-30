@@ -1,6 +1,8 @@
-import sys
+from pathlib import Path
 
-with open('frontend/src/pages/Chat.jsx', 'r') as f:
+ROOT = Path(__file__).resolve().parents[2]
+
+with open(ROOT / 'frontend/src/pages/Chat.jsx', 'r') as f:
     content = f.read()
 
 paren_stack = []

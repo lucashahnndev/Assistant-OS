@@ -9,6 +9,7 @@ Este é o estado inicial pareado com `project.spec.md`.
 - convenção inicial criada;
 - estrutura base disponível;
 - domínios reais ainda podem ser separados em specs próprias.
+- artefatos temporarios de validacao foram movidos para `agent/test/` e `agent/scripts/`, reduzindo o uso de `tests/` e `scratch/` para apoio operacional fora da workspace do agente.
 
 ## Pendências
 
@@ -20,6 +21,7 @@ Este é o estado inicial pareado com `project.spec.md`.
 - template inicial criado;
 - estrutura do workspace definida;
 - convenção de `.spec` e `.stat` estabelecida.
+- a raiz do repositorio foi limpa de scripts e arquivos de teste temporarios rastreados; os artefatos pontuais de validacao agora vivem na workspace do agente.
 
 ## Próximo passo recomendado
 

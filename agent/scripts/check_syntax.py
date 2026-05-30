@@ -1,4 +1,7 @@
 import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
 
 def check_syntax(filename):
     with open(filename, 'r') as f:
@@ -46,4 +49,4 @@ def check_syntax(filename):
             print(f"Unclosed open brace at index {b} (line {content.count('\n', 0, b) + 1})")
             print(f"Snippet: {content[b-20:b+20]!r}")
 
-check_syntax('frontend/src/pages/Chat.jsx')
+check_syntax(str(ROOT / 'frontend/src/pages/Chat.jsx'))
