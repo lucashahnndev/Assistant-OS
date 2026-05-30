@@ -32,3 +32,10 @@ Data da ultima atualizacao: 2026-05-30
 - usar esta spec como referencia para revisar docs secundarias de arquitetura.
 - usar `semantic_decision_boundary.spec.md` como clausula de fronteira semantica principal.
 - usar `atlas_operating_model.spec.md` como clausula operacional principal para clarificar papel do agente, do runtime e da clarificacao.
+
+## Registros de commits recentes
+
+- `5536d28f` `feat: add observation freshness and grounding evidence`
+  - resumo: ampliou `ActionObservation`, `Session` e o encoder TOON para carregar proveniencia/freshness da observacao atual, mantendo evidencias enumeraveis e preview truncado para o proximo ciclo do agente;
+  - validacao: `python3 -m py_compile src/core/observation.py src/core/session.py src/utils/toon_codec.py tests/minimal/test_action_observation_contract.py tests/minimal/test_observation_freshness.py tests/minimal/test_last_mile_grounding.py` e `PYTHONPATH=src:. env/bin/python -m pytest tests/minimal/test_action_observation_contract.py tests/minimal/test_observation_freshness.py tests/minimal/test_last_mile_grounding.py -q`;
+  - falhas conhecidas fora do escopo: os testes antigos de alias/Obsidian em `tests/minimal/test_mcp_llm_alias_and_recovery.py` continuam preexistentes e nao bloqueiam este pacote.
