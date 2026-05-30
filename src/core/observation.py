@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import json
 from typing import Any, Dict, List, Optional
 
 
@@ -169,6 +170,12 @@ class ActionObservation:
     structured_result: Any = field(default_factory=dict)
     error: str = ""
     raw_result_preview: str = ""
+    observed_at: str = ""
+    observed_turn_id: int = 0
+    observed_work_id: str = ""
+    source_action: str = ""
+    source_args: Dict[str, Any] = field(default_factory=dict)
+    freshness_note: str = ""
     evidence_items: List[str] = field(default_factory=list)
     evidence_total: int = 0
     evidence_shown: int = 0
@@ -198,6 +205,7 @@ class ActionObservation:
         structured_result: Any = None,
         error: str = "",
         raw_result_preview: str = "",
+        source_args: Optional[Dict[str, Any]] = None,
         state_changes: Optional[Dict[str, Any]] = None,
         artifacts: Optional[Dict[str, Any]] = None,
         next_step_context: str = "",
@@ -238,6 +246,12 @@ class ActionObservation:
             error_text = str(reason or "").strip()
 
         preview = _clip_text(raw_result_preview, 360)
+        observed_at = datetime.now(timezone.utc).isoformat()
+        observed_turn_id = int(turn_id or 0)
+        observed_work_id = str(work_id or "").strip()
+        source_action = str(action_name or "").strip()
+        source_args_payload = dict(source_args or {}) if isinstance(source_args, dict) else {}
+        freshness_note = "fresh_current_turn"
         next_step = str(next_step_context or "").strip()
         if not next_step:
             if normalized_status == "success":
@@ -275,6 +289,12 @@ class ActionObservation:
             structured_result=structured_result if structured_result is not None else {},
             error=error_text,
             raw_result_preview=preview,
+            observed_at=observed_at,
+            observed_turn_id=observed_turn_id,
+            observed_work_id=observed_work_id,
+            source_action=source_action,
+            source_args=source_args_payload,
+            freshness_note=freshness_note,
             evidence_items=list(evidence.get("items") or []),
             evidence_total=int(evidence.get("total_count") or 0),
             evidence_shown=int(evidence.get("shown_count") or 0),
@@ -304,6 +324,12 @@ class ActionObservation:
             "last_observation_status": self.status,
             "last_observation_reason": self.reason,
             "last_observation_requires_replan": self.requires_replan,
+            "last_observation_turn_id": self.observed_turn_id or self.turn_id,
+            "last_observation_work_id": self.observed_work_id or self.work_id,
+            "last_observation_source_action": self.source_action or self.action_name,
+            "last_observation_source_args": self.source_args,
+            "last_observation_observed_at": self.observed_at or self.timestamp,
+            "last_observation_freshness": self.freshness_note or "fresh_current_turn",
         }
 
     def to_evidence_summary(self) -> str:
@@ -343,6 +369,18 @@ class ActionObservation:
             bits.append(f"summary={_clip_text(self.result_summary, 140)}")
         if self.error:
             bits.append(f"error={_clip_text(self.error, 80)}")
+        if self.observed_at:
+            bits.append(f"observed_at={_clip_text(self.observed_at, 40)}")
+        if self.observed_turn_id:
+            bits.append(f"observed_turn={self.observed_turn_id}")
+        if self.observed_work_id:
+            bits.append(f"work={_clip_text(self.observed_work_id, 40)}")
+        if self.source_action:
+            bits.append(f"source_action={_clip_text(self.source_action, 48)}")
+        if self.source_args:
+            bits.append(f"source_args={_clip_json(self.source_args, 120)}")
+        if self.freshness_note:
+            bits.append(f"freshness={_clip_text(self.freshness_note, 24)}")
         evidence_summary = self.to_evidence_summary()
         if evidence_summary:
             bits.append(f"evidence={_clip_text(evidence_summary, 220)}")
@@ -361,6 +399,12 @@ class ActionObservation:
             "structured_result": self.structured_result,
             "error": self.error,
             "raw_result_preview": self.raw_result_preview,
+            "observed_at": self.observed_at,
+            "observed_turn_id": self.observed_turn_id,
+            "observed_work_id": self.observed_work_id,
+            "source_action": self.source_action,
+            "source_args": self.source_args,
+            "freshness_note": self.freshness_note,
             "evidence_items": self.evidence_items,
             "evidence_total": self.evidence_total,
             "evidence_shown": self.evidence_shown,

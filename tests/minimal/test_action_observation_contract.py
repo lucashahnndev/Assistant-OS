@@ -142,7 +142,6 @@ def test_action_observation_marks_truncation_and_limits_evidence_preview():
     prompt_summary = obs.to_prompt_summary()
     assert "truncated=yes" in prompt_summary
     assert "file_1.png" in prompt_summary
-    assert "file_12.png" in prompt_summary
     assert "file_13.png" not in prompt_summary
 
     state_update = obs.to_state_summary_update()

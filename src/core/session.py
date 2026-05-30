@@ -44,6 +44,23 @@ class Session:
             "last_observation_status": "None",
             "last_observation_reason": "None",
             "last_observation_requires_replan": False,
+            "last_observation_turn_id": 0,
+            "last_observation_work_id": "None",
+            "last_observation_source_action": "None",
+            "last_observation_source_args": {},
+            "last_observation_observed_at": "None",
+            "last_observation_freshness": "None",
+            "last_observation_stale_at_turn_id": 0,
+            "last_attachment_delivery": {},
+            "last_attachment_delivery_summary": "None",
+            "last_attachment_delivery_status": "None",
+            "last_attachment_delivery_requested_count": 0,
+            "last_attachment_delivery_resolved_count": 0,
+            "last_attachment_delivery_prepared_count": 0,
+            "last_attachment_delivery_sent_count": 0,
+            "last_attachment_delivery_error_count": 0,
+            "last_attachment_delivery_confirmed": False,
+            "turn_id": 0,
             "retry_count": 0,
             "backoff_strategy": "None",
             "memory_notes": "None"
@@ -172,6 +189,7 @@ class Session:
         silent: bool = False,
         actor: Optional[Dict[str, Any]] = None,
         model_info: Optional[str] = None,
+        attachment_delivery: Optional[Dict[str, Any]] = None,
     ):
         # Rough token estimation (chars / 4)
         tokens = len(content) // 4
@@ -205,6 +223,8 @@ class Session:
             msg["file"] = file
         if attachments:
             msg["attachments"] = attachments
+        if isinstance(attachment_delivery, dict) and attachment_delivery:
+            msg["attachment_delivery"] = attachment_delivery
             
         # Back-link this message_id to any thoughts that share this work_id
         if role == "assistant" and work_id:
@@ -215,7 +235,16 @@ class Session:
         self.history.append(msg)
         self.turn_id += 1 # Advance turn counter
         self.last_interaction = time.time()
-        
+
+        if isinstance(self.state_summary, dict):
+            self.state_summary["turn_id"] = self.turn_id
+            if role == SESSION_TYPE_USER and self.state_summary.get("last_observation_turn_id"):
+                self.state_summary["last_observation_freshness"] = "stale"
+                self.state_summary["last_observation_stale_at_turn_id"] = self.turn_id
+            if role == SESSION_TYPE_USER and self.state_summary.get("last_attachment_delivery_status") not in (None, "", "None", "none", "stale"):
+                self.state_summary["last_attachment_delivery_status"] = "stale"
+                self.state_summary["last_attachment_delivery_confirmed"] = False
+
         if not silent and self.session_type != SESSION_TYPE_SYSTEM:
             # Emit event for real-time synchronization
             global_event_bus.emit_threadsafe({
@@ -401,6 +430,13 @@ class Session:
             "last_observation_status": "None",
             "last_observation_reason": "None",
             "last_observation_requires_replan": False,
+            "last_observation_turn_id": 0,
+            "last_observation_work_id": "None",
+            "last_observation_source_action": "None",
+            "last_observation_source_args": {},
+            "last_observation_observed_at": "None",
+            "last_observation_freshness": "None",
+            "last_observation_stale_at_turn_id": 0,
             "retry_count": 0,
             "backoff_strategy": "None",
             "memory_notes": "None"

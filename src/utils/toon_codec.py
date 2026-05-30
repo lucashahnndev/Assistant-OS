@@ -27,6 +27,9 @@ def _clean_obj(data: Dict[str, Any]) -> Dict[str, Any]:
     for k, v in data.items():
         if v is None:
             continue
+        if isinstance(v, bool):
+            out[k] = v
+            continue
         if isinstance(v, str) and not v.strip():
             continue
         if isinstance(v, (list, dict)) and len(v) == 0:
@@ -107,6 +110,18 @@ def encode_state_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
         "ls": _short_text(src.get("last_observation_status"), 24),
         "lr": _short_text(src.get("last_observation_reason"), 80),
         "rp": bool(src.get("last_observation_requires_replan")),
+        "lot": int(src.get("last_observation_turn_id", 0) or 0),
+        "low": _short_text(src.get("last_observation_work_id"), 48),
+        "loa": _short_text(src.get("last_observation_source_action"), 48),
+        "lxa": _short_text(json.dumps(src.get("last_observation_source_args") or {}, ensure_ascii=False, separators=(",", ":")), 120),
+        "lof": _short_text(src.get("last_observation_freshness"), 24),
+        "lad": _short_text(src.get("last_attachment_delivery_status"), 24),
+        "laq": int(src.get("last_attachment_delivery_requested_count", 0) or 0),
+        "lar": int(src.get("last_attachment_delivery_resolved_count", 0) or 0),
+        "lap": int(src.get("last_attachment_delivery_prepared_count", 0) or 0),
+        "las": int(src.get("last_attachment_delivery_sent_count", 0) or 0),
+        "lae": int(src.get("last_attachment_delivery_error_count", 0) or 0),
+        "lac": bool(src.get("last_attachment_delivery_confirmed")),
         "r": int(src.get("retry_count", 0) or 0),
     }
     return _clean_obj(payload)
