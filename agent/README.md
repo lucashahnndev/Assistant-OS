@@ -16,3 +16,7 @@ Este diretorio organiza o workspace operacional do agente.
 Tudo aqui e apoio ao trabalho.
 
 Nada aqui deve substituir especificacao, contrato ou documentacao oficial do projeto.
+
+## Contrato operacional
+
+Ao alterar prompt, discovery, tool use, approval, observacao, clarificacao ou runtime, considere `agent/specs/atlas_operating_model.spec.md` como contrato ativo e leia a `.stat` correspondente antes de alterar comportamento.

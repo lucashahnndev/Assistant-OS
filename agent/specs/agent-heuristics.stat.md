@@ -48,6 +48,8 @@ Recentemente, parte desse risco foi reduzida em camadas que ainda carregavam mui
 - `src/services/context/intent_classifier.py` passou a expor uma classificacao de compatibilidade com `legacy_intent`, `hints` e `candidate_intents`, reduzindo a aparencia de autoridade semantica final
 - `src/services/context/retrieval_router.py` passou a expor um envelope de sinais com `targets`, pesos, candidatos e justificativas, reduzindo a aparencia de rota semantica final
 - `src/capabilities/assistive_overlay/capability.py`, `src/capabilities/browser_control/browser_control_capability.py` e `src/capabilities/notifications/capability.py` removeram shortcuts de linguagem natural em reflex, mantendo apenas fluxos operacionais e eventos tecnicos
+- `src/core/orchestrator.py` removeu os overrides semanticos de browser/media que trocavam action por heuristica textual, preservando apenas assistive hints, validacao tecnica e reparo de `youtube.retrieve.get`
+- `atlas_operating_model.spec.md` passou a formalizar, de forma curta, quando heuristicas devem orientar e quando o agente deve agir em vez de clarificar por fuga
 
 Essas areas agora estao menos proximas de um "if por caso" e mais proximas de regras observaveis e revisaveis.
 
@@ -113,6 +115,7 @@ Os primeiros pontos para revisar sao:
 - adaptacao por interface
 - normalizacao de resposta de tools e providers
 - consolidacao da fronteira semantica agora explicitada em `semantic_decision_boundary.spec.md`
+- alinhamento do comportamento do agente ao contrato operacional descrito em `atlas_operating_model.spec.md`
 
 ## Conclusao
 

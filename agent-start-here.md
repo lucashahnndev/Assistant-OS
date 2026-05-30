@@ -8,7 +8,7 @@ Depois siga a ordem abaixo.
 ## Ordem de leitura
 
 1. `README.md` do projeto.
-2. `.spec` relevante em `agent/specs/`, incluindo specs de sistema, arquitetura, contrato ou domínio que governem a mudança.
+2. `.spec` relevante em `agent/specs/`, incluindo specs de sistema, arquitetura, contrato ou domínio que governem a mudança. Para mudanças em prompt, discovery, tool use, approval, runtime, observação ou clarificação, leia também `agent/specs/atlas_operating_model.spec.md`.
 3. `.stat` correspondente.
 4. documentação humana, operacional ou de arquitetura relevante em `docs/`, quando existir.
 5. testes relacionados.

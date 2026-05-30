@@ -5,6 +5,7 @@ Data: 2026-05-27
 ## Propósito
 
 Este documento define como o Atlas deve usar heuristicas sem transformar a arquitetura em uma camada que controla rigidamente o comportamento do agente.
+O comportamento operacional do agente e o papel do runtime estão definidos em [atlas_operating_model.spec.md](atlas_operating_model.spec.md).
 
 O objetivo e:
 

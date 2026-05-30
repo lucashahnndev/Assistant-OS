@@ -6,6 +6,7 @@ This document defines the **authoritative contract** for asynchronous execution 
 - `ScheduleTrigger` (when to run)
 - `TaskExecution` (audit trail for scheduled runs)
 - `Work` (runtime unit for both scheduled and interactive jobs)
+It complements [atlas_operating_model.spec.md](atlas_operating_model.spec.md), which defines how the agent should behave while operating inside this runtime.
 
 All future changes to scheduler, worker orchestration, APIs, UI, and capabilities **must comply** with this contract.
 

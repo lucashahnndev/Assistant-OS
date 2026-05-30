@@ -5,6 +5,7 @@ Data: 2026-05-29
 ## Propósito
 
 Esta spec define a fronteira entre orquestração técnica e decisão agentica/semântica no Atlas.
+Ela deve ser lida junto de [atlas_operating_model.spec.md](atlas_operating_model.spec.md), que define como o agente opera dentro do runtime seguro.
 
 O sistema pode preparar o ambiente, validar contratos e aplicar segurança.
 O sistema nao deve decidir o significado final da intenção do usuário por heuristicas fixas.
@@ -80,4 +81,3 @@ O orchestrator nao deve:
 O sistema prepara o ambiente.
 O agente interpreta o contexto.
 O agente decide semânticamente.
-

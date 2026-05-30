@@ -21,3 +21,8 @@ Este diretório guarda os contratos normativos do projeto alvo que o agente deve
 
 - `project.spec.md`
 - `project.stat.md`
+
+## Contrato operacional central
+
+- `atlas_operating_model.spec.md`: contrato ativo do modelo operacional do A.T.L.A.S para agente/runtime, clarificação, approval, grounded response e uso de tools/capabilities.
+- `atlas_operating_model.stat.md`: estado vivo correspondente do contrato operacional.

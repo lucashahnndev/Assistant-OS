@@ -2,6 +2,7 @@
 
 ## Overview
 Atlas Bot is a modular, agentic AI assistant designed for Linux systems. It employs a **Kernel-Driver-Service** architecture to decouple low-level I/O from high-level reasoning. The core intelligence is driven by an LLM-based Orchestrator that operates in a ReAct (Reason-Act) loop.
+The agent operating model itself is defined in [atlas_operating_model.spec.md](atlas_operating_model.spec.md) and should be used as the behavioral contract for how the orchestrator reasons, acts, and recovers inside the runtime.
 
 ---
 

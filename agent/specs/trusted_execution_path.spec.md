@@ -2,6 +2,7 @@
 
 ## Current Status: Phase 3
 As of Phase 3, the `InternalDriver` remains a **trusted execution path**, but with significantly hardened identity and routing mechanics.
+This path should be read together with [atlas_operating_model.spec.md](atlas_operating_model.spec.md), which defines the agent/runtime boundary that uses this trust path.
 
 ### Why it is safe today
 1. **Kernel Residency**: Owned and instantiated exclusively by the `Kernel`.
