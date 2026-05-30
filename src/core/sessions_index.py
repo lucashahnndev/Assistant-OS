@@ -70,8 +70,11 @@ class SessionIndexManager:
             logger.info(f"Session {session_id} removed from index.")
 
     def list_sessions(self, interface: str = "all", session_type: str = SESSION_TYPE_USER) -> List[Dict]:
-        if interface == "all" or interface == "web": 
-            # Include Telegram in Web view so they appear in Dashboard
+        if interface == "all":
+            # Include Telegram and Nexus in Web view so they appear in Dashboard
+            sessions = [s for s in self.index.values() if s.get("interface") in ["web", "telegram", "nexus"]]
+        elif interface == "web": 
+            # Legacy/Fallback behavior: limit to web/telegram
             sessions = [s for s in self.index.values() if s.get("interface") in ["web", "telegram"]]
         else:
             sessions = [s for s in self.index.values() if s.get("interface") == interface]
