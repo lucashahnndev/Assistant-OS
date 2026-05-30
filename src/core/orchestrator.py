@@ -453,6 +453,15 @@ class AgentOrchestrator:
             "last_error": "None",
             "retry_count": 0,
             "backoff_strategy": "None",
+            "last_attachment_delivery": {},
+            "last_attachment_delivery_summary": "None",
+            "last_attachment_delivery_status": "None",
+            "last_attachment_delivery_requested_count": 0,
+            "last_attachment_delivery_resolved_count": 0,
+            "last_attachment_delivery_prepared_count": 0,
+            "last_attachment_delivery_sent_count": 0,
+            "last_attachment_delivery_error_count": 0,
+            "last_attachment_delivery_confirmed": False,
             "memory_notes": session.state_summary.get("memory_notes", "None")
         }
         session.plan = []
@@ -598,6 +607,126 @@ class AgentOrchestrator:
                 logger.error(f"Failed to standardize attachment {file_path}: {e}")
                 
         return standardized
+
+    @staticmethod
+    def _coerce_attachment_references(entries: Optional[List[Any]]) -> List[str]:
+        if not entries:
+            return []
+        references: List[str] = []
+        for entry in entries:
+            if isinstance(entry, str):
+                value = entry.strip()
+                if value:
+                    references.append(value)
+                continue
+            if isinstance(entry, dict):
+                for key in ("path", "file_path", "filename", "url", "name"):
+                    value = entry.get(key)
+                    if isinstance(value, str) and value.strip():
+                        references.append(value.strip())
+                        break
+        return references
+
+    @classmethod
+    def _build_attachment_delivery_state(
+        cls,
+        *,
+        requested_attachments: Optional[List[Any]] = None,
+        resolved_attachments: Optional[List[Any]] = None,
+        prepared_attachments: Optional[List[Any]] = None,
+        sent_attachments: Optional[List[Any]] = None,
+        attachment_errors: Optional[List[Any]] = None,
+        bridge: str = "",
+        source_action: str = "",
+    ) -> Dict[str, Any]:
+        requested = cls._coerce_attachment_references(requested_attachments)
+        resolved = list(resolved_attachments or [])
+        prepared = list(prepared_attachments or resolved)
+        sent = list(sent_attachments or [])
+        errors = list(attachment_errors or [])
+        status = "idle"
+        if errors and not sent:
+            status = "failed"
+        elif sent:
+            status = "sent"
+        elif prepared or resolved or requested:
+            status = "prepared"
+        return {
+            "requested": requested,
+            "resolved": resolved,
+            "prepared": prepared,
+            "sent": sent,
+            "errors": errors,
+            "bridge": str(bridge or "").strip(),
+            "source_action": str(source_action or "").strip(),
+            "status": status,
+            "confirmed": bool(sent),
+        }
+
+    @staticmethod
+    def _attachment_delivery_summary(delivery_state: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(delivery_state, dict) or not delivery_state:
+            return ""
+        requested = len(delivery_state.get("requested") or [])
+        resolved = len(delivery_state.get("resolved") or [])
+        prepared = len(delivery_state.get("prepared") or [])
+        sent = len(delivery_state.get("sent") or [])
+        errors = len(delivery_state.get("errors") or [])
+        status = str(delivery_state.get("status") or "unknown").strip() or "unknown"
+        bridge = str(delivery_state.get("bridge") or "").strip()
+        parts = [
+            f"status={status}",
+            f"requested={requested}",
+            f"resolved={resolved}",
+            f"prepared={prepared}",
+            f"sent={sent}",
+            f"errors={errors}",
+        ]
+        if bridge:
+            parts.append(f"bridge={bridge}")
+        parts.append(f"confirmed={'yes' if delivery_state.get('confirmed') else 'no'}")
+        return " | ".join(parts)
+
+    def _persist_attachment_delivery_state(self, session: Session, delivery_state: Optional[Dict[str, Any]]) -> None:
+        if not isinstance(session, Session) or not isinstance(delivery_state, dict):
+            return
+        if isinstance(session.context, dict):
+            session.context["last_attachment_delivery"] = dict(delivery_state)
+        summary = self._attachment_delivery_summary(delivery_state)
+        if isinstance(session.state_summary, dict):
+            session.state_summary["last_attachment_delivery"] = dict(delivery_state)
+            session.state_summary["last_attachment_delivery_summary"] = summary or "None"
+            session.state_summary["last_attachment_delivery_status"] = str(delivery_state.get("status") or "none")
+            session.state_summary["last_attachment_delivery_requested_count"] = len(delivery_state.get("requested") or [])
+            session.state_summary["last_attachment_delivery_resolved_count"] = len(delivery_state.get("resolved") or [])
+            session.state_summary["last_attachment_delivery_prepared_count"] = len(delivery_state.get("prepared") or [])
+            session.state_summary["last_attachment_delivery_sent_count"] = len(delivery_state.get("sent") or [])
+            session.state_summary["last_attachment_delivery_error_count"] = len(delivery_state.get("errors") or [])
+            session.state_summary["last_attachment_delivery_confirmed"] = bool(delivery_state.get("sent"))
+
+    @classmethod
+    def _merge_attachment_delivery_report(
+        cls,
+        delivery_state: Optional[Dict[str, Any]],
+        delivery_report: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        state = dict(delivery_state or {})
+        if not isinstance(delivery_report, dict):
+            return state
+        sent_items = delivery_report.get("sent_attachments")
+        if isinstance(sent_items, list) and sent_items:
+            state["sent"] = list(sent_items)
+        attachment_errors = delivery_report.get("attachment_errors")
+        if isinstance(attachment_errors, list) and attachment_errors:
+            state["errors"] = list(attachment_errors)
+        bridge = str(delivery_report.get("bridge") or state.get("bridge") or "").strip()
+        if bridge:
+            state["bridge"] = bridge
+        status = str(delivery_report.get("status") or state.get("status") or "").strip()
+        if status:
+            state["status"] = status
+        state["confirmed"] = bool(state.get("sent"))
+        return state
 
     def set_browser_driver(self, driver):
         """Sets the browser driver for advanced controls."""
@@ -2017,6 +2146,7 @@ class AgentOrchestrator:
             no_plan_global_retry_attempts = 0
             final_response = self._t(session, "reply.step_budget_exceeded")
             final_structured_attachments = None
+            final_attachment_delivery_state: Optional[Dict[str, Any]] = None
             final_response_persisted = False
             final_response_streamed = False
             stream_completed = False
@@ -2877,20 +3007,45 @@ class AgentOrchestrator:
                                 plan.action_id,
                             )
                         final_response = normalized_response
+                        attachment_inputs = plan.attachments or last_generated_attachment_paths
+                        structured_attachments = self._standardize_attachments(session, attachment_inputs) if attachment_inputs else None
+                        final_attachment_delivery_state = self._build_attachment_delivery_state(
+                            requested_attachments=attachment_inputs,
+                            resolved_attachments=structured_attachments,
+                            prepared_attachments=structured_attachments,
+                            bridge=(
+                                str(session.context.get("channel") or "").strip()
+                                if isinstance(session.context, dict)
+                                else ""
+                            )
+                            or str(getattr(session, "source", "") or "").strip(),
+                            source_action=plan.action_id,
+                        )
+                        self._persist_attachment_delivery_state(session, final_attachment_delivery_state)
                         final_response = self.apply_conversation_coaching(session, user_input, final_response)
                         final_response = self._sanitize_user_facing_response(
                             final_response,
                             language=self._session_locale(session),
+                            has_fresh_tool_evidence=self._has_fresh_current_turn_observation(session),
+                            attachment_payload_present=bool(structured_attachments),
+                            attachment_delivery_state=final_attachment_delivery_state,
                         )
-                        
-                        # Process attachments
-                        attachment_inputs = plan.attachments or last_generated_attachment_paths
-                        structured_attachments = self._standardize_attachments(session, attachment_inputs) if attachment_inputs else None
-    
                         if not final_response and structured_attachments:
-                            final_response = "Here is the requested file."
+                            is_pt = self._session_locale(session).startswith("pt")
+                            final_response = (
+                                "Encontrei e preparei os arquivos, mas ainda não há confirmação de envio nesta resposta."
+                                if is_pt
+                                else "I found and prepared the files, but there is no confirmed attachment in this response yet."
+                            )
                         
-                        session.add_message("assistant", final_response, attachments=structured_attachments, work_id=work_id, model_info=last_model_used)
+                        session.add_message(
+                            "assistant",
+                            final_response,
+                            attachments=structured_attachments,
+                            work_id=work_id,
+                            model_info=last_model_used,
+                            attachment_delivery=final_attachment_delivery_state,
+                        )
                         final_structured_attachments = structured_attachments
                         final_response_persisted = True
                         session.scratchpad = ""
@@ -2908,7 +3063,13 @@ class AgentOrchestrator:
                         )
 
                         if callbacks and 'send_response' in callbacks:
-                            callbacks['send_response'](final_response, is_chunk=True, attachments=structured_attachments, model_info=last_model_used)
+                            delivery_report = callbacks['send_response'](final_response, is_chunk=True, attachments=structured_attachments, model_info=last_model_used)
+                            if isinstance(delivery_report, dict):
+                                final_attachment_delivery_state = self._merge_attachment_delivery_report(
+                                    final_attachment_delivery_state,
+                                    delivery_report,
+                                )
+                                self._persist_attachment_delivery_state(session, final_attachment_delivery_state)
                             final_response_streamed = True
                                 
                         if callbacks and 'send_complete' in callbacks:
@@ -3353,6 +3514,7 @@ class AgentOrchestrator:
                                 "Auto-attachment disabled for action %s",
                                 plan.action_id,
                             )
+                    standardized_runtime_attachments: List[Dict[str, Any]] = []
                     if last_generated_attachment_paths:
                         standardized_runtime_attachments = self._standardize_attachments(
                             session,
@@ -3363,6 +3525,18 @@ class AgentOrchestrator:
                             for item in standardized_runtime_attachments
                             if isinstance(item, dict) and str(item.get("path") or "").strip()
                         ]
+                    attachment_delivery_state = self._build_attachment_delivery_state(
+                        requested_attachments=plan.attachments if isinstance(plan.attachments, list) else [],
+                        resolved_attachments=standardized_runtime_attachments,
+                        prepared_attachments=standardized_runtime_attachments or last_generated_attachment_paths,
+                        bridge=(
+                            str(session.context.get("channel") or "").strip()
+                            if isinstance(session.context, dict)
+                            else ""
+                        )
+                        or str(getattr(session, "source", "") or "").strip(),
+                        source_action=plan.action_id,
+                    )
                     extracted_sources = self._extract_sources_from_result(
                         structured_result=structured_result,
                         raw_result=raw_result,
@@ -3535,6 +3709,7 @@ class AgentOrchestrator:
                         summary=summary,
                         extracted_sources=extracted_sources,
                         last_generated_attachment_paths=last_generated_attachment_paths,
+                        attachment_delivery=attachment_delivery_state,
                     )
                     evidence_summary = action_observation.to_evidence_summary()
                     if evidence_summary:
@@ -3545,6 +3720,7 @@ class AgentOrchestrator:
                         summary = evidence_summary
                     session.context["last_action_observation"] = action_observation.to_dict()
                     session.state_summary.update(action_observation.to_state_summary_update())
+                    self._persist_attachment_delivery_state(session, attachment_delivery_state)
                     logger.info(
                         "Observation Metrics | Session: %s | Action: %s | RawTok~%d | TruncTok~%d | Summarized: %s",
                         session_id,
@@ -3649,16 +3825,49 @@ class AgentOrchestrator:
                             session,
                             last_generated_attachment_paths,
                         ) if last_generated_attachment_paths else None
-                        session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id, model_info=last_model_used)
+                        final_attachment_delivery_state = self._build_attachment_delivery_state(
+                            requested_attachments=last_generated_attachment_paths,
+                            resolved_attachments=final_structured_attachments,
+                            prepared_attachments=final_structured_attachments,
+                            bridge=(
+                                str(session.context.get("channel") or "").strip()
+                                if isinstance(session.context, dict)
+                                else ""
+                            )
+                            or str(getattr(session, "source", "") or "").strip(),
+                            source_action=plan.action_id,
+                        )
+                        self._persist_attachment_delivery_state(session, final_attachment_delivery_state)
+                        final_response = self._sanitize_user_facing_response(
+                            final_response,
+                            language=self._session_locale(session),
+                            has_fresh_tool_evidence=self._has_fresh_current_turn_observation(session),
+                            attachment_payload_present=bool(final_structured_attachments),
+                            attachment_delivery_state=final_attachment_delivery_state,
+                        )
+                        session.add_message(
+                            "assistant",
+                            final_response,
+                            attachments=final_structured_attachments,
+                            work_id=work_id,
+                            model_info=last_model_used,
+                            attachment_delivery=final_attachment_delivery_state,
+                        )
                         final_response_persisted = True
                         session.scratchpad = ""
                         session.plan = []
                         if callbacks and 'send_response' in callbacks:
-                            callbacks['send_response'](
+                            delivery_report = callbacks['send_response'](
                                 final_response,
                                 is_chunk=True,
                                 attachments=final_structured_attachments,
                             )
+                            if isinstance(delivery_report, dict):
+                                final_attachment_delivery_state = self._merge_attachment_delivery_report(
+                                    final_attachment_delivery_state,
+                                    delivery_report,
+                                )
+                                self._persist_attachment_delivery_state(session, final_attachment_delivery_state)
                             final_response_streamed = True
                         if callbacks and 'send_complete' in callbacks:
                             callbacks['send_complete']()
@@ -3708,16 +3917,49 @@ class AgentOrchestrator:
                                 session,
                                 last_generated_attachment_paths,
                             ) if last_generated_attachment_paths else None
-                            session.add_message("assistant", final_response, attachments=final_structured_attachments, work_id=work_id, model_info=last_model_used)
+                            final_attachment_delivery_state = self._build_attachment_delivery_state(
+                                requested_attachments=last_generated_attachment_paths,
+                                resolved_attachments=final_structured_attachments,
+                                prepared_attachments=final_structured_attachments,
+                                bridge=(
+                                    str(session.context.get("channel") or "").strip()
+                                    if isinstance(session.context, dict)
+                                    else ""
+                                )
+                                or str(getattr(session, "source", "") or "").strip(),
+                                source_action=plan.action_id,
+                            )
+                            self._persist_attachment_delivery_state(session, final_attachment_delivery_state)
+                            final_response = self._sanitize_user_facing_response(
+                                final_response,
+                                language=self._session_locale(session),
+                                has_fresh_tool_evidence=self._has_fresh_current_turn_observation(session),
+                                attachment_payload_present=bool(final_structured_attachments),
+                                attachment_delivery_state=final_attachment_delivery_state,
+                            )
+                            session.add_message(
+                                "assistant",
+                                final_response,
+                                attachments=final_structured_attachments,
+                                work_id=work_id,
+                                model_info=last_model_used,
+                                attachment_delivery=final_attachment_delivery_state,
+                            )
                             final_response_persisted = True
                             session.scratchpad = ""
                             session.plan = []
                             if callbacks and 'send_response' in callbacks:
-                                callbacks['send_response'](
+                                delivery_report = callbacks['send_response'](
                                     final_response,
                                     is_chunk=True,
                                     attachments=final_structured_attachments,
                                 )
+                                if isinstance(delivery_report, dict):
+                                    final_attachment_delivery_state = self._merge_attachment_delivery_report(
+                                        final_attachment_delivery_state,
+                                        delivery_report,
+                                    )
+                                    self._persist_attachment_delivery_state(session, final_attachment_delivery_state)
                                 final_response_streamed = True
                                 if callbacks and 'send_complete' in callbacks:
                                     callbacks['send_complete']()
@@ -4748,6 +4990,7 @@ class AgentOrchestrator:
         summary: Optional[str],
         extracted_sources: List[Dict[str, Any]],
         last_generated_attachment_paths: List[str],
+        attachment_delivery: Optional[Dict[str, Any]] = None,
         requires_replan: bool = False,
     ) -> ActionObservation:
         capability_metadata = {}
@@ -4767,6 +5010,7 @@ class AgentOrchestrator:
         artifacts = {
             "attachments": list(last_generated_attachment_paths or []),
             "sources": list(extracted_sources or []),
+            "attachment_delivery": dict(attachment_delivery or {}) if isinstance(attachment_delivery, dict) else {},
         }
         repair_context: Dict[str, Any] = {}
         if isinstance(structured_result, dict):
@@ -4791,8 +5035,10 @@ class AgentOrchestrator:
             structured_result=structured_result,
             error=error_text,
             raw_result_preview=truncated_result,
+            source_args=plan.args if isinstance(plan.args, dict) else {},
             state_changes=state_changes,
             artifacts=artifacts,
+            attachment_delivery=attachment_delivery,
             next_step_context=next_step_context,
             repair_context=repair_context,
             requires_replan=requires_replan or result_status in {"failure", "partial", "error"},

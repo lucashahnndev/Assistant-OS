@@ -151,6 +151,42 @@ def _build_evidence_summary(*, action_name: str, capability: str, evidence: Dict
     return " | ".join(parts)
 
 
+def _build_attachment_delivery_summary(delivery: Any) -> str:
+    if not isinstance(delivery, dict) or not delivery:
+        return ""
+
+    requested = len(delivery.get("requested") or [])
+    resolved = len(delivery.get("resolved") or [])
+    prepared = len(delivery.get("prepared") or [])
+    sent = len(delivery.get("sent") or [])
+    errors = len(delivery.get("errors") or [])
+    status = str(delivery.get("status") or "").strip() or "unknown"
+    bridge = str(delivery.get("bridge") or "").strip()
+    confirmed = delivery.get("confirmed")
+
+    parts = [
+        f"status={status}",
+        f"requested={requested}",
+        f"resolved={resolved}",
+        f"prepared={prepared}",
+        f"sent={sent}",
+        f"errors={errors}",
+    ]
+    if bridge:
+        parts.append(f"bridge={bridge}")
+    if confirmed is not None:
+        parts.append(f"confirmed={'yes' if confirmed else 'no'}")
+    return " | ".join(parts)
+
+
+def _clip_json(value: Any, limit: int = 180) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        text = _clip_text(value, limit)
+    return _clip_text(text, limit)
+
+
 @dataclass(slots=True)
 class ActionObservation:
     """
@@ -186,6 +222,7 @@ class ActionObservation:
     evidence_warning: str = ""
     state_changes: Dict[str, Any] = field(default_factory=dict)
     artifacts: Dict[str, Any] = field(default_factory=dict)
+    attachment_delivery: Dict[str, Any] = field(default_factory=dict)
     next_step_context: str = ""
     repair_context: Dict[str, Any] = field(default_factory=dict)
     requires_replan: bool = False
@@ -208,6 +245,7 @@ class ActionObservation:
         source_args: Optional[Dict[str, Any]] = None,
         state_changes: Optional[Dict[str, Any]] = None,
         artifacts: Optional[Dict[str, Any]] = None,
+        attachment_delivery: Optional[Dict[str, Any]] = None,
         next_step_context: str = "",
         repair_context: Optional[Dict[str, Any]] = None,
         requires_replan: bool = False,
@@ -279,6 +317,19 @@ class ActionObservation:
             }
 
         artifacts_payload = dict(artifacts or {})
+        attachment_delivery_payload = dict(attachment_delivery or {}) if isinstance(attachment_delivery, dict) else {}
+        if not attachment_delivery_payload and artifacts_payload.get("attachments"):
+            attachment_delivery_payload = {
+                "requested": [],
+                "resolved": list(artifacts_payload.get("attachments") or []),
+                "prepared": list(artifacts_payload.get("attachments") or []),
+                "sent": [],
+                "errors": [],
+                "bridge": source,
+                "source_action": source_action,
+                "status": "prepared",
+                "confirmed": False,
+            }
         return cls(
             action_name=str(action_name or "").strip(),
             capability=str(capability or "").strip(),
@@ -305,6 +356,7 @@ class ActionObservation:
             evidence_warning=str(evidence.get("warning") or "").strip(),
             state_changes=changes,
             artifacts=artifacts_payload,
+            attachment_delivery=attachment_delivery_payload,
             next_step_context=next_step,
             repair_context=repair,
             requires_replan=bool(requires_replan or normalized_status in {"failure", "partial", "error"}),
@@ -315,12 +367,27 @@ class ActionObservation:
         )
 
     def to_state_summary_update(self) -> Dict[str, Any]:
+        attachment_summary = _build_attachment_delivery_summary(self.attachment_delivery)
+        requested = self.attachment_delivery.get("requested") if isinstance(self.attachment_delivery, dict) else []
+        resolved = self.attachment_delivery.get("resolved") if isinstance(self.attachment_delivery, dict) else []
+        prepared = self.attachment_delivery.get("prepared") if isinstance(self.attachment_delivery, dict) else []
+        sent = self.attachment_delivery.get("sent") if isinstance(self.attachment_delivery, dict) else []
+        errors = self.attachment_delivery.get("errors") if isinstance(self.attachment_delivery, dict) else []
         return {
             "last_observation": self.to_prompt_summary(),
             "last_observation_evidence": self.to_evidence_summary(),
             "last_observation_evidence_count": self.evidence_total,
             "last_observation_evidence_shown": self.evidence_shown,
             "last_observation_evidence_truncated": self.evidence_truncated,
+            "last_attachment_delivery": self.attachment_delivery,
+            "last_attachment_delivery_summary": attachment_summary or "None",
+            "last_attachment_delivery_status": str(self.attachment_delivery.get("status") or "none") if isinstance(self.attachment_delivery, dict) else "none",
+            "last_attachment_delivery_requested_count": len(requested) if isinstance(requested, list) else 0,
+            "last_attachment_delivery_resolved_count": len(resolved) if isinstance(resolved, list) else 0,
+            "last_attachment_delivery_prepared_count": len(prepared) if isinstance(prepared, list) else 0,
+            "last_attachment_delivery_sent_count": len(sent) if isinstance(sent, list) else 0,
+            "last_attachment_delivery_error_count": len(errors) if isinstance(errors, list) else 0,
+            "last_attachment_delivery_confirmed": bool(self.attachment_delivery.get("sent")) if isinstance(self.attachment_delivery, dict) else False,
             "last_observation_status": self.status,
             "last_observation_reason": self.reason,
             "last_observation_requires_replan": self.requires_replan,
@@ -384,6 +451,9 @@ class ActionObservation:
         evidence_summary = self.to_evidence_summary()
         if evidence_summary:
             bits.append(f"evidence={_clip_text(evidence_summary, 220)}")
+        attachment_summary = _build_attachment_delivery_summary(self.attachment_delivery)
+        if attachment_summary:
+            bits.append(f"attachment_delivery={_clip_text(attachment_summary, 220)}")
         if self.requires_replan:
             bits.append("replan=yes")
         return " | ".join(bits)
@@ -415,6 +485,7 @@ class ActionObservation:
             "evidence_warning": self.evidence_warning,
             "state_changes": self.state_changes,
             "artifacts": self.artifacts,
+            "attachment_delivery": self.attachment_delivery,
             "next_step_context": self.next_step_context,
             "repair_context": self.repair_context,
             "requires_replan": self.requires_replan,

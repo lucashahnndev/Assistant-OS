@@ -346,7 +346,7 @@ class ServerDriver(BaseDriver):
                      self.turn_id = f"boot_{int(time.time())}"
                      
                  def send_response(self, text, target=None, is_chunk=False, attachments=None, model_info=None, **kwargs):
-                     self.driver.send_response(text, target, is_chunk, attachments, model_info)
+                     result = self.driver.send_response(text, target, is_chunk, attachments, model_info)
                      raw = str(text or "")
                      if not raw: return
                      from utils.voice_text import sanitize_tts_text
@@ -365,6 +365,7 @@ class ServerDriver(BaseDriver):
                                  from services.tts.manager import TTSManager
                                  self.driver.voice_manager.tts_manager = TTSManager()
                              self.driver.voice_manager._queue_tts(self.sid, self.turn_id, to_queue.strip())
+                     return result
                              
                  def send_complete(self, target=None, *args, **kwargs):
                      if self.buffer.strip():
@@ -460,6 +461,7 @@ class ServerDriver(BaseDriver):
             # Prepare JSON response
             # Standardized message types for the new Portal UI
             msg_type = "final_message_chunk" if is_chunk else "assistant_response"
+            attachment_list = list(attachments or [])
             
             response_payload = json.dumps({
                 "type": msg_type,
@@ -480,12 +482,28 @@ class ServerDriver(BaseDriver):
                         "session_id": target,
                         "content": text,
                         "model_info": model_info,
-                        "attachments": attachments or []
+                        "attachments": attachment_list
                     })
                 except Exception as e:
                     logger.debug(f"ServerDriver: Failed to emit assistant_chunk event: {e}")
+            return {
+                "bridge": "web",
+                "status": "sent_to_web_payload",
+                "text_sent": bool(text and str(text).strip()),
+                "caption_sent": False,
+                "sent_attachments": attachment_list,
+                "attachment_errors": [],
+            }
         else:
             logger.error("ServerDriver: Loop not captured or target missing. Cannot send response.")
+            return {
+                "bridge": "web",
+                "status": "error",
+                "text_sent": False,
+                "caption_sent": False,
+                "sent_attachments": [],
+                "attachment_errors": [{"bridge": "web", "status": "error", "error": "loop_or_target_missing"}],
+            }
 
     def send_status(self, target, phase, payload=None, model_info=None):
         """Sends a status update (loader phase)."""

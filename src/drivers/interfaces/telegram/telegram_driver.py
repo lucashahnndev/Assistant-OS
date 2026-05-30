@@ -58,6 +58,14 @@ class TelegramDriver(BaseDriver):
                 chat_id = chat_id.replace("telegram-", "", 1)
             
             try:
+                delivery_report = {
+                    "bridge": "telegram",
+                    "status": "sent",
+                    "text_sent": False,
+                    "caption_sent": False,
+                    "sent_attachments": [],
+                    "attachment_errors": [],
+                }
                 caption_sent = False
                 
                 # Check if we can use the response text as a caption
@@ -69,14 +77,30 @@ class TelegramDriver(BaseDriver):
                     # Telegram limit is ~1024 for captions
                     if text and len(text) <= 1000:
                         logger.info(f"TelegramDriver sending file with caption to {chat_id}: {file_path}")
-                        self.bot.send_file_to(chat_id, file_path, caption=text)
+                        file_report = self.bot.send_file_to(chat_id, file_path, caption=text)
                         caption_sent = True
+                        if isinstance(file_report, dict):
+                            if str(file_report.get("status") or "").lower() == "sent":
+                                delivery_report["sent_attachments"].append(file_report)
+                            else:
+                                delivery_report["attachment_errors"].append(file_report)
+                        else:
+                            delivery_report["sent_attachments"].append(
+                                {
+                                    "bridge": "telegram",
+                                    "status": "sent",
+                                    "path": file_path,
+                                    "chat_id": str(chat_id),
+                                    "kind": "caption_attachment",
+                                }
+                            )
                         if self.bot:
                             self.bot.send_action_to(chat_id, action="typing")
                 
                 # If we didn't send text as a caption, send it normally
                 if not caption_sent and text and text.strip():
                     self.bot.send_message_to(chat_id, text)
+                    delivery_report["text_sent"] = True
                     if self.bot:
                         self.bot.send_action_to(chat_id, action="typing")
                         
@@ -88,15 +112,47 @@ class TelegramDriver(BaseDriver):
                             
                         file_path = att.get('path') if isinstance(att, dict) else att
                         logger.info(f"TelegramDriver requesting file send to {chat_id}: {file_path}")
-                        self.bot.send_file_to(chat_id, file_path)
+                        file_report = self.bot.send_file_to(chat_id, file_path)
+                        if isinstance(file_report, dict):
+                            if str(file_report.get("status") or "").lower() == "sent":
+                                delivery_report["sent_attachments"].append(file_report)
+                            else:
+                                delivery_report["attachment_errors"].append(file_report)
+                        else:
+                            delivery_report["sent_attachments"].append(
+                                {
+                                    "bridge": "telegram",
+                                    "status": "sent",
+                                    "path": file_path,
+                                    "chat_id": str(chat_id),
+                                    "kind": "attachment",
+                                }
+                            )
                         if self.bot:
                             self.bot.send_action_to(chat_id, action="typing")
                 
                 logger.debug(f"TelegramDriver sent response to {chat_id}")
+                return delivery_report
             except Exception as e:
                 logger.error(f"Error sending Telegram response to {chat_id}: {e}")
+                return {
+                    "bridge": "telegram",
+                    "status": "error",
+                    "sent_attachments": [],
+                    "attachment_errors": [{"bridge": "telegram", "status": "error", "error": str(e)}],
+                    "text_sent": False,
+                    "caption_sent": False,
+                }
         else:
             logger.warning(f"TelegramDriver cannot send response. Bot: {self.bot}, Target: {target}")
+            return {
+                "bridge": "telegram",
+                "status": "error",
+                "sent_attachments": [],
+                "attachment_errors": [{"bridge": "telegram", "status": "error", "error": "bot_or_target_missing"}],
+                "text_sent": False,
+                "caption_sent": False,
+            }
 
     def send_file(self, target, file_path, caption=None):
         """

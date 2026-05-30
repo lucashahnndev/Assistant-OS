@@ -40,7 +40,7 @@ class InternalDriver:
             try:
                 driver = self.kernel._resolve_driver_for_session(target)
                 if driver and driver is not self and hasattr(driver, "send_response"):
-                    driver.send_response(
+                    result = driver.send_response(
                         text,
                         target=target,
                         is_chunk=is_chunk,
@@ -50,7 +50,7 @@ class InternalDriver:
                     if hasattr(driver, "send_complete"):
                         driver.send_complete(target)
                     logger.info(f"Internal response routed to {target} via {driver.__class__.__name__}.")
-                    return
+                    return result
             except Exception as e:
                 logger.debug(f"Failed to route internal response to {target}: {e}")
 

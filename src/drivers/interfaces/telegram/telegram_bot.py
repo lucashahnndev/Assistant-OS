@@ -189,11 +189,21 @@ class TelegramInterface:
         """
         if not self.loop or not self.application:
             logger.error("Cannot send file: Bot loop not running.")
-            return
+            return {
+                "bridge": "telegram",
+                "status": "error",
+                "path": file_path,
+                "error": "bot_loop_not_running",
+            }
 
         if not os.path.exists(file_path):
             logger.error(f"File not found: {file_path}")
-            return
+            return {
+                "bridge": "telegram",
+                "status": "error",
+                "path": file_path,
+                "error": "file_not_found",
+            }
 
         async def _send():
             try:
@@ -215,14 +225,42 @@ class TelegramInterface:
                 ext = os.path.splitext(file_path)[1].lower()
                 with open(file_path, 'rb') as f:
                     if ext in ['.jpg', '.jpeg', '.png', '.gif']:
-                        await self.application.bot.send_photo(chat_id=chat_id, photo=f, caption=formatted_caption, parse_mode=parse_mode)
+                        message = await self.application.bot.send_photo(chat_id=chat_id, photo=f, caption=formatted_caption, parse_mode=parse_mode)
+                        message_id = getattr(message, "message_id", None)
                     else:
-                        await self.application.bot.send_document(chat_id=chat_id, document=f, caption=formatted_caption, parse_mode=parse_mode)
+                        message = await self.application.bot.send_document(chat_id=chat_id, document=f, caption=formatted_caption, parse_mode=parse_mode)
+                        message_id = getattr(message, "message_id", None)
                 logger.info(f"File sent to {chat_id}: {file_path}")
+                return {
+                    "bridge": "telegram",
+                    "status": "sent",
+                    "path": file_path,
+                    "chat_id": str(chat_id),
+                    "message_id": message_id,
+                    "kind": "photo" if ext in ['.jpg', '.jpeg', '.png', '.gif'] else "document",
+                }
             except Exception as e:
                 logger.error(f"Failed to send file to {chat_id}: {e}")
+                return {
+                    "bridge": "telegram",
+                    "status": "error",
+                    "path": file_path,
+                    "chat_id": str(chat_id),
+                    "error": str(e),
+                }
 
-        asyncio.run_coroutine_threadsafe(_send(), self.loop)
+        future = asyncio.run_coroutine_threadsafe(_send(), self.loop)
+        try:
+            return future.result(timeout=60)
+        except Exception as e:
+            logger.error(f"Failed waiting for file send confirmation to {chat_id}: {e}")
+            return {
+                "bridge": "telegram",
+                "status": "error",
+                "path": file_path,
+                "chat_id": str(chat_id),
+                "error": str(e),
+            }
 
     def send_message_to(self, chat_id, text):
         """
