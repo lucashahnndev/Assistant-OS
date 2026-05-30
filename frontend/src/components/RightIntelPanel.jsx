@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ChevronRight, ChevronLeft, Brain, Layers, Clock, Server, GitBranch, ChevronDown, ChevronUp, Zap, MessageSquare, Maximize2, Minimize2, RefreshCw, LayoutGrid } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Brain, Layers, Clock, Server, GitBranch, ChevronDown, ChevronUp, Zap, MessageSquare, Maximize2, Minimize2, RefreshCw, LayoutGrid, Trash2 } from 'lucide-react';
 import { normalizeHistoryMessageType, extractReasoningLine } from '../utils/chatHistoryTransform';
 import { WorkUnitInspector } from './chat/WorkUnitInspector';
 import { api } from '../hooks/api';
@@ -12,7 +12,7 @@ function loadState() {
 }
 function saveState(s) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch { } }
 
-const SectionHeader = ({ icon: Icon, title, open, onToggle, badge, onMaximize }) => (
+const SectionHeader = ({ icon: Icon, title, open, onToggle, badge, onMaximize, onClear }) => (
     <div style={{
         width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '10px 14px 8px', userSelect: 'none',
@@ -25,6 +25,11 @@ const SectionHeader = ({ icon: Icon, title, open, onToggle, badge, onMaximize })
             {badge > 0 && <span style={{ fontSize: '9px', fontWeight: '800', padding: '1px 5px', borderRadius: '999px', background: 'rgba(0,242,255,0.12)', color: 'var(--accent-color)' }}>{badge}</span>}
         </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            {onClear && (
+                <button onClick={(e) => { e.stopPropagation(); onClear(); }} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', transition: 'all 0.2s', color: 'var(--text-muted)' }} title="Limpar" onMouseEnter={e => e.currentTarget.style.color = '#ef4444'} onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}>
+                    <Trash2 size={12} color="currentColor" />
+                </button>
+            )}
             {onMaximize && (
                 <button onClick={(e) => { e.stopPropagation(); onMaximize(); }} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', transition: 'all 0.2s', color: 'var(--text-muted)' }} title="Expandir no HUD" onMouseEnter={e => e.currentTarget.style.color = '#fff'} onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}>
                     <Maximize2 size={12} color="currentColor" />
@@ -70,32 +75,6 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
     const [thoughts, setThoughts] = useState([]);
     const [historicalWorkers, setHistoricalWorkers] = useState([]);
     const [mediaCards, setMediaCards] = useState([]);
-    const loadedSessionId = useRef(null);
-
-    // 0. Load cache when sessionId changes
-    useEffect(() => {
-        if (!sessionId || loadedSessionId.current === sessionId) return;
-        try {
-            const cachedThoughts = JSON.parse(localStorage.getItem(`atlas_thoughts_${sessionId}`) || 'null');
-            if (cachedThoughts && Array.isArray(cachedThoughts)) setThoughts(cachedThoughts);
-            
-            const cachedWorkers = JSON.parse(localStorage.getItem(`atlas_workers_${sessionId}`) || 'null');
-            if (cachedWorkers && Array.isArray(cachedWorkers)) setHistoricalWorkers(cachedWorkers);
-            
-            loadedSessionId.current = sessionId;
-        } catch {}
-    }, [sessionId]);
-    
-    // 1. Save caches
-    useEffect(() => {
-        if (loadedSessionId.current !== sessionId) return; // Prevent overwriting cache with empty state before load
-        try { localStorage.setItem(`atlas_thoughts_${sessionId}`, JSON.stringify(thoughts)); } catch {}
-    }, [thoughts, sessionId]);
-    
-    useEffect(() => {
-        if (loadedSessionId.current !== sessionId) return;
-        try { localStorage.setItem(`atlas_workers_${sessionId}`, JSON.stringify(historicalWorkers)); } catch {}
-    }, [historicalWorkers, sessionId]);
 
     useEffect(() => { saveState(ps); }, [ps]);
     const toggle = useCallback((key) => setPs(prev => ({ ...prev, [key]: !prev[key] })), []);
@@ -105,7 +84,7 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
         if (!agentThought) return;
         setThoughts(prev => {
             if (prev[prev.length - 1]?.text === agentThought) return prev;
-            return [...prev, { text: agentThought, ts: Date.now() }].slice(-200);
+            return [...prev, { text: agentThought, ts: Date.now() }].slice(-50);
         });
     }, [agentThought]);
 
@@ -149,7 +128,7 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
 
                         if (changed) {
                             updated.sort((a, b) => a.ts - b.ts);
-                            return updated.slice(-200);
+                            return updated.slice(-50);
                         }
                         return prev;
                     });
@@ -227,7 +206,7 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
                 }
             });
 
-            return changed ? newHistory.slice(-30) : prev;
+            return changed ? newHistory.slice(-15) : prev;
         });
     }, [sys?.works, activeWorkers]);
 
@@ -346,7 +325,7 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
             <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto' }}>
 
                 {/* 1 — LIVE THOUGHT */}
-                <SectionHeader icon={Brain} title="Pensamento" open={ps.thoughtOpen} onToggle={() => toggle('thoughtOpen')} onMaximize={() => onAddMedia?.({ title: 'System Thought Stream', thoughts }, 'THOUGHT_INSPECTOR')} />
+                <SectionHeader icon={Brain} title="Pensamento" open={ps.thoughtOpen} onToggle={() => toggle('thoughtOpen')} onMaximize={() => onAddMedia?.({ title: 'System Thought Stream', thoughts }, 'THOUGHT_INSPECTOR')} onClear={() => setThoughts([])} />
                 {ps.thoughtOpen && (
                     <div ref={thoughtRef} className="custom-scrollbar" style={{ padding: '4px 14px 12px 20px', maxHeight: '45vh', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
                         {thoughts.length === 0 ? (

@@ -6,11 +6,13 @@ import { VideoPlayerProvider } from './context/VideoPlayerContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import VideoPlayerDock from './components/VideoPlayerDock';
 import WegenaSceneModal from './components/WegenaSceneModal';
+import PwaInstallBanner from './components/PwaInstallBanner';
 import DashboardLayout from './layouts/DashboardLayout';
 
 // Pages (to be implemented)
 import Login from './pages/Login';
 import Setup from './pages/Setup';
+import Overview from './pages/Overview';
 import Chat from './pages/Chat';
 import Capabilities from './pages/Capabilities';
 import Memory from './pages/Memory';
@@ -27,6 +29,13 @@ import { Toaster } from 'react-hot-toast';
 
 const AppRoutes = () => {
     const { initialized, loading, agentName } = useAuth();
+
+    // Sync browser tab title with agent name from config
+    useEffect(() => {
+        if (agentName && agentName !== '...') {
+            document.title = agentName;
+        }
+    }, [agentName]);
 
     const showLoader = loading;
 
@@ -73,7 +82,7 @@ const AppRoutes = () => {
                     <DashboardLayout />
                 </ProtectedRoute>
             }>
-                <Route index element={<Nexus />} />
+                <Route index element={<Overview />} />
                 <Route path="chat" element={<Chat />} />
                 <Route path="nexus" element={<Nexus />} />
                 <Route path="capabilities" element={<Capabilities />} />
@@ -104,6 +113,7 @@ function App() {
                         <AppRoutes />
                         <VideoPlayerDock />
                         <WegenaSceneModal />
+                        <PwaInstallBanner />
                     </VideoPlayerProvider>
                 </AuthProvider>
             </ThemeProvider>

@@ -549,7 +549,7 @@ const Tasks = () => {
                             alignContent: 'start',
                         }}
                     >
-                        {archiveWorks.map(work => (
+                        {archiveWorks.length > 0 ? archiveWorks.map(work => (
                             layoutMode === 'grid' ? (
                                 <div key={work.work_id} className="glass" style={{
                                     padding: '14px',
@@ -575,7 +575,12 @@ const Tasks = () => {
                             ) : (
                                 <ArchiveRow key={work.work_id} work={work} />
                             )
-                        ))}
+                        )) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px', opacity: 0.5, gap: '12px' }}>
+                                <Clock size={32} />
+                                <p style={{ fontSize: '13px', margin: 0, textAlign: 'center' }}>Nenhum histórico de execução.<br/>Workers finalizados aparecerão aqui.</p>
+                            </div>
+                        )}
                     </div>
                 </div>
             );
@@ -608,15 +613,17 @@ const Tasks = () => {
                                 gridColumn: layoutMode === 'grid' ? '1 / -1' : undefined,
                                 minHeight: '100%',
                                 display: 'flex',
+                                flexDirection: 'column',
                                 alignItems: 'center',
                                 justifyContent: 'center',
                                 textAlign: 'center',
-                                border: 'none',
-                                boxShadow: 'none',
-                                background: 'transparent',
+                                padding: '40px 20px',
+                                opacity: 0.5,
+                                gap: '12px'
                             }}
                         >
-                            <p style={{ color: 'var(--text-muted)', fontSize: '12px', margin: 0 }}>No active workers.</p>
+                            <Terminal size={32} />
+                            <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>Nenhum worker ativo no momento.<br/>As tarefas em andamento aparecerão aqui.</p>
                         </div>
                     )}
                 </div>

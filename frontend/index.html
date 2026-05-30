@@ -2,9 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/x-icon" href="/api/static/favicon.ico" />
+    <link rel="apple-touch-icon" href="/api/static/apple-touch-icon.png" />
+    <!-- Manifest served dynamically by the backend so start_url/scope adapt to any tunnel URL -->
+    <link rel="manifest" href="/api/manifest.webmanifest" />
+    <meta name="theme-color" content="#030406" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <title>Assistant OS</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="/atlas-wegena/engine/weg_compiler.js"></script>
     <script src="/atlas-wegena/engine/profiler.js"></script>

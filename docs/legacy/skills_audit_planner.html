@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Atlas Bot - Planner Skills</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <div class="alert alert-warning" style="margin: 16px; border-radius: 12px;">
+        <strong>Legacy:</strong> este planner e historico e nao descreve o contrato atual do runtime.
+    </div>
+    <div class="sidebar">
+        <a href="index.html" class="logo">Atlas Bot</a>
+        <ul class="nav-links">
+            <li><a href="index.html">Visão Geral</a></li>
+            <li><a href="installation.html">Instalação</a></li>
+            <li><a href="architecture.html">Arquitetura</a></li>
+            <li><a href="modules.html">Módulos</a></li>
+            <li><a href="agent_refactor_plan.html">Plano Núcleo Agêntico</a></li>
+            <li><a href="permission_groups_planner.html">Planner Permissões</a></li>
+            <li><a href="skills_audit_planner.html" class="active">Planner Skills</a></li>
+        </ul>
+    </div>
+
+    <div class="main-content">
+        <h1>Planner: Auditoria e Correção de Skills</h1>
+
+        <div class="alert alert-info">
+            <strong>Status atual:</strong> 44 ações registradas e 44 ações em contrato, sem divergência contrato x runtime.
+        </div>
+
+        <h2>Correções já aplicadas</h2>
+        <ul>
+            <li>Alinhamento de namespaces e IDs de ações em contratos de shell/system/apps/weather/browser.</li>
+            <li>Saída estruturada e fallback resiliente em web/youtube/deezer/spotify/shell/browser/weather/memory/logs/system/apps/vision/maps.</li>
+            <li>Suporte de previsão meteorológica via <code>weather.control.forecast</code>.</li>
+            <li>Parâmetros de contrato explícitos e alinhados com <code>params.get(...)</code> em <code>system_control</code>, <code>system_apps</code> e <code>vision</code>.</li>
+            <li>Migração de regras reflex (<code>/status</code>, <code>/cancel</code>) para <code>system.control.*</code>, mantendo <code>reflex</code> como alias legado.</li>
+            <li>Descrições de skills/actions revisadas para melhor clareza nas telas web (Skills Hub e Messaging Access).</li>
+            <li>Atualização do guia de contrato em <code>agent/specs/skill_contract.spec.md</code>.</li>
+            <li>Novos testes de qualidade em <code>tests/test_skills_quality.py</code>.</li>
+        </ul>
+
+        <h2>Achados pendentes</h2>
+        <h3>Alta prioridade</h3>
+        <ul>
+            <li><code>task_management</code> e <code>reflex_skill</code>: concluir normalização completa de payload e códigos de erro.</li>
+        </ul>
+
+        <h3>Média prioridade</h3>
+        <ul>
+            <li><code>vision</code>: hardening final dos envelopes para respostas heterogêneas de providers de LLM.</li>
+            <li><code>maps_search</code>: validar cenários reais com billing/API ativa (diverse mode + filtros).</li>
+        </ul>
+
+        <h3>Baixa prioridade</h3>
+        <ul>
+            <li>Expandir testes E2E de browser/shell em ambiente gráfico real.</li>
+        </ul>
+
+        <h2>Plano por fases</h2>
+        <ol>
+            <li><strong>F1 - Envelope unificado:</strong> concluir padronização em <code>task_management</code> e consolidar fluxo legado de <code>reflex_skill</code>.</li>
+            <li><strong>F2 - Contratos/Parâmetros:</strong> revisar <code>params.get()</code> vs <code>contract.json</code>.</li>
+            <li><strong>F3 - Robustez funcional:</strong> validar em produção-like o <code>maps_search</code> (cidade/diverse/filtros).</li>
+            <li><strong>F4 - Testes:</strong> ampliar unitários e smoke tests por skill crítica.</li>
+            <li><strong>F5 - E2E:</strong> validar cenários reais com shell/browser/search/weather/memory/logs/system.</li>
+        </ol>
+
+        <h2>Critérios de pronto</h2>
+        <ul>
+            <li>Contrato e runtime 100% coerentes (ações e parâmetros).</li>
+            <li>Todas as skills críticas com payload estruturado e <code>text</code> útil para LLM.</li>
+            <li>Previsão de clima operacional com fallback.</li>
+            <li>Suite de testes de skills verde.</li>
+        </ul>
+    </div>
+</body>
+
+</html>

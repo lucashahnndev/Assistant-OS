@@ -86,45 +86,8 @@ export const tryParseIntentPayload = (content) => {
     }
 };
 
-export const looksLikeInternalMonologue = (content) => {
-    if (typeof content !== 'string') return false;
-    const text = content.trim().toLowerCase();
-    if (!text) return false;
-
-    // High-confidence monologue starts only (JSON or strict markdown).
-    if (
-        text.startsWith('{"thought":') ||
-        text.startsWith('```json\n{"thought":')
-    ) {
-        return true;
-    }
-
-    // Avoid false positives on long, user-facing answers (e.g. vision descriptions with logs/markdown).
-    if (text.length > 420) return false;
-
-    // Strict planning cues: require clear action-planning language, not generic words.
-    const strictCues = [
-        'vou usar a ação',
-        'vou usar a acao',
-        'i will use the action',
-        'my plan is',
-        'plan:',
-        '"action":',
-        '"params":',
-        'returning results'
-    ];
-    return strictCues.some((cue) => text.includes(cue));
-};
-
 export const normalizeHistoryMessageType = (msg) => {
-    const explicitType = String(msg?.type || msg?.msg_type || 'default').toLowerCase();
-    if (explicitType !== 'default') return explicitType;
-    if (msg?.role === 'assistant') {
-        const payload = tryParseIntentPayload(msg?.content);
-        if (payload && (payload.thought || payload.action)) return 'reasoning';
-        if (looksLikeInternalMonologue(msg?.content)) return 'reasoning';
-    }
-    return explicitType;
+    return String(msg?.type || msg?.msg_type || 'default').toLowerCase();
 };
 
 export const extractReasoningLine = (msg) => {
@@ -136,8 +99,10 @@ export const extractReasoningLine = (msg) => {
         if (action && action !== 'reply' && action !== 'none') return `Planned action: ${action}`;
         if (action === 'reply' && payload.thought) return payload.thought;
     }
-    if (looksLikeInternalMonologue(msg?.content)) {
-        return String(msg.content || '').trim();
+    
+    // Fallback if backend sent pure text with msg_type=reasoning
+    if (normalizeHistoryMessageType(msg) === 'reasoning') {
+        return String(msg?.content || '').trim();
     }
     return null;
 };

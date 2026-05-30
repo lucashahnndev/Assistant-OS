@@ -55,32 +55,9 @@ class AssistiveOverlayCapability(CapabilityBase):
         ]
 
     def get_reflex_rules(self) -> List[Dict[str, Any]]:
-        overlay_cfg = self.config.get("overlay") if isinstance(self.config.get("overlay"), dict) else self.config
-        if not bool((overlay_cfg or {}).get("enable_reflex_shortcuts", False)):
-            return []
-
-        def _to_params(match: Any) -> Dict[str, Any]:
-            target = str((match.group(1) or "")).strip(" .,:;!?")
-            return {
-                "label": target or "elemento solicitado na tela",
-                "mark_type": "focus_corners",
-                "pulse": True,
-            }
-
-        return [
-            {
-                # "atlas, me mostra na minha tela a guia que está aberta para o telegram"
-                "pattern": r"(?:^|\b)(?:atlas[,\s:-]*)?(?:me\s+)?(?:mostra|mostre|aponta|aponte|destaca|destaque|demarca|demarque|circula|circule|desenha|desenhe|indica|indique)\s+(?:na\s+minha\s+tela\s+)?(?:um\s+indicador\s+de\s+onde\s+est[áa]\s+|onde\s+est[áa]\s+|onde\s+fica\s+)?(.+)$",
-                "action_id": "overlay.assist.highlight_target",
-                "handler": _to_params,
-            },
-            {
-                # "me mostra na tela onde está ..."
-                "pattern": r"(?:^|\b)(?:na\s+minha\s+tela|na\s+tela)\s+(?:onde\s+est[áa]\s+|onde\s+fica\s+)?(.+)$",
-                "action_id": "overlay.assist.highlight_target",
-                "handler": _to_params,
-            },
-        ]
+        # Legacy natural-language shortcuts were removed in Phase 4.
+        # Visual tool selection must come from the agent/LLM, not from reflex rules.
+        return []
 
     @staticmethod
     def _ok(text: str, **extra: Any) -> Dict[str, Any]:

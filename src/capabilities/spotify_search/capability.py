@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from typing import Dict, Any, List, Optional
 from server.core.secret_manager import resolve_secret_ref
 from ..base import CapabilityBase
+from ..shared.link_validation import validate_media_results
 
 logger = logging.getLogger("SpotifySearchCapability")
 
@@ -188,40 +189,86 @@ class SpotifySearchCapability(CapabilityBase):
                 missing.append("clientId")
             if not auth["client_secret"]:
                 missing.append("clientSecret")
-            text = self._render_text(query, "duckduckgo_fallback", fallback_results)
+            validation = validate_media_results(fallback_results[:limit], timeout=4.0) if fallback_results else {"results": [], "best": None, "failures": []}
+            fallback_results = validation["results"]
+            best = validation["best"]
+            failures = validation["failures"]
+            if not best:
+                return {
+                    "ok": False,
+                    "status": "error",
+                    "error_code": "BROKEN_LINK",
+                    "error_details": "Nenhum link do Spotify (fallback) foi validado com sucesso.",
+                    "provider": "spotify",
+                    "query": query,
+                    "count": len(fallback_results),
+                    "results": fallback_results,
+                    "best": None,
+                    "validation_failures": failures,
+                    "fallback": True,
+                }
             return {
-                "ok": True if fallback_results else False,
-                "status": "success" if fallback_results else "error",
-                "error_code": None if fallback_results else "MISSING_CONFIG",
+                "ok": True,
+                "status": "success",
+                "error_code": None,
                 "error_details": (
                     f"Configuração do Spotify incompleta. Faltando: {', '.join(missing)}"
                     if missing else "Configuração do Spotify incompleta."
                 ),
                 "missing_fields": missing,
-                "provider": "spotify_fallback_web" if fallback_results else "spotify",
+                "provider": "spotify_fallback_web",
                 "query": query,
                 "count": len(fallback_results),
                 "results": fallback_results,
-                "best": fallback_results[0] if fallback_results else None,
+                "best": best,
                 "fallback": True,
+                "validation_failures": failures,
+                "warnings": (
+                    ["Spotify fallback link is access-restricted but not broken."]
+                    if best and best.get("link_validation", {}).get("status") == "restricted"
+                    else []
+                ),
             }
 
         # 2. Get Token
         token = self._get_access_token()
         if not token:
             fallback_results = self._fallback_search_web(query, limit, search_type)
-            text = self._render_text(query, "duckduckgo_fallback", fallback_results)
+            validation = validate_media_results(fallback_results[:limit], timeout=4.0) if fallback_results else {"results": [], "best": None, "failures": []}
+            fallback_results = validation["results"]
+            best = validation["best"]
+            failures = validation["failures"]
+            if not best:
+                return {
+                    "ok": False,
+                    "status": "error",
+                    "error_code": "BROKEN_LINK",
+                    "error_details": "Nenhum link do Spotify (fallback) foi validado com sucesso.",
+                    "provider": "spotify",
+                    "query": query,
+                    "count": len(fallback_results),
+                    "results": fallback_results,
+                    "best": None,
+                    "validation_failures": failures,
+                    "fallback": True,
+                }
             return {
-                "ok": True if fallback_results else False,
-                "status": "success" if fallback_results else "error",
-                "error_code": None if fallback_results else "AUTH_FAILED",
+                "ok": True,
+                "status": "success",
+                "error_code": None,
                 "error_details": "Erro ao obter token de acesso do Spotify. Verifique suas credenciais.",
-                "provider": "spotify_fallback_web" if fallback_results else "spotify",
+                "provider": "spotify_fallback_web",
                 "query": query,
                 "count": len(fallback_results),
                 "results": fallback_results,
-                "best": fallback_results[0] if fallback_results else None,
+                "best": best,
                 "fallback": True,
+                "validation_failures": failures,
+                "warnings": (
+                    ["Spotify fallback link is access-restricted but not broken."]
+                    if best and best.get("link_validation", {}).get("status") == "restricted"
+                    else []
+                ),
             }
 
         # 3. Perform Search
@@ -288,7 +335,23 @@ class SpotifySearchCapability(CapabilityBase):
 
             # Sort by confidence
             results.sort(key=lambda x: x["confidenceScore"], reverse=True)
-            best = results[0] if results else None
+            validation = validate_media_results(results[:limit], timeout=4.0)
+            results = validation["results"]
+            best = validation["best"]
+            failures = validation["failures"]
+            if not best:
+                return {
+                    "ok": False,
+                    "status": "error",
+                    "error_code": "BROKEN_LINK",
+                    "error_details": "Nenhum link do Spotify foi validado com sucesso.",
+                    "provider": "spotify",
+                    "query": query,
+                    "count": len(results),
+                    "results": results,
+                    "best": None,
+                    "validation_failures": failures,
+                }
 
             return {
                 "ok": True,
@@ -301,6 +364,12 @@ class SpotifySearchCapability(CapabilityBase):
                 "count": len(results),
                 "type": search_type,
                 "market": market,
+                "validation_failures": failures,
+                "warnings": (
+                    ["Spotify link is access-restricted but not broken."]
+                    if best and best.get("link_validation", {}).get("status") == "restricted"
+                    else []
+                ),
             }
         except Exception as e:
             logger.error(f"Spotify Search Execution Error: {e}")

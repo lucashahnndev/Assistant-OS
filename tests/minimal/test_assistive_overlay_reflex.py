@@ -17,7 +17,7 @@ def test_reflex_shortcuts_disabled_by_default():
     assert capability.get_reflex_rules() == []
 
 
-def test_reflex_routes_show_on_screen_to_overlay_highlight():
+def test_reflex_shortcuts_do_not_route_natural_language_to_overlay():
     capability = AssistiveOverlayCapability(kernel=None, config={"overlay": {"backend": "noop", "enable_reflex_shortcuts": True}})
     registry = ReflexRegistry()
     for rule in capability.get_reflex_rules():
@@ -26,7 +26,4 @@ def test_reflex_routes_show_on_screen_to_overlay_highlight():
     text = "atlas, me mostra na minha tela a guia que está aberta para o telegram"
     plan = registry.match(text)
 
-    assert plan is not None
-    assert plan.action_id == "overlay.assist.highlight_target"
-    assert isinstance(plan.args, dict)
-    assert "telegram" in str(plan.args.get("label", "")).lower()
+    assert plan is None

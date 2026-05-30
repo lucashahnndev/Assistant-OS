@@ -53,18 +53,32 @@ def _session(**overrides):
 
 def test_intent_classifier_maps_memory_and_capability_queries():
     classifier = IntentClassifier()
-    memory_intent, _ = classifier.classify("Do you remember what I said last time?", session=_session())
-    capability_intent, _ = classifier.classify("How do I use the browser tool?", session=_session())
+    memory_classification = classifier.classify("Do you remember what I said last time?", session=_session())
+    capability_classification = classifier.classify("How do I use the browser tool?", session=_session())
 
+    memory_intent, memory_notes = memory_classification
+    capability_intent, capability_notes = capability_classification
+
+    assert memory_classification.legacy_intent == ContextIntent.MEMORY_LOOKUP
+    assert capability_classification.legacy_intent == ContextIntent.CAPABILITY_LOOKUP
+    assert memory_classification.semantic_authority is False
+    assert capability_classification.semantic_authority is False
     assert memory_intent == ContextIntent.MEMORY_LOOKUP
     assert capability_intent == ContextIntent.CAPABILITY_LOOKUP
+    assert memory_notes == memory_classification.hints
+    assert capability_notes == capability_classification.hints
+    assert "memory_markers" in memory_notes
+    assert "capability_markers" in capability_notes
 
 
 def test_retrieval_router_exposes_phase1_domains_without_entrenching_store_details():
     router = RetrievalRouter()
-    targets = router.route(ContextIntent.TASK_EXECUTION, user_input="implement a task")
-    domains = [target.domain for target in targets]
+    route_signals = router.route(ContextIntent.TASK_EXECUTION, user_input="implement a task")
+    targets = route_signals.targets
+    domains = [target.domain for target in route_signals]
 
+    assert route_signals.legacy_intent == ContextIntent.TASK_EXECUTION
+    assert route_signals.semantic_authority is False
     assert domains == [
         "procedures",
         "capability_knowledge",
@@ -75,6 +89,10 @@ def test_retrieval_router_exposes_phase1_domains_without_entrenching_store_detai
         "mcp_resources",
         "policies",
     ]
+    assert route_signals.candidate_domains == domains
+    assert route_signals.reasons[0] == "intent:task_execution"
+    assert "legacy_intent:task_execution" in route_signals.source_hints
+    assert route_signals.domain_weights["procedures"] > route_signals.domain_weights["policies"]
     assert any(target.domain == "agent_experience" and target.active is False for target in targets)
     assert any(target.domain == "custom_knowledge" and target.active is False for target in targets)
     assert any(target.domain == "external_knowledge" and target.active is False for target in targets)

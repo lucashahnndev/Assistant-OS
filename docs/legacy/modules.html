@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Módulos - Atlas Bot</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <div class="alert alert-warning" style="margin: 16px; border-radius: 12px;">
+        <strong>Legacy:</strong> esta pagina e historica e nao representa o contrato ativo atual.
+    </div>
+    <div class="sidebar">
+        <a href="index.html" class="logo">Atlas Bot</a>
+        <ul class="nav-links">
+            <li><a href="index.html">Visão Geral</a></li>
+            <li><a href="installation.html">Instalação</a></li>
+            <li><a href="architecture.html">Arquitetura</a></li>
+            <li><a href="modules.html" class="active">Módulos</a></li>
+        </ul>
+    </div>
+
+    <div class="main-content">
+        <h1>Referência de Módulos</h1>
+        <p>Abaixo estão os módulos principais que compõem o ecossistema do Atlas Bot.</p>
+
+        <h2>Core (src/core)</h2>
+        <div class="card-grid">
+            <div class="card">
+                <h3>orchestrator.py (AgentOrchestrator)</h3>
+                <p>O Cérebro Agêntico. Implementa o loop de raciocínio, gerencia a memória de curto prazo e decide qual
+                    ferramenta usar.</p>
+            </div>
+            <div class="card">
+                <h3>intent.py (AgentIntent)</h3>
+                <p>Estrutura de dados que normaliza a saída do LLM (Thought, Action, Params).</p>
+            </div>
+        </div>
+
+        <h2>Drivers (src/drivers)</h2>
+        <p>Interfaces de I/O (Herdeiros de <code>BaseDriver</code>):</p>
+        <div class="card-grid">
+            <div class="card">
+                <h3>telegram_driver.py</h3>
+                <p>Conexão assíncrona com API do Telegram. Suporta texto, comandos e arquivos.</p>
+            </div>
+            <div class="card">
+                <h3>browser_driver.py</h3>
+                <p>Automação web via Playwright. Permite navegar, interagir com elementos e controlar mídia (YouTube).
+                </p>
+            </div>
+            <div class="card">
+                <h3>voice_driver.py</h3>
+                <p>Interface local Legacy (PyGame). Gerencia STT/TTS.</p>
+            </div>
+            <div class="card">
+                <h3>server_driver.py</h3>
+                <p>Stub para futura API REST/WebSocket.</p>
+            </div>
+        </div>
+
+        <h2>Services (src/services)</h2>
+        <div class="card-grid">
+            <div class="card">
+                <h3>llm/manager.py</h3>
+                <p>Gerencia provedores de IA (OpenAI, Ollama, DeepSeek). Trata erros e rate limits.</p>
+            </div>
+            <div class="card">
+                <h3>memory/</h3>
+                <p>Serviços de persistência: ChromaDB (Vetorial) e SessionManager (Contexto).</p>
+            </div>
+            <div class="card">
+                <h3>tts/manager.py</h3>
+                <p>Gerenciador de Síntese de Voz (EdgeTTS, System).</p>
+            </div>
+        </div>
+
+        <h2>Skills (src/skills)</h2>
+        <p>Habilidades documentadas para uso do LLM:</p>
+        <ul>
+            <li><code>send_file.md</code>: Envio de anexos.</li>
+            <li><code>youtube_control.md</code>: Busca e reprodução de vídeo.</li>
+            <li><code>search_web.md</code>: Pesquisa Google.</li>
+        </ul>
+    </div>
+</body>
+
+</html>

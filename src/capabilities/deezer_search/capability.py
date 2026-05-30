@@ -2,6 +2,7 @@ import logging
 import requests
 from typing import Dict, Any, List, Optional
 from ..base import CapabilityBase
+from ..shared.link_validation import validate_media_results
 
 logger = logging.getLogger("DeezerSearchCapability")
 
@@ -172,7 +173,23 @@ class DeezerSearchCapability(CapabilityBase):
                 results.append(res)
 
             results.sort(key=lambda x: x["confidenceScore"], reverse=True)
-            best = results[0] if results else None
+            validation = validate_media_results(results[:limit], timeout=4.0)
+            results = validation["results"]
+            best = validation["best"]
+            failures = validation["failures"]
+            if not best:
+                return {
+                    "ok": False,
+                    "status": "error",
+                    "error": "BROKEN_LINK",
+                    "error_details": "Nenhum link do Deezer foi validado com sucesso.",
+                    "provider": "deezer",
+                    "query": query,
+                    "count": len(results),
+                    "results": results,
+                    "best": None,
+                    "validation_failures": failures,
+                }
             text = self._render_text(query, "deezer_api", results)
 
             return {
@@ -185,6 +202,12 @@ class DeezerSearchCapability(CapabilityBase):
                 "query": query,
                 "count": len(results),
                 "type": search_type,
+                "validation_failures": failures,
+                "warnings": (
+                    ["Deezer link is access-restricted but not broken."]
+                    if best and best.get("link_validation", {}).get("status") == "restricted"
+                    else []
+                ),
                 "error_details": text,
             }
         except Exception as e:

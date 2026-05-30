@@ -128,9 +128,13 @@ class ContextBroker:
         session_context: Optional[Dict[str, Any]] = None,
         broker_hints: Optional[Dict[str, Any]] = None,
     ) -> ContextBundle:
-        intent, classifier_notes = self.intent_classifier.classify(user_input, session=session)
-        baseline_targets = self.retrieval_router.route(intent, user_input=user_input, broker_hints=None) if broker_hints else []
-        targets = self.retrieval_router.route(intent, user_input=user_input, broker_hints=broker_hints)
+        classification = self.intent_classifier.classify(user_input, session=session)
+        intent = classification.legacy_intent
+        classifier_notes = classification.notes
+        baseline_route = self.retrieval_router.route(intent, user_input=user_input, broker_hints=None) if broker_hints else None
+        route_signals = self.retrieval_router.route(intent, user_input=user_input, broker_hints=broker_hints)
+        baseline_targets = baseline_route.targets if baseline_route else []
+        targets = route_signals.targets
         evidence_items = []
         retrieval_notes: List[str] = []
         priorities = {target.domain: target.priority for target in targets}

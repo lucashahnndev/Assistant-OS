@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Atlas Bot - Documentação</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <div class="alert alert-warning" style="margin: 16px; border-radius: 12px;">
+        <strong>Legacy:</strong> esta pagina e historica e nao representa o contrato ativo atual.
+    </div>
+    <div class="sidebar">
+        <a href="index.html" class="logo">Atlas Bot</a>
+        <ul class="nav-links">
+            <li><a href="index.html" class="active">Visão Geral</a></li>
+            <li><a href="installation.html">Instalação</a></li>
+            <li><a href="architecture.html">Arquitetura</a></li>
+            <li><a href="modules.html">Módulos</a></li>
+            <li><a href="agent_refactor_plan.html">Plano Núcleo Agêntico</a></li>
+            <li><a href="permission_groups_planner.html">Planner Permissões</a></li>
+            <li><a href="skills_audit_planner.html">Planner Skills</a></li>
+        </ul>
+    </div>
+
+    <div class="main-content">
+        <h1>Bem-vindo ao Atlas Bot</h1>
+        <p>Atlas Bot (anteriormente Assistant-OS) é um <strong>Agente de Sistema Proativo</strong> projetado para Linux.
+            Diferente de assistentes tradicionais, o Atlas utiliza um <strong>Cérebro Agêntico (LLM)</strong> para
+            raciocinar,
+            planejar e executar tarefas complexas através de múltiplos canais (Voz, Texto, Navegador).
+        </p>
+
+        <div class="alert alert-info">
+            <strong>Status:</strong> O projeto está em fase de Estabilização do Core e Expansão de Habilidades.
+        </div>
+
+        <h2>Funcionalidades Principais</h2>
+        <div class="card-grid">
+            <div class="card">
+                <h3>🧠 Cérebro Agêntico</h3>
+                <p>Loop de Raciocínio (ReAct) que permite ao Atlas entender intenções complexas e planejar múltiplos
+                    passos.</p>
+            </div>
+            <div class="card">
+                <h3>💬 Integração Telegram</h3>
+                <p>Controle total via chat: envie comandos de texto, receba respostas e troque arquivos (imagens/docs).
+                </p>
+            </div>
+            <div class="card">
+                <h3>🌐 Navegação Autônoma</h3>
+                <p>Controle de navegador via Playwright para pesquisar na web, tocar música e interagir com sites.</p>
+            </div>
+            <div class="card">
+                <h3>💾 Memória Persistente</h3>
+                <p>Sistema de memória de curto e longo prazo (Vector DB) para lembrar de preferências e conversas
+                    passadas.</p>
+            </div>
+        </div>
+
+        <h2>Arquitetura Modular</h2>
+        <p>
+            O sistema é construído sobre uma arquitetura <strong>Kernel-Driver</strong>, permitindo que novas interfaces
+            (como Discord ou Home Assistant) sejam adicionadas como plugins sem alterar o código principal.
+        </p>
+
+        <h2>Contribuição</h2>
+        <p>
+            O projeto é Open Source. Consulte <a href="architecture.html">Arquitetura</a> para entender como criar novos
+            Drivers ou Skills.
+        </p>
+    </div>
+</body>
+
+</html>

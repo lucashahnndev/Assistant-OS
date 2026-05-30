@@ -64,6 +64,13 @@ export const AuthProvider = ({ children }) => {
 
         if (res.ok) {
             await checkStatus();
+            // Trigger background generation of the morning briefing with the user's name
+            const userLocale = navigator.language || 'pt-BR';
+            fetch('/api/system/welcome/trigger', { 
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_name: username, locale: userLocale })
+            }).catch(err => console.error("Greeting trigger failed", err));
             return { success: true };
         }
         const data = await res.json();

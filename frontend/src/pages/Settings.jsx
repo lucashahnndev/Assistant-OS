@@ -37,7 +37,8 @@ import {
     Server,
     FolderOpen,
     Cloud,
-    SlidersHorizontal
+    SlidersHorizontal,
+    Image as ImageIcon
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -65,6 +66,7 @@ const Settings = () => {
     const [externalTab, setExternalTab] = useState('accounts');
     const [editingProviderKey, setEditingProviderKey] = useState('');
     const [externalSecretEditor, setExternalSecretEditor] = useState({ target: '', key: '', value: '' });
+    const [uploadingLogo, setUploadingLogo] = useState(false);
     const [selectedConnectProvider, setSelectedConnectProvider] = useState('');
     const [connectingProvider, setConnectingProvider] = useState('');
     const [mcpStatus, setMcpStatus] = useState({ servers: [], resources: [], refresh: {} });
@@ -858,6 +860,38 @@ const Settings = () => {
 
     );
 
+    const handleLogoUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        setUploadingLogo(true);
+        const toastId = notify.loading("Processing and generating logos...");
+        
+        try {
+            const formData = new FormData();
+            formData.append("file", file);
+            
+            const res = await fetch("/api/assets/logo", {
+                method: "POST",
+                body: formData,
+            });
+            
+            if (!res.ok) {
+                const errData = await res.json();
+                throw new Error(errData.detail || "Failed to upload logo.");
+            }
+            
+            notify.success("Logos generated successfully! Please refresh the page to see changes.", { id: toastId });
+            
+            // Trigger a quick reload of the img tag in Dashboard by updating state or just relying on user refresh
+        } catch (err) {
+            notify.error(err.message, { id: toastId });
+        } finally {
+            setUploadingLogo(false);
+            e.target.value = null; // reset input
+        }
+    };
+
     const renderGeneral = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
@@ -875,6 +909,20 @@ const Settings = () => {
                             onChange={(e) => updateNestedValue('agent.agent_name', e.target.value)}
                             placeholder="e.g. Assistant, Jarvis..."
                         />
+                    </div>
+                    <div className="form-group" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <label style={{ margin: 0 }}>Voice Boot Greeting</label>
+                            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Generate intelligent TTS greeting at login.</span>
+                        </div>
+                        <label className="toggle-switch">
+                            <input
+                                type="checkbox"
+                                checked={config.frontend?.voice_greeting || false}
+                                onChange={(e) => updateNestedValue('frontend.voice_greeting', e.target.checked)}
+                            />
+                            <span className="slider"></span>
+                        </label>
                     </div>
                     <div className="form-group">
                         <label>System Personality (Neural Bias)</label>
@@ -922,6 +970,29 @@ const Settings = () => {
                 </div>
             </section>
 
+            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+                <h3 className="section-title">
+                    <ImageIcon size={20} /> Branding & PWA
+                </h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                    <div style={{ background: 'rgba(255,255,255,0.02)', padding: '20px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', gap: '20px' }}>
+                        <div style={{ width: '80px', height: '80px', borderRadius: '16px', background: 'var(--bg-color)', border: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
+                            <img src={`/api/static/logo-192x192.png?t=${Date.now()}`} alt="Current Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                            <h4 style={{ fontSize: '15px', fontWeight: '600', marginBottom: '8px' }}>Auto-Generate App Icons</h4>
+                            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '16px', lineHeight: '1.4' }}>
+                                Upload a single high-resolution image (PNG or JPG). The system will automatically resize, crop, and generate all required PWA assets (Manifest icons, Apple Touch Icon, and Favicon).
+                            </p>
+                            <label className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 16px', fontSize: '13px', cursor: uploadingLogo ? 'not-allowed' : 'pointer', opacity: uploadingLogo ? 0.7 : 1 }}>
+                                {uploadingLogo ? <Loader className="spin" size={16} /> : <Download size={16} style={{ transform: 'rotate(180deg)' }} />}
+                                {uploadingLogo ? 'Processing...' : 'Upload Image'}
+                                <input type="file" accept="image/png, image/jpeg" style={{ display: 'none' }} onChange={handleLogoUpload} disabled={uploadingLogo} />
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </section>
         </div>
     );
 

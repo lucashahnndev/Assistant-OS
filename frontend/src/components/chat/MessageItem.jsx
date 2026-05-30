@@ -337,6 +337,13 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
     const hasReasoning = !isUser && reasoningTimeline.length > 0;
     const showInlineThoughtToggle = hasReasoning && !isStreaming && isCognitiveCollapsed;
     const statusPhaseNormalized = String(msg?.statusPhase || '').toLowerCase();
+    const getPhaseColor = (phase) => {
+        if (['thinking', 'reasoning'].includes(phase)) return '#a855f7';
+        if (['tool_use', 'executing', 'action'].includes(phase)) return '#3b82f6';
+        if (['error', 'failed', 'refusal'].includes(phase)) return '#ef4444';
+        return 'var(--accent-color)';
+    };
+    const phaseColor = getPhaseColor(statusPhaseNormalized);
     const isTerminalPhase = ['complete', 'completed', 'succeeded', 'success', 'done', 'failed', 'error', 'aborted', 'cancelled', 'canceled'].includes(statusPhaseNormalized);
     const isActivelyStreaming = isStreaming && !isTerminalPhase;
     const previewMessageContent = useMemo(() => {
@@ -511,7 +518,7 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
                                 <div style={{
                                     width: '10px', height: '10px',
                                     border: '1.5px solid rgba(0,0,0,0.1)',
-                                    borderTopColor: 'var(--accent-color)',
+                                    borderTopColor: phaseColor,
                                     borderRadius: '50%',
                                     animation: 'spin 1s linear infinite',
                                     flexShrink: 0
@@ -520,7 +527,7 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
                                     fontSize: '9px',
                                     fontWeight: '800',
                                     textTransform: 'uppercase',
-                                    color: 'var(--accent-color)',
+                                    color: phaseColor,
                                     letterSpacing: '0.05em',
                                     whiteSpace: 'nowrap'
                                 }}>
@@ -825,6 +832,12 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
                                 animateTyping={!isUser && (msg.animateTyping || (!msg.timestamp || msg.timestamp > (Date.now() / 1000 - 30)))}
                             />
                         ) : null}
+                        {!isUser && isActivelyStreaming && !msg.content && !hasReasoning && !msg.playback && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', opacity: 0.6, padding: '4px 0' }}>
+                                <div style={{ height: '10px', width: '80%', background: 'var(--card-border)', borderRadius: '4px', animation: 'pulse 1.5s infinite ease-in-out' }} />
+                                <div style={{ height: '10px', width: '60%', background: 'var(--card-border)', borderRadius: '4px', animation: 'pulse 1.5s infinite ease-in-out', animationDelay: '0.2s' }} />
+                            </div>
+                        )}
                         <MessageAttachments msg={msg} sessionId={sessionId} onExpand={onExpand} />
                     </>
                 )}

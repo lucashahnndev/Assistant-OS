@@ -456,3 +456,110 @@ async def get_work_context(work_id: str, request: Request, user: User = Depends(
         return {"work_id": work_id, "context": context}
 
     return {"work_id": work_id, "context": snapshot.get("context", {}), "status": snapshot.get("status")}
+
+# --- Boot / Welcome Sequence ---
+_cached_welcome_greeting = None
+_is_generating_greeting = False
+
+def _generate_intelligent_greeting_bg(kernel, user_name="Administrator", locale="pt-BR", user_roles=None):
+    """
+    Spawns an agentic boot sequence via the Orchestrator.
+    The roles are resolved from the authenticated user — never hardcoded.
+    """
+    global _is_generating_greeting
+    if _is_generating_greeting:
+        return
+    
+    _is_generating_greeting = True
+    try:
+        from core.identity import PrincipalContext
+        
+        session_id = "system.boot"
+        roles = user_roles if isinstance(user_roles, list) and user_roles else []
+        
+        principal = PrincipalContext(
+            interface="web",
+            sender_id="system_boot",
+            sender_name=user_name,
+            session_id=session_id,
+            roles=roles  # Derived from the authenticated user's DB role — never hardcoded
+        )
+        
+        prompt = (
+            f"SYSTEM BOOT SEQUENCE INITIATED.\n"
+            f"The user '{user_name}' has just logged in.\n"
+            f"Your task is to act as the OS Kernel and perform a boot diagnostic.\n"
+            f"1. Use your capabilities to check system health (CPU/RAM).\n"
+            f"2. Check active network tunnels (like Cloudflare or Ngrok).\n"
+            f"3. Check the user's agenda for today.\n"
+            f"4. Finally, synthesize this information into a brief, welcoming boot briefing.\n"
+            f"CRITICAL: Do NOT output generic text. Use your tools. RESPOND EXPLICITLY IN THE FOLLOWING LOCALE/LANGUAGE: {locale}"
+        )
+        
+        # Trigger the agentic loop
+        user_data = {"is_boot": True, "invisible_to_history": True, "user_name": user_name}
+        kernel.process_input(
+            text=prompt,
+            driver_instance=getattr(kernel, "server_driver", None),
+            user_id=session_id,
+            user_data=user_data,
+            context=principal
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to generate agentic boot sequence: {e}")
+    finally:
+        _is_generating_greeting = False
+
+
+class WelcomeTriggerRequest(BaseModel):
+    user_name: str = "Administrator"
+    locale: str = "pt-BR"
+
+@router.post("/welcome/trigger")
+def trigger_welcome_generation(
+    request: Request,
+    body: WelcomeTriggerRequest = None,
+    current_user: User = Depends(get_current_user)
+):
+    try:
+        kernel = get_kernel(request)
+        from threading import Thread
+        
+        # Derive user info from the authenticated session — never hardcoded
+        user_name = getattr(current_user, 'display_name', None) or getattr(current_user, 'username', None) or "Administrator"
+        locale = body.locale if body else "pt-BR"
+        
+        # Map DB role to a list for PrincipalContext
+        db_role = getattr(current_user, 'role', 'viewer') or 'viewer'
+        user_roles = [db_role]  # e.g. ["admin"] or ["operator"] or ["viewer"]
+        
+        Thread(
+            target=_generate_intelligent_greeting_bg,
+            args=(kernel, user_name, locale, user_roles),
+            daemon=True
+        ).start()
+    except Exception as e:
+        logger.error(f"Trigger welcome error: {e}")
+    return {"status": "started"}
+
+@router.get("/welcome")
+def get_welcome_greeting(request: Request):
+    global _cached_welcome_greeting
+    
+    if not _cached_welcome_greeting:
+        # Fallback if not ready
+        data = {"text": "Core Systems Online. Welcome back.", "audio_b64": None}
+    else:
+        data = _cached_welcome_greeting.copy()
+        # Invalidate so we don't repeat the exact same next time
+        _cached_welcome_greeting = None
+    
+    try:
+        kernel = get_kernel(request)
+        from threading import Thread
+        Thread(target=_generate_intelligent_greeting_bg, args=(kernel, "Administrator"), daemon=True).start()
+    except:
+        pass
+        
+    return data

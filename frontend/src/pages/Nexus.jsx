@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useReducer, useRef, useCallback, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { useVoice } from '../hooks/useVoice';
 import { useTheme } from '../context/ThemeContext';
@@ -1619,6 +1620,7 @@ const StageAssistCard = ({ type, payload, sessionId, isMobile = false }) => {
 
 // Main Nexus Component
 const Nexus = () => {
+    const location = useLocation();
     const [state, dispatch] = useReducer(dashboardReducer, initialState);
     const [preferredStageSignatures, setPreferredStageSignatures] = useState([]);
     const { theme } = useTheme();
@@ -1680,6 +1682,19 @@ const Nexus = () => {
         msmSetPinnedRef.current = msm.setMediaPinned;
         msmRef.current = msm;
     }, [msm]);
+
+    const autoVoiceTriggered = useRef(false);
+    useEffect(() => {
+        if (location.state?.autoStartVoice && !autoVoiceTriggered.current) {
+            autoVoiceTriggered.current = true;
+            // Delay slightly to ensure UI is ready
+            setTimeout(() => {
+                if (typeof handleVoiceToggle === 'function') {
+                    handleVoiceToggle();
+                }
+            }, 1500);
+        }
+    }, [location.state]);
 
     useEffect(() => {
         const fetchConfig = async () => {
@@ -2174,15 +2189,11 @@ const Nexus = () => {
     useEffect(() => {
         const init = async () => {
             try {
-                let activeId = localStorage.getItem('dash_session_id');
-
-                if (!activeId) {
-                    const activeData = await api.get('/sessions/active?interface=web');
-                    if (activeData && activeData.id) activeId = activeData.id;
-                }
+                let activeId = null;
+                const activeData = await api.get('/sessions/active?interface=web');
+                if (activeData && activeData.id) activeId = activeData.id;
 
                 if (activeId) {
-                    localStorage.setItem('dash_session_id', activeId);
                     const historyData = await api.get(`/sessions/${activeId}`);
                     if (historyData) {
                         dispatch({ type: 'SET_SESSION', payload: { id: activeId, name: historyData.name } });
@@ -2692,7 +2703,6 @@ const Nexus = () => {
                 if (data && data.id) {
                     activeId = data.id;
                     dispatch({ type: 'SET_SESSION', payload: { id: activeId, name: data.name } });
-                    localStorage.setItem('dash_session_id', activeId);
                 } else return;
             } catch (err) {
                 notify.error("Bridge failure");
@@ -2723,7 +2733,6 @@ const Nexus = () => {
 
     const handleReload = async () => {
         if (wsRef.current) wsRef.current.close();
-        localStorage.removeItem('dash_session_id');
         dispatch({ type: 'SET_SESSION', payload: null });
         dispatch({ type: 'SET_HISTORY', payload: [] });
         dispatch({ type: 'SET_CONNECTED', payload: false });
@@ -2733,7 +2742,6 @@ const Nexus = () => {
             const data = await api.post('/sessions', { interface: 'web' });
             if (data && data.id) {
                 dispatch({ type: 'SET_SESSION', payload: { id: data.id, name: data.name } });
-                localStorage.setItem('dash_session_id', data.id);
                 notify.success("New Session Ready", { id: 'live-reload' });
             }
         } catch (err) {

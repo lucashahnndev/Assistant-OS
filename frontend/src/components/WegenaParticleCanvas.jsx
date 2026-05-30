@@ -193,8 +193,8 @@ const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = '
 
         try {
             const engine = new WegenaEngineClass(container, {
-                particleCount: 70000,
-                activeCount: 45000,
+                particleCount: 150000,
+                activeCount: overrideConfig?.particleCount || 120000,
                 zoom: 165,
                 baseColor: new window.THREE.Color('#3b82f6'),
                 glowColor: new window.THREE.Color('#00f2ff')
@@ -298,7 +298,7 @@ const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = '
             
             // Particle tweaks
             if (overrideConfig.particleCount && typeof engine.setDensity === 'function') {
-                if (engine.config.particleCount !== overrideConfig.particleCount) {
+                if (engine.config.activeCount !== overrideConfig.particleCount) {
                     engine.setDensity(overrideConfig.particleCount, true);
                     // Re-apply script to fix roles after density resize
                     window.fetch(`/presets/${overrideConfig.preset || appliedDefaultPresetIdRef.current}/scene-script.weg?v=${Date.now()}`)

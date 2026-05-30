@@ -215,6 +215,7 @@ class CapabilityAction(BaseModel):
     permissions: ActionPermissions
     parameters: Dict[str, Any]
     result_schema: Optional[Dict[str, Any]] = None
+    ui_hints: Optional[Dict[str, Any]] = None
     examples: List[Dict[str, Any]] = Field(default_factory=list)
     side_effect: Optional[str] = None
 

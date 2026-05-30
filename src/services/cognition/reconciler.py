@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -33,6 +34,49 @@ class CognitiveReconciler:
         "unavailable",
         "exception",
         "stalled",
+    )
+    _CONVERSATIONAL_PRESERVE_MARKERS = (
+        "continue",
+        "continua",
+        "continuar",
+        "retoma",
+        "retomar",
+        "segue",
+        "você está aí",
+        "voce está aí",
+        "voce esta ai",
+        "está aí",
+        "esta ai",
+    )
+    _SUBSTANTIVE_TURN_MARKERS = (
+        "create",
+        "write",
+        "build",
+        "implement",
+        "run",
+        "open",
+        "search",
+        "fix",
+        "update",
+        "execute",
+        "make",
+        "show",
+        "list",
+        "generate",
+        "find",
+        "crie",
+        "escreva",
+        "implemente",
+        "rode",
+        "abra",
+        "pesquise",
+        "corrija",
+        "atualize",
+        "faça",
+        "faca",
+        "mostre",
+        "gere",
+        "encontre",
     )
 
     def reconcile(
@@ -145,9 +189,19 @@ class CognitiveReconciler:
 
     @staticmethod
     def _derive_objective(session: Any, user_input: str, primary_task: Optional[Dict[str, Any]]) -> str:
+        context = getattr(session, "context", {}) if isinstance(getattr(session, "context", {}), dict) else {}
+        anchor = context.get("continuity_anchor") if isinstance(context.get("continuity_anchor"), dict) else {}
+        anchor_objective = _clip_text(anchor.get("objective"), 220)
+        anchor_state = str(anchor.get("objective_state") or "").strip().lower()
+
         text = _clip_text(user_input, 220)
         if text:
+            if anchor_objective and anchor_state not in {"completed", "closed", "resolved", "idle"}:
+                if CognitiveReconciler._should_preserve_continuity(text, anchor):
+                    return anchor_objective
             return text
+        if anchor_objective and anchor_state not in {"completed", "closed", "resolved", "idle"}:
+            return anchor_objective
         if primary_task:
             for key in ("last_summary", "completion_summary", "last_outcome", "task_role"):
                 value = _clip_text(primary_task.get(key), 220)
@@ -158,6 +212,24 @@ class CognitiveReconciler:
         if goal and goal.lower() != "standby":
             return goal
         return "Standby"
+
+    @classmethod
+    def _should_preserve_continuity(cls, text: str, anchor: Dict[str, Any]) -> bool:
+        normalized = re.sub(r"[!?.,;:]+", "", str(text or "").strip().lower()).strip()
+        if not normalized:
+            return True
+        if any(marker in normalized for marker in cls._SUBSTANTIVE_TURN_MARKERS):
+            return False
+        if normalized in {"oi", "ola", "olá", "hello", "hi", "hey"}:
+            return True
+        if any(marker in normalized for marker in cls._CONVERSATIONAL_PRESERVE_MARKERS):
+            return True
+        if len(normalized) <= 12:
+            return True
+        last_turn_kind = str(anchor.get("last_turn_kind") or "").strip().lower()
+        if last_turn_kind in {"clarification", "recovery", "conversational"} and len(normalized.split()) <= 6:
+            return True
+        return False
 
     @staticmethod
     def _derive_primary_summary(primary_task: Optional[Dict[str, Any]], objective: str) -> str:

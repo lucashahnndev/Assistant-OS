@@ -35,21 +35,9 @@ class NotificationCapability(CapabilityBase):
         ]
 
     def get_reflex_rules(self) -> List[Dict[str, Any]]:
-        return [
-            {
-                "pattern": (
-                    r"^(?:atlas[\s,:-]*)?"
-                    r"(?:n[aã]o\s+(?:me\s+)?(?:mande|envie|dispare).*(?:push|notifica[cç][aã]o)"
-                    r"|sem\s+push"
-                    r"|me\s+avise\s+sempre\s+\d{1,3}\s*(?:min|mins|minutos?)\s*(?:antes)?"
-                    r"|n[aã]o\s+me\s+interrompa\s+enquanto\s+estou\s+conversando"
-                    r"|seja\s+mais\s+direto(?:\s+nas\s+mensagens)?"
-                    r"|evite\s+mensagens\s+longas)$"
-                ),
-                "action_id": "notifications.set_preference",
-                "handler": self._handle_preference_reflex,
-            }
-        ]
+        # Phase 4: natural-language preference capture must go through the agent flow,
+        # not reflex dispatch. Keep this disabled until a dedicated command surface exists.
+        return []
 
     @staticmethod
     def _handle_preference_reflex(match) -> Dict[str, Any]:

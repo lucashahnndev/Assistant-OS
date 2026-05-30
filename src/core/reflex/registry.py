@@ -12,6 +12,13 @@ class ReflexRule:
     handler: Optional[Callable[[re.Match], dict]] = None
 
 class ReflexRegistry:
+    """Registry for operational reflexes only.
+
+    Reflex rules here are intended for explicit operator commands, internal
+    deterministic events, emergency/fallback paths, and other technical
+    dispatches. Natural-language intent must not be routed through this layer.
+    """
+
     def __init__(self):
         self.rules: List[ReflexRule] = []
         self._compiled_rules = []
@@ -41,6 +48,8 @@ class ReflexRegistry:
             match = regex.search(text)
             if match:
                 args = rule.handler(match) if rule.handler else {}
+                # Reflex dispatch is compatibility/operational only; it must not
+                # be used as semantic planning or tool selection for free-form text.
                 return ActionPlan(
                     action_id=rule.action_id,
                     args=args,

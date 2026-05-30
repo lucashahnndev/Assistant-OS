@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { VitePWA } from 'vite-plugin-pwa'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -23,7 +24,31 @@ export default defineConfig(({ mode }) => {
         : false;
 
     return {
-        plugins: [react()],
+        plugins: [
+            react(),
+            VitePWA({
+                registerType: 'autoUpdate',
+                // Manifest is served dynamically by the backend (/api/manifest.webmanifest)
+                manifest: false,
+                // Don't auto-inject a <link rel="manifest"> or a SW registration script
+                // — our index.html already has the correct link and the SW auto-registers.
+                injectRegister: null,
+                // Disable completely in dev mode to avoid 404s on localhost:5173
+                devOptions: { enabled: false },
+                workbox: {
+                    globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+                    navigateFallback: '/index.html',
+                    navigateFallbackDenylist: [/^\/api/, /^\/ws/, /^\/manifest\.webmanifest/],
+                    runtimeCaching: [
+                        {
+                            urlPattern: /\.(?:png|jpg|jpeg|svg|gif|webp|woff2?)$/,
+                            handler: 'CacheFirst',
+                            options: { cacheName: 'atlas-assets', expiration: { maxEntries: 60, maxAgeSeconds: 86400 } }
+                        }
+                    ]
+                }
+            })
+        ],
         server: {
             host: host,
             port: port,
@@ -33,28 +58,19 @@ export default defineConfig(({ mode }) => {
                     target: apiTarget,
                     changeOrigin: true,
                     secure: false,
-                    configure: (proxy, _options) => {
-                        proxy.on('error', (err, _req, _res) => {
-                            console.log('proxy error', err);
-                        });
-                        proxy.on('proxyReq', (proxyReq, req, _res) => {
-                            console.log('Sending Request to the Target:', req.method, req.url);
-                        });
-                        proxy.on('proxyRes', (proxyRes, req, _res) => {
-                            console.log('Received Response from the Target:', proxyRes.statusCode, req.url);
-                        });
-                    },
+                },
+                // Redirect bare /manifest.webmanifest (auto-injected by some PWA tools) to the backend route
+                '/manifest.webmanifest': {
+                    target: apiTarget,
+                    changeOrigin: true,
+                    secure: false,
+                    rewrite: () => '/api/manifest.webmanifest',
                 },
                 '/ws': {
                     target: apiTarget,
                     changeOrigin: true,
                     secure: false,
                     ws: true,
-                    configure: (proxy, _options) => {
-                        proxy.on('error', (err, _req, _res) => {
-                            console.log('ws proxy error', err);
-                        });
-                    },
                 },
             }
         },

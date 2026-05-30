@@ -1,0 +1,7 @@
+{
+  "name": "Aether Minimal",
+  "version": "1.0.0",
+  "description": "An extremely lightweight, sparse spherical orb for a minimalistic cyber aesthetic.",
+  "author": "Antigravity",
+  "capabilities": ["audio_reactive", "dynamic_themes", "ai_state_visualization", "ultra_lightweight"]
+}

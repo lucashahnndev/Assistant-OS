@@ -1,0 +1,12 @@
+{
+  "id": "atlas-live-brain",
+  "title": "Atlas Live Brain",
+  "description": "Atlas live_panel scene with the original orbital shell and a cerebral inner core.",
+  "kind": "preset",
+  "format": "weg",
+  "entrypoint": "scene-script.weg",
+  "engineVersion": "5.0.0",
+  "sceneScriptApiVersion": "1.0.0",
+  "thumbnail": null,
+  "tags": ["atlas", "live-panel", "brain", "reactive"]
+}

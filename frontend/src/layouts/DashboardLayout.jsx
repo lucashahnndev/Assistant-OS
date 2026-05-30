@@ -176,16 +176,37 @@ const DashboardLayout = () => {
                             <div style={{
                                 width: '32px',
                                 height: '32px',
-                                background: 'var(--accent-color)',
                                 borderRadius: 'var(--radius-sm)',
+                                overflow: 'hidden',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
-                                color: 'white',
-                                fontWeight: '900',
-                                fontSize: '1.2rem'
+                                flexShrink: 0,
                             }}>
-                                {agentName.charAt(0).toUpperCase()}
+                                <img
+                                    src="/api/static/logo-192x192.png"
+                                    alt={agentName}
+                                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                                    onError={(e) => {
+                                        e.currentTarget.style.display = 'none';
+                                        e.currentTarget.nextSibling.style.display = 'flex';
+                                    }}
+                                />
+                                <div style={{
+                                    display: 'none',
+                                    width: '32px',
+                                    height: '32px',
+                                    background: 'var(--accent-color)',
+                                    borderRadius: 'var(--radius-sm)',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    color: 'white',
+                                    fontWeight: '900',
+                                    fontSize: '1.2rem',
+                                    flexShrink: 0,
+                                }}>
+                                    {agentName.charAt(0).toUpperCase()}
+                                </div>
                             </div>
                             {!isBelowDesktop && (
                                 <span style={{ fontWeight: '800', fontSize: '1.1rem', letterSpacing: '-0.02em', textTransform: 'uppercase' }}>{agentName}</span>

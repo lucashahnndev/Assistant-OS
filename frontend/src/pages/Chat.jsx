@@ -17,7 +17,8 @@ import {
     Monitor,
     Download,
     Bot,
-    Zap
+    Zap,
+    MessageSquare
 } from 'lucide-react';
 
 import { SessionAvatar } from '../components/chat/ChatIcons';
@@ -1404,7 +1405,10 @@ def monitor_system():
                                 )}
                             </div>
                         )) : (
-                            (!isSessionsCollapsed || isMobile) && <p style={{ textAlign: 'center', marginTop: '20px', fontSize: '12px', color: 'var(--text-muted)' }}>No active sessions.</p>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', opacity: 0.5, gap: '12px', padding: '20px', textAlign: 'center' }}>
+                                <MessageSquare size={24} />
+                                <p style={{ fontSize: '11px', margin: 0 }}>Nenhuma sessão ativa.<br/>Crie uma nova sessão para iniciar.</p>
+                            </div>
                         )}
                     </div>
                 </div>

@@ -9,6 +9,7 @@ import requests
 from ..base import CapabilityBase
 from ..shared.error_contract import error_envelope, success_envelope
 from ..shared.google_auth import resolve_google_request_auth
+from ..shared.link_validation import validate_media_results
 
 logger = logging.getLogger("YouTubeSearchCapability")
 
@@ -306,23 +307,33 @@ class YouTubeSearchCapability(CapabilityBase):
                 error_msg = data.get("error", {}).get("message", f"HTTP {response.status_code}")
                 fallback_results = self._fallback_search_web(query, limit, search_type)
                 if fallback_results:
-                    payload = success_envelope(
-                        provider="youtube_fallback_web",
-                        elapsed=int((perf_counter() - started) * 1000),
-                        warnings=[f"YouTube API error: {error_msg}"],
-                        status_code=response.status_code,
-                    )
-                    payload.update(
-                        {
-                            "query": query,
-                            "count": len(fallback_results),
-                            "results": fallback_results,
-                            "best": fallback_results[0],
-                            "fallback": True,
-                        }
-                    )
-                    payload["warning"] = f"YouTube API error: {error_msg}"
-                    return payload
+                    validation = validate_media_results(fallback_results[:limit], timeout=4.0)
+                    fallback_results = validation["results"]
+                    best = validation["best"]
+                    failures = validation["failures"]
+                    if best:
+                        warnings = [f"YouTube API error: {error_msg}"]
+                        if best.get("link_validation", {}).get("status") == "restricted":
+                            warnings.append("YouTube fallback link is access-restricted; returning the best verified candidate.")
+                        payload = success_envelope(
+                            provider="youtube_fallback_web",
+                            elapsed=int((perf_counter() - started) * 1000),
+                            warnings=warnings,
+                            status_code=response.status_code,
+                        )
+                        payload.update(
+                            {
+                                "status": "success" if fallback_results else "empty",
+                                "query": query,
+                                "count": len(fallback_results),
+                                "results": fallback_results,
+                                "best": best,
+                                "fallback": True,
+                                "validation_failures": failures,
+                            }
+                        )
+                        payload["warning"] = f"YouTube API error: {error_msg}"
+                        return payload
 
                 payload = error_envelope(
                     provider="youtube",
@@ -366,12 +377,53 @@ class YouTubeSearchCapability(CapabilityBase):
                 )
 
             results.sort(key=lambda x: x["confidenceScore"], reverse=True)
-            best = results[0] if results else None
+            validation = validate_media_results(results[:limit], timeout=4.0)
+            validated_results = validation["results"]
+            best = validation["best"]
+            failures = validation["failures"]
+            if not best:
+                fallback_results = self._fallback_search_web(query, limit, search_type)
+                if fallback_results:
+                    validation = validate_media_results(fallback_results[:limit], timeout=4.0)
+                    validated_results = validation["results"]
+                    best = validation["best"]
+                    failures.extend(validation["failures"])
+                    results = validated_results
+                else:
+                    results = validated_results
+            else:
+                results = validated_results
+
+            if not best:
+                payload = error_envelope(
+                    provider="youtube",
+                    error_code="BROKEN_LINK",
+                    error_message="Nenhum link de YouTube válido foi encontrado.",
+                    retryable=True,
+                    elapsed=int((perf_counter() - started) * 1000),
+                    warnings=[f"Falhas de validação: {len(failures)}"],
+                )
+                payload.update(
+                    {
+                        "query": query,
+                        "count": len(results),
+                        "results": results,
+                        "best": None,
+                        "validation_failures": failures,
+                        "fallback": bool(failures),
+                    }
+                )
+                return payload
 
             payload = success_envelope(
                 provider="youtube_oauth" if auth.get("mode") == "oauth" else "youtube",
                 elapsed=int((perf_counter() - started) * 1000),
                 status_code=response.status_code,
+                warnings=(
+                    ["Best YouTube link is access-restricted but not broken."]
+                    if best and best.get("link_validation", {}).get("status") == "restricted"
+                    else None
+                ),
             )
             payload.update(
                 {
@@ -381,6 +433,7 @@ class YouTubeSearchCapability(CapabilityBase):
                     "query": query,
                     "count": len(results),
                     "surfaceHint": surface,
+                    "validation_failures": failures,
                 }
             )
             return payload

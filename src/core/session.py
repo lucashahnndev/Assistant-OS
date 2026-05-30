@@ -69,6 +69,89 @@ class Session:
         # Phase 16: Intent Agenda for tracking open loops
         self.intent_agenda = IntentAgenda()
 
+    @staticmethod
+    def _clip_anchor_text(value: Any, limit: int = 240) -> str:
+        text = str(value or "").strip()
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip()
+
+    def get_continuity_anchor(self) -> Dict[str, Any]:
+        anchor = self.context.get("continuity_anchor")
+        return dict(anchor) if isinstance(anchor, dict) else {}
+
+    def update_continuity_anchor(
+        self,
+        *,
+        user_input: str = "",
+        objective_override: Optional[str] = None,
+        objective_state: Optional[str] = None,
+        last_turn_kind: Optional[str] = None,
+        last_outcome_type: Optional[str] = None,
+        last_action_id: Optional[str] = None,
+        last_action_status: Optional[str] = None,
+        last_clarification: Optional[Dict[str, Any]] = None,
+        location_payload: Optional[Dict[str, Any]] = None,
+        final_response: str = "",
+    ) -> Dict[str, Any]:
+        anchor = self.get_continuity_anchor()
+        raw_user_input = self._clip_anchor_text(user_input, 320)
+        if raw_user_input:
+            anchor["last_user_input"] = raw_user_input
+            if not anchor.get("initial_user_input"):
+                anchor["initial_user_input"] = raw_user_input
+
+        if objective_override:
+            anchor["objective"] = self._clip_anchor_text(objective_override, 240)
+            if raw_user_input:
+                anchor["last_substantive_user_input"] = raw_user_input
+        elif not anchor.get("objective"):
+            goal = self._clip_anchor_text(self.state_summary.get("goal"), 240)
+            if goal and goal.lower() != "standby":
+                anchor["objective"] = goal
+
+        if objective_state:
+            anchor["objective_state"] = str(objective_state).strip().lower()
+
+        if last_turn_kind:
+            anchor["last_turn_kind"] = str(last_turn_kind).strip().lower()
+        if last_outcome_type:
+            anchor["last_outcome_type"] = self._clip_anchor_text(last_outcome_type, 80)
+        if last_action_id:
+            anchor["last_action_id"] = self._clip_anchor_text(last_action_id, 80)
+        if last_action_status:
+            anchor["last_action_status"] = self._clip_anchor_text(last_action_status, 40)
+        if final_response:
+            anchor["last_response"] = self._clip_anchor_text(final_response, 240)
+
+        if isinstance(last_clarification, dict):
+            anchor["last_clarification"] = {
+                key: self._clip_anchor_text(value, 240) if isinstance(value, str) else value
+                for key, value in last_clarification.items()
+                if value not in (None, "", [], {})
+            }
+
+        if isinstance(location_payload, dict):
+            location_snapshot = {}
+            for key in ("source", "mode", "city", "state", "country", "timezone", "language"):
+                value = location_payload.get(key)
+                if value not in (None, "", [], {}):
+                    location_snapshot[key] = value
+            if location_snapshot:
+                anchor["location"] = location_snapshot
+
+        anchor["task_state"] = {
+            "goal": self._clip_anchor_text(self.state_summary.get("goal"), 240),
+            "cursor": self._clip_anchor_text(self.state_summary.get("cursor"), 80),
+            "last_outcome": self._clip_anchor_text(self.state_summary.get("last_outcome"), 240),
+            "last_error": self._clip_anchor_text(self.state_summary.get("last_error"), 240),
+        }
+        anchor["pending_action_present"] = bool(self.pending_action)
+        anchor["active_focus_task_id"] = self.active_focus_task_id
+        anchor["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self.context["continuity_anchor"] = anchor
+        return anchor
+
     def add_message(
         self,
         role: str,

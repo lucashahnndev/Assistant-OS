@@ -1891,6 +1891,14 @@ class AgentOrchestrator:
                 user_input,
                 fallback=str(session.context.get("user_language") or "en"),
             )
+            if user_input:
+                self._sync_continuity_anchor(
+                    session,
+                    user_input=user_input,
+                    turn_kind=self._derive_continuity_turn_kind(session),
+                    objective_override="",
+                    objective_state="active" if session.pending_action or getattr(session, "active_focus_task_id", None) else "",
+                )
             if context:
                 session.context["principal_context"] = context.model_dump()
             
@@ -3357,6 +3365,30 @@ class AgentOrchestrator:
                                 event_key=f"failure_recovery:{plan.action_id}:{loops}",
                             )
                         session.state_summary["last_error"] = result_reason
+                        if result_reason == "BROKEN_LINK" and self._is_media_link_search_action(plan.action_id):
+                            plan_args = plan.args if isinstance(plan.args, dict) else {}
+                            media_retry_hint = {
+                                "action_id": plan.action_id,
+                                "query": str(plan_args.get("query") or user_input or "").strip(),
+                                "provider": str((structured_result or {}).get("provider") or "").strip(),
+                                "validation_failures": list((structured_result or {}).get("validation_failures") or []),
+                                "retryable": bool((structured_result or {}).get("retryable", True)),
+                            }
+                            session.context["media_link_retry_hint"] = media_retry_hint
+                            session.state_summary["media_link_retry_hint"] = media_retry_hint
+                            session.state_summary["last_outcome"] = (
+                                "Broken media link detected; search for another verified candidate."
+                            )
+                            session.add_message(
+                                "system",
+                                (
+                                    "MEDIA LINK VALIDATION FAILED: "
+                                    f"action={plan.action_id} returned BROKEN_LINK. "
+                                    "Do not reuse the broken URL; search for another verified candidate or broaden the query."
+                                ),
+                                msg_type="reasoning",
+                                work_id=work_id,
+                            )
 
                         # Fix #4: Track tool cooldown on failure
                         if plan.action_id == "browser.control.run" and result_reason in {"PLANNER_OUTPUT_INVALID", "SKILL_EXECUTION_ERROR", "ACTION_DISPATCH_FAILURE", "failure_marker_detected", "timeout"}:
@@ -3718,6 +3750,19 @@ class AgentOrchestrator:
 
             # 5. Check for Memory Consolidation (Token-based)
             # Threshold is configurable and intentionally lower to trigger earlier compaction.
+            turn_outcome_payload = {
+                "outcome_type": "turn_complete",
+                "last_action_id": last_action_id,
+                "last_action_status": last_action_status,
+                "last_action_reason": last_action_reason,
+                "last_action_plan": session.context.get("last_action_plan") if isinstance(session.context, dict) else None,
+                "final_response": final_response,
+                "pending_action": session.pending_action if isinstance(session.pending_action, dict) else None,
+                "planner_tree": planner_tree,
+                "replans_used": replans_used,
+                "loops": loops,
+                **turn_outcome_overrides,
+            }
             last_cognitive_outcome = {}
             if isinstance(session.context, dict) and isinstance(session.context.get("last_cognitive_outcome"), dict):
                 last_cognitive_outcome = dict(session.context.get("last_cognitive_outcome") or {})
@@ -3733,19 +3778,7 @@ class AgentOrchestrator:
             self._commit_cognitive_turn_state(
                 session=session,
                 user_input=user_input,
-                turn_outcome={
-                    "outcome_type": "turn_complete",
-                    "last_action_id": last_action_id,
-                    "last_action_status": last_action_status,
-                    "last_action_reason": last_action_reason,
-                    "last_action_plan": session.context.get("last_action_plan") if isinstance(session.context, dict) else None,
-                    "final_response": final_response,
-                    "pending_action": session.pending_action if isinstance(session.pending_action, dict) else None,
-                    "planner_tree": planner_tree,
-                    "replans_used": replans_used,
-                    "loops": loops,
-                    **turn_outcome_overrides,
-                },
+                turn_outcome=turn_outcome_payload,
             )
 
             if isinstance(session.context, dict):
@@ -3767,6 +3800,13 @@ class AgentOrchestrator:
                     }
                 elif progressed_turn and session.context.get("last_clarification"):
                     session.context.pop("last_clarification", None)
+                self._sync_continuity_anchor(
+                    session,
+                    user_input=user_input,
+                    turn_outcome=turn_outcome_payload,
+                    final_response=final_response or "",
+                    last_clarification=session.context.get("last_clarification") if isinstance(session.context.get("last_clarification"), dict) else None,
+                )
 
             total_tokens = sum(m.get("tokens", 0) for m in session.history)
             if total_tokens > self._memory_consolidation_threshold():
@@ -4595,14 +4635,20 @@ class AgentOrchestrator:
         if structured:
             ok = structured.get("ok")
             status = str(structured.get("status") or "").strip().lower()
-            error_code = structured.get("error")
+            error_code = structured.get("error_code") or structured.get("error")
+            normalized_error_code = str(error_code or "").strip().upper()
 
             # Fix #3: Harden Result Assessment
             if "result" in structured and isinstance(structured["result"], dict):
                 nested_status = str(structured["result"].get("status") or "").strip().lower()
                 if nested_status in {"error", "failed", "failure"}:
                     return "failure", str(structured["result"].get("error") or nested_status)
+                nested_error_code = str(structured["result"].get("error_code") or "").strip().upper()
+                if nested_error_code == "BROKEN_LINK":
+                    return "failure", "BROKEN_LINK"
 
+            if normalized_error_code == "BROKEN_LINK":
+                return "failure", "BROKEN_LINK"
             if ok is False:
                 return "failure", str(error_code or status or "ok_false")
 
@@ -4653,6 +4699,15 @@ class AgentOrchestrator:
         """Returns a compact signature string used to detect repeated failures."""
         cleaned = re.sub(r"\s+", " ", (raw_result or "").strip().lower())
         return cleaned[:240]
+
+    @staticmethod
+    def _is_media_link_search_action(action_id: Optional[str]) -> bool:
+        normalized = str(action_id or "").strip().lower()
+        return normalized in {
+            "youtube.search.find",
+            "spotify.search.search",
+            "deezer.search.search",
+        }
 
     @staticmethod
     def _summarize_last_success_data(
@@ -6122,6 +6177,128 @@ class AgentOrchestrator:
             return "Unknown | " + " | ".join(extras)
         return "Unknown"
 
+    def _derive_continuity_turn_kind(self, session: Session) -> str:
+        pending_action = session.pending_action if isinstance(session.pending_action, dict) else None
+        if pending_action:
+            return "task"
+        if isinstance(session.context.get("last_clarification"), dict):
+            return "clarification"
+        if getattr(session, "active_focus_task_id", None):
+            return "task"
+        last_outcome = session.context.get("last_cognitive_outcome")
+        if isinstance(last_outcome, dict) and bool(last_outcome.get("fallback_used")):
+            return "recovery"
+        return "conversation"
+
+    @staticmethod
+    def _objective_state_from_outcome(turn_outcome: Optional[Dict[str, Any]]) -> str:
+        outcome = turn_outcome if isinstance(turn_outcome, dict) else {}
+        if bool(outcome.get("task_completed")):
+            return "completed"
+        if bool(outcome.get("approval_pending")):
+            return "blocked"
+        if bool(outcome.get("clarification_required")):
+            return "clarification"
+        if bool(outcome.get("task_progressed")):
+            return "active"
+        if bool(outcome.get("fallback_used")):
+            return "recovery"
+        return ""
+
+    def _sync_continuity_anchor(
+        self,
+        session: Session,
+        *,
+        user_input: str = "",
+        turn_kind: str = "",
+        objective_override: str = "",
+        objective_state: str = "",
+        last_outcome_type: str = "",
+        turn_outcome: Optional[Dict[str, Any]] = None,
+        final_response: str = "",
+        location_payload: Optional[Dict[str, Any]] = None,
+        last_clarification: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if not isinstance(session, Session):
+            return {}
+
+        anchor = session.get_continuity_anchor()
+        raw_input = str(user_input or "").strip()
+        if raw_input:
+            anchor["last_user_input"] = raw_input[:320]
+            if not anchor.get("initial_user_input"):
+                anchor["initial_user_input"] = raw_input[:320]
+
+        if raw_input:
+            anchor["last_substantive_user_input"] = raw_input[:320]
+            if not objective_override:
+                objective_override = ""
+
+        if objective_override:
+            anchor["objective"] = str(objective_override or "").strip()[:240]
+        else:
+            goal = str(session.state_summary.get("goal") or "").strip()
+            if goal and goal.lower() != "standby":
+                current_objective = str(anchor.get("objective") or "").strip()
+                if not current_objective or current_objective != goal:
+                    anchor["objective"] = goal[:240]
+
+        if objective_state:
+            anchor["objective_state"] = objective_state
+        elif turn_outcome:
+            derived_state = self._objective_state_from_outcome(turn_outcome)
+            if derived_state:
+                anchor["objective_state"] = derived_state
+
+        if turn_kind:
+            anchor["last_turn_kind"] = str(turn_kind or "").strip().lower()
+
+        if last_outcome_type:
+            anchor["last_outcome_type"] = str(last_outcome_type or "").strip()[:80]
+        elif isinstance(turn_outcome, dict) and turn_outcome.get("outcome_type"):
+            anchor["last_outcome_type"] = str(turn_outcome.get("outcome_type") or "").strip()[:80]
+
+        if isinstance(turn_outcome, dict):
+            action_id = str(turn_outcome.get("last_action_id") or "").strip()
+            if action_id:
+                anchor["last_action_id"] = action_id[:80]
+            action_status = str(turn_outcome.get("last_action_status") or "").strip()
+            if action_status:
+                anchor["last_action_status"] = action_status[:40]
+            final_text = str(turn_outcome.get("final_response") or final_response or "").strip()
+            if final_text:
+                anchor["last_response"] = final_text[:240]
+        elif final_response:
+            anchor["last_response"] = str(final_response).strip()[:240]
+
+        if isinstance(last_clarification, dict):
+            anchor["last_clarification"] = {
+                key: value
+                for key, value in last_clarification.items()
+                if value not in (None, "", [], {})
+            }
+
+        if isinstance(location_payload, dict):
+            location_snapshot = {}
+            for key in ("source", "mode", "city", "state", "country", "timezone", "language"):
+                value = location_payload.get(key)
+                if value not in (None, "", [], {}):
+                    location_snapshot[key] = value
+            if location_snapshot:
+                anchor["location"] = location_snapshot
+
+        anchor["task_state"] = {
+            "goal": str(session.state_summary.get("goal") or "").strip()[:240],
+            "cursor": str(session.state_summary.get("cursor") or "").strip()[:80],
+            "last_outcome": str(session.state_summary.get("last_outcome") or "").strip()[:240],
+            "last_error": str(session.state_summary.get("last_error") or "").strip()[:240],
+        }
+        anchor["pending_action_present"] = bool(session.pending_action)
+        anchor["active_focus_task_id"] = getattr(session, "active_focus_task_id", None)
+        anchor["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        session.context["continuity_anchor"] = anchor
+        return anchor
+
     def _build_situational_context_snapshot(self, session: Session, location_payload: Any) -> Dict[str, Any]:
         if not isinstance(session, Session):
             return {}
@@ -6150,11 +6327,28 @@ class AgentOrchestrator:
         if not isinstance(clarification, dict):
             clarification = {}
 
+        continuity_anchor = context.get("continuity_anchor")
+        if not isinstance(continuity_anchor, dict):
+            continuity_anchor = {}
+        continuity_snapshot = {
+            "objective": continuity_anchor.get("objective"),
+            "objective_state": continuity_anchor.get("objective_state"),
+            "last_user_input": continuity_anchor.get("last_user_input"),
+            "last_substantive_user_input": continuity_anchor.get("last_substantive_user_input"),
+            "last_turn_kind": continuity_anchor.get("last_turn_kind"),
+            "last_outcome_type": continuity_anchor.get("last_outcome_type"),
+            "active_focus_task_id": continuity_anchor.get("active_focus_task_id"),
+            "pending_action_present": continuity_anchor.get("pending_action_present"),
+            "updated_at": continuity_anchor.get("updated_at"),
+        }
+        continuity_snapshot = {k: v for k, v in continuity_snapshot.items() if v not in (None, "", [], {})}
+
         snapshot = {
             "user_language": context.get("user_language"),
             "timezone": context.get("timezone") or self._resolve_session_timezone(session),
             "initial_user_request": context.get("initial_user_request"),
             "last_user_request": context.get("last_user_request"),
+            "continuity_anchor": continuity_snapshot,
             "pending_action": pending_action,
             "last_clarification": clarification,
             "active_intents": active_intents,
@@ -6172,6 +6366,11 @@ class AgentOrchestrator:
                 "cursor": session.state_summary.get("cursor") if isinstance(session.state_summary, dict) else None,
                 "last_outcome": session.state_summary.get("last_outcome") if isinstance(session.state_summary, dict) else None,
                 "last_error": session.state_summary.get("last_error") if isinstance(session.state_summary, dict) else None,
+                "media_link_retry_hint": (
+                    session.context.get("media_link_retry_hint")
+                    if isinstance(session.context.get("media_link_retry_hint"), dict)
+                    else None
+                ),
             },
         }
         return {k: v for k, v in snapshot.items() if v not in (None, "", [], {})}

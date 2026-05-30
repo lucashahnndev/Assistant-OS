@@ -46,8 +46,18 @@ def build_cognitive_frame(session: Any, user_input: str = "") -> CognitiveFrame:
     frame.context_sources.append("runtime_state")
 
     # 1. Objective Parsing
-    # Look at active intent group or session state summary
-    frame.objective = session.state_summary.get("goal", "Standby")
+    # Prefer a compact continuity anchor when available so conversational turns
+    # do not erase the active session objective.
+    context = getattr(session, "context", {}) if isinstance(getattr(session, "context", {}), dict) else {}
+    anchor = context.get("continuity_anchor") if isinstance(context.get("continuity_anchor"), dict) else {}
+    anchor_objective = str(anchor.get("objective") or "").strip()
+    anchor_state = str(anchor.get("objective_state") or "").strip().lower()
+    if anchor_objective and anchor_state not in {"completed", "closed", "resolved", "idle"}:
+        frame.objective = anchor_objective
+        frame.context_sources.append("continuity_anchor")
+    else:
+        # Look at active intent group or session state summary
+        frame.objective = session.state_summary.get("goal", "Standby")
     if user_input:
         frame.active_user_intent = "user_prompt"
         frame.context_sources.append("user_input")

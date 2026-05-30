@@ -1,12 +1,49 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Dict, List
 
 from .models import ContextIntent, RetrievalTarget
 
 
+@dataclass(slots=True)
+class RetrievalRouteSignals:
+    """Weak retrieval guidance produced by RetrievalRouter.
+
+    `legacy_intent` exists for compatibility with the current pipeline, but the
+    semantic decision remains external to the router.
+    """
+
+    legacy_intent: ContextIntent
+    targets: List[RetrievalTarget] = field(default_factory=list)
+    candidate_domains: List[str] = field(default_factory=list)
+    domain_weights: Dict[str, float] = field(default_factory=dict)
+    reasons: List[str] = field(default_factory=list)
+    source_hints: List[str] = field(default_factory=list)
+    matched_markers: Dict[str, bool] = field(default_factory=dict)
+    uncertainty: str = "low"
+    semantic_authority: bool = False
+
+    def __iter__(self):
+        return iter(self.targets)
+
+    def __len__(self) -> int:
+        return len(self.targets)
+
+    def __getitem__(self, index: int) -> RetrievalTarget:
+        return self.targets[index]
+
+    @property
+    def intent(self) -> ContextIntent:
+        return self.legacy_intent
+
+    @property
+    def notes(self) -> List[str]:
+        return self.reasons
+
+
 class RetrievalRouter:
-    """Maps classified intent to logical retrieval domains."""
+    """Produces retrieval candidates and weak evidence signals."""
 
     _DOCUMENTATION_HINTS = (
         "documentation",
@@ -144,7 +181,12 @@ class RetrievalRouter:
         ],
     }
 
-    def route(self, intent: ContextIntent, user_input: str = "", broker_hints: Dict[str, object] | None = None) -> List[RetrievalTarget]:
+    def route(
+        self,
+        intent: ContextIntent,
+        user_input: str = "",
+        broker_hints: Dict[str, object] | None = None,
+    ) -> RetrievalRouteSignals:
         targets = self._ROUTES.get(intent, [])
         policy_relevant = self._is_policy_relevant(user_input)
         troubleshooting_relevant = self._is_troubleshooting_relevant(user_input)
@@ -168,7 +210,47 @@ class RetrievalRouter:
             )
             for target in targets
         ]
-        return hinted_targets
+        candidate_domains = [target.domain for target in hinted_targets]
+        domain_weights = {
+            target.domain: self._hinted_weight(target=target, broker_hints=broker_hints)
+            for target in hinted_targets
+        }
+        reasons = self._build_route_reasons(
+            intent=intent,
+            user_input=user_input,
+            policy_relevant=policy_relevant,
+            troubleshooting_relevant=troubleshooting_relevant,
+            documentation_relevant=documentation_relevant,
+            custom_relevant=custom_relevant,
+            broker_hints=broker_hints,
+            targets=hinted_targets,
+        )
+        source_hints = self._build_source_hints(
+            intent=intent,
+            policy_relevant=policy_relevant,
+            troubleshooting_relevant=troubleshooting_relevant,
+            documentation_relevant=documentation_relevant,
+            custom_relevant=custom_relevant,
+            broker_hints=broker_hints,
+        )
+        uncertainty = self._infer_uncertainty(targets=hinted_targets, broker_hints=broker_hints)
+        matched_markers = {
+            "policy_relevant": policy_relevant,
+            "troubleshooting_relevant": troubleshooting_relevant,
+            "documentation_relevant": documentation_relevant,
+            "custom_relevant": custom_relevant,
+        }
+        return RetrievalRouteSignals(
+            legacy_intent=intent,
+            targets=hinted_targets,
+            candidate_domains=candidate_domains,
+            domain_weights=domain_weights,
+            reasons=reasons,
+            source_hints=source_hints,
+            matched_markers=matched_markers,
+            uncertainty=uncertainty,
+            semantic_authority=False,
+        )
 
     @classmethod
     def _is_policy_relevant(cls, user_input: str) -> bool:
@@ -310,3 +392,84 @@ class RetrievalRouter:
         if notes:
             return notes + "|" + "|".join(applied)
         return "|".join(applied)
+
+    @staticmethod
+    def _hinted_weight(target: RetrievalTarget, broker_hints: Dict[str, object] | None) -> float:
+        hints = broker_hints if isinstance(broker_hints, dict) else {}
+        weight = 1.0 / max(1, int(target.priority))
+        if target.domain == "policies" and bool(hints.get("approval_pending")):
+            weight += 0.15
+        if target.domain == "agent_experience" and bool(hints.get("troubleshooting_active")):
+            weight += 0.15
+        if target.domain == "capability_knowledge" and hints.get("hot_action_namespace"):
+            weight += 0.1
+        if target.domain == "procedures" and hints.get("primary_task_id"):
+            weight += 0.1
+        return round(weight, 3)
+
+    @staticmethod
+    def _build_route_reasons(
+        *,
+        intent: ContextIntent,
+        user_input: str,
+        policy_relevant: bool,
+        troubleshooting_relevant: bool,
+        documentation_relevant: bool,
+        custom_relevant: bool,
+        broker_hints: Dict[str, object] | None,
+        targets: List[RetrievalTarget],
+    ) -> List[str]:
+        hints = broker_hints if isinstance(broker_hints, dict) else {}
+        reasons = [
+            f"intent:{intent.value}",
+            f"policy_relevant:{str(policy_relevant).lower()}",
+            f"troubleshooting_relevant:{str(troubleshooting_relevant).lower()}",
+            f"documentation_relevant:{str(documentation_relevant).lower()}",
+            f"custom_relevant:{str(custom_relevant).lower()}",
+        ]
+        for key in ("approval_pending", "troubleshooting_active", "hot_action_namespace", "primary_task_id"):
+            if hints.get(key):
+                reasons.append(f"hint:{key}")
+        for target in targets[:6]:
+            if target.notes:
+                reasons.append(f"{target.domain}:{target.notes}")
+        text = (user_input or "").strip()
+        if text:
+            reasons.append(f"query_len:{len(text.split())}")
+        return list(dict.fromkeys(reasons))[:10]
+
+    @staticmethod
+    def _build_source_hints(
+        *,
+        intent: ContextIntent,
+        policy_relevant: bool,
+        troubleshooting_relevant: bool,
+        documentation_relevant: bool,
+        custom_relevant: bool,
+        broker_hints: Dict[str, object] | None,
+    ) -> List[str]:
+        hints = broker_hints if isinstance(broker_hints, dict) else {}
+        source_hints = [f"legacy_intent:{intent.value}"]
+        if policy_relevant:
+            source_hints.append("policy_marker")
+        if troubleshooting_relevant:
+            source_hints.append("troubleshooting_marker")
+        if documentation_relevant:
+            source_hints.append("documentation_marker")
+        if custom_relevant:
+            source_hints.append("custom_marker")
+        for key in ("approval_pending", "troubleshooting_active", "hot_action_namespace", "primary_task_id"):
+            if hints.get(key):
+                source_hints.append(f"broker_hint:{key}")
+        return list(dict.fromkeys(source_hints))[:10]
+
+    @staticmethod
+    def _infer_uncertainty(*, targets: List[RetrievalTarget], broker_hints: Dict[str, object] | None) -> str:
+        hints = broker_hints if isinstance(broker_hints, dict) else {}
+        if not targets:
+            return "high"
+        if bool(hints):
+            return "medium"
+        if any(not target.active for target in targets):
+            return "medium"
+        return "low"

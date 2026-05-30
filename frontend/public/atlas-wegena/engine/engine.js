@@ -921,6 +921,18 @@ class WegenaEngine {
     clearSceneNodes() {
         this.visualState.sceneNodes.byName = {};
         this.visualState.sceneNodes.order = [];
+        if (this.visualState.meshes) {
+            this.visualState.meshes.order.forEach(name => {
+                const mesh = this.visualState.meshes.byName[name];
+                if (mesh) {
+                    this.scene.remove(mesh);
+                    if (mesh.geometry) mesh.geometry.dispose();
+                    if (mesh.material) mesh.material.dispose();
+                }
+            });
+            this.visualState.meshes.byName = {};
+            this.visualState.meshes.order = [];
+        }
     }
 
     registerSceneNode(name, descriptor = {}) {
@@ -2848,7 +2860,7 @@ class WegenaEngine {
         if (this.isDestroyed) return;
         if (this.visualState?.isDensityChanging) return;
         
-        let density = val;
+        let density = Math.min(val, this.config.particleCount); // Clamp to prevent WebGL buffer overflow
         const activeMeta = this.visualState?.lastPayload?.scriptMeta;
         if (activeMeta) {
             if (activeMeta.maxParticles && density > activeMeta.maxParticles) {

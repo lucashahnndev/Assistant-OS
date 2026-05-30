@@ -17,33 +17,50 @@ from server.auth import decode_access_token
 logger = get_logger("ServerDriver")
 
 class ConnectionManager:
-    # ... (no changes to ConnectionManager)
     def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
+        self.active_connections: Dict[str, set] = {}
 
     async def connect(self, websocket: WebSocket, session_id: str):
         await websocket.accept()
-        self.active_connections[session_id] = websocket
-        logger.info(f"Client connected: {session_id}. Total: {len(self.active_connections)}")
+        if session_id not in self.active_connections:
+            self.active_connections[session_id] = set()
+        self.active_connections[session_id].add(websocket)
+        total = sum(len(s) for s in self.active_connections.values())
+        logger.info(f"Client connected: {session_id}. Total: {total}")
 
-    def disconnect(self, session_id: str):
+    def disconnect(self, session_id: str, websocket: WebSocket = None):
         if session_id in self.active_connections:
-            del self.active_connections[session_id]
+            if websocket is not None:
+                self.active_connections[session_id].discard(websocket)
+                if not self.active_connections[session_id]:
+                    del self.active_connections[session_id]
+            else:
+                del self.active_connections[session_id]
             logger.info(f"Client disconnected: {session_id}")
 
     async def broadcast(self, message: str):
-        for connection in self.active_connections.values():
-            try:
-                await connection.send_text(message)
-            except Exception as e:
-                logger.error(f"Error broadcasting message: {e}")
+        dead = []
+        for session_id, sockets in self.active_connections.items():
+            for connection in list(sockets):
+                try:
+                    await connection.send_text(message)
+                except Exception as e:
+                    logger.error(f"Error broadcasting to {session_id}: {e}")
+                    dead.append((session_id, connection))
+        for session_id, ws in dead:
+            self.active_connections.get(session_id, set()).discard(ws)
 
     async def send_personal_message(self, message: str, session_id: str):
-        if session_id in self.active_connections:
+        sockets = self.active_connections.get(session_id, set())
+        dead = []
+        for ws in list(sockets):
             try:
-                await self.active_connections[session_id].send_text(message)
+                await ws.send_text(message)
             except Exception as e:
                 logger.error(f"Error sending message to {session_id}: {e}")
+                dead.append(ws)
+        for ws in dead:
+            sockets.discard(ws)
 
 class ServerDriver(BaseDriver):
     def __init__(self, kernel, parent_dir):
@@ -204,17 +221,44 @@ class ServerDriver(BaseDriver):
                         # Not fully implemented in P0, but signal received
                         continue
 
+                    # Boot sequence sentinel — replace with the actual diagnostic prompt
+                    # so the agent uses its real tools instead of receiving a literal token.
+                    if content == '__BOOT_SEQUENCE__' and session_id == 'system.boot':
+                        locale = (user_data or {}).get('locale', 'pt-BR')
+                        resolved_name = sender_name or 'Administrator'
+
+                        # Reset session history before each boot so accumulated previous
+                        # boots don't confuse the LLM (prevents "Append-only protection" spam).
+                        try:
+                            session = self.kernel.orchestrator.get_session_robust(session_id)
+                            if session and hasattr(session, 'clear_history'):
+                                session.clear_history()
+                                logger.info(f"Boot: cleared session history for {session_id}")
+                        except Exception as e:
+                            logger.warning(f"Boot: could not clear session history: {e}")
+
+                        content = (
+                            f"SYSTEM BOOT SEQUENCE INITIATED.\n"
+                            f"The user '{resolved_name}' has just logged in.\n"
+                            f"Your task is to act as the OS Kernel and perform a boot diagnostic.\n"
+                            f"1. Use 'system.control.info' and 'system.control.status' to check system health.\n"
+                            f"2. Use 'cloudflare.tunnel.status' or 'ngrok.tunnel.status' to check active network tunnels.\n"
+                            f"3. Finally, synthesize this information into a brief, welcoming boot briefing.\n"
+                            f"CRITICAL: Do NOT output generic text. Use your tools. "
+                            f"RESPOND EXPLICITLY IN THE FOLLOWING LOCALE/LANGUAGE: {locale}"
+                        )
+
                     # Process in background thread to avoid blocking WebSocket loop
                     threading.Thread(
                         target=self._process_message,
                         args=(content, session_id, attachments, user_data, sender_id, sender_name),
-                    ).start()
-                    
+                     ).start()
+                     
             except WebSocketDisconnect:
-                self.connection_manager.disconnect(session_id)
+                self.connection_manager.disconnect(session_id, websocket)
             except Exception as e:
                 logger.error(f"WebSocket Error: {e}")
-                self.connection_manager.disconnect(session_id)
+                self.connection_manager.disconnect(session_id, websocket)
  
         @self.app.get("/status")
         async def status():
@@ -290,9 +334,62 @@ class ServerDriver(BaseDriver):
          safe_user_data = user_data if isinstance(user_data, dict) else {}
          if sender_name and not safe_user_data.get("user_name"):
              safe_user_data["user_name"] = sender_name
+
+         driver_instance = self
+         if safe_user_data.get('is_boot') and safe_user_data.get('is_voice_active') and hasattr(self, 'voice_manager'):
+             import time, re
+             class BootVoiceWrapper:
+                 def __init__(self, driver, sid):
+                     self.driver = driver
+                     self.sid = sid
+                     self.buffer = ""
+                     self.turn_id = f"boot_{int(time.time())}"
+                     
+                 def send_response(self, text, target=None, is_chunk=False, attachments=None, model_info=None, **kwargs):
+                     self.driver.send_response(text, target, is_chunk, attachments, model_info)
+                     raw = str(text or "")
+                     if not raw: return
+                     from utils.voice_text import sanitize_tts_text
+                     speech_text = sanitize_tts_text(raw)
+                     if not speech_text: return
+                     self.buffer += speech_text
+                     parts = re.split(r'([.?!]|\n)', self.buffer)
+                     if len(parts) > 2:
+                         to_queue = ""
+                         for i in range(0, len(parts) - 1, 2):
+                             to_queue += parts[i] + parts[i+1]
+                         self.buffer = parts[-1]
+                         if to_queue.strip():
+                             self.driver.voice_manager._ensure_engines()
+                             if not self.driver.voice_manager.tts_manager:
+                                 from services.tts.manager import TTSManager
+                                 self.driver.voice_manager.tts_manager = TTSManager()
+                             self.driver.voice_manager._queue_tts(self.sid, self.turn_id, to_queue.strip())
+                             
+                 def send_complete(self, target=None, *args, **kwargs):
+                     if self.buffer.strip():
+                         self.driver.voice_manager._ensure_engines()
+                         if not self.driver.voice_manager.tts_manager:
+                             from services.tts.manager import TTSManager
+                             self.driver.voice_manager.tts_manager = TTSManager()
+                         self.driver.voice_manager._queue_tts(self.sid, self.turn_id, self.buffer.strip())
+                     ctx = self.driver.voice_manager.get_context(self.sid)
+                     ctx.tts_queue.put((self.turn_id, None)) # EOF sentinel
+                     if hasattr(self.driver, 'send_complete'):
+                         self.driver.send_complete(target, *args, **kwargs)
+
+                 def send_status(self, *args, **kwargs):
+                     self.driver.send_status(*args, **kwargs)
+                 def get_capabilities(self):
+                     return getattr(self.driver, 'get_capabilities', lambda: [])()
+                 def get_interface_id(self):
+                     return getattr(self.driver, 'get_interface_id', lambda: "web")()
+
+             driver_instance = BootVoiceWrapper(self, session_id)
+
          self.kernel.process_input(
              message,
-             self,
+             driver_instance,
              user_id=session_id,
              user_data=safe_user_data,
              context=context,

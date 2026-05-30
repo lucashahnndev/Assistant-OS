@@ -253,13 +253,9 @@ class BrowserControlCapability(CapabilityBase):
         return ["run", "step", "close", "inspect", "close_tab", "close_instance", "sync_registry", "gc", "health"]
 
     def get_reflex_rules(self) -> List[Dict[str, Any]]:
-        return [
-            {
-                "pattern": r"(?i)(?:abr[aei]|open|launch|inicie?)\s+(?:o\s+)?(?:navegador|browser|chrome|google\s+chrome)",
-                "action_id": "browser.control.run",
-                "handler": lambda m: {"goal": m.string},
-            },
-        ]
+        # Browser launch and tool selection must be decided by the agent/LLM.
+        # Keep reflex shortcuts disabled so natural language never bypasses planning.
+        return []
 
     def get_keywords(self) -> List[str]:
         return [
