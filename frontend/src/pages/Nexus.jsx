@@ -5,6 +5,7 @@ import { useVoice } from '../hooks/useVoice';
 import { useTheme } from '../context/ThemeContext';
 import { api } from '../hooks/api';
 import { notify } from '../utils/notify.jsx';
+import { useGlobalSession } from '../context/GlobalSessionContext';
 import {
     Activity,
     Copy,
@@ -1634,7 +1635,6 @@ const Nexus = () => {
         onError: (err) => notify.error("Microphone error: " + err.message)
     });
     const [sys, setSys] = useState({ status: null, works: [] });
-    const [activeWorkers, setActiveWorkers] = useState([]);
     const [agentThought, setAgentThought] = useState('');
     const [isThinking, setIsThinking] = useState(false);
     const agentThoughtTimeoutRef = useRef(null);
@@ -2190,8 +2190,16 @@ const Nexus = () => {
         const init = async () => {
             try {
                 let activeId = null;
-                const activeData = await api.get('/sessions/active?interface=web');
-                if (activeData && activeData.id) activeId = activeData.id;
+                const activeData = await api.get('/sessions/active?interface=nexus');
+                if (activeData && activeData.id) {
+                    activeId = activeData.id;
+                } else {
+                    const newData = await api.post('/sessions', { interface: 'nexus' });
+                    if (newData && newData.id) {
+                        activeId = newData.id;
+                        setActiveSessionId(activeId);
+                    }
+                }
 
                 if (activeId) {
                     const historyData = await api.get(`/sessions/${activeId}`);
@@ -2229,31 +2237,27 @@ const Nexus = () => {
 
         init();
         fetchMetrics();
-        const t = setInterval(fetchMetrics, 5000);
+        const t = setInterval(fetchMetrics, 15000);
         return () => clearInterval(t);
     }, []);
+
+    // Extract useGlobalSession properties
+    const { addWebSocketListener, removeWebSocketListener, sendWebSocketMessage, connectionStatus, activeSessionId, setActiveSessionId, workers: activeWorkers } = useGlobalSession();
 
     useEffect(() => {
         const sessionId = state.textState.sessionId;
         if (!sessionId) return;
 
-        if (wsRef.current) wsRef.current.close();
+        setActiveSessionId(sessionId);
 
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws/${sessionId}`;
-        const ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
+        if (connectionStatus === 'online') {
             dispatch({ type: 'SET_CONNECTED', payload: true });
-            notify.success("Assistant Link Active", { id: 'nexus-ws' });
-        };
+        } else {
+            dispatch({ type: 'SET_CONNECTED', payload: false });
+        }
 
-        ws.onclose = () => dispatch({ type: 'SET_CONNECTED', payload: false });
-
-        ws.onmessage = (event) => {
+        const handleWebSocketMessage = (data) => {
             try {
-                const data = JSON.parse(event.data);
                 if (data.type === 'pong') return;
 
                 // ── Worker state updates ──────────────────────────────────
@@ -2266,19 +2270,13 @@ const Nexus = () => {
                         if (agentThoughtTimeoutRef.current) clearTimeout(agentThoughtTimeoutRef.current);
                         agentThoughtTimeoutRef.current = setTimeout(() => setIsThinking(false), 6000);
                     }
-                    setActiveWorkers(prev => {
-                        const next = [...prev];
-                        const idx = next.findIndex(w => w.work_id === data.data?.work_id);
-                        if (idx >= 0) next[idx] = { ...next[idx], ...data.data };
-                        else if (data.data) next.push(data.data);
-                        return next.filter(w => !['complete', 'failed', 'succeeded', 'cancelled'].includes(String(w.status || '').toLowerCase()));
-                    });
+                    // Handled by GlobalSessionContext now
                     return;
                 }
 
                 // ── System metrics push ───────────────────────────────────
                 if (data.type === 'system_metrics' || data.type === 'system_health') {
-                    if (data.data?.active_workers) setActiveWorkers(data.data.active_workers);
+                    // Handled by GlobalSessionContext now
                     return;
                 }
 
@@ -2678,11 +2676,13 @@ const Nexus = () => {
             }
         };
 
+        addWebSocketListener(handleWebSocketMessage);
+
         return () => {
-            ws.close();
+            removeWebSocketListener(handleWebSocketMessage);
             if (agentThoughtTimeoutRef.current) clearTimeout(agentThoughtTimeoutRef.current);
         };
-    }, [state.textState.sessionId]);
+    }, [state.textState.sessionId, connectionStatus, addWebSocketListener, removeWebSocketListener]);
 
     useEffect(() => {
         const onResize = () => setIsMobile(window.innerWidth <= 640);
@@ -2699,10 +2699,11 @@ const Nexus = () => {
 
         if (!activeId) {
             try {
-                const data = await api.post('/sessions', { interface: 'web' });
+                const data = await api.post('/sessions', { interface: 'nexus' });
                 if (data && data.id) {
                     activeId = data.id;
                     dispatch({ type: 'SET_SESSION', payload: { id: activeId, name: data.name } });
+                    setActiveSessionId(activeId);
                 } else return;
             } catch (err) {
                 notify.error("Bridge failure");
@@ -2712,6 +2713,15 @@ const Nexus = () => {
 
         dispatch({ type: 'SET_SENDING', payload: true });
         dispatch({ type: 'SET_TEXT', payload: { input: '' } });
+        dispatch({
+            type: 'ADD_MESSAGE',
+            payload: {
+                id: `msg-optimistic-${Date.now()}`,
+                role: 'user',
+                content: input,
+                timestamp: Date.now() / 1000
+            }
+        });
 
         const payload = {
             type: 'msg',
@@ -2719,8 +2729,8 @@ const Nexus = () => {
             timestamp: Date.now()
         };
 
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify(payload));
+        if (connectionStatus === 'online') {
+            sendWebSocketMessage(payload);
         } else {
             try {
                 await api.post(`/sessions/${activeId}/message`, { message: input });
@@ -2732,16 +2742,16 @@ const Nexus = () => {
     };
 
     const handleReload = async () => {
-        if (wsRef.current) wsRef.current.close();
         dispatch({ type: 'SET_SESSION', payload: null });
         dispatch({ type: 'SET_HISTORY', payload: [] });
         dispatch({ type: 'SET_CONNECTED', payload: false });
         notify.loading("Provisioning new session...", { id: 'live-reload' });
 
         try {
-            const data = await api.post('/sessions', { interface: 'web' });
+            const data = await api.post('/sessions', { interface: 'nexus' });
             if (data && data.id) {
                 dispatch({ type: 'SET_SESSION', payload: { id: data.id, name: data.name } });
+                setActiveSessionId(data.id);
                 notify.success("New Session Ready", { id: 'live-reload' });
             }
         } catch (err) {

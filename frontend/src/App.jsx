@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { VideoPlayerProvider } from './context/VideoPlayerContext';
+import { GlobalSessionProvider } from './context/GlobalSessionContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import VideoPlayerDock from './components/VideoPlayerDock';
 import WegenaSceneModal from './components/WegenaSceneModal';
@@ -104,17 +105,19 @@ function App() {
         <BrowserRouter>
             <ThemeProvider>
                 <AuthProvider>
-                    <VideoPlayerProvider>
-                        <Toaster
-                            position="top-right"
-                            containerStyle={{ zIndex: 12000 }}
-                            toastOptions={{ style: { background: 'transparent', boxShadow: 'none', padding: 0 } }}
-                        />
-                        <AppRoutes />
-                        <VideoPlayerDock />
-                        <WegenaSceneModal />
-                        <PwaInstallBanner />
-                    </VideoPlayerProvider>
+                    <GlobalSessionProvider>
+                        <VideoPlayerProvider>
+                            <Toaster
+                                position="top-right"
+                                containerStyle={{ zIndex: 12000 }}
+                                toastOptions={{ style: { background: 'transparent', boxShadow: 'none', padding: 0 } }}
+                            />
+                            <AppRoutes />
+                            <VideoPlayerDock />
+                            <WegenaSceneModal />
+                            <PwaInstallBanner />
+                        </VideoPlayerProvider>
+                    </GlobalSessionProvider>
                 </AuthProvider>
             </ThemeProvider>
         </BrowserRouter>

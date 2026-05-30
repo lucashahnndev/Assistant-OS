@@ -4,6 +4,7 @@ import { api } from '../hooks/api';
 import PlaybackCard from '../components/PlaybackCard';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { notify } from '../utils/notify.jsx';
+import { useGlobalSession } from '../context/GlobalSessionContext';
 import {
     Plus,
     Trash2,
@@ -56,8 +57,9 @@ const Chat = () => {
     const [isEditingName, setIsEditingName] = useState(false);
     const [editNameValue, setEditNameValue] = useState("");
 
-    const [activeWorkers, setActiveWorkers] = useState([]);
     const [systemHealth, setSystemHealth] = useState({ llm: {}, capabilities: {} });
+
+    const { addWebSocketListener, removeWebSocketListener, sendWebSocketMessage, connectionStatus, setActiveSessionId, workers: activeWorkers } = useGlobalSession();
 
     const [hasMoreHistory, setHasMoreHistory] = useState(false);
     const [historyOffset, setHistoryOffset] = useState(0);
@@ -149,38 +151,23 @@ const Chat = () => {
         fetchSessionDetail(selectedId);
         markSessionRead(selectedId);
         markSessionOpen(selectedId);
+        setActiveSessionId(selectedId);
 
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsHost = window.location.host;
-        let wsUrl = `${protocol}//${wsHost}/ws/${selectedId}`;
+        if (connectionStatus === 'online') setIsConnected(true);
+        else setIsConnected(false);
 
-        const ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-            if (isSub) setIsConnected(true);
-        };
-
-        ws.onmessage = (event) => {
+        const handleWebSocketMessage = (raw) => {
             if (!isSub) return;
             try {
-                const raw = JSON.parse(event.data);
                 if (raw.type === 'ping') return;
 
                 if (raw.type === 'system_metrics' || raw.type === 'system_health') {
-                    if (raw.data?.active_workers) setActiveWorkers(raw.data.active_workers);
                     if (raw.data?.health) setSystemHealth(raw.data.health);
                     return;
                 }
 
                 if (raw.type === 'worker_state') {
-                    setActiveWorkers(prev => {
-                        const next = [...prev];
-                        const idx = next.findIndex(w => w.work_id === raw.data?.work_id);
-                        if (idx >= 0) next[idx] = { ...next[idx], ...raw.data };
-                        else if (raw.data) next.push(raw.data);
-                        return next.filter(w => w.status !== 'complete' && w.status !== 'failed');
-                    });
+                    // Handled by GlobalSessionContext now
                     return;
                 }
 
@@ -232,7 +219,7 @@ const Chat = () => {
                             role: 'assistant',
                             content: content,
                             reasoningLines: nextLines,
-                            reasoningTimeline: pendingReasoningRef.current,
+                            reasoningTimeline: [...pendingReasoningRef.current],
                             statusPhase: raw.phase || (prev ? prev.statusPhase : 'thinking'),
                             statusMessage: thoughtText || (prev ? prev.statusMessage : ''),
                             isComplete: false,
@@ -254,7 +241,7 @@ const Chat = () => {
                             role: 'assistant',
                             content: nextContent,
                             reasoningLines: prev?.reasoningLines || [],
-                            reasoningTimeline: pendingReasoningRef.current,
+                            reasoningTimeline: [...pendingReasoningRef.current],
                             statusPhase: raw.phase || 'responding',
                             statusMessage: raw.status || 'Streaming response...',
                             isComplete: false,
@@ -296,9 +283,10 @@ const Chat = () => {
                     pendingReasoningRef.current = [];
 
                     setMessages(prev => {
-                        const filtered = prev.filter(m => !m.isSending);
-                        if (filtered.some(m => m.id === finalMsg.id)) return filtered;
-                        return [...filtered, finalMsg];
+                        const nextMsgs = [...prev];
+                        if (nextMsgs.some(m => m.id === finalMsg.id)) return nextMsgs;
+                        // Clean up optimistic isSending flag from the user message, so we don't drop it.
+                        return nextMsgs.map(m => m.isSending ? { ...m, isSending: false } : m).concat(finalMsg);
                     });
 
                     setTimeout(() => {
@@ -311,25 +299,19 @@ const Chat = () => {
                     return;
                 }
             } catch (err) {
-                console.error("WS Parse error:", err, event.data);
+                console.error("WS Parse error:", err, raw);
             }
         };
 
-        ws.onerror = () => {
-            if (isSub) setIsConnected(false);
-        };
-
-        ws.onclose = () => {
-            if (isSub) setIsConnected(false);
-        };
+        addWebSocketListener(handleWebSocketMessage);
 
         return () => {
             isSub = false;
-            ws.close();
+            removeWebSocketListener(handleWebSocketMessage);
             if (thoughtTimeoutRef.current) clearTimeout(thoughtTimeoutRef.current);
             if (completeFlushTimeoutRef.current) clearTimeout(completeFlushTimeoutRef.current);
         };
-    }, [selectedId]);
+    }, [selectedId, connectionStatus, addWebSocketListener, removeWebSocketListener]);
 
     const handleRenameSession = async () => {
         if (!selectedId || !isEditingName) return;
@@ -436,7 +418,7 @@ const Chat = () => {
             } catch (error) {}
         };
         tick();
-        const interval = setInterval(tick, 3000);
+        const interval = setInterval(tick, 15000);
         return () => {
             cancelled = true;
             clearInterval(interval);
@@ -1010,6 +992,7 @@ const Chat = () => {
                     activeId = data.id;
                     skipResetRef.current = true;
                     setSelectedId(activeId);
+                    setActiveSessionId(activeId);
                     fetchSessions();
                 } else {
                     notify.error("Error initializing session.");
@@ -1144,6 +1127,7 @@ def monitor_system():
         }
 
         const userMsg = {
+            id: `msg-optimistic-${Date.now()}`,
             role: 'user',
             content: userMsgContent,
             timestamp: Date.now() / 1000,
@@ -1162,8 +1146,8 @@ def monitor_system():
             }
         };
 
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && activeId) {
-            wsRef.current.send(JSON.stringify(payload));
+        if (connectionStatus === 'online' && activeId) {
+            sendWebSocketMessage(payload);
         } else {
             try {
                 await api.post(`/sessions/${activeId}/message`, {
@@ -1372,7 +1356,21 @@ def monitor_system():
                                     <>
                                         <div style={{ flex: 1, overflow: 'hidden' }}>
                                             <p style={{ fontSize: '13px', fontWeight: '600', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{s.name ? s.name : s.session_id.substring(0, 18) + "..."}</p>
-                                            <p style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{new Date(s.updated_at || s.last_active || Date.now()).toLocaleString()}</p>
+                                            <p style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                {new Date(s.updated_at || s.last_active || Date.now()).toLocaleString()}
+                                                <span style={{
+                                                    padding: '1px 5px',
+                                                    borderRadius: '4px',
+                                                    background: s.source === 'nexus' ? 'rgba(0, 242, 255, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                                                    color: s.source === 'nexus' ? '#00f2ff' : 'var(--text-muted)',
+                                                    fontSize: '9px',
+                                                    fontWeight: '700',
+                                                    textTransform: 'uppercase',
+                                                    border: s.source === 'nexus' ? '1px solid rgba(0, 242, 255, 0.3)' : '1px solid transparent'
+                                                }}>
+                                                    {s.source === 'nexus' ? 'Nexus' : 'Console'}
+                                                </span>
+                                            </p>
                                         </div>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
                                             {s.unread_count > 0 && (

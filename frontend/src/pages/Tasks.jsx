@@ -1,5 +1,5 @@
 import { notify } from '../utils/notify.jsx';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { api } from '../hooks/api';
 
 import {
@@ -25,13 +25,13 @@ import {
 import TaskDetails from '../components/tasks/TaskDetails';
 import PageHeader from '../components/PageHeader';
 import CapabilityIcon from '../components/CapabilityIcon';
+import { useGlobalSession } from '../context/GlobalSessionContext';
 
 const TASKS_LAYOUT_MODE_KEY = 'tasks_layout_mode';
 
 const Tasks = () => {
     const [tasks, setTasks] = useState([]);
     const [works, setWorks] = useState([]);
-    const [activeAgents, setActiveAgents] = useState([]);
     const [selectedTaskId, setSelectedTaskId] = useState(null);
     const [loading, setLoading] = useState(true);
     const [showNewTaskModal, setShowNewTaskModal] = useState(false);
@@ -59,6 +59,29 @@ const Tasks = () => {
     const [isNarrowHeader, setIsNarrowHeader] = useState(window.innerWidth < 1120);
     const [isCompactHeader, setIsCompactHeader] = useState(window.innerWidth < 1280);
 
+    const { workers: globalWorkers } = useGlobalSession() || { workers: [] };
+
+    const mergedWorks = useMemo(() => {
+        const map = new Map();
+        works.forEach(w => map.set(w.work_id, w));
+        
+        globalWorkers.forEach(gw => {
+            if (map.has(gw.work_id)) {
+                map.set(gw.work_id, { ...map.get(gw.work_id), ...gw });
+            } else {
+                map.set(gw.work_id, gw);
+            }
+        });
+        
+        return Array.from(map.values()).sort((a, b) => {
+            const ta = new Date(a.created_at || 0).getTime();
+            const tb = new Date(b.created_at || 0).getTime();
+            return tb - ta;
+        });
+    }, [works, globalWorkers]);
+
+    const activeAgents = mergedWorks.filter(w => ['queued', 'running', 'waiting_user'].includes((w?.status || '').toLowerCase()));
+
     useEffect(() => {
         const handleResize = () => {
             setIsMobile(window.innerWidth <= 640);
@@ -78,9 +101,6 @@ const Tasks = () => {
             setTasks(tasksRes);
             const normalizedWorks = Array.isArray(worksRes) ? worksRes : [];
             setWorks(normalizedWorks);
-            setActiveAgents(
-                normalizedWorks.filter(w => ['queued', 'running', 'waiting_user'].includes((w?.status || '').toLowerCase()))
-            );
         } catch (error) {
             console.error("Error fetching data:", error);
             // notify.error("Failed to load tasks"); // suppress noise
@@ -91,7 +111,7 @@ const Tasks = () => {
 
     useEffect(() => {
         fetchData();
-        const interval = setInterval(fetchData, 5000);
+        const interval = setInterval(fetchData, 15000);
         return () => clearInterval(interval);
     }, []);
 
@@ -241,7 +261,7 @@ const Tasks = () => {
                         }}
                     >
                         <Activity size={13} color="var(--success)" className={activeAgents.length > 0 ? "animate-pulse" : ""} />
-                        <span>{activeAgents.length} ativas de {works.length}</span>
+                        <span>{activeAgents.length} ativas de {mergedWorks.length}</span>
                     </div>
                 </div>
 
@@ -384,8 +404,8 @@ const Tasks = () => {
             return true;
         };
 
-        const archiveWorks = works.filter(w => classifyWork(w).isArchived && matchesFilters(w));
-        const liveWorks = works.filter(w => !classifyWork(w).isArchived && matchesFilters(w));
+        const archiveWorks = mergedWorks.filter(w => classifyWork(w).isArchived && matchesFilters(w));
+        const liveWorks = mergedWorks.filter(w => !classifyWork(w).isArchived && matchesFilters(w));
         const topActive = liveWorks.filter(w => ['queued', 'running', 'waiting_user', 'paused'].includes(String(w?.status || '').toLowerCase())).slice(0, 8);
 
         const sendCommand = async (workId, command, payload = {}) => {

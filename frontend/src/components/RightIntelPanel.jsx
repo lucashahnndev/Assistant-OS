@@ -3,6 +3,7 @@ import { ChevronRight, ChevronLeft, Brain, Layers, Clock, Server, GitBranch, Che
 import { normalizeHistoryMessageType, extractReasoningLine } from '../utils/chatHistoryTransform';
 import { WorkUnitInspector } from './chat/WorkUnitInspector';
 import { api } from '../hooks/api';
+import { useGlobalSession } from '../context/GlobalSessionContext';
 
 const STORAGE_KEY = 'atlas_intel_sidebar_v2';
 const DEFAULTS = { panelOpen: false, thoughtOpen: true, workersOpen: true, vitalsOpen: false, chatOpen: false, mediaOpen: true };
@@ -70,9 +71,10 @@ const WorkerCard = ({ worker, sessionId }) => {
 };
 
 const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinking = false, isMobile, sessionId, history = [], onAddMedia, onReload, onToggleFullscreen, isFullscreen }) => {
+    const { thoughts: ctxThoughts, pushGlobalThought, clearGlobalPanel } = useGlobalSession();
     const [ps, setPs] = useState(loadState);
     const thoughtRef = useRef(null);
-    const [thoughts, setThoughts] = useState([]);
+    const [thoughts, setThoughts] = useState(ctxThoughts || []);
     const [historicalWorkers, setHistoricalWorkers] = useState([]);
     const [mediaCards, setMediaCards] = useState([]);
 
@@ -86,7 +88,8 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
             if (prev[prev.length - 1]?.text === agentThought) return prev;
             return [...prev, { text: agentThought, ts: Date.now() }].slice(-50);
         });
-    }, [agentThought]);
+        pushGlobalThought(agentThought);
+    }, [agentThought, pushGlobalThought]);
 
     // 2. Fallback/Reconstruction: fetch cognitive audit trail from thoughts.json
     useEffect(() => {
@@ -325,7 +328,7 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
             <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto' }}>
 
                 {/* 1 — LIVE THOUGHT */}
-                <SectionHeader icon={Brain} title="Pensamento" open={ps.thoughtOpen} onToggle={() => toggle('thoughtOpen')} onMaximize={() => onAddMedia?.({ title: 'System Thought Stream', thoughts }, 'THOUGHT_INSPECTOR')} onClear={() => setThoughts([])} />
+                <SectionHeader icon={Brain} title="Pensamento" open={ps.thoughtOpen} onToggle={() => toggle('thoughtOpen')} onMaximize={() => onAddMedia?.({ title: 'System Thought Stream', thoughts }, 'THOUGHT_INSPECTOR')} onClear={() => { setThoughts([]); clearGlobalPanel(); }} />
                 {ps.thoughtOpen && (
                     <div ref={thoughtRef} className="custom-scrollbar" style={{ padding: '4px 14px 12px 20px', maxHeight: '45vh', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
                         {thoughts.length === 0 ? (
