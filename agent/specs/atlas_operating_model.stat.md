@@ -25,3 +25,10 @@ Data da ultima atualizacao: 2026-05-30
 - revisar o prompt composer para refletir esta regra sem reintroduzir cautela genérica ou clarificação defensiva;
 - manter a regra de freshness para evitar que observacoes antigas sejam tratadas como prova atual;
 - manter approval e safety como responsabilidade do runtime, nao do medo do agente.
+
+## Registros de commits recentes
+
+- `df47ba50` `docs: refresh atlas operating model state`
+  - resumo: atualizou a referencia estatistica do operating model para reforcar a fronteira entre agente operador e runtime gatekeeper, mantendo freshness/proveniencia como clausula ativa de grounding;
+  - validacao: documentacao atualizada no arquivo de estado;
+  - falhas conhecidas fora do escopo: suites antigas de alias/Obsidian em `tests/minimal/test_mcp_llm_alias_and_recovery.py` permanecem preexistentes e fora desta entrega.
