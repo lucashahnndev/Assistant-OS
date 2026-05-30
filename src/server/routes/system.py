@@ -503,7 +503,8 @@ def _generate_intelligent_greeting_bg(kernel, user_name="Administrator", locale=
             driver_instance=getattr(kernel, "server_driver", None),
             user_id=session_id,
             user_data=user_data,
-            context=principal
+            context=principal,
+            is_internal=True
         )
         
     except Exception as e:
