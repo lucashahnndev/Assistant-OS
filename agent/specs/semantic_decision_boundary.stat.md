@@ -32,3 +32,10 @@ Data da ultima atualizacao: 2026-05-29
 - usar esta spec como contrato base para reduzir hardcode semantico em intent, routing, reflexes e overrides;
 - continuar a evolucao do retrieval e revisar a necessidade de compatibilidade legada nos reflexes em fases futuras.
 - usar `atlas_operating_model.spec.md` como orientacao primaria para clarificar quando agir, quando perguntar e quando deixar o runtime gatear.
+
+## Registros de commits recentes
+
+- `fe9e2eac` `feat: tighten operating model and factual grounding prompt`
+  - resumo: reforcou o `PromptComposer` com regras mais duras contra clarificacao como fuga, limitacao generica e claims factuais sem `ActionObservation` fresca;
+  - validacao: `python3 -m py_compile src/services/llm/prompt_composer.py tests/minimal/test_prompt_composer_operating_model.py` e `PYTHONPATH=src:. env/bin/python -m pytest tests/minimal/test_prompt_composer_operating_model.py -q`;
+  - falhas conhecidas fora do escopo: os testes antigos de alias/Obsidian em `tests/minimal/test_mcp_llm_alias_and_recovery.py` seguem preexistentes e nao afetam este bloco.
