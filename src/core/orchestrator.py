@@ -33,6 +33,7 @@ from services.cognition import CognitiveLayer
 from utils.logging_config import get_logger, read_recent_logs
 from utils.event_bus import global_event_bus
 from utils.toon_codec import encode_state_summary, dumps_toon
+from core.observation import ActionObservation
 
 from services.calendar.models import CalendarEvent
 from services.calendar.store import CalendarStore
@@ -3456,6 +3457,28 @@ class AgentOrchestrator:
                             f"RESULT OF ACTION {plan.action_id} "
                             f"[status={result_status}; reason={result_reason}]: {truncated_result}"
                         )
+                    action_observation = self._build_action_observation(
+                        session=session,
+                        work_id=work_id,
+                        plan=plan,
+                        result_status=result_status,
+                        result_reason=result_reason,
+                        structured_result=structured_result,
+                        raw_result=raw_result,
+                        truncated_result=truncated_result,
+                        summary=summary,
+                        extracted_sources=extracted_sources,
+                        last_generated_attachment_paths=last_generated_attachment_paths,
+                    )
+                    evidence_summary = action_observation.to_evidence_summary()
+                    if evidence_summary:
+                        observation = (
+                            f"{observation}\nEVIDENCE PREVIEW: {evidence_summary}"
+                            "\nGROUNDING RULE: cite only items present in the evidence preview; if it is truncated, say so explicitly."
+                        )
+                        summary = evidence_summary
+                    session.context["last_action_observation"] = action_observation.to_dict()
+                    session.state_summary.update(action_observation.to_state_summary_update())
                     logger.info(
                         "Observation Metrics | Session: %s | Action: %s | RawTok~%d | TruncTok~%d | Summarized: %s",
                         session_id,
@@ -3511,6 +3534,7 @@ class AgentOrchestrator:
                                 "last_result_status": result_status,
                                 "last_error": result_reason if result_status == "failure" else "",
                                 "cursor": session.state_summary.get("cursor"),
+                                "last_observation": action_observation.to_prompt_summary(),
                             },
                             "planner": {
                                 "max_steps": max_steps,
@@ -3523,6 +3547,7 @@ class AgentOrchestrator:
                                 "capabilities_used": capabilities_used[-40:],
                                 "media_used": media_used[-80:],
                                 "sources_used": sources_used[-120:],
+                                "last_action_observation": action_observation.to_dict(),
                                 "queued_messages": queued_messages[-40:],
                             },
                         },
@@ -3756,6 +3781,7 @@ class AgentOrchestrator:
                 "last_action_status": last_action_status,
                 "last_action_reason": last_action_reason,
                 "last_action_plan": session.context.get("last_action_plan") if isinstance(session.context, dict) else None,
+                "last_action_observation": session.context.get("last_action_observation") if isinstance(session.context, dict) else None,
                 "final_response": final_response,
                 "pending_action": session.pending_action if isinstance(session.pending_action, dict) else None,
                 "planner_tree": planner_tree,
@@ -4625,6 +4651,73 @@ class AgentOrchestrator:
             except Exception:
                 continue
         return None
+
+    def _build_action_observation(
+        self,
+        *,
+        session: Session,
+        work_id: str,
+        plan: ActionPlan,
+        result_status: str,
+        result_reason: str,
+        structured_result: Optional[Dict[str, Any]],
+        raw_result: str,
+        truncated_result: str,
+        summary: Optional[str],
+        extracted_sources: List[Dict[str, Any]],
+        last_generated_attachment_paths: List[str],
+        requires_replan: bool = False,
+    ) -> ActionObservation:
+        capability_metadata = {}
+        if hasattr(self.capability_registry, "get_action_metadata"):
+            try:
+                capability_metadata = self.capability_registry.get_action_metadata(plan.action_id) or {}
+            except Exception:
+                capability_metadata = {}
+        capability = str(capability_metadata.get("capability_id") or capability_metadata.get("capability") or capability_metadata.get("namespace") or "").strip()
+        state_changes = {
+            "action_id": plan.action_id,
+            "status": result_status,
+            "reason": result_reason,
+            "cursor": session.state_summary.get("cursor") if isinstance(session.state_summary, dict) else "",
+            "last_outcome": summary if summary else truncated_result[:300],
+        }
+        artifacts = {
+            "attachments": list(last_generated_attachment_paths or []),
+            "sources": list(extracted_sources or []),
+        }
+        repair_context: Dict[str, Any] = {}
+        if isinstance(structured_result, dict):
+            for key in ("error_code", "error", "validation_failures", "retryable", "provider", "message"):
+                value = structured_result.get(key)
+                if value not in (None, "", [], {}):
+                    repair_context[key] = value
+        next_step_context = "continue_current_plan" if result_status == "success" else "repair_or_replan"
+        error_text = ""
+        if result_status in {"failure", "partial", "error"}:
+            if isinstance(structured_result, dict):
+                error_text = str(result_reason or structured_result.get("error_code") or structured_result.get("error") or "").strip()
+            else:
+                error_text = str(result_reason or "").strip()
+
+        return ActionObservation.from_execution(
+            action_name=plan.action_id,
+            capability=capability,
+            status=result_status,
+            reason=result_reason,
+            result_summary=summary if summary else truncated_result[:300],
+            structured_result=structured_result,
+            error=error_text,
+            raw_result_preview=truncated_result,
+            state_changes=state_changes,
+            artifacts=artifacts,
+            next_step_context=next_step_context,
+            repair_context=repair_context,
+            requires_replan=requires_replan or result_status in {"failure", "partial", "error"},
+            work_id=str(work_id or "").strip(),
+            turn_id=int(getattr(session, "turn_id", 0) or 0),
+            source="runtime",
+        )
 
     @classmethod
     def _assess_action_result(cls, result: Any, raw_result: Optional[str] = None) -> tuple[str, str]:
@@ -6670,43 +6763,6 @@ class AgentOrchestrator:
         return None
 
     @staticmethod
-    def _is_youtube_playback_request(text: str) -> bool:
-        value = str(text or "").strip().lower()
-        if not value:
-            return False
-        mentions_youtube = bool(re.search(r"\b(youtube|yt|youtube music|music\.youtube)\b", value))
-        playback_verb = bool(
-            re.search(
-                r"\b(play|start|listen|stream|tocar|toque|reproduz|reproduza|ouvir|escutar|inicia|iniciar)\b",
-                value,
-            )
-        )
-        has_music_hint = bool(re.search(r"\b(lofi|music|musica|m[uú]sica|song|track|playlist)\b", value))
-        return mentions_youtube and playback_verb and has_music_hint
-
-    @staticmethod
-    def _looks_like_browser_capability_refusal(response_text: str) -> bool:
-        value = str(response_text or "").strip().lower()
-        if not value:
-            return False
-        markers = (
-            "browser.control.run",
-            "browser.open",
-            "não possuo ações como",
-            "nao possuo acoes como",
-            "ferramentas listadas",
-            "sessão de navegador pré-existente",
-            "sessao de navegador pre-existente",
-            "não está diretamente exposta",
-            "nao esta diretamente exposta",
-            "minha função principal é processar informações",
-            "cannot open browser",
-            "need a pre-existing browser session",
-            "not directly exposed",
-        )
-        return any(marker in value for marker in markers)
-
-    @staticmethod
     def _looks_like_interactive_browser_request(text: str) -> bool:
         value = str(text or "").strip().lower()
         if not value:
@@ -6752,162 +6808,8 @@ class AgentOrchestrator:
         return any(re.search(pattern, value) for pattern in explicit_navigation_patterns)
 
     @staticmethod
-    def _looks_like_knowledge_research_request(text: str) -> bool:
-        value = str(text or "").strip().lower()
-        if not value:
-            return False
-        research_markers = (
-            "pesquise",
-            "pesquisar",
-            "procure",
-            "buscar",
-            "busque",
-            "search",
-            "find",
-            "look up",
-            "qual ",
-            "quais ",
-            "quando ",
-            "como ",
-            "quem ",
-            "o que",
-            "por que",
-            "data de",
-            "what ",
-            "when ",
-            "why ",
-            "how ",
-            "where ",
-        )
-        return any(marker in value for marker in research_markers)
-
-    @staticmethod
     def _has_capability(capability_registry: Any, action_id: str) -> bool:
         return bool(capability_registry and capability_registry.get_capability_for_action(action_id))
-
-    def _build_browser_media_override_plan(
-        self,
-        *,
-        plan: ActionPlan,
-        user_input: str,
-        source_suffix: str,
-        min_confidence: float,
-    ) -> ActionPlan:
-        return ActionPlan(
-            action_id="browser.control.run",
-            args={
-                "goal": (user_input or "").strip(),
-                "intent_class": "controlar_midia",
-            },
-            confidence=max(float(plan.confidence or 0.0), min_confidence),
-            source=f"{plan.source}_{source_suffix}",
-            response_text=plan.response_text,
-            thought=plan.thought,
-            metadata=dict(plan.metadata or {}),
-            attachments=plan.attachments,
-        )
-
-    def _maybe_route_non_interactive_browser_query(
-        self,
-        *,
-        plan: ActionPlan,
-        user_input: str,
-        action_id: str,
-        intent_class: str,
-    ) -> Optional[ActionPlan]:
-        if (
-            action_id != "browser.control.run"
-            or intent_class not in {"", "realizar_pesquisa"}
-            or self._is_youtube_playback_request(user_input)
-            or not self._looks_like_knowledge_research_request(user_input)
-            or self._looks_like_interactive_browser_request(user_input)
-        ):
-            return None
-
-        query = str(user_input or "").strip()
-        if not query:
-            return None
-
-        if self._has_capability(self.capability_registry, "research.retrieve.run"):
-            logger.info(
-                "Decision policy guardrail: browser.control.run -> research.retrieve.run for non-interactive knowledge query."
-            )
-            return ActionPlan(
-                action_id="research.retrieve.run",
-                args={"query": query},
-                confidence=max(float(plan.confidence or 0.0), 0.76),
-                source=f"{plan.source}_knowledge_guardrail",
-                response_text=plan.response_text,
-                thought=plan.thought,
-                metadata=dict(plan.metadata or {}),
-                attachments=plan.attachments,
-            )
-
-        if self._has_capability(self.capability_registry, "web.search.discover"):
-            logger.info(
-                "Decision policy guardrail: browser.control.run -> web.search.discover for non-interactive knowledge query."
-            )
-            return ActionPlan(
-                action_id="web.search.discover",
-                args={"query": query, "mode": "links", "limit": 5},
-                confidence=max(float(plan.confidence or 0.0), 0.75),
-                source=f"{plan.source}_knowledge_guardrail",
-                response_text=plan.response_text,
-                thought=plan.thought,
-                metadata=dict(plan.metadata or {}),
-                attachments=plan.attachments,
-            )
-
-        return None
-
-    def _maybe_recover_youtube_playback_request(
-        self,
-        *,
-        plan: ActionPlan,
-        user_input: str,
-        mode: str,
-    ) -> Optional[ActionPlan]:
-        if mode not in {"hard", "on", "strict"}:
-            return None
-        if not self._is_youtube_playback_request(user_input):
-            return None
-
-        if (
-            plan.action_id == "reply"
-            and self._has_capability(self.capability_registry, "browser.control.run")
-            and self._looks_like_browser_capability_refusal(plan.response_text or "")
-        ):
-            logger.info(
-                "Decision policy override: reply(capability_refusal) -> browser.control.run for YouTube playback request."
-            )
-            return self._build_browser_media_override_plan(
-                plan=plan,
-                user_input=user_input,
-                source_suffix="policy_refusal_recover",
-                min_confidence=0.76,
-            )
-
-        metadata_actions = {
-            "youtube.search.find",
-            "youtube.retrieve.get",
-            "web.search.discover",
-            "web.retrieve.read",
-            "web.retrieve.extract",
-            "research.retrieve.run",
-        }
-        if plan.action_id in metadata_actions and self._has_capability(self.capability_registry, "browser.control.run"):
-            logger.info(
-                "Decision policy override: %s -> browser.control.run for YouTube playback request.",
-                plan.action_id,
-            )
-            return self._build_browser_media_override_plan(
-                plan=plan,
-                user_input=user_input,
-                source_suffix="policy",
-                min_confidence=0.75,
-            )
-
-        return None
 
     def _maybe_repair_youtube_retrieve_action(
         self,
@@ -6998,28 +6900,6 @@ class AgentOrchestrator:
                         metadata=dict(plan.metadata or {}),
                         attachments=plan.attachments,
                     )
-
-        action_id = str(plan.action_id or "").strip().lower()
-        args = plan.args if isinstance(plan.args, dict) else {}
-        intent_class = str(args.get("intent_class") or "").strip().lower()
-        routed_plan = self._maybe_route_non_interactive_browser_query(
-            plan=plan,
-            user_input=user_input,
-            action_id=action_id,
-            intent_class=intent_class,
-        )
-        if routed_plan is not None:
-            return routed_plan
-
-        decision_cfg = self.config_manager.get("decision_policy", {}) if hasattr(self, "config_manager") else {}
-        mode = str(decision_cfg.get("media_override_mode", "off")).strip().lower()
-        recovered_plan = self._maybe_recover_youtube_playback_request(
-            plan=plan,
-            user_input=user_input,
-            mode=mode,
-        )
-        if recovered_plan is not None:
-            return recovered_plan
 
         repaired_plan = self._maybe_repair_youtube_retrieve_action(
             plan=plan,

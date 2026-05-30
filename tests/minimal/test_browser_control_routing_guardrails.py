@@ -43,7 +43,7 @@ def test_interactive_browser_request_triggers_on_explicit_navigation():
     assert AgentOrchestrator._looks_like_interactive_browser_request("abra https://openai.com no navegador") is True
 
 
-def test_media_policy_demotes_browser_for_non_interactive_research_query():
+def test_media_policy_keeps_browser_for_non_interactive_research_query():
     orchestrator = _orchestrator()
     plan = ActionPlan(
         action_id="browser.control.run",
@@ -60,8 +60,9 @@ def test_media_policy_demotes_browser_for_non_interactive_research_query():
         last_action_structured=None,
     )
 
-    assert rewritten.action_id == "research.retrieve.run"
-    assert rewritten.args == {"query": "qual o site oficial da OpenAI?"}
+    assert rewritten is plan
+    assert rewritten.action_id == "browser.control.run"
+    assert rewritten.args == {"goal": "qual o site oficial da OpenAI?", "intent_class": "realizar_pesquisa"}
 
 
 def test_media_policy_keeps_browser_for_explicit_ui_workflow():
@@ -82,6 +83,28 @@ def test_media_policy_keeps_browser_for_explicit_ui_workflow():
     )
 
     assert rewritten is plan
+
+
+def test_media_policy_keeps_reply_for_youtube_playback_request():
+    orchestrator = _orchestrator()
+    plan = ActionPlan(
+        action_id="reply",
+        args={},
+        confidence=0.84,
+        source="llm",
+        response_text="Não posso abrir o navegador diretamente.",
+    )
+
+    rewritten = orchestrator._apply_media_decision_policy(
+        session=None,
+        user_input="toca uma música no youtube",
+        plan=plan,
+        last_action_id=None,
+        last_action_structured=None,
+    )
+
+    assert rewritten is plan
+    assert rewritten.action_id == "reply"
 
 
 def test_prompt_policy_discourages_browser_for_lookup_tasks():

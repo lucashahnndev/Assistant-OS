@@ -99,6 +99,14 @@ def encode_state_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
         "d": [str(x) for x in (src.get("done_steps") or [])[:8]],
         "o": _short_text(src.get("last_outcome"), 120),
         "e": _short_text(src.get("last_error"), 80),
+        "lo": _short_text(src.get("last_observation") or src.get("last_observation_summary"), 120),
+        "le": _short_text(src.get("last_observation_evidence") or src.get("last_observation_evidence_summary"), 220),
+        "lc": int(src.get("last_observation_evidence_count", 0) or 0),
+        "lsn": int(src.get("last_observation_evidence_shown", 0) or 0),
+        "lt": bool(src.get("last_observation_evidence_truncated")),
+        "ls": _short_text(src.get("last_observation_status"), 24),
+        "lr": _short_text(src.get("last_observation_reason"), 80),
+        "rp": bool(src.get("last_observation_requires_replan")),
         "r": int(src.get("retry_count", 0) or 0),
     }
     return _clean_obj(payload)
