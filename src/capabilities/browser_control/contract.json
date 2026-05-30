@@ -5,7 +5,7 @@
         "namespace": "browser.control",
         "version": "1.0.0",
         "title": "browser.control",
-        "description": "Abre e controla um navegador real (Chrome) via CDP. USE ESTA SKILL quando o usu\u00e1rio pedir para ABRIR o navegador, NAVEGAR em sites, CLICAR em elementos, PREENCHER formul\u00e1rios, ou realizar qualquer INTERA\u00c7\u00c3O VISUAL com p\u00e1ginas web. N\u00c3O use web.search ou web.retrieve para esses casos.",
+        "description": "Controla um navegador real (Chrome) via CDP para tarefas de interação web, automação visual e observação de páginas.",
         "assets": {
             "icon_svg": "assets/icon.svg"
         }
@@ -22,6 +22,41 @@
             "description": "Abre o Chrome e executa uma tarefa completa no navegador: navegar, pesquisar, clicar, interagir com p\u00e1ginas. O campo 'goal' pode ficar vazio; nesse caso, o texto original do usu\u00e1rio ser\u00e1 usado como objetivo.",
             "handler": "run",
             "risk_level": "medium",
+            "when_to_use": "Quando o agente precisa interagir de verdade com uma página web, navegar, clicar, preencher ou observar estado visual no navegador para cumprir um objetivo operacional.",
+            "when_not_to_use": "Quando basta explicação textual, quando uma recuperação textual resolve, quando não há objetivo operacional claro ou quando a simples menção a navegador, YouTube ou site não exige ação real no browser.",
+            "required_context": [
+                "goal",
+                "objective",
+                "site_or_url_if_known",
+                "current_browser_state_if_relevant"
+            ],
+            "common_failures": [
+                "página não carrega",
+                "elemento ou seletor não encontrado",
+                "DOM mudou após atualização do site",
+                "login, captcha ou bloqueio de acesso",
+                "objetivo ambíguo"
+            ],
+            "repair_hints": [
+                "peça URL ou site alvo quando faltar contexto",
+                "tente uma navegação alternativa ou uma busca intermediária",
+                "use observação do browser para ajustar o próximo passo",
+                "pida clarificação se o objetivo estiver ambíguo"
+            ],
+            "examples": [
+                {
+                    "input": {
+                        "goal": "abrir o site da OpenAI e navegar até a página de preços",
+                        "intent_class": "automacao_ui",
+                        "headless": false,
+                        "muted": false
+                    },
+                    "output": {
+                        "ok": true,
+                        "status": "success"
+                    }
+                }
+            ],
             "permissions": {
                 "scopes": [
                     "browser:control:run"
@@ -60,6 +95,10 @@
                 "required": [
                     "intent_class"
                 ]
+            },
+            "ui_hints": {
+                "icon": "browser",
+                "surface": "chrome"
             },
             "side_effect": "idempotent"
         },

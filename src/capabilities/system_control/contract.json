@@ -115,6 +115,41 @@
             "description": "Consulta o bibliotecário de ferramentas e retorna um subconjunto ordenado da descoberta semântica.",
             "handler": "consult_tools",
             "risk_level": "low",
+            "when_to_use": "Quando o agente precisa entender quais ferramentas existem, comparar opções operacionais ou pedir uma visão semântica de capabilities antes de agir.",
+            "when_not_to_use": "Quando a action já está clara e o schema é suficiente, quando a dúvida é conceitual e pode ser respondida sem tool, ou quando a chamada seria apenas um reflexo por palavra-chave.",
+            "required_context": [
+                "objective",
+                "capability_type_sought",
+                "operational_constraints"
+            ],
+            "common_failures": [
+                "consulta ampla demais",
+                "objetivo ambíguo",
+                "tool não encontrada"
+            ],
+            "repair_hints": [
+                "refinar o objetivo",
+                "pedir clarificação",
+                "consultar uma capability mais específica",
+                "responder sem ferramenta se discovery não ajudar"
+            ],
+            "examples": [
+                {
+                    "input": {
+                        "query": "quais ferramentas posso usar para navegar em uma página web?",
+                        "domain": "browser",
+                        "intent": "discovery"
+                    },
+                    "output": {
+                        "ok": true,
+                        "status": "success"
+                    }
+                }
+            ],
+            "ui_hints": {
+                "icon": "search",
+                "surface": "tool_catalog"
+            },
             "permissions": {
                 "scopes": [
                     "system:control:consult_tools"
@@ -206,6 +241,40 @@
             "description": "Lista a\u00e7\u00f5es em formato otimizado para IA (TOON compacto).",
             "handler": "capabilities.list.ai",
             "risk_level": "low",
+            "when_to_use": "Quando o agente precisa de uma lista curta e limpa de capabilities disponíveis para contextualizar a escolha de ferramentas.",
+            "when_not_to_use": "Quando a action escolhida já é conhecida e não é preciso catálogo, ou quando uma resposta textual basta.",
+            "required_context": [
+                "objective",
+                "capability_scope",
+                "result_format"
+            ],
+            "common_failures": [
+                "catálogo amplo demais",
+                "filtro textual muito genérico",
+                "saída sem ação específica suficiente"
+            ],
+            "repair_hints": [
+                "pedir escopo mais específico",
+                "usar consult_tools quando precisar de semântica mais forte",
+                "reduzir o filtro textual"
+            ],
+            "examples": [
+                {
+                    "input": {
+                        "query": "browser",
+                        "limit": 10,
+                        "include_descriptions": true
+                    },
+                    "output": {
+                        "ok": true,
+                        "status": "success"
+                    }
+                }
+            ],
+            "ui_hints": {
+                "icon": "list",
+                "surface": "tool_catalog"
+            },
             "permissions": {
                 "scopes": [
                     "system:control:capabilities_list_ai"
@@ -313,6 +382,42 @@
             "description": "Retorna metadados de a\u00e7\u00e3o em formato otimizado para IA (TOON compacto).",
             "handler": "capabilities.describe.ai",
             "risk_level": "low",
+            "when_to_use": "Quando o agente já tem um conjunto pequeno de ações candidatas e precisa ver detalhes estruturados para comparar utilidade e custo.",
+            "when_not_to_use": "Quando a ação ainda não foi reduzida a um pequeno conjunto, ou quando o problema é melhor resolvido com descoberta mais ampla.",
+            "required_context": [
+                "action_id_or_action_ids",
+                "objective",
+                "comparison_need"
+            ],
+            "common_failures": [
+                "ação desconhecida",
+                "lista de ids vazia",
+                "comparação ampla demais"
+            ],
+            "repair_hints": [
+                "reduzir a lista de ações candidatas",
+                "usar discovery antes de describe",
+                "pedir detalhes de uma ação específica"
+            ],
+            "examples": [
+                {
+                    "input": {
+                        "action_ids": [
+                            "system.control.consult_tools",
+                            "system.control.capabilities.list.ai"
+                        ],
+                        "format": "toon"
+                    },
+                    "output": {
+                        "ok": true,
+                        "status": "success"
+                    }
+                }
+            ],
+            "ui_hints": {
+                "icon": "document",
+                "surface": "tool_catalog"
+            },
             "permissions": {
                 "scopes": [
                     "system:control:capabilities_describe_ai"

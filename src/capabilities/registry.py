@@ -173,6 +173,12 @@ class CapabilityRegistry:
                     "result_schema": item.get("result_schema") if isinstance(item.get("result_schema"), dict) else None,
                     "examples": list(item.get("examples") or []),
                     "side_effect": str(item.get("side_effect") or "none"),
+                    "ui_hints": item.get("ui_hints") if isinstance(item.get("ui_hints"), dict) else None,
+                    "when_to_use": str(item.get("when_to_use") or "").strip() or None,
+                    "when_not_to_use": str(item.get("when_not_to_use") or "").strip() or None,
+                    "required_context": list(item.get("required_context") or []),
+                    "common_failures": list(item.get("common_failures") or []),
+                    "repair_hints": list(item.get("repair_hints") or []),
                 }
             )
             self.action_map[action_id] = capability
@@ -356,11 +362,50 @@ class CapabilityRegistry:
                     break
         contract = self.capability_contracts.get(capability_id) if capability_id else None
         assets = contract.capability.assets.model_dump() if contract else None
+        capability_description = contract.capability.description if contract else ""
+        capability_title = contract.capability.title if contract else ""
         if not namespace and "." in action_id:
             namespace = ".".join(action_id.split(".")[:-1])
+        discovery: Dict[str, Any] = {}
+
+        def _add_discovery_field(key: str, value: Any) -> None:
+            if value in (None, "", [], {}, ()):
+                return
+            discovery[key] = value
+
+        def _action_list(value: Any) -> List[Any]:
+            if isinstance(value, list):
+                return [item for item in value if item not in (None, "", [], {})]
+            return []
+
+        def _action_dict(value: Any) -> Dict[str, Any]:
+            return dict(value) if isinstance(value, dict) else {}
+
+        action_examples = list(action.examples or [])
+        action_ui_hints = dict(action.ui_hints or {}) if isinstance(action.ui_hints, dict) else {}
+        action_required_context = _action_list(getattr(action, "required_context", []))
+        action_common_failures = _action_list(getattr(action, "common_failures", []))
+        action_repair_hints = _action_list(getattr(action, "repair_hints", []))
+        action_when_to_use = getattr(action, "when_to_use", None)
+        action_when_not_to_use = getattr(action, "when_not_to_use", None)
 
         if action_id in self.dynamic_action_metadata:
             dynamic_meta = dict(self.dynamic_action_metadata.get(action_id) or {})
+            dynamic_examples = list(dynamic_meta.get("examples") or action_examples)
+            dynamic_ui_hints = _action_dict(dynamic_meta.get("ui_hints") or action_ui_hints)
+            dynamic_required_context = _action_list(dynamic_meta.get("required_context") or action_required_context)
+            dynamic_common_failures = _action_list(dynamic_meta.get("common_failures") or action_common_failures)
+            dynamic_repair_hints = _action_list(dynamic_meta.get("repair_hints") or action_repair_hints)
+            _add_discovery_field("when_to_use", dynamic_meta.get("when_to_use") or action_when_to_use)
+            _add_discovery_field("when_not_to_use", dynamic_meta.get("when_not_to_use") or action_when_not_to_use)
+            _add_discovery_field("required_context", dynamic_required_context)
+            _add_discovery_field("common_failures", dynamic_common_failures)
+            _add_discovery_field("repair_hints", dynamic_repair_hints)
+            _add_discovery_field("examples", dynamic_examples)
+            _add_discovery_field("ui_hints", dynamic_ui_hints)
+            _add_discovery_field("side_effect", dynamic_meta.get("side_effect") or action.side_effect or "none")
+            _add_discovery_field("risk_level", dynamic_meta.get("risk_level") or action.risk_level)
+            _add_discovery_field("permissions", dict(dynamic_meta.get("permissions") or action.permissions.model_dump()))
             return {
                 "id": action.id,
                 "title": dynamic_meta.get("title") or action.title,
@@ -370,15 +415,36 @@ class CapabilityRegistry:
                 "permissions": dict(dynamic_meta.get("permissions") or action.permissions.model_dump()),
                 "parameters": dict(dynamic_meta.get("parameters") or action.parameters),
                 "side_effect": dynamic_meta.get("side_effect") or action.side_effect or "none",
+                "examples": dynamic_examples,
+                "ui_hints": dynamic_ui_hints,
+                "when_to_use": dynamic_meta.get("when_to_use") or action_when_to_use,
+                "when_not_to_use": dynamic_meta.get("when_not_to_use") or action_when_not_to_use,
+                "required_context": dynamic_required_context,
+                "common_failures": dynamic_common_failures,
+                "repair_hints": dynamic_repair_hints,
                 "namespace": dynamic_meta.get("namespace") or namespace,
                 "capability_id": dynamic_meta.get("capability_id") or "",
                 "capability": dynamic_meta.get("capability") or "",
+                "capability_title": dynamic_meta.get("capability_title") or capability_title,
+                "capability_description": dynamic_meta.get("capability_description") or capability_description,
                 "assets": dynamic_meta.get("assets"),
                 "origin": dynamic_meta.get("origin") or "dynamic",
                 "source_id": dynamic_meta.get("source_id") or "",
                 "aliases": list(dynamic_meta.get("aliases") or []),
+                "discovery": discovery,
                 "metadata": dynamic_meta,
             }
+
+        _add_discovery_field("when_to_use", action_when_to_use)
+        _add_discovery_field("when_not_to_use", action_when_not_to_use)
+        _add_discovery_field("required_context", action_required_context)
+        _add_discovery_field("common_failures", action_common_failures)
+        _add_discovery_field("repair_hints", action_repair_hints)
+        _add_discovery_field("examples", action_examples)
+        _add_discovery_field("ui_hints", action_ui_hints)
+        _add_discovery_field("side_effect", action.side_effect or "none")
+        _add_discovery_field("risk_level", action.risk_level)
+        _add_discovery_field("permissions", action.permissions.model_dump())
 
         return {
             "id": action.id,
@@ -389,10 +455,20 @@ class CapabilityRegistry:
             "permissions": action.permissions.model_dump(),
             "parameters": action.parameters,
             "side_effect": action.side_effect or "none",
+            "examples": action_examples,
+            "ui_hints": action_ui_hints,
+            "when_to_use": action_when_to_use,
+            "when_not_to_use": action_when_not_to_use,
+            "required_context": action_required_context,
+            "common_failures": action_common_failures,
+            "repair_hints": action_repair_hints,
             "namespace": namespace,
             "capability_id": capability_id,
             "capability": capability_id,
+            "capability_title": capability_title,
+            "capability_description": capability_description,
             "assets": assets,
+            "discovery": discovery,
         }
 
     @staticmethod
@@ -426,7 +502,15 @@ class CapabilityRegistry:
             if allowed is not None and action_id not in allowed:
                 continue
             action = self.action_models[action_id]
-            lines.append(f"- `{action_id}`: {action.description}")
+            extra_bits: List[str] = []
+            if action.side_effect and action.side_effect != "none":
+                extra_bits.append(f"side_effect={action.side_effect}")
+            if action.permissions.requires_approval:
+                extra_bits.append("approval_required")
+            if extra_bits:
+                lines.append(f"- `{action_id}`: {action.description} ({', '.join(extra_bits)})")
+            else:
+                lines.append(f"- `{action_id}`: {action.description}")
         return "\n".join(lines)
 
     def get_compact_manifest(self, allowed_actions: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -489,6 +573,10 @@ class CapabilityRegistry:
                 "namespace": meta.get("namespace") or ".".join(action_id.split(".")[:2]),
                 "risk_level": str(meta.get("risk_level")),
                 "capability_id": meta.get("capability_id", ""),
+                "side_effect": str(meta.get("side_effect") or "none"),
+                "requires_approval": bool((meta.get("permissions") or {}).get("requires_approval", False)),
+                "allow_anyone": bool((meta.get("permissions") or {}).get("allow_anyone", False)),
+                "has_examples": bool(meta.get("examples")),
             }
             if include_descriptions:
                 row["description"] = str(meta.get("description") or "")

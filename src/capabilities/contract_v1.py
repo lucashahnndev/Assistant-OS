@@ -218,6 +218,11 @@ class CapabilityAction(BaseModel):
     ui_hints: Optional[Dict[str, Any]] = None
     examples: List[Dict[str, Any]] = Field(default_factory=list)
     side_effect: Optional[str] = None
+    when_to_use: Optional[str] = None
+    when_not_to_use: Optional[str] = None
+    required_context: List[str] = Field(default_factory=list)
+    common_failures: List[str] = Field(default_factory=list)
+    repair_hints: List[str] = Field(default_factory=list)
 
     @field_validator("id", "title", "description", "handler")
     @classmethod

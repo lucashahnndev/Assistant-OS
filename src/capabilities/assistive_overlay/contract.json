@@ -22,6 +22,41 @@
             "description": "Localiza um elemento na tela via vis\u00e3o e desenha marca\u00e7\u00e3o tempor\u00e1ria.",
             "handler": "highlight_target",
             "risk_level": "low",
+            "when_to_use": "Quando o agente já decidiu ajudar visualmente o usuário na interface e existe um alvo visual claro para destacar, marcar ou apontar.",
+            "when_not_to_use": "Quando não há alvo visual claro, quando o usuário só precisa de explicação textual, quando a tela ou contexto visual não está disponível ou quando o overlay seria uma distração desnecessária.",
+            "required_context": [
+                "label",
+                "target",
+                "query",
+                "mark_type",
+                "screen_or_ui_context"
+            ],
+            "common_failures": [
+                "alvo não encontrado",
+                "geometria ausente",
+                "label ambígua",
+                "contexto visual desatualizado"
+            ],
+            "repair_hints": [
+                "pedir descrição mais específica do elemento",
+                "usar um label alternativo",
+                "tentar highlight em vez de draw quando houver contexto visual",
+                "responder em texto se o overlay não for confiável"
+            ],
+            "examples": [
+                {
+                    "input": {
+                        "label": "botão enviar",
+                        "mark_type": "focus_corners",
+                        "ttl_ms": 2200,
+                        "pulse": true
+                    },
+                    "output": {
+                        "ok": true,
+                        "status": "success"
+                    }
+                }
+            ],
             "permissions": {
                 "scopes": [
                     "overlay:assist:highlight_target"
@@ -93,6 +128,10 @@
                     }
                 },
                 "additionalProperties": true
+            },
+            "ui_hints": {
+                "icon": "highlight",
+                "surface": "screen"
             },
             "side_effect": "none"
         },

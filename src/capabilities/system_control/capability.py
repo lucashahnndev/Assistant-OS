@@ -725,6 +725,15 @@ class SystemCapability(CapabilityBase):
                     "risk_level": str(metadata.get("risk_level") or "low"),
                     "capability_id": str(metadata.get("capability_id") or ""),
                     "side_effect": str(metadata.get("side_effect") or ""),
+                    "requires_approval": bool((metadata.get("permissions") or {}).get("requires_approval", False)),
+                    "allow_anyone": bool((metadata.get("permissions") or {}).get("allow_anyone", False)),
+                    "examples": list(metadata.get("examples") or []),
+                    "when_to_use": self._trim_text(metadata.get("when_to_use") or (metadata.get("discovery") or {}).get("when_to_use") or "", 240),
+                    "when_not_to_use": self._trim_text(metadata.get("when_not_to_use") or (metadata.get("discovery") or {}).get("when_not_to_use") or "", 240),
+                    "required_context": list(metadata.get("required_context") or (metadata.get("discovery") or {}).get("required_context") or []),
+                    "common_failures": list(metadata.get("common_failures") or (metadata.get("discovery") or {}).get("common_failures") or []),
+                    "repair_hints": list(metadata.get("repair_hints") or (metadata.get("discovery") or {}).get("repair_hints") or []),
+                    "ui_hints": dict(metadata.get("ui_hints") or (metadata.get("discovery") or {}).get("ui_hints") or {}),
                 }
             )
 

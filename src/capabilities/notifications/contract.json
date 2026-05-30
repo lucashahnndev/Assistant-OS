@@ -22,6 +22,44 @@
             "description": "Sends a formal notification to the user. Use this for reminders, alerts, or important updates.",
             "handler": "handle_send",
             "risk_level": "low",
+            "when_to_use": "Quando o agente precisa criar ou exibir uma notificação ao usuário, ou quando uma tarefa produz um evento relevante que merece aviso.",
+            "when_not_to_use": "Quando uma resposta textual normal basta, quando o usuário não pediu aviso, quando a notificação seria ruído ou quando o conteúdo ainda não está confirmado.",
+            "required_context": [
+                "message",
+                "title",
+                "priority",
+                "recipient_context",
+                "notification_reason"
+            ],
+            "common_failures": [
+                "mensagem vaga",
+                "notificação duplicada",
+                "falta de prioridade"
+            ],
+            "repair_hints": [
+                "resumir melhor",
+                "reduzir a urgência",
+                "pedir confirmação se for intrusiva"
+            ],
+            "examples": [
+                {
+                    "input": {
+                        "title": "Agenda atualizada",
+                        "message": "Sua reunião foi reagendada para 15:30.",
+                        "priority": "medium",
+                        "domain": "calendar"
+                    },
+                    "output": {
+                        "ok": true,
+                        "status": "success"
+                    }
+                }
+            ],
+            "ui_hints": {
+                "icon": "bell",
+                "surface": "notification_center"
+            },
+            "side_effect": "interruptive",
             "permissions": {
                 "scopes": [
                     "notifications:send"
@@ -97,6 +135,45 @@
             "description": "Registers an explicit user notification preference (timing/channel/style/interruptibility).",
             "handler": "handle_set_preference",
             "risk_level": "low",
+            "when_to_use": "Quando o agente precisa registrar uma preferência explícita do usuário sobre timing, canal, estilo ou interruptibilidade das notificações.",
+            "when_not_to_use": "Quando a resposta normal basta, quando não há preferência explícita, quando a alteração ainda não foi confirmada ou quando seria melhor responder em texto.",
+            "required_context": [
+                "preference_text",
+                "dimension",
+                "priority",
+                "impact_level",
+                "confirmed"
+            ],
+            "common_failures": [
+                "preferência vaga",
+                "conflito de escopo",
+                "alteração sem confirmação suficiente"
+            ],
+            "repair_hints": [
+                "resumir a preferência de forma mais clara",
+                "reduzir o impacto",
+                "pedir confirmação antes de aplicar mudanças intrusivas"
+            ],
+            "examples": [
+                {
+                    "input": {
+                        "preference_text": "não me envie notificações à noite",
+                        "dimension": "timing",
+                        "priority": "hard",
+                        "impact_level": "low",
+                        "confirmed": true
+                    },
+                    "output": {
+                        "ok": true,
+                        "status": "success"
+                    }
+                }
+            ],
+            "ui_hints": {
+                "icon": "sliders",
+                "surface": "notification_settings"
+            },
+            "side_effect": "stateful",
             "permissions": {
                 "scopes": [
                     "notifications:write_preferences"

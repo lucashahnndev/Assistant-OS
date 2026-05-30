@@ -540,3 +540,100 @@ def test_state_summary_encodes_tool_discovery_for_followup_prompt():
     assert "[TOOL DISCOVERY]" not in prompt
     assert "weather.control.get" in prompt
     assert "weather.control.forecast" in prompt
+
+
+def test_agentic_consult_tools_receives_richer_discovery_metadata():
+    class _FakeRegistry:
+        def list_discovery_offers(self, **kwargs):
+            return []
+
+        def get_action_metadata(self, action_id: str):
+            if action_id != "dummy.search":
+                return {}
+            return {
+                "title": "Search dummy data",
+                "description": "Search in dummy data sources.",
+                "risk_level": "low",
+                "capability_id": "dummy",
+                "namespace": "dummy",
+                "side_effect": "read_only",
+                "permissions": {
+                    "scopes": ["dummy.read"],
+                    "allow_anyone": True,
+                    "requires_approval": False,
+                },
+                "examples": [{"input": {"query": "abc"}, "output": {"ok": True}}],
+                "when_to_use": "When the request is a lookup inside the dummy data set.",
+                "when_not_to_use": "Do not use for task execution or write operations.",
+                "required_context": ["query"],
+                "common_failures": ["No matching records"],
+                "repair_hints": ["Ask for a narrower query if the result is empty."],
+            }
+
+        def list_actions(self):
+            return ["dummy.search"]
+
+    class _FakeBroker:
+        def build_bundle(self, **kwargs):
+            return SimpleNamespace(
+                diagnostics=SimpleNamespace(
+                    intent="task_execution",
+                    evidence_domains=["dummy"],
+                ),
+                evidence_items=[],
+            )
+
+    class _FakeLLMManager:
+        def __init__(self):
+            self.calls = []
+
+        def generate_structured_text(self, prompt, system_prompt=None, **kwargs):
+            self.calls.append(
+                {
+                    "prompt": prompt,
+                    "system_prompt": system_prompt or "",
+                    "kwargs": kwargs,
+                }
+            )
+            payload = {
+                "candidate_set": [
+                    {
+                        "action_id": "dummy.search",
+                        "rank": 1,
+                        "why": "lookup",
+                        "confidence": 0.91,
+                    }
+                ],
+                "primary_action_id": "dummy.search",
+                "decision_summary": "use dummy.search",
+                "turns": 1,
+            }
+            return payload
+
+    llm_manager = _FakeLLMManager()
+    kernel = SimpleNamespace(
+        orchestrator=SimpleNamespace(capability_registry=_FakeRegistry(), context_broker=_FakeBroker(), llm_manager=llm_manager)
+    )
+    capability = SystemCapability(kernel=kernel)
+
+    result = capability._agentic_consult_tools(
+        query="procure algo",
+        domain="dummy",
+        intent="task_execution",
+        role="search",
+        entity_type="record",
+        limit=3,
+        context={
+            "allowed_actions": ["dummy.search"],
+            "session": None,
+        },
+        registry=_FakeRegistry(),
+    )
+
+    assert result["primary_action_id"] == "dummy.search"
+    assert len(llm_manager.calls) >= 2
+    second_prompt = llm_manager.calls[1]["prompt"]
+    assert "when_to_use" in second_prompt
+    assert "when_not_to_use" in second_prompt
+    assert "repair_hints" in second_prompt
+    assert "No matching records" in second_prompt
