@@ -43,3 +43,7 @@ Data da ultima atualizacao: 2026-05-30
   - resumo: separou o contrato de entrega de anexos entre resolvido, preparado e enviado, propagando confirmacao estruturada pelos bridges Telegram/Web e impedindo claims de envio sem payload confirmado;
   - validacao: `python3 -m py_compile src/core/observation.py src/core/orchestrator.py src/drivers/interfaces/internal_driver.py src/drivers/interfaces/server_driver.py src/drivers/interfaces/telegram/telegram_bot.py src/drivers/interfaces/telegram/telegram_driver.py tests/minimal/test_attachment_delivery_contract.py tests/minimal/test_orchestrator_grounding_flow.py` e `PYTHONPATH=src:. env/bin/python -m pytest tests/minimal/test_attachment_delivery_contract.py tests/minimal/test_orchestrator_grounding_flow.py -q`;
   - falhas conhecidas fora do escopo: os testes antigos de alias/Obsidian em `tests/minimal/test_mcp_llm_alias_and_recovery.py` continuam preexistentes e nao bloqueiam este pacote.
+- `0c31ac52` `fix: expand safe path resolution for attachment checks`
+  - resumo: expandiu `~` e variaveis de ambiente antes da resolucao de caminhos absolutos no `SafetyService`, alinhando checks de path ao local real do arquivo;
+  - validacao: `python3 -m py_compile src/services/safety_service.py` e smoke `PYTHONPATH=src:. env/bin/python - <<'PY' ... SafetyService()._resolve_fs_target('~/Downloads') ... PY` retornando `/home/lucas/Downloads`;
+  - falhas conhecidas fora do escopo: os testes antigos de alias/Obsidian em `tests/minimal/test_mcp_llm_alias_and_recovery.py` continuam preexistentes e nao bloqueiam este pacote.
