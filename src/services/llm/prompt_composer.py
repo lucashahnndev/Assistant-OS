@@ -535,8 +535,13 @@ class PromptComposer:
             "Use available tools/capabilities when they are the right way to make progress.",
             "Sensitive does not mean forbidden: the runtime validates, blocks, approves, or denies sensitive actions.",
             "Do not refuse legitimate tasks with generic local-access or sandbox limitations when a capability exists.",
+            "Do not tell the user to copy, paste, or manually collect output when a capability can produce the result.",
+            "Memory informs; current evidence proves. Treat stale observations and prior summaries as history, not proof for a new factual or enumerable answer.",
             "Ask for clarification only when missing information blocks a safe, useful, or correct first step.",
+            "If a safe observational or discovery action can reduce uncertainty, prefer act-and-observe before asking the user for manual work.",
             "When enough context exists, act, observe, and continue.",
+            "Do not claim execution, completion, verification, or update unless fresh ActionObservation/tool output confirms it.",
+            "If no action/work ran, say so clearly and label the reply as guidance or clarification rather than execution.",
             "Ground final answers in real ActionObservation/tool output; do not invent files, IDs, paths, or results.",
         ]
         return "[ATLAS OPERATING MODEL]\n" + "\n".join(f"- {rule}" for rule in rules)
@@ -560,9 +565,15 @@ class PromptComposer:
             "CRITICAL CAPABILITY RULE: rely on the available tools for screen observation, capture, browser control, and system interaction instead of claiming a lack of visibility or a text-only limitation.",
             "Use exact namespaced action ids; prefer discovery before execution and never invent a tool that was not returned by discovery.",
             "Do not refuse legitimate tasks with generic local-access or sandbox limitations when a capability exists; propose the appropriate action and let the runtime gate it.",
+            "Memory informs; current evidence proves. Treat stale observations and prior summaries as history, not proof for a new factual or enumerable answer.",
+            "Do not answer a current factual or enumerable request from memory, a prior summary, or a stale observation; use fresh ActionObservation/tool evidence, or say current evidence is unavailable.",
+            "If a safe observational or discovery action can reduce uncertainty, prefer act-and-observe before asking the user for manual work.",
+            "Do not ask the user to copy, paste, or manually collect output when a capability can produce the result.",
+            "Do not claim execution, completion, verification, or update unless fresh ActionObservation/tool output confirms it.",
+            "If no action/work ran, say so clearly and label the response as guidance rather than execution.",
             "Use browser actions only for explicit browser/UI interaction or when a page must truly be manipulated or verified visually.",
             "Do NOT choose browser.control.run just because the request mentions web/site/search/browser/open.",
-            "Ask for clarification only when missing information blocks a safe, useful, or correct first step.",
+            "Ask for clarification only when missing information blocks a safe, useful, or correct first step; if a safe observation can reduce uncertainty, prefer acting first.",
             "On failure, be honest, choose a grounded alternative, and avoid retry loops.",
             "If the chosen action may take time or requires tool discovery, you may emit a short persona-consistent acknowledgement in `response_text`; do not use canned phrases and keep it brief.",
             "When the user asks for a visual display, 3D scene, particle simulation, server/data flow visualization, dynamic charts, particle compositor, or drawing, prefer `reply` with a rich conceptual scene description when that preserves the task intent better than a direct tool call.",
@@ -640,6 +651,9 @@ class PromptComposer:
             "- One JSON object only; no markdown or extra text.\n"
             f"- Schema: {json.dumps(self._INTENT_SCHEMA_COMPACT, ensure_ascii=False, separators=(',', ':'))}\n"
             "- `reply` = answer/clarify/wait; otherwise use a namespaced action id or `error`.\n"
+            "- Do not answer current factual or enumerable requests from memory, prior summaries, or stale observations; use fresh ActionObservation/tool evidence, or say current evidence is unavailable.\n"
+            "- Do not claim execution, completion, verification, or update unless fresh ActionObservation/tool output confirms it.\n"
+            "- If no action/work ran, say so clearly and label the response as guidance rather than execution.\n"
             "- If action!=reply, keep `response_text` optional and brief.\n"
             "- When the chosen action may take time or requires tool discovery, `response_text` may be a short persona-consistent acknowledgement generated by the model itself; do not use canned phrases.\n"
             "- Clarify only when missing information blocks a safe, useful, or correct first step.\n"
@@ -654,6 +668,9 @@ class PromptComposer:
             "- Use full namespaced action ids.\n"
             "- Prefer discovery before execution and never invent a tool that was not returned by discovery.\n"
             "- Do not refuse legitimate tasks with generic local-access or sandbox limitations when a capability exists; propose the appropriate action and let the runtime gate it.\n"
+            "- Do not answer a current factual or enumerable request from memory, a prior summary, or a stale observation; use fresh ActionObservation/tool evidence, or say current evidence is unavailable.\n"
+            "- Do not claim execution, completion, verification, or update unless fresh ActionObservation/tool output confirms it.\n"
+            "- If no action/work ran, say so clearly and label the response as guidance rather than execution.\n"
             "- Browser actions only for real UI interaction.\n"
             "- Do NOT choose browser.control.run just because the request mentions web/site/search/browser/open.\n"
             "- On failure: report honestly and choose an alternative.\n"
@@ -670,6 +687,7 @@ class PromptComposer:
             "  - Never fabricate files; only claim artifacts that were actually produced by actions.\n"
             "- Agentic clarification policy (no hardcoded templates):\n"
             "  - Clarify only when missing information blocks a safe, useful, or correct first step.\n"
+            "  - If a safe observation can reduce uncertainty, prefer acting first.\n"
             "  - If enough context exists for a safe first action, prefer act-and-observe over asking the user to do manual work.\n"
             "  - Keep clarification to one concise question and preserve user goal semantics.\n"
         )
@@ -704,6 +722,9 @@ class PromptComposer:
             "- No text outside JSON.\n"
             f"- Schema: {json.dumps(self._INTENT_SCHEMA_COMPACT, ensure_ascii=False, separators=(',', ':'))}\n"
             "- Use `reply` for conversational answers, clarification, or when no tool action is needed.\n"
+            "- Do not answer current factual or enumerable requests from memory, prior summaries, or stale observations; use fresh ActionObservation/tool evidence, or say current evidence is unavailable.\n"
+            "- Do not claim execution, completion, verification, or update unless fresh ActionObservation/tool output confirms it.\n"
+            "- If no action/work ran, say so clearly and label the response as guidance rather than execution.\n"
             "- If action!=reply, response_text is optional and should be a short execution ack.\n"
             "- When the selected action may take time or requires discovery, the ack may be a brief persona-consistent acknowledgement generated by the model itself; avoid canned phrases.\n"
             "- Clarify only when missing information blocks a safe, useful, or correct first step.\n"

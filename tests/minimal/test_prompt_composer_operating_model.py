@@ -44,6 +44,11 @@ def test_operating_model_block_is_included_and_grounded():
     prompt = _compose("liste os arquivos de imagens da minha pasta Downloads")
     assert "[ATLAS OPERATING MODEL]" in prompt
     assert "You are the operator; the runtime is the gatekeeper." in prompt
+    assert "Memory informs; current evidence proves." in prompt
+    assert "If a safe observational or discovery action can reduce uncertainty, prefer act-and-observe before asking the user for manual work." in prompt
+    assert "Do not claim execution, completion, verification, or update unless fresh ActionObservation/tool output confirms it." in prompt
+    assert "If no action/work ran, say so clearly and label the reply as guidance or clarification rather than execution." in prompt
+    assert "Do not tell the user to copy, paste, or manually collect output when a capability can produce the result." in prompt
     assert "Do not refuse legitimate tasks with generic local-access or sandbox limitations when a capability exists." in prompt
     assert "Ask for clarification only when missing information blocks a safe, useful, or correct first step." in prompt
     assert "Ground final answers in real ActionObservation/tool output; do not invent files, IDs, paths, or results." in prompt
