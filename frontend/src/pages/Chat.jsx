@@ -132,7 +132,8 @@ const Chat = () => {
             });
             setSessions(sorted);
             if (!selectedId && sorted.length > 0) {
-                setSelectedId(sorted[0].session_id);
+                const defaultSession = sorted.find(s => s.source !== 'nexus') || sorted[0];
+                setSelectedId(defaultSession.session_id);
             }
         } catch (err) {
             console.error("Error fetching sessions:", err);
@@ -1356,20 +1357,8 @@ def monitor_system():
                                     <>
                                         <div style={{ flex: 1, overflow: 'hidden' }}>
                                             <p style={{ fontSize: '13px', fontWeight: '600', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{s.name ? s.name : s.session_id.substring(0, 18) + "..."}</p>
-                                            <p style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                            <p style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
                                                 {new Date(s.updated_at || s.last_active || Date.now()).toLocaleString()}
-                                                <span style={{
-                                                    padding: '1px 5px',
-                                                    borderRadius: '4px',
-                                                    background: s.source === 'nexus' ? 'rgba(0, 242, 255, 0.15)' : 'rgba(255, 255, 255, 0.05)',
-                                                    color: s.source === 'nexus' ? '#00f2ff' : 'var(--text-muted)',
-                                                    fontSize: '9px',
-                                                    fontWeight: '700',
-                                                    textTransform: 'uppercase',
-                                                    border: s.source === 'nexus' ? '1px solid rgba(0, 242, 255, 0.3)' : '1px solid transparent'
-                                                }}>
-                                                    {s.source === 'nexus' ? 'Nexus' : 'Console'}
-                                                </span>
                                             </p>
                                         </div>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>

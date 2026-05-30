@@ -1,5 +1,5 @@
 import React from 'react';
-import { Hash, Terminal, SendHorizontal, MessageCircle, Mic } from 'lucide-react';
+import { Hash, Terminal, SendHorizontal, MessageCircle, Mic, Activity } from 'lucide-react';
 
 export const SessionIcon = ({ source, size = 16 }) => {
     let icon = <Hash size={size} color="var(--text-muted)" />;
@@ -23,6 +23,10 @@ export const SessionIcon = ({ source, size = 16 }) => {
         case 'voice':
             icon = <Mic size={size} color="#fff" />;
             bgColor = 'var(--success)';
+            break;
+        case 'nexus':
+            icon = <Activity size={size} color="#1e293b" />;
+            bgColor = '#00f2ff';
             break;
         default:
             break;
