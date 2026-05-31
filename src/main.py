@@ -1169,9 +1169,17 @@ class Kernel:
                 # LLM straight reply or reflex
                 coached_response = self.orchestrator.apply_conversation_coaching(session, text, plan.response_text or "")
                 coached_response = self.orchestrator._enforce_response_language(session, coached_response)
+                reply_to_message_id = None
+                if isinstance(getattr(session, "context", None), dict):
+                    reply_to_message_id = str(session.context.get("current_turn_user_message_id") or "").strip() or None
                 if plan.thought:
                     session.add_message("system", plan.thought, msg_type="reasoning")
-                session.add_message("assistant", coached_response, model_info=plan.model_used)
+                session.add_message(
+                    "assistant",
+                    coached_response,
+                    model_info=plan.model_used,
+                    reply_to_message_id=reply_to_message_id,
+                )
                 self.orchestrator._save_session(session)
 
                 # Keep thought/protocol hidden from user chat by default.
@@ -1225,7 +1233,10 @@ class Kernel:
                     "requested_action": plan.action_id,
                     "requested_at": now_str,
                 }
-                session.add_message("assistant", prompt)
+                reply_to_message_id = None
+                if isinstance(getattr(session, "context", None), dict):
+                    reply_to_message_id = str(session.context.get("current_turn_user_message_id") or "").strip() or None
+                session.add_message("assistant", prompt, reply_to_message_id=reply_to_message_id)
                 self.orchestrator._save_session(session)
                 if hasattr(driver_instance, "send_status"):
                     driver_instance.send_status(
@@ -1262,7 +1273,10 @@ class Kernel:
                 driver_instance.send_response(busy_msg, target=session_id, is_chunk=True)
                 if hasattr(driver_instance, "send_complete"):
                     driver_instance.send_complete(session_id)
-                session.add_message("assistant", busy_msg)
+                reply_to_message_id = None
+                if isinstance(getattr(session, "context", None), dict):
+                    reply_to_message_id = str(session.context.get("current_turn_user_message_id") or "").strip() or None
+                session.add_message("assistant", busy_msg, reply_to_message_id=reply_to_message_id)
                 self.orchestrator._save_session(session)
                 return session_id
 

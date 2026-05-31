@@ -1803,7 +1803,16 @@ class AgentOrchestrator:
             if "send_complete" in callbacks:
                 callbacks["send_complete"]()
             if session:
-                session.add_message("assistant", commit_msg, work_id=work_id, model_info=plan.model_used if plan else None)
+                reply_to_message_id = None
+                if isinstance(getattr(session, "context", None), dict):
+                    reply_to_message_id = str(session.context.get("current_turn_user_message_id") or "").strip() or None
+                session.add_message(
+                    "assistant",
+                    commit_msg,
+                    work_id=work_id,
+                    model_info=plan.model_used if plan else None,
+                    reply_to_message_id=reply_to_message_id,
+                )
                 self._save_session(session)
 
         # 4. Technical Status Update
@@ -2617,7 +2626,16 @@ class AgentOrchestrator:
                         else:
                             # Too many failures, abort
                             final_response = f"Não consegui executar o comando devido a erros repetidos de validação: {v_res.message}" if self._session_locale(session).startswith("pt") else f"I couldn't execute the command due to repeated validation errors: {v_res.message}"
-                            session.add_message("assistant", final_response, work_id=work_id, model_info=last_model_used)
+                            reply_to_message_id = None
+                            if isinstance(getattr(session, "context", None), dict):
+                                reply_to_message_id = str(session.context.get("current_turn_user_message_id") or "").strip() or None
+                            session.add_message(
+                                "assistant",
+                                final_response,
+                                work_id=work_id,
+                                model_info=last_model_used,
+                                reply_to_message_id=reply_to_message_id,
+                            )
                             break
 
                     plan = self._apply_media_decision_policy(
@@ -2694,6 +2712,11 @@ class AgentOrchestrator:
                                 attachments=final_structured_attachments,
                                 work_id=work_id,
                                 model_info=last_model_used,
+                                reply_to_message_id=(
+                                    str(session.context.get("current_turn_user_message_id") or "").strip() or None
+                                    if isinstance(getattr(session, "context", None), dict)
+                                    else None
+                                ),
                                 attachment_delivery=final_attachment_delivery_state,
                             )
                             final_response_persisted = True
@@ -2783,6 +2806,11 @@ class AgentOrchestrator:
                                     attachments=final_structured_attachments,
                                     work_id=work_id,
                                     model_info=last_model_used,
+                                    reply_to_message_id=(
+                                        str(session.context.get("current_turn_user_message_id") or "").strip() or None
+                                        if isinstance(getattr(session, "context", None), dict)
+                                        else None
+                                    ),
                                     attachment_delivery=final_attachment_delivery_state,
                                 )
                                 final_response_persisted = True
@@ -3063,6 +3091,11 @@ class AgentOrchestrator:
                             attachments=structured_attachments,
                             work_id=work_id,
                             model_info=last_model_used,
+                            reply_to_message_id=(
+                                str(session.context.get("current_turn_user_message_id") or "").strip() or None
+                                if isinstance(getattr(session, "context", None), dict)
+                                else None
+                            ),
                             attachment_delivery=final_attachment_delivery_state,
                         )
                         final_structured_attachments = structured_attachments
@@ -3138,7 +3171,16 @@ class AgentOrchestrator:
                                 model_info=last_model_used
                             )
                             
-                        session.add_message("assistant", final_response, work_id=work_id, model_info=last_model_used)
+                        reply_to_message_id = None
+                        if isinstance(getattr(session, "context", None), dict):
+                            reply_to_message_id = str(session.context.get("current_turn_user_message_id") or "").strip() or None
+                        session.add_message(
+                            "assistant",
+                            final_response,
+                            work_id=work_id,
+                            model_info=last_model_used,
+                            reply_to_message_id=reply_to_message_id,
+                        )
                         final_response_persisted = True
                         if callbacks and 'send_response' in callbacks:
                             callbacks['send_response'](final_response, is_chunk=True, model_info=last_model_used)
@@ -3222,7 +3264,16 @@ class AgentOrchestrator:
                                 "work_id": work_id,
                                 "requested_at": now_str,
                             }
-                            target_session.add_message("assistant", approval_msg, work_id=work_id, model_info=last_model_used)
+                            reply_to_message_id = None
+                            if isinstance(getattr(target_session, "context", None), dict):
+                                reply_to_message_id = str(target_session.context.get("current_turn_user_message_id") or "").strip() or None
+                            target_session.add_message(
+                                "assistant",
+                                approval_msg,
+                                work_id=work_id,
+                                model_info=last_model_used,
+                                reply_to_message_id=reply_to_message_id,
+                            )
                             self._save_session(target_session)
 
                             self._touch_work_context(
@@ -3315,7 +3366,16 @@ class AgentOrchestrator:
                                         "last_action_reason": "approval_denied",
                                         "handoff_or_escalation": True,
                                     }
-                                    session.add_message("assistant", final_response, work_id=work_id, model_info=last_model_used)
+                                    reply_to_message_id = None
+                                    if isinstance(getattr(session, "context", None), dict):
+                                        reply_to_message_id = str(session.context.get("current_turn_user_message_id") or "").strip() or None
+                                    session.add_message(
+                                        "assistant",
+                                        final_response,
+                                        work_id=work_id,
+                                        model_info=last_model_used,
+                                        reply_to_message_id=reply_to_message_id,
+                                    )
                                     final_response_persisted = True
                                     if callbacks and 'send_response' in callbacks:
                                         callbacks['send_response'](final_response, is_chunk=True)
@@ -3331,7 +3391,16 @@ class AgentOrchestrator:
                                 if hasattr(session, "intent_agenda"):
                                     for intent in session.intent_agenda.get_active_intents():
                                         session.intent_agenda.update_intent_status(intent.intent_id, "PAUSED", blocking_reason="approval_pending")
-                                session.add_message("assistant", approval_msg, work_id=work_id, model_info=last_model_used)
+                                reply_to_message_id = None
+                                if isinstance(getattr(session, "context", None), dict):
+                                    reply_to_message_id = str(session.context.get("current_turn_user_message_id") or "").strip() or None
+                                session.add_message(
+                                    "assistant",
+                                    approval_msg,
+                                    work_id=work_id,
+                                    model_info=last_model_used,
+                                    reply_to_message_id=reply_to_message_id,
+                                )
                                 self._commit_cognitive_turn_state(
                                     session=session,
                                     user_input=user_input,
@@ -3603,7 +3672,16 @@ class AgentOrchestrator:
                                     f"Technical detail: {details or result_reason}."
                                 )
                             session.state_summary["last_error"] = result_reason
-                            session.add_message("assistant", final_response, work_id=work_id, model_info=last_model_used)
+                            reply_to_message_id = None
+                            if isinstance(getattr(session, "context", None), dict):
+                                reply_to_message_id = str(session.context.get("current_turn_user_message_id") or "").strip() or None
+                            session.add_message(
+                                "assistant",
+                                final_response,
+                                work_id=work_id,
+                                model_info=last_model_used,
+                                reply_to_message_id=reply_to_message_id,
+                            )
                             final_response_persisted = True
                             if callbacks and 'send_response' in callbacks:
                                 callbacks['send_response'](final_response, is_chunk=True)
@@ -3870,6 +3948,11 @@ class AgentOrchestrator:
                             attachments=final_structured_attachments,
                             work_id=work_id,
                             model_info=last_model_used,
+                            reply_to_message_id=(
+                                str(session.context.get("current_turn_user_message_id") or "").strip() or None
+                                if isinstance(getattr(session, "context", None), dict)
+                                else None
+                            ),
                             attachment_delivery=final_attachment_delivery_state,
                         )
                         final_response_persisted = True
@@ -4093,6 +4176,11 @@ class AgentOrchestrator:
                     attachments=final_structured_attachments,
                     work_id=work_id,
                     model_info=last_model_used,
+                    reply_to_message_id=(
+                        str(session.context.get("current_turn_user_message_id") or "").strip() or None
+                        if isinstance(getattr(session, "context", None), dict)
+                        else None
+                    ),
                     attachment_delivery=final_attachment_delivery_state,
                 )
                 final_response_persisted = True
@@ -4759,7 +4847,15 @@ class AgentOrchestrator:
         task["status"] = "WAITING_INPUT"
         task["waiting_user_response"] = True
         
-        session.add_message("assistant", f"I need some input for task '{task['task_role']}': {prompt}", work_id=task_id)
+        reply_to_message_id = None
+        if isinstance(getattr(session, "context", None), dict):
+            reply_to_message_id = str(session.context.get("current_turn_user_message_id") or "").strip() or None
+        session.add_message(
+            "assistant",
+            f"I need some input for task '{task['task_role']}': {prompt}",
+            work_id=task_id,
+            reply_to_message_id=reply_to_message_id,
+        )
         self._save_session(session)
 
     def mark_task_attention_required(self, session_id: str, task_id: str, reason: str):

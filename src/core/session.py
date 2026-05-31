@@ -190,6 +190,7 @@ class Session:
         actor: Optional[Dict[str, Any]] = None,
         model_info: Optional[str] = None,
         attachment_delivery: Optional[Dict[str, Any]] = None,
+        reply_to_message_id: Optional[str] = None,
     ):
         # Rough token estimation (chars / 4)
         tokens = len(content) // 4
@@ -211,6 +212,8 @@ class Session:
         }
         if work_id:
             msg["work_id"] = work_id
+        if reply_to_message_id:
+            msg["reply_to_message_id"] = str(reply_to_message_id)
         if actor and isinstance(actor, dict):
             msg["actor"] = actor
             
