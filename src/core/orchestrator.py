@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import re
+import shlex
 import time
 import datetime
 import platform
@@ -644,14 +645,7 @@ class AgentOrchestrator:
         prepared = list(prepared_attachments or resolved)
         sent = list(sent_attachments or [])
         errors = list(attachment_errors or [])
-        status = "idle"
-        if errors and not sent:
-            status = "failed"
-        elif sent:
-            status = "sent"
-        elif prepared or resolved or requested:
-            status = "prepared"
-        return {
+        state = {
             "requested": requested,
             "resolved": resolved,
             "prepared": prepared,
@@ -659,9 +653,37 @@ class AgentOrchestrator:
             "errors": errors,
             "bridge": str(bridge or "").strip(),
             "source_action": str(source_action or "").strip(),
-            "status": status,
-            "confirmed": bool(sent),
         }
+        return cls._normalize_attachment_delivery_state(state)
+
+    @staticmethod
+    def _normalize_attachment_delivery_state(delivery_state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        state = dict(delivery_state or {})
+        requested = list(state.get("requested") or [])
+        resolved = list(state.get("resolved") or [])
+        prepared = list(state.get("prepared") or [])
+        sent = list(state.get("sent") or [])
+        errors = list(state.get("errors") or [])
+        sent_count = len(sent)
+        error_count = len(errors)
+        if sent_count and error_count:
+            status = "partial"
+        elif sent_count:
+            status = "sent"
+        elif error_count:
+            status = "failed"
+        elif prepared or resolved or requested:
+            status = "prepared"
+        else:
+            status = "idle"
+        state["requested"] = requested
+        state["resolved"] = resolved
+        state["prepared"] = prepared
+        state["sent"] = sent
+        state["errors"] = errors
+        state["status"] = status
+        state["confirmed"] = bool(sent_count and error_count == 0 and status == "sent")
+        return state
 
     @staticmethod
     def _attachment_delivery_summary(delivery_state: Optional[Dict[str, Any]]) -> str:
@@ -690,6 +712,7 @@ class AgentOrchestrator:
     def _persist_attachment_delivery_state(self, session: Session, delivery_state: Optional[Dict[str, Any]]) -> None:
         if not isinstance(session, Session) or not isinstance(delivery_state, dict):
             return
+        delivery_state = self._normalize_attachment_delivery_state(delivery_state)
         if isinstance(session.context, dict):
             session.context["last_attachment_delivery"] = dict(delivery_state)
         summary = self._attachment_delivery_summary(delivery_state)
@@ -702,7 +725,7 @@ class AgentOrchestrator:
             session.state_summary["last_attachment_delivery_prepared_count"] = len(delivery_state.get("prepared") or [])
             session.state_summary["last_attachment_delivery_sent_count"] = len(delivery_state.get("sent") or [])
             session.state_summary["last_attachment_delivery_error_count"] = len(delivery_state.get("errors") or [])
-            session.state_summary["last_attachment_delivery_confirmed"] = bool(delivery_state.get("sent"))
+            session.state_summary["last_attachment_delivery_confirmed"] = bool(delivery_state.get("confirmed"))
 
     @classmethod
     def _merge_attachment_delivery_report(
@@ -712,7 +735,7 @@ class AgentOrchestrator:
     ) -> Dict[str, Any]:
         state = dict(delivery_state or {})
         if not isinstance(delivery_report, dict):
-            return state
+            return cls._normalize_attachment_delivery_state(state)
         sent_items = delivery_report.get("sent_attachments")
         if isinstance(sent_items, list) and sent_items:
             state["sent"] = list(sent_items)
@@ -722,11 +745,7 @@ class AgentOrchestrator:
         bridge = str(delivery_report.get("bridge") or state.get("bridge") or "").strip()
         if bridge:
             state["bridge"] = bridge
-        status = str(delivery_report.get("status") or state.get("status") or "").strip()
-        if status:
-            state["status"] = status
-        state["confirmed"] = bool(state.get("sent"))
-        return state
+        return cls._normalize_attachment_delivery_state(state)
 
     def set_browser_driver(self, driver):
         """Sets the browser driver for advanced controls."""
@@ -5322,6 +5341,7 @@ class AgentOrchestrator:
             return []
 
         candidates: List[str] = []
+        base_dir = AgentOrchestrator._infer_attachment_base_dir_from_command(structured_result)
 
         direct_path = structured_result.get("path")
         if isinstance(direct_path, str) and direct_path.strip():
@@ -5346,6 +5366,20 @@ class AgentOrchestrator:
                             candidates.append(value.strip())
                             break
 
+        stdout = structured_result.get("stdout")
+        if isinstance(stdout, str) and stdout.strip():
+            for line in stdout.splitlines():
+                entry = line.strip()
+                if not entry:
+                    continue
+                if entry.lower().startswith(("ls:", "find:", "error:", "warning:", "total ")):
+                    continue
+                if os.path.isabs(entry):
+                    candidates.append(entry)
+                    continue
+                if base_dir:
+                    candidates.append(os.path.join(base_dir, entry))
+
         unique_existing: List[str] = []
         seen = set()
         for candidate in candidates:
@@ -5356,6 +5390,37 @@ class AgentOrchestrator:
                 unique_existing.append(candidate)
 
         return unique_existing
+
+    @staticmethod
+    def _infer_attachment_base_dir_from_command(structured_result: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(structured_result, dict):
+            return ""
+
+        for key in ("command_effective", "command"):
+            command = str(structured_result.get(key) or "").strip()
+            if not command:
+                continue
+            try:
+                parts = shlex.split(command)
+            except ValueError:
+                continue
+            if len(parts) < 2:
+                continue
+
+            # Prefer the first explicit filesystem-looking argument after the command name.
+            for token in parts[1:]:
+                token = str(token or "").strip()
+                if not token or token.startswith("-"):
+                    continue
+                expanded = os.path.abspath(os.path.expanduser(os.path.expandvars(token)))
+                if os.path.isdir(expanded):
+                    return expanded
+                if os.sep in token or token.startswith(".") or token.startswith("~"):
+                    parent = os.path.dirname(expanded) if not os.path.isdir(expanded) else expanded
+                    if parent:
+                        return parent
+
+        return ""
 
     @staticmethod
     def _should_auto_attach_action_output(action_id: Optional[str]) -> bool:
@@ -5518,12 +5583,20 @@ class AgentOrchestrator:
             "attachment",
             "attachments",
             "files attached",
+            "seguem os ",
             "seguem anex",
             "segue anex",
+            "segue os ",
+            "aqui estão os ",
+            "aqui estao os ",
             "arquivos anex",
             "enviei os arquivos",
             "enviados com sucesso",
             "enviado com sucesso",
+            "estão anex",
+            "estao anex",
+            "estão enviados",
+            "estao enviados",
             "sent the files",
             "sent as attachment",
         )
@@ -5646,14 +5719,58 @@ class AgentOrchestrator:
             return "Destaque aplicado na tela." if is_pt else "Highlight applied on screen."
 
         attachment_state = attachment_delivery_state if isinstance(attachment_delivery_state, dict) else {}
-        attachment_confirmed = bool(attachment_state.get("sent")) if attachment_state else bool(attachment_payload_present)
+        attachment_confirmed = bool(attachment_state.get("confirmed")) if attachment_state else bool(attachment_payload_present)
         attachment_prepared = bool(
             attachment_state.get("prepared")
             or attachment_state.get("resolved")
             or attachment_state.get("requested")
         ) if attachment_state else bool(attachment_payload_present)
+        attachment_status = str(attachment_state.get("status") or "").strip().lower()
+
+        def _attachment_failure_reason() -> str:
+            errors = attachment_state.get("errors") if isinstance(attachment_state.get("errors"), list) else []
+            reasons: List[str] = []
+            for item in errors:
+                reason = ""
+                if isinstance(item, dict):
+                    for key in ("error", "message", "reason", "status"):
+                        value = item.get(key)
+                        if isinstance(value, str) and value.strip():
+                            reason = value.strip()
+                            break
+                    if not reason:
+                        reason = _clip_json(item, 120)
+                else:
+                    reason = str(item or "").strip()
+                if reason:
+                    reasons.append(reason)
+            joined = "; ".join(reasons[:2]).strip()
+            if not joined:
+                return ""
+            lowered_joined = joined.lower()
+            if "timeout" in lowered_joined or "timed out" in lowered_joined:
+                return "timeout"
+            return joined
 
         if cls._looks_like_attachment_claim(text) and not attachment_confirmed:
+            failure_reason = _attachment_failure_reason()
+            if attachment_status in {"failed", "partial"} or failure_reason:
+                if attachment_status == "partial":
+                    if is_pt:
+                        return "Enviei parte dos arquivos, mas houve falha em um ou mais envios no Telegram. Não há confirmação de anexo completo nesta tentativa."
+                    return "I sent part of the files, but one or more Telegram sends failed. There is no confirmation of a complete attachment in this attempt."
+                if failure_reason == "timeout":
+                    return (
+                        "Encontrei e preparei os arquivos, mas o envio pelo Telegram falhou por timeout. Não há confirmação de anexo enviado nesta tentativa."
+                        if is_pt
+                        else "I found and prepared the files, but Telegram delivery failed due to a timeout. There is no confirmed attachment in this attempt."
+                    )
+                if failure_reason:
+                    return (
+                        f"Encontrei e preparei os arquivos, mas o envio pelo Telegram falhou: {failure_reason}. Não há confirmação de anexo enviado nesta tentativa."
+                        if is_pt
+                        else f"I found and prepared the files, but Telegram delivery failed: {failure_reason}. There is no confirmed attachment in this attempt."
+                    )
             if attachment_prepared:
                 return (
                     "Encontrei/validei os arquivos, mas ainda não há confirmação de envio/anexo nesta resposta."

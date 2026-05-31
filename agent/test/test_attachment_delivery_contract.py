@@ -10,6 +10,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from src.core.observation import ActionObservation
+from src.core.orchestrator import AgentOrchestrator
 from src.drivers.interfaces.telegram.telegram_driver import TelegramDriver
 
 
@@ -77,3 +78,156 @@ def test_telegram_driver_returns_structured_delivery_report_for_attachments():
     assert report["status"] == "sent"
     assert report["sent_attachments"][0]["status"] == "sent"
     assert report["sent_attachments"][0]["message_id"] == "msg-123"
+
+
+def test_shell_stdout_listing_resolves_attachment_paths_for_delivery(tmp_path):
+    shot_dir = tmp_path / "Capturas de tela"
+    shot_dir.mkdir()
+    first = shot_dir / "captura-1.png"
+    second = shot_dir / "captura-2.png"
+    first.write_bytes(b"one")
+    second.write_bytes(b"two")
+
+    structured_result = {
+        "ok": True,
+        "status": "success",
+        "command": f'ls -1 "{shot_dir}"',
+        "command_effective": f'ls -1 "{shot_dir}"',
+        "stdout": "captura-1.png\ncaptura-2.png\n",
+        "cwd": str(tmp_path),
+    }
+
+    paths = AgentOrchestrator._extract_attachment_paths_from_result(structured_result)
+
+    assert str(first) in paths
+    assert str(second) in paths
+
+
+def test_attachment_delivery_normalizes_failed_when_bridge_returns_timeout_without_sent():
+    state = AgentOrchestrator._merge_attachment_delivery_report(
+        {
+            "requested": ["/tmp/a.png", "/tmp/b.png"],
+            "resolved": [{"path": "/tmp/a.png", "name": "a.png"}, {"path": "/tmp/b.png", "name": "b.png"}],
+            "prepared": [{"path": "/tmp/a.png", "name": "a.png"}, {"path": "/tmp/b.png", "name": "b.png"}],
+            "sent": [],
+            "errors": [],
+            "bridge": "Telegram",
+            "source_action": "shell.control.execute",
+            "status": "prepared",
+            "confirmed": False,
+        },
+        {
+            "bridge": "telegram",
+            "status": "sent",
+            "sent_attachments": [],
+            "attachment_errors": [
+                {"bridge": "telegram", "status": "error", "path": "/tmp/a.png", "chat_id": "1498193674", "error": "Timed out"},
+                {"bridge": "telegram", "status": "error", "path": "/tmp/b.png", "chat_id": "1498193674", "error": "Timed out"},
+            ],
+            "text_sent": True,
+            "caption_sent": False,
+            "confirmed": False,
+        },
+    )
+
+    assert state["status"] == "failed"
+    assert state["confirmed"] is False
+    assert state["sent"] == []
+    assert len(state["errors"]) == 2
+
+
+def test_attachment_delivery_normalizes_partial_when_some_files_send_and_some_fail():
+    state = AgentOrchestrator._merge_attachment_delivery_report(
+        {
+            "requested": ["/tmp/a.png", "/tmp/b.png"],
+            "resolved": [{"path": "/tmp/a.png", "name": "a.png"}, {"path": "/tmp/b.png", "name": "b.png"}],
+            "prepared": [{"path": "/tmp/a.png", "name": "a.png"}, {"path": "/tmp/b.png", "name": "b.png"}],
+            "sent": [],
+            "errors": [],
+            "bridge": "Telegram",
+            "source_action": "shell.control.execute",
+            "status": "prepared",
+            "confirmed": False,
+        },
+        {
+            "bridge": "telegram",
+            "status": "sent",
+            "sent_attachments": [
+                {"bridge": "telegram", "status": "sent", "path": "/tmp/a.png", "message_id": "msg-1"},
+            ],
+            "attachment_errors": [
+                {"bridge": "telegram", "status": "error", "path": "/tmp/b.png", "chat_id": "1498193674", "error": "Timed out"},
+            ],
+            "text_sent": True,
+            "caption_sent": False,
+            "confirmed": False,
+        },
+    )
+
+    assert state["status"] == "partial"
+    assert state["confirmed"] is False
+    assert len(state["sent"]) == 1
+    assert len(state["errors"]) == 1
+
+
+def test_sanitize_user_facing_response_reports_timeout_when_attachment_delivery_fails():
+    reply = AgentOrchestrator._sanitize_user_facing_response(
+        "Com certeza, sir. Seguem os dois prints mais recentes da sua pasta de capturas de tela conforme solicitado.",
+        language="pt-BR",
+        has_fresh_tool_evidence=True,
+        attachment_payload_present=True,
+        attachment_delivery_state={
+            "requested": ["/tmp/a.png", "/tmp/b.png"],
+            "resolved": [{"path": "/tmp/a.png", "name": "a.png"}, {"path": "/tmp/b.png", "name": "b.png"}],
+            "prepared": [{"path": "/tmp/a.png", "name": "a.png"}, {"path": "/tmp/b.png", "name": "b.png"}],
+            "sent": [],
+            "errors": [
+                {"bridge": "telegram", "status": "error", "path": "/tmp/a.png", "chat_id": "1498193674", "error": "Timed out"},
+                {"bridge": "telegram", "status": "error", "path": "/tmp/b.png", "chat_id": "1498193674", "error": "Timed out"},
+            ],
+            "bridge": "telegram",
+            "source_action": "shell.control.execute",
+            "status": "failed",
+            "confirmed": False,
+        },
+    )
+
+    lowered = reply.lower()
+    assert "timeout" in lowered or "falhou" in lowered
+    assert "seguem os" not in lowered
+    assert "anexados" not in lowered
+    assert "anexei" not in lowered
+    assert "confirmação de anexo" in lowered or "não há confirmação" in lowered
+
+
+def test_telegram_driver_marks_failed_when_all_attachment_sends_timeout():
+    class _TimeoutBot:
+        def send_message_to(self, chat_id, text):
+            return {"chat_id": str(chat_id), "text": text}
+
+        def send_action_to(self, chat_id, action="typing"):
+            return None
+
+        def send_file_to(self, chat_id, file_path, caption=None):
+            return {
+                "bridge": "telegram",
+                "status": "error",
+                "path": file_path,
+                "chat_id": str(chat_id),
+                "error": "Timed out",
+                "kind": "document",
+            }
+
+    driver = TelegramDriver(kernel=SimpleNamespace(), parent_dir=str(ROOT))
+    driver.bot = _TimeoutBot()
+
+    report = driver.send_response(
+        "Com certeza, sir. Seguem os arquivos anexados.",
+        target="telegram_123",
+        attachments=[{"path": "/tmp/a.png", "name": "a.png"}],
+    )
+
+    assert report["status"] == "failed"
+    assert report["confirmed"] is False
+    assert report["sent_attachments"] == []
+    assert report["attachment_errors"]
