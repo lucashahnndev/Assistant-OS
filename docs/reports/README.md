@@ -63,6 +63,7 @@ Conventions:
 - [session_event_contract_runtime_audit.md](session_event_contract_runtime_audit.md)
 - [session_event_contract_phase_b_plan.md](session_event_contract_phase_b_plan.md)
 - [session_event_contract_phase_b_checklist.md](session_event_contract_phase_b_checklist.md)
+- [session_event_contract_media_artifacts_v15_v2_note.md](session_event_contract_media_artifacts_v15_v2_note.md)
 
 ### Human Review
 - These are human-authored technical opinions and audit conclusions, not runtime telemetry.
