@@ -662,10 +662,15 @@ class ServerDriver(BaseDriver):
             self.loop
         )
 
-    def send_complete(self, target, stream_id=None, sequence=None):
+    def send_complete(self, target, complete_target=None, stream_id=None, sequence=None):
         """Sends completion signal."""
         if not self.loop or self.loop.is_closed() or not target: return
         session, context = self._get_session_stream_context(target)
+        if complete_target is None:
+            if isinstance(context, dict) and str(context.get("current_response_stream_id") or "").strip():
+                complete_target = "stream"
+            else:
+                complete_target = "legacy"
         if stream_id is None and isinstance(context, dict):
             stream_id = str(context.get("current_response_stream_id") or "").strip() or None
         if sequence is None and isinstance(context, dict):
@@ -675,8 +680,12 @@ class ServerDriver(BaseDriver):
                 sequence = None
         if isinstance(context, dict):
             context["current_response_stream_completed_at"] = time.time()
+        legacy_target = str(complete_target or "").strip().lower() == "legacy"
         payload = json.dumps(self._normalize_ws_event({
             "type": "complete",
+            "target": complete_target,
+            **({"legacy": True} if legacy_target else {}),
+            **({"ambiguous": True} if legacy_target else {}),
             **({"stream_id": stream_id} if stream_id else {}),
             **({"sequence": sequence} if sequence is not None else {}),
         }, session_id=target))

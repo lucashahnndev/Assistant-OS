@@ -72,3 +72,46 @@ def test_stream_reuse_survives_complete_until_turn_changes(monkeypatch):
 
     assert new_turn_event["stream_id"] != first_event["stream_id"]
     assert new_turn_event["sequence"] == 0
+
+
+def test_complete_uses_stream_target_and_falls_back_without_stream(monkeypatch):
+    driver = _make_driver()
+    session = SimpleNamespace(
+        context={
+            "current_turn_user_message_id": "user-msg-1",
+        }
+    )
+    driver.kernel.orchestrator.get_session_robust = lambda session_id: session
+
+    def _run_coro(coro, loop):
+        loop.run_until_complete(coro)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", _run_coro)
+
+    driver.send_response("first response", target="session-1", is_chunk=True)
+    driver.send_complete("session-1")
+
+    first_event = json.loads(driver._captured_messages[0][1])
+    complete_event = json.loads(driver._captured_messages[1][1])
+    assert complete_event["type"] == "complete"
+    assert complete_event["event_type"] == "complete"
+    assert complete_event["target"] == "stream"
+    assert complete_event["stream_id"] == first_event["stream_id"]
+
+    driver.send_response("late chunk", target="session-1", is_chunk=True)
+    late_event = json.loads(driver._captured_messages[2][1])
+    assert late_event["stream_id"] == complete_event["stream_id"]
+
+    session.context.pop("current_response_stream_id", None)
+    session.context.pop("current_response_stream_sequence", None)
+    session.context.pop("current_response_stream_user_message_id", None)
+    driver.send_complete("session-1")
+    fallback_complete_event = json.loads(driver._captured_messages[3][1])
+    assert fallback_complete_event["type"] == "complete"
+    assert fallback_complete_event["event_type"] == "complete"
+    assert fallback_complete_event["target"] == "legacy"
+    assert fallback_complete_event["legacy"] is True
+    assert fallback_complete_event["ambiguous"] is True
+    assert "stream_id" not in fallback_complete_event
+    assert "message_id" not in fallback_complete_event
