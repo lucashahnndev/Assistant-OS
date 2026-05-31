@@ -29,6 +29,18 @@ import { MessageList } from '../components/chat/MessageItem';
 import { FilePreviewIcon } from '../components/chat/MessageAttachments';
 import { formatDate } from '../utils/chatHistoryTransform';
 
+const normalizeLiveTimestamp = (ts) => {
+    if (!ts) return Date.now() / 1000;
+    if (typeof ts === 'string') {
+        const parsed = Date.parse(ts);
+        return isNaN(parsed) ? (Date.now() / 1000) : (parsed / 1000);
+    }
+    if (typeof ts === 'number' && ts > 10000000000) {
+        return ts / 1000;
+    }
+    return ts;
+};
+
 const Chat = () => {
     const { agentName } = useAuth();
     const [sessions, setSessions] = useState([]);
@@ -197,13 +209,27 @@ const Chat = () => {
 
                 if (raw.type === 'thought' || raw.type === 'cognitive_thought' || raw.type === 'assistant_thought' || raw.type === 'reasoning_chunk') {
                     setIsThinking(true);
-                    const thoughtText = raw.thought || raw.content || '';
-                    if (thoughtText) setThought(thoughtText);
+                    
+                    let safeThought = '';
+                    const rawThought = raw.thought || raw.content;
+                    if (typeof rawThought === 'string') {
+                        safeThought = rawThought;
+                    } else if (Array.isArray(rawThought)) {
+                        safeThought = rawThought.map(item => (typeof item === 'string' ? item : JSON.stringify(item))).join('\n');
+                    } else if (typeof rawThought === 'object' && rawThought !== null) {
+                        safeThought = rawThought.text || rawThought.thought || rawThought.content || rawThought.message || rawThought.summary || rawThought.value || JSON.stringify(rawThought);
+                    } else if (rawThought !== undefined && rawThought !== null) {
+                        safeThought = String(rawThought);
+                    }
 
-                    if (thoughtText && thoughtText.trim()) {
+                    if (safeThought) setThought(safeThought);
+
+                    const trimmedThought = typeof safeThought === 'string' ? safeThought.trim() : String(safeThought).trim();
+
+                    if (trimmedThought) {
                         pendingReasoningRef.current.push({
-                            text: thoughtText.trim(),
-                            ts: raw.timestamp ? raw.timestamp : Date.now() / 1000
+                            text: trimmedThought,
+                            ts: normalizeLiveTimestamp(raw.timestamp)
                         });
                     }
 
@@ -215,14 +241,14 @@ const Chat = () => {
                     setStreamingMessage(prev => {
                         const content = prev ? prev.content : '';
                         const currentLines = prev?.reasoningLines || [];
-                        const nextLines = thoughtText ? [...currentLines, thoughtText] : currentLines;
+                        const nextLines = trimmedThought ? [...currentLines, trimmedThought] : currentLines;
                         return {
                             role: 'assistant',
                             content: content,
                             reasoningLines: nextLines,
                             reasoningTimeline: [...pendingReasoningRef.current],
                             statusPhase: raw.phase || (prev ? prev.statusPhase : 'thinking'),
-                            statusMessage: thoughtText || (prev ? prev.statusMessage : ''),
+                            statusMessage: trimmedThought || (prev ? prev.statusMessage : ''),
                             isComplete: false,
                             work_id: raw.work_id || prev?.work_id,
                             model_info: raw.model_info || prev?.model_info
@@ -270,7 +296,7 @@ const Chat = () => {
                         id: raw.message_id || `msg-${Date.now()}`,
                         role: raw.role || 'assistant',
                         content: finalContent,
-                        timestamp: raw.timestamp ? raw.timestamp / 1000 : Date.now() / 1000,
+                        timestamp: normalizeLiveTimestamp(raw.timestamp),
                         reasoningTimeline: finalReasoning,
                         work_id: finalWorkId,
                         model_info: finalModelInfo,
