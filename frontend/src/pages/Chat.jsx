@@ -253,7 +253,8 @@ const Chat = () => {
                     return;
                 }
 
-                if (raw.type === 'complete' || raw.type === 'msg' || raw.type === 'message' || raw.type === 'assistant_response') {
+                const isAssistantCompletion = raw.type === 'complete' || raw.type === 'assistant_response' || ((raw.type === 'msg' || raw.type === 'message') && raw.role !== 'user');
+                if (isAssistantCompletion) {
                     setIsSending(false);
                     setIsThinking(false);
 

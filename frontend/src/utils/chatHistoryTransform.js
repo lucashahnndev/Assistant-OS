@@ -184,9 +184,9 @@ export const groupHistoryWithReasoning = (rawHistory = []) => {
                 // New work unit
                 const unit = {
                     ...msg,
-                    reasoningLines: [],
-                    reasoningTimeline: [],
-                    contentSegments: []
+                    reasoningLines: msg.reasoningLines ? [...msg.reasoningLines] : [],
+                    reasoningTimeline: msg.reasoningTimeline ? [...msg.reasoningTimeline] : [],
+                    contentSegments: msg.contentSegments ? [...msg.contentSegments] : []
                 };
                 if (type === 'reasoning') {
                     const line = extractReasoningLine(msg);
