@@ -3,6 +3,8 @@
 Este diretorio guarda documentacao humana de arquitetura do sistema.
 As specs normativas canônicas vivem em `agent/specs/`.
 
+`Session Event Contract` e o dominio guarda-chuva para sessoes, mensagens, turnos, streams, works, eventos, indices e persistencia. Para trabalho novo em session/event/WebSocket, consulte esse contrato primeiro; `system_sessions` e `agent_events` permanecem como contratos especificos e/ou legados.
+
 ## Uso
 
 - explicacoes de arquitetura;

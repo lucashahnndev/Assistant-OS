@@ -16,3 +16,4 @@ Este diretório guarda regras completas para o agente.
 - `official-documentation.policy.md`: regra de documentação oficial viva;
 - `workspace.policy.md`: organização do workspace operacional;
 - `commit-safety.policy.md`: segurança e higiene de commits.
+- `session-event-contract.policy.md`: regras de correlacao, renderizacao e persistencia para sessoes e eventos.

@@ -1,5 +1,7 @@
 # Agent Events Spec
 
+Note: for the broader session/message/turn/stream/work/event correlation model, see `agent/specs/session-event-contract.spec.md`. This document remains the narrower internal-agent-event contract.
+
 ## Overview
 `AgentEvent` is the formal contract for internal system signals that require agent attention. It allows capabilities and background services to wake up a system session, such as `system.attention`, with structured context and human-readable summaries.
 

@@ -1,5 +1,7 @@
 # Documentation: System Sessions & Domain Isolation
 
+Note: the broader `Session Event Contract` in `agent/specs/session-event-contract.spec.md` is the umbrella reference for session/message/turn/stream/work/event correlation and persistence. This document remains the narrower system-session/domain-isolation contract.
+
 ## Overview
 As of Phase 3, the Atlas architecture evolved from a single `system.attention` catch-all to a robust, domain-isolated system session model. This ensures that internal agentic events (calendar, monitoring, notifications) are handled in separate cognitive contexts, preventing domain bleed and improving observability.
 
