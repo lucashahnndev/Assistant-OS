@@ -2,8 +2,9 @@ import threading
 import uvicorn
 import asyncio
 import os
+import uuid
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from typing import Dict
+from typing import Any, Dict, Optional
 import json
 import time
 import re
@@ -91,6 +92,25 @@ class ServerDriver(BaseDriver):
         from server.voice_manager import VoiceManager
         self.voice_manager = VoiceManager(self)
 
+    def _normalize_ws_event(self, event: Dict[str, Any], session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Adds a minimal, backwards-compatible envelope to outbound WS events."""
+        normalized = dict(event or {})
+        event_type = str(normalized.get("event_type") or normalized.get("type") or "").strip()
+        if event_type and not normalized.get("event_type"):
+            normalized["event_type"] = event_type
+        if event_type and not normalized.get("type"):
+            normalized["type"] = event_type
+        if "event_id" not in normalized or not normalized.get("event_id"):
+            normalized["event_id"] = str(uuid.uuid4())
+        if session_id and not normalized.get("session_id"):
+            normalized["session_id"] = session_id
+        if "timestamp" not in normalized or normalized.get("timestamp") in (None, ""):
+            normalized["timestamp"] = time.time()
+        normalized.setdefault("channel", "websocket")
+        normalized.setdefault("interface", self.get_interface_id())
+        normalized.setdefault("source", "server_driver")
+        return normalized
+
     def _setup_extra_routes(self):
         @self.app.on_event("startup")
         async def startup_event():
@@ -122,24 +142,25 @@ class ServerDriver(BaseDriver):
                         # to avoid duplication in the Web UI.
                         if event.get("type") in ["status", "reasoning_chunk", "complete"]:
                             continue
-                            
+                        
                         target = event.get("session_id")
-                        payload = json.dumps(event)
+                        normalized_event = self._normalize_ws_event(event, session_id=target)
+                        payload = json.dumps(normalized_event)
                         
                         # List-affecting events should be broadcasted so ALL connected clients
                         # (even if on different active sessions) see the updates in their sidebar.
-                        if event.get("type") in ["session_updated", "unread_count_updated", "message_added"]:
-                            logger.debug(f"Broadcasting event: {event.get('type')} to all clients")
+                        if normalized_event.get("type") in ["session_updated", "unread_count_updated", "message_added"]:
+                            logger.debug(f"Broadcasting event: {normalized_event.get('type')} to all clients")
                             await self.connection_manager.broadcast(payload)
-                        elif event.get("type") == "weg_scene":
+                        elif normalized_event.get("type") == "weg_scene":
                             # Broadcast or send weg_scene event directly
                             logger.info(f"Broadcasting weg_scene event to all clients for session {target}")
                             await self.connection_manager.broadcast(payload)
                         elif target:
-                             logger.debug(f"Sending event: {event.get('type')} to session {target}")
+                             logger.debug(f"Sending event: {normalized_event.get('type')} to session {target}")
                              await self.connection_manager.send_personal_message(payload, target)
                         else:
-                             logger.debug(f"Broadcasting generic event: {event.get('type')}")
+                             logger.debug(f"Broadcasting generic event: {normalized_event.get('type')}")
                              await self.connection_manager.broadcast(payload)
                 except Exception as e:
                     logger.error(f"Error in EventBus-to-WS bridge: {e}")
@@ -462,14 +483,13 @@ class ServerDriver(BaseDriver):
             # Standardized message types for the new Portal UI
             msg_type = "final_message_chunk" if is_chunk else "assistant_response"
             attachment_list = list(attachments or [])
-            
-            response_payload = json.dumps({
+            response_event = self._normalize_ws_event({
                 "type": msg_type,
                 "content": text,
                 "model_info": model_info,
-                "timestamp": time.time(),
-                "attachments": attachments
-            })
+                "attachments": attachment_list,
+            }, session_id=target)
+            response_payload = json.dumps(response_event)
             asyncio.run_coroutine_threadsafe(
                 self.connection_manager.send_personal_message(response_payload, target), 
                 self.loop
@@ -477,13 +497,12 @@ class ServerDriver(BaseDriver):
             if is_chunk and text:
                 try:
                     from utils.event_bus import global_event_bus
-                    global_event_bus.emit_threadsafe({
+                    global_event_bus.emit_threadsafe(self._normalize_ws_event({
                         "type": "assistant_chunk",
-                        "session_id": target,
                         "content": text,
                         "model_info": model_info,
                         "attachments": attachment_list
-                    })
+                    }, session_id=target))
                 except Exception as e:
                     logger.debug(f"ServerDriver: Failed to emit assistant_chunk event: {e}")
             return {
@@ -516,14 +535,13 @@ class ServerDriver(BaseDriver):
             display_message = payload.get('label', payload.get('message', str(payload)))
 
         # Convert the dictionary to a JSON string for sending over WebSocket
-        json_payload = json.dumps({
+        json_payload = json.dumps(self._normalize_ws_event({
             "type": "status",
             "phase": phase,
             "message": display_message,
             "payload": payload, # Keep full payload for new UI components
             "model_info": model_info,
-            "timestamp": time.time()
-        })
+        }, session_id=target))
 
         asyncio.run_coroutine_threadsafe(
             self.connection_manager.send_personal_message(json_payload, target), 
@@ -533,11 +551,10 @@ class ServerDriver(BaseDriver):
     def send_reasoning_chunk(self, target, content):
         """Sends a reasoning step log."""
         if not self.loop or self.loop.is_closed() or not target: return
-        payload = json.dumps({
+        payload = json.dumps(self._normalize_ws_event({
             "type": "reasoning_chunk",
             "content": content,
-            "timestamp": time.time()
-        })
+        }, session_id=target))
         asyncio.run_coroutine_threadsafe(
             self.connection_manager.send_personal_message(payload, target), 
             self.loop
@@ -546,10 +563,9 @@ class ServerDriver(BaseDriver):
     def send_complete(self, target):
         """Sends completion signal."""
         if not self.loop or self.loop.is_closed() or not target: return
-        payload = json.dumps({
+        payload = json.dumps(self._normalize_ws_event({
             "type": "complete",
-            "timestamp": time.time()
-        })
+        }, session_id=target))
         asyncio.run_coroutine_threadsafe(
             self.connection_manager.send_personal_message(payload, target), 
             self.loop
