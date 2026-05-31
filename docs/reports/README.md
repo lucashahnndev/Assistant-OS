@@ -61,6 +61,7 @@ Conventions:
 ### Operations and Telemetry
 - [real-session-telemetry-audit-report.md](real-session-telemetry-audit-report.md)
 - [session_event_contract_runtime_audit.md](session_event_contract_runtime_audit.md)
+- [session_event_contract_phase_b_plan.md](session_event_contract_phase_b_plan.md)
 
 ### Human Review
 - These are human-authored technical opinions and audit conclusions, not runtime telemetry.
