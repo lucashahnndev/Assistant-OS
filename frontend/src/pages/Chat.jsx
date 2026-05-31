@@ -312,32 +312,8 @@ const Chat = () => {
 
                     setMessages(prev => {
                         const nextMsgs = [...prev];
-                        
-                        // If it's a user message from backend, deduplicate against optimistic user msg
-                        if (finalMsg.role === 'user') {
-                            // Find optimistic user message (isSending) that doesn't have an ID assigned by backend yet
-                            const optIndex = nextMsgs.findIndex(m => m.isSending && m.role === 'user');
-                            if (optIndex >= 0) {
-                                nextMsgs[optIndex] = { ...finalMsg, isSending: false };
-                                return nextMsgs;
-                            }
-                            // Otherwise, normal deduplication
-                            if (nextMsgs.some(m => m.id === finalMsg.id)) return nextMsgs;
-                            return [...nextMsgs, finalMsg];
-                        }
-                        
-                        // For assistant completions, fill empty skeleton placeholders or append
-                        if (nextMsgs.some(m => m.id === finalMsg.id)) {
-                             // Update existing final message if needed (backend might emit updated attachments)
-                             return nextMsgs.map(m => m.id === finalMsg.id ? { ...m, ...finalMsg } : m);
-                        }
-                        
-                        // If we had a skeleton stream and we receive a complete chunk matching its work_id
-                        if (streamingMessageRef.current && finalMsg.work_id && finalMsg.work_id === streamingMessageRef.current.work_id) {
-                            return nextMsgs.map(m => m.isSending ? { ...m, isSending: false } : m).concat(finalMsg);
-                        }
-                        
-                        // Default append
+                        if (nextMsgs.some(m => m.id === finalMsg.id)) return nextMsgs;
+                        // Clean up optimistic isSending flag from the user message, so we don't drop it.
                         return nextMsgs.map(m => m.isSending ? { ...m, isSending: false } : m).concat(finalMsg);
                     });
 

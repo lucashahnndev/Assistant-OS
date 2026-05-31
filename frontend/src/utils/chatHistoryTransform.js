@@ -247,11 +247,9 @@ export const groupHistoryWithReasoning = (rawHistory = []) => {
 
     // Pass 2: build output in timeline order (deduplicated)
     const seen = new Set();
-    const result = orderedKeys.filter(k => {
+    return orderedKeys.filter(k => {
         if (seen.has(k)) return false;
         seen.add(k);
         return true;
     }).map(k => workUnitMap.get(k));
-
-    return result;
 };
