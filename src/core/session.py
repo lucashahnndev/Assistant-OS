@@ -257,6 +257,8 @@ class Session:
                 "unread_count": self.get_unread_count("assistant")
             })
 
+        return msg
+
     def add_thought(self, thought_text: str, work_id: Optional[str] = None, message_id: Optional[str] = None):
         """Adds a cognitive thought to the dedicated audit trail."""
         thought_entry = {

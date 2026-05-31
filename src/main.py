@@ -1130,7 +1130,7 @@ class Kernel:
             if session:
                 inbound_role = "notification" if is_internal else "user"
                 inbound_type = "internal_event" if is_internal else "default"
-                session.add_message(
+                user_message = session.add_message(
                     inbound_role,
                     text,
                     attachments=attachments,
@@ -1138,6 +1138,11 @@ class Kernel:
                     msg_type=inbound_type,
                     actor=self._build_message_actor(context, is_internal),
                 )
+                user_message_id = user_message.get("id") if isinstance(user_message, dict) else None
+                if user_message_id and isinstance(getattr(session, "context", None), dict):
+                    session.context["last_user_message_id"] = user_message_id
+                    session.context["current_turn_user_message_id"] = user_message_id
+                    session.context["current_turn_message_id"] = user_message_id
                 self.orchestrator._save_session(session)
                 
                 # Trigger auto-naming for web sessions on first user messages
