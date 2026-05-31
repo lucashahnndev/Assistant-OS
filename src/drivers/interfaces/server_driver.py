@@ -367,7 +367,7 @@ class ServerDriver(BaseDriver):
                      self.turn_id = f"boot_{int(time.time())}"
                      
                  def send_response(self, text, target=None, is_chunk=False, attachments=None, model_info=None, **kwargs):
-                     result = self.driver.send_response(text, target, is_chunk, attachments, model_info)
+                     result = self.driver.send_response(text, target, is_chunk, attachments, model_info, **kwargs)
                      raw = str(text or "")
                      if not raw: return
                      from utils.voice_text import sanitize_tts_text
@@ -465,7 +465,103 @@ class ServerDriver(BaseDriver):
         # But setting daemon=True on thread helps.
         pass
 
-    def send_response(self, text, target=None, is_chunk=False, attachments=None, model_info=None):
+    def _get_session_stream_context(self, session_id: str):
+        session = None
+        context = None
+        if self.kernel and getattr(self.kernel, "orchestrator", None):
+            try:
+                session = self.kernel.orchestrator.get_session_robust(session_id)
+            except Exception:
+                session = None
+        if session and isinstance(getattr(session, "context", None), dict):
+            context = session.context
+        return session, context
+
+    def _ensure_response_stream(self, session_id: str):
+        session, context = self._get_session_stream_context(session_id)
+        stream_id = None
+        stream_sequence = 0
+        if context is not None:
+            current_turn_user_message_id = str(context.get("current_turn_user_message_id") or "").strip() or None
+            stream_id = str(context.get("current_response_stream_id") or "").strip() or None
+            stream_user_message_id = str(context.get("current_response_stream_user_message_id") or "").strip() or None
+            try:
+                stream_sequence = int(context.get("current_response_stream_sequence") or 0)
+            except Exception:
+                stream_sequence = 0
+            if not stream_id or (current_turn_user_message_id and stream_user_message_id and current_turn_user_message_id != stream_user_message_id):
+                stream_id = str(uuid.uuid4())
+                stream_sequence = 0
+                context["current_response_stream_id"] = stream_id
+                context["current_response_stream_sequence"] = stream_sequence
+                context["current_response_stream_started_at"] = time.time()
+                context["current_response_stream_session_id"] = session_id
+                if current_turn_user_message_id:
+                    context["current_response_stream_user_message_id"] = current_turn_user_message_id
+                else:
+                    context.pop("current_response_stream_user_message_id", None)
+        else:
+            stream_id = str(uuid.uuid4())
+            stream_sequence = 0
+        return session, context, stream_id, stream_sequence
+
+    @staticmethod
+    def _clear_response_stream_context(context: Optional[Dict[str, Any]]):
+        if not isinstance(context, dict):
+            return
+        for key in (
+            "current_response_stream_id",
+            "current_response_stream_sequence",
+            "current_response_stream_started_at",
+            "current_response_stream_session_id",
+            "current_response_stream_user_message_id",
+            "current_response_stream_completed_at",
+        ):
+            context.pop(key, None)
+
+    def _build_streamed_response_events(
+        self,
+        text,
+        target,
+        is_chunk=False,
+        attachments=None,
+        model_info=None,
+        stream_id=None,
+        sequence=None,
+    ):
+        msg_type = "final_message_chunk" if is_chunk else "assistant_response"
+        attachment_list = list(attachments or [])
+        stream_id = str(stream_id or "").strip() or str(uuid.uuid4())
+        try:
+            sequence = int(sequence if sequence is not None else 0)
+        except Exception:
+            sequence = 0
+
+        response_event = self._normalize_ws_event({
+            "type": msg_type,
+            "content": text,
+            "model_info": model_info,
+            "attachments": attachment_list,
+            "stream_id": stream_id,
+            "sequence": sequence,
+        }, session_id=target)
+
+        assistant_chunk_event = None
+        next_sequence = sequence + 1
+        if is_chunk and text:
+            assistant_chunk_event = self._normalize_ws_event({
+                "type": "assistant_chunk",
+                "content": text,
+                "model_info": model_info,
+                "attachments": attachment_list,
+                "stream_id": stream_id,
+                "sequence": next_sequence,
+            }, session_id=target)
+            next_sequence += 1
+
+        return response_event, assistant_chunk_event, stream_id, next_sequence
+
+    def send_response(self, text, target=None, is_chunk=False, attachments=None, model_info=None, stream_id=None, sequence=None):
         # Input: Text from Kernel
         # Output: Send to specific WebSocket (target=session_id)
 
@@ -479,30 +575,32 @@ class ServerDriver(BaseDriver):
             self.loop_ready.wait(timeout=5.0)
 
         if self.loop and not self.loop.is_closed() and target:
-            # Prepare JSON response
-            # Standardized message types for the new Portal UI
-            msg_type = "final_message_chunk" if is_chunk else "assistant_response"
-            attachment_list = list(attachments or [])
-            response_event = self._normalize_ws_event({
-                "type": msg_type,
-                "content": text,
-                "model_info": model_info,
-                "attachments": attachment_list,
-            }, session_id=target)
+            session, context, current_stream_id, current_stream_sequence = self._ensure_response_stream(target)
+            if stream_id is None:
+                stream_id = current_stream_id
+            if sequence is None:
+                sequence = current_stream_sequence
+            response_event, assistant_chunk_event, stream_id, next_sequence = self._build_streamed_response_events(
+                text,
+                target,
+                is_chunk=is_chunk,
+                attachments=attachments,
+                model_info=model_info,
+                stream_id=stream_id,
+                sequence=sequence,
+            )
             response_payload = json.dumps(response_event)
             asyncio.run_coroutine_threadsafe(
                 self.connection_manager.send_personal_message(response_payload, target), 
                 self.loop
             )
-            if is_chunk and text:
+            if isinstance(context, dict):
+                context["current_response_stream_id"] = stream_id
+                context["current_response_stream_sequence"] = next_sequence
+            if assistant_chunk_event is not None:
                 try:
                     from utils.event_bus import global_event_bus
-                    global_event_bus.emit_threadsafe(self._normalize_ws_event({
-                        "type": "assistant_chunk",
-                        "content": text,
-                        "model_info": model_info,
-                        "attachments": attachment_list
-                    }, session_id=target))
+                    global_event_bus.emit_threadsafe(assistant_chunk_event)
                 except Exception as e:
                     logger.debug(f"ServerDriver: Failed to emit assistant_chunk event: {e}")
             return {
@@ -510,7 +608,7 @@ class ServerDriver(BaseDriver):
                 "status": "sent_to_web_payload",
                 "text_sent": bool(text and str(text).strip()),
                 "caption_sent": False,
-                "sent_attachments": attachment_list,
+                "sent_attachments": list(attachments or []),
                 "attachment_errors": [],
             }
         else:
@@ -524,7 +622,7 @@ class ServerDriver(BaseDriver):
                 "attachment_errors": [{"bridge": "web", "status": "error", "error": "loop_or_target_missing"}],
             }
 
-    def send_status(self, target, phase, payload=None, model_info=None):
+    def send_status(self, target, phase, payload=None, model_info=None, stream_id=None, sequence=None):
         """Sends a status update (loader phase)."""
         if not self.loop or self.loop.is_closed() or not target: return
         
@@ -541,6 +639,8 @@ class ServerDriver(BaseDriver):
             "message": display_message,
             "payload": payload, # Keep full payload for new UI components
             "model_info": model_info,
+            **({"stream_id": stream_id} if stream_id else {}),
+            **({"sequence": sequence} if sequence is not None else {}),
         }, session_id=target))
 
         asyncio.run_coroutine_threadsafe(
@@ -548,23 +648,37 @@ class ServerDriver(BaseDriver):
             self.loop
         )
 
-    def send_reasoning_chunk(self, target, content):
+    def send_reasoning_chunk(self, target, content, stream_id=None, sequence=None):
         """Sends a reasoning step log."""
         if not self.loop or self.loop.is_closed() or not target: return
         payload = json.dumps(self._normalize_ws_event({
             "type": "reasoning_chunk",
             "content": content,
+            **({"stream_id": stream_id} if stream_id else {}),
+            **({"sequence": sequence} if sequence is not None else {}),
         }, session_id=target))
         asyncio.run_coroutine_threadsafe(
             self.connection_manager.send_personal_message(payload, target), 
             self.loop
         )
 
-    def send_complete(self, target):
+    def send_complete(self, target, stream_id=None, sequence=None):
         """Sends completion signal."""
         if not self.loop or self.loop.is_closed() or not target: return
+        session, context = self._get_session_stream_context(target)
+        if stream_id is None and isinstance(context, dict):
+            stream_id = str(context.get("current_response_stream_id") or "").strip() or None
+        if sequence is None and isinstance(context, dict):
+            try:
+                sequence = int(context.get("current_response_stream_sequence") or 0)
+            except Exception:
+                sequence = None
+        if isinstance(context, dict):
+            context["current_response_stream_completed_at"] = time.time()
         payload = json.dumps(self._normalize_ws_event({
             "type": "complete",
+            **({"stream_id": stream_id} if stream_id else {}),
+            **({"sequence": sequence} if sequence is not None else {}),
         }, session_id=target))
         asyncio.run_coroutine_threadsafe(
             self.connection_manager.send_personal_message(payload, target), 
