@@ -101,6 +101,86 @@ class Session:
             return text
         return text[:limit].rstrip()
 
+    def _get_context_dict(self) -> Dict[str, Any]:
+        if not isinstance(self.context, dict):
+            self.context = {}
+        return self.context
+
+    @staticmethod
+    def _coerce_turn_id(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except Exception:
+            return 0
+
+    def _seed_canonical_turn_sequence(self) -> int:
+        context = self._get_context_dict()
+        current = self._coerce_turn_id(context.get("canonical_turn_sequence"))
+        if current > 0:
+            return current
+
+        history_max = 0
+        for msg in self.history:
+            history_max = max(history_max, self._coerce_turn_id(msg.get("turn_id")))
+
+        context_turn = self._coerce_turn_id(context.get("current_turn_id"))
+        response_turn = self._coerce_turn_id(context.get("current_response_stream_turn_id"))
+        seeded = max(history_max, context_turn, response_turn)
+        context["canonical_turn_sequence"] = seeded
+        return seeded
+
+    def _next_canonical_turn_id(self) -> int:
+        context = self._get_context_dict()
+        current = self._seed_canonical_turn_sequence()
+        next_turn = current + 1
+        context["canonical_turn_sequence"] = next_turn
+        return next_turn
+
+    def _start_canonical_turn(self, role: str, *, now: Optional[float] = None) -> int:
+        context = self._get_context_dict()
+        turn_id = self._next_canonical_turn_id()
+        context["current_turn_id"] = turn_id
+        context["current_turn_started_at"] = now or time.time()
+        context["current_turn_started_by"] = str(role or "").strip().lower() or "unknown"
+        context["current_turn_closed_at"] = None
+        return turn_id
+
+    def _resolve_canonical_turn_id(
+        self,
+        role: str,
+        *,
+        reply_to_message_id: Optional[str] = None,
+        msg_type: str = "default",
+    ) -> Optional[int]:
+        context = self._get_context_dict()
+        role_key = str(role or "").strip().lower()
+        msg_type_key = str(msg_type or "").strip().lower()
+        reply_to_message_id = str(reply_to_message_id or "").strip() or None
+
+        # Technical/internal messages should not invent a conversational turn.
+        if role_key in {"system"} or msg_type_key in {"reasoning", "internal_event"}:
+            return None
+
+        current_turn_id = self._coerce_turn_id(context.get("current_turn_id"))
+        current_user_message_id = str(context.get("current_turn_user_message_id") or "").strip() or None
+        current_closed_at = context.get("current_turn_closed_at")
+
+        if role_key in {"user", "notification"}:
+            return self._start_canonical_turn(role_key)
+
+        if role_key == "assistant":
+            if current_turn_id and not current_closed_at:
+                if current_user_message_id and reply_to_message_id and reply_to_message_id == current_user_message_id:
+                    return current_turn_id
+                if not current_user_message_id and str(context.get("current_turn_started_by") or "").strip().lower() == "assistant":
+                    return current_turn_id
+            return self._start_canonical_turn(role_key)
+
+        if current_turn_id and not current_closed_at:
+            return current_turn_id
+
+        return None
+
     def get_continuity_anchor(self) -> Dict[str, Any]:
         anchor = self.context.get("continuity_anchor")
         return dict(anchor) if isinstance(anchor, dict) else {}
@@ -194,6 +274,11 @@ class Session:
     ):
         # Rough token estimation (chars / 4)
         tokens = len(content) // 4
+        turn_id = self._resolve_canonical_turn_id(
+            role,
+            reply_to_message_id=reply_to_message_id,
+            msg_type=msg_type,
+        )
         from zoneinfo import ZoneInfo
         tz_name = ConfigManager().get_timezone()
         try:
@@ -210,6 +295,8 @@ class Session:
             "is_read": role == "user", # Agent "reads" user messages immediately
             "model_info": model_info
         }
+        if turn_id is not None:
+            msg["turn_id"] = turn_id
         if work_id:
             msg["work_id"] = work_id
         if reply_to_message_id:
@@ -234,7 +321,24 @@ class Session:
             for t in self.thoughts:
                 if t.get("work_id") == work_id and not t.get("message_id"):
                     t["message_id"] = msg["id"]
-                    
+
+        context = self._get_context_dict()
+        if role in {SESSION_TYPE_USER, "notification"}:
+            if turn_id is not None:
+                context["current_turn_id"] = turn_id
+            context["current_turn_user_message_id"] = msg["id"]
+            context["last_user_message_id"] = msg["id"]
+            context["current_turn_message_id"] = msg["id"]
+            context["current_turn_closed_at"] = None
+            context["current_turn_role"] = str(role or "").strip().lower() or "user"
+        elif role == "assistant":
+            if turn_id is not None:
+                context["current_turn_id"] = turn_id
+            context["current_turn_assistant_message_id"] = msg["id"]
+            context["current_turn_message_id"] = msg["id"]
+            if context.get("current_turn_started_by") is None:
+                context["current_turn_started_by"] = "assistant"
+
         self.history.append(msg)
         self.turn_id += 1 # Advance turn counter
         self.last_interaction = time.time()
@@ -275,17 +379,17 @@ class Session:
                 record_session_event(
                     self,
                     event,
-                    defaults={
-                        "session_id": self.session_id,
-                        "channel": self.source,
-                        "interface": self.source,
-                        "source": "session",
-                        "turn_id": self.turn_id,
-                        "message_id": msg["id"],
-                        "reply_to_message_id": reply_to_message_id,
-                    },
-                    publish=True,
-                )
+                defaults={
+                    "session_id": self.session_id,
+                    "channel": self.source,
+                    "interface": self.source,
+                    "source": "session",
+                    "turn_id": turn_id if turn_id is not None else self.turn_id,
+                    "message_id": msg["id"],
+                    "reply_to_message_id": reply_to_message_id,
+                },
+                publish=True,
+            )
             except Exception:
                 # Fallback to the legacy bus path if the pipeline cannot be loaded.
                 global_event_bus.emit_threadsafe(event)

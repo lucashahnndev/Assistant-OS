@@ -67,12 +67,13 @@ def test_snapshot_contract_smoke(tmp_path, monkeypatch):
     pipeline = SessionEventPipeline(session, base_data_dir=str(tmp_path))
     stream_id = "stream-smoke"
     work_id = "work-smoke"
+    turn_id = session.context["current_turn_id"]
 
     pipeline.process_event(
         {
             "type": "assistant_chunk",
             "session_id": session_id,
-            "turn_id": session.turn_id,
+            "turn_id": turn_id,
             "stream_id": stream_id,
             "sequence": 1,
             "payload": {"content": "stream part 1"},
@@ -82,7 +83,7 @@ def test_snapshot_contract_smoke(tmp_path, monkeypatch):
         {
             "type": "final_message_chunk",
             "session_id": session_id,
-            "turn_id": session.turn_id,
+            "turn_id": turn_id,
             "stream_id": stream_id,
             "sequence": 2,
             "message_id": assistant_message["id"],
@@ -93,7 +94,7 @@ def test_snapshot_contract_smoke(tmp_path, monkeypatch):
         {
             "type": "complete",
             "session_id": session_id,
-            "turn_id": session.turn_id,
+            "turn_id": turn_id,
             "stream_id": stream_id,
             "sequence": 3,
             "target": "stream",
@@ -104,7 +105,7 @@ def test_snapshot_contract_smoke(tmp_path, monkeypatch):
         {
             "type": "status",
             "session_id": session_id,
-            "turn_id": session.turn_id,
+            "turn_id": turn_id,
             "payload": {"phase": "working", "message": "streaming"},
         }
     )
@@ -112,7 +113,7 @@ def test_snapshot_contract_smoke(tmp_path, monkeypatch):
         {
             "type": "reasoning_chunk",
             "session_id": session_id,
-            "turn_id": session.turn_id,
+            "turn_id": turn_id,
             "work_id": work_id,
             "payload": {
                 "thought_id": "thought-smoke",
@@ -126,7 +127,7 @@ def test_snapshot_contract_smoke(tmp_path, monkeypatch):
         {
             "type": "media.added",
             "session_id": session_id,
-            "turn_id": session.turn_id,
+            "turn_id": turn_id,
             "message_id": assistant_message["id"],
             "work_id": work_id,
             "payload": {
@@ -142,7 +143,7 @@ def test_snapshot_contract_smoke(tmp_path, monkeypatch):
         {
             "type": "artifact.created",
             "session_id": session_id,
-            "turn_id": session.turn_id,
+            "turn_id": turn_id,
             "message_id": assistant_message["id"],
             "work_id": work_id,
             "payload": {
@@ -158,7 +159,7 @@ def test_snapshot_contract_smoke(tmp_path, monkeypatch):
         {
             "type": "card.created",
             "session_id": session_id,
-            "turn_id": session.turn_id,
+            "turn_id": turn_id,
             "message_id": assistant_message["id"],
             "work_id": work_id,
             "payload": {
@@ -174,7 +175,7 @@ def test_snapshot_contract_smoke(tmp_path, monkeypatch):
         {
             "type": "visual.wegena.scene_reset",
             "session_id": session_id,
-            "turn_id": session.turn_id,
+            "turn_id": turn_id,
             "payload": {
                 "scene_id": "scene-smoke",
                 "scene_type": "reset",
@@ -188,7 +189,7 @@ def test_snapshot_contract_smoke(tmp_path, monkeypatch):
         {
             "type": "complete",
             "session_id": session_id,
-            "turn_id": session.turn_id,
+            "turn_id": turn_id,
             "target": "legacy",
             "payload": {"content": "legacy complete"},
         }
@@ -208,6 +209,9 @@ def test_snapshot_contract_smoke(tmp_path, monkeypatch):
     assert snapshot["session_id"] == session_id
     assert snapshot["session"]["session_id"] == session_id
     assert snapshot["chat"] == session.history
+    assert snapshot["current"]["turn_id"] == turn_id
+    assert snapshot["current"]["current_turn_id"] == turn_id
+    assert snapshot["current"]["legacy_turn_id"] == session.turn_id
     assert len(snapshot["events"]) == 12
     assert snapshot["events"][-1]["target"] == "legacy"
     stream_complete_event = next(event for event in snapshot["events"] if event.get("type") == "complete" and event.get("target") == "stream")
@@ -229,9 +233,9 @@ def test_snapshot_contract_smoke(tmp_path, monkeypatch):
     assert "artifact-smoke" not in snapshot["indices"]["messages"]["items"]
     assert "card-smoke" not in snapshot["indices"]["messages"]["items"]
 
-    assert snapshot["indices"]["turns"]["items"]["1"]["user_message_id"] == user_message["id"]
-    assert assistant_message["id"] in snapshot["indices"]["turns"]["items"]["2"]["assistant_message_ids"]
-    assert stream_id in snapshot["indices"]["turns"]["items"]["2"]["stream_ids"]
+    assert snapshot["indices"]["turns"]["items"][str(turn_id)]["user_message_id"] == user_message["id"]
+    assert assistant_message["id"] in snapshot["indices"]["turns"]["items"][str(turn_id)]["assistant_message_ids"]
+    assert stream_id in snapshot["indices"]["turns"]["items"][str(turn_id)]["stream_ids"]
     assert snapshot["indices"]["streams"]["items"][stream_id]["status"] == "completed"
     assert snapshot["indices"]["streams"]["items"][stream_id]["sequence_last"] == 3
     assert snapshot["indices"]["thoughts"]["items"]["thought-smoke"]["thought_id"] == "thought-smoke"

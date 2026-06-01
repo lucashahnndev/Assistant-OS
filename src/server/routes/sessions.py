@@ -561,12 +561,17 @@ def get_session_snapshot(
         recent_events_limit=recent_events_limit,
     )
     snapshot["session"] = snapshot.get("session") or session.to_dict()
+    canonical_turn_id = None
+    if isinstance(getattr(session, "context", None), dict):
+        canonical_turn_id = session.context.get("current_turn_id")
     snapshot["current"] = {
         "session_id": session.session_id,
         "source": getattr(session, "source", "web"),
         "name": getattr(session, "name", ""),
         "profile_picture": getattr(session, "profile_picture", None),
-        "turn_id": getattr(session, "turn_id", 0),
+        "turn_id": canonical_turn_id if canonical_turn_id is not None else getattr(session, "turn_id", 0),
+        "legacy_turn_id": getattr(session, "turn_id", 0),
+        "current_turn_id": canonical_turn_id if canonical_turn_id is not None else getattr(session, "turn_id", 0),
         "context": session.context,
         "scratchpad": session.scratchpad,
     }

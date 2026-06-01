@@ -516,25 +516,46 @@ class ServerDriver(BaseDriver):
             context = session.context
         return session, context
 
+    @staticmethod
+    def _coerce_turn_id(value):
+        if value in (None, "", []):
+            return None
+        try:
+            return int(value)
+        except Exception:
+            text = str(value).strip()
+            return text or None
+
     def _ensure_response_stream(self, session_id: str):
         session, context = self._get_session_stream_context(session_id)
         stream_id = None
         stream_sequence = 0
         if context is not None:
+            current_turn_id = self._coerce_turn_id(context.get("current_turn_id"))
             current_turn_user_message_id = str(context.get("current_turn_user_message_id") or "").strip() or None
             stream_id = str(context.get("current_response_stream_id") or "").strip() or None
             stream_user_message_id = str(context.get("current_response_stream_user_message_id") or "").strip() or None
+            current_stream_turn_id = self._coerce_turn_id(context.get("current_response_stream_turn_id"))
             try:
                 stream_sequence = int(context.get("current_response_stream_sequence") or 0)
             except Exception:
                 stream_sequence = 0
-            if not stream_id or (current_turn_user_message_id and stream_user_message_id and current_turn_user_message_id != stream_user_message_id):
+            if current_turn_id is not None and current_stream_turn_id is None and stream_id:
+                context["current_response_stream_turn_id"] = current_turn_id
+                current_stream_turn_id = current_turn_id
+            if (
+                not stream_id
+                or (current_turn_user_message_id and stream_user_message_id and current_turn_user_message_id != stream_user_message_id)
+                or (current_turn_id is not None and current_stream_turn_id is not None and current_turn_id != current_stream_turn_id)
+            ):
                 stream_id = str(uuid.uuid4())
                 stream_sequence = 0
                 context["current_response_stream_id"] = stream_id
                 context["current_response_stream_sequence"] = stream_sequence
                 context["current_response_stream_started_at"] = time.time()
                 context["current_response_stream_session_id"] = session_id
+                if current_turn_id is not None:
+                    context["current_response_stream_turn_id"] = current_turn_id
                 if current_turn_user_message_id:
                     context["current_response_stream_user_message_id"] = current_turn_user_message_id
                 else:
@@ -567,6 +588,7 @@ class ServerDriver(BaseDriver):
         model_info=None,
         stream_id=None,
         sequence=None,
+        turn_id=None,
     ):
         msg_type = "final_message_chunk" if is_chunk else "assistant_response"
         attachment_list = list(attachments or [])
@@ -583,6 +605,7 @@ class ServerDriver(BaseDriver):
             "attachments": attachment_list,
             "stream_id": stream_id,
             "sequence": sequence,
+            **({"turn_id": turn_id} if turn_id is not None else {}),
         }, session_id=target)
 
         assistant_chunk_event = None
@@ -595,6 +618,7 @@ class ServerDriver(BaseDriver):
                 "attachments": attachment_list,
                 "stream_id": stream_id,
                 "sequence": next_sequence,
+                **({"turn_id": turn_id} if turn_id is not None else {}),
             }, session_id=target)
             next_sequence += 1
 
@@ -619,6 +643,11 @@ class ServerDriver(BaseDriver):
                 stream_id = current_stream_id
             if sequence is None:
                 sequence = current_stream_sequence
+            turn_id = None
+            if isinstance(context, dict):
+                turn_id = self._coerce_turn_id(context.get("current_response_stream_turn_id"))
+                if turn_id is None:
+                    turn_id = self._coerce_turn_id(context.get("current_turn_id"))
             response_event, assistant_chunk_event, stream_id, next_sequence = self._build_streamed_response_events(
                 text,
                 target,
@@ -627,6 +656,7 @@ class ServerDriver(BaseDriver):
                 model_info=model_info,
                 stream_id=stream_id,
                 sequence=sequence,
+                turn_id=turn_id,
             )
             recorded_response_event = self._record_pipeline_event(target, response_event, publish=False)
             response_payload = json.dumps(recorded_response_event)
@@ -637,6 +667,8 @@ class ServerDriver(BaseDriver):
             if isinstance(context, dict):
                 context["current_response_stream_id"] = stream_id
                 context["current_response_stream_sequence"] = next_sequence
+                if turn_id is not None:
+                    context["current_response_stream_turn_id"] = turn_id
             if assistant_chunk_event is not None:
                 try:
                     from utils.event_bus import global_event_bus
@@ -672,6 +704,12 @@ class ServerDriver(BaseDriver):
         display_message = payload
         if isinstance(payload, dict):
             display_message = payload.get('label', payload.get('message', str(payload)))
+        session, context = self._get_session_stream_context(target)
+        turn_id = None
+        if isinstance(context, dict):
+            turn_id = self._coerce_turn_id(context.get("current_response_stream_turn_id"))
+            if turn_id is None:
+                turn_id = self._coerce_turn_id(context.get("current_turn_id"))
 
         recorded_event = self._record_pipeline_event(target, {
             "type": "status",
@@ -679,6 +717,7 @@ class ServerDriver(BaseDriver):
             "message": display_message,
             "payload": payload, # Keep full payload for new UI components
             "model_info": model_info,
+            **({"turn_id": turn_id} if turn_id is not None else {}),
             **({"stream_id": stream_id} if stream_id else {}),
             **({"sequence": sequence} if sequence is not None else {}),
         }, publish=False)
@@ -710,6 +749,11 @@ class ServerDriver(BaseDriver):
         """Sends completion signal."""
         if not self.loop or self.loop.is_closed() or not target: return
         session, context = self._get_session_stream_context(target)
+        turn_id = None
+        if isinstance(context, dict):
+            turn_id = self._coerce_turn_id(context.get("current_response_stream_turn_id"))
+            if turn_id is None:
+                turn_id = self._coerce_turn_id(context.get("current_turn_id"))
         if complete_target is None:
             if isinstance(context, dict) and str(context.get("current_response_stream_id") or "").strip():
                 complete_target = "stream"
@@ -730,6 +774,7 @@ class ServerDriver(BaseDriver):
             "target": complete_target,
             **({"legacy": True} if legacy_target else {}),
             **({"ambiguous": True} if legacy_target else {}),
+            **({"turn_id": turn_id} if turn_id is not None else {}),
             **({"stream_id": stream_id} if stream_id else {}),
             **({"sequence": sequence} if sequence is not None else {}),
         }, publish=False)

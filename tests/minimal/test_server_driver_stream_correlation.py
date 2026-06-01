@@ -38,6 +38,7 @@ def test_stream_reuse_survives_complete_until_turn_changes(monkeypatch):
     driver = _make_driver()
     context = {
         "current_turn_user_message_id": "user-msg-1",
+        "current_turn_id": 1,
     }
     session = SimpleNamespace(context=context)
     driver.kernel.orchestrator.get_session_robust = lambda session_id: session
@@ -62,18 +63,23 @@ def test_stream_reuse_survives_complete_until_turn_changes(monkeypatch):
 
     assert first_event["type"] == "final_message_chunk"
     assert first_event["stream_id"] == complete_event["stream_id"]
+    assert first_event["turn_id"] == 1
+    assert complete_event["turn_id"] == 1
     assert late_event["stream_id"] == first_event["stream_id"]
+    assert late_event["turn_id"] == 1
     assert first_event["sequence"] < late_event["sequence"]
     assert "type" in complete_event
     assert "stream_id" in complete_event
 
     context["current_turn_user_message_id"] = "user-msg-2"
+    context["current_turn_id"] = 2
     driver.send_response("new turn response", target="session-1", is_chunk=True)
     new_turn_payload = driver._captured_messages[3][1]
     new_turn_event = json.loads(new_turn_payload)
 
     assert new_turn_event["stream_id"] != first_event["stream_id"]
     assert new_turn_event["sequence"] == 0
+    assert new_turn_event["turn_id"] == 2
 
 
 def test_complete_uses_stream_target_and_falls_back_without_stream(monkeypatch):
@@ -81,6 +87,7 @@ def test_complete_uses_stream_target_and_falls_back_without_stream(monkeypatch):
     session = SimpleNamespace(
         context={
             "current_turn_user_message_id": "user-msg-1",
+            "current_turn_id": 1,
         }
     )
     driver.kernel.orchestrator.get_session_robust = lambda session_id: session
@@ -100,14 +107,17 @@ def test_complete_uses_stream_target_and_falls_back_without_stream(monkeypatch):
     assert complete_event["event_type"] == "complete"
     assert complete_event["target"] == "stream"
     assert complete_event["stream_id"] == first_event["stream_id"]
+    assert complete_event["turn_id"] == 1
 
     driver.send_response("late chunk", target="session-1", is_chunk=True)
     late_event = json.loads(driver._captured_messages[2][1])
     assert late_event["stream_id"] == complete_event["stream_id"]
+    assert late_event["turn_id"] == 1
 
     session.context.pop("current_response_stream_id", None)
     session.context.pop("current_response_stream_sequence", None)
     session.context.pop("current_response_stream_user_message_id", None)
+    session.context.pop("current_response_stream_turn_id", None)
     driver.send_complete("session-1")
     fallback_complete_event = json.loads(driver._captured_messages[3][1])
     assert fallback_complete_event["type"] == "complete"
@@ -115,6 +125,7 @@ def test_complete_uses_stream_target_and_falls_back_without_stream(monkeypatch):
     assert fallback_complete_event["target"] == "legacy"
     assert fallback_complete_event["legacy"] is True
     assert fallback_complete_event["ambiguous"] is True
+    assert fallback_complete_event["turn_id"] == 1
     assert "stream_id" not in fallback_complete_event
     assert "message_id" not in fallback_complete_event
 
@@ -125,6 +136,7 @@ def test_live_events_are_persisted_through_pipeline(tmp_path, monkeypatch):
         session_id="session-1",
         context={
             "current_turn_user_message_id": "user-msg-1",
+            "current_turn_id": 1,
         },
         event_timeline=[],
     )
@@ -158,6 +170,10 @@ def test_live_events_are_persisted_through_pipeline(tmp_path, monkeypatch):
     assert events[3]["event_type"] == "complete"
     assert events[3]["target"] == "stream"
     assert events[3]["stream_id"] == events[0]["stream_id"]
+    assert events[0]["turn_id"] == 1
+    assert events[1]["turn_id"] == 1
+    assert events[2]["turn_id"] == 1
+    assert events[3]["turn_id"] == 1
     assert events[0]["sequence"] == 0
     assert events[1]["sequence"] == 1
     assert events[2]["category"] == "status"
