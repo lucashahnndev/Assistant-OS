@@ -536,6 +536,44 @@ def get_session(session_id: str, request: Request, user: User = Depends(get_curr
     }
 
 
+@router.get("/{session_id}/snapshot")
+def get_session_snapshot(
+    session_id: str,
+    request: Request,
+    recent_events_limit: int = 100,
+    user: User = Depends(get_current_user),
+):
+    """
+    Return a canonical backend snapshot for initial load or reload flows.
+    """
+    kernel = get_kernel(request)
+    orch = kernel.orchestrator
+
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    from core.session_event_pipeline import build_session_snapshot
+
+    snapshot = build_session_snapshot(
+        session_id,
+        base_data_dir=getattr(kernel.config_manager, "base_data_dir", None),
+        recent_events_limit=recent_events_limit,
+    )
+    snapshot["session"] = snapshot.get("session") or session.to_dict()
+    snapshot["current"] = {
+        "session_id": session.session_id,
+        "source": getattr(session, "source", "web"),
+        "name": getattr(session, "name", ""),
+        "profile_picture": getattr(session, "profile_picture", None),
+        "turn_id": getattr(session, "turn_id", 0),
+        "context": session.context,
+        "scratchpad": session.scratchpad,
+    }
+    snapshot["runtime_metrics"] = orch.get_runtime_metrics(session_id) if hasattr(orch, "get_runtime_metrics") else {}
+    return snapshot
+
+
 @router.get("/{session_id}/cognition")
 def get_session_cognition(session_id: str, request: Request, user: User = Depends(get_current_user)):
     kernel = get_kernel(request)

@@ -46,6 +46,31 @@ REASONING_EVENT_TYPES = {
     "reasoning_chunk",
 }
 
+MEDIA_EVENT_TYPES = {
+    "media.added",
+    "media.updated",
+    "media.created",
+    "media_message",
+}
+
+ARTIFACT_EVENT_TYPES = {
+    "artifact.created",
+    "artifact.updated",
+}
+
+CARD_EVENT_TYPES = {
+    "card.created",
+    "card.updated",
+}
+
+WEGENA_EVENT_TYPES = {
+    "weg_scene_reset",
+    "visual.wegena.scene_reset",
+    "visual.wegena.scene_update",
+    "visual.wegena.composition_ready",
+    "visual.wegena.scene_failed",
+}
+
 
 def _is_mapping(value: Any) -> bool:
     return isinstance(value, dict)
@@ -233,6 +258,67 @@ def record_session_event(
     return pipeline.process_event(raw_event, defaults=defaults, publish=publish)
 
 
+def _read_json_file(path: str, default: Any):
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data
+    except Exception:
+        return default
+
+
+def build_session_snapshot(session_id: str, base_data_dir: Optional[str] = None, recent_events_limit: int = 100) -> Dict[str, Any]:
+    resolved_data_dir = os.path.abspath(base_data_dir or ConfigManager.get_data_dir())
+    session_dir = os.path.join(resolved_data_dir, "sessions", str(session_id))
+    events_path = os.path.join(session_dir, "events.jsonl")
+    session_path = os.path.join(session_dir, "session.json")
+    chat_path = os.path.join(session_dir, "chat.json")
+
+    snapshot = {
+        "session_id": str(session_id),
+        "session": _read_json_file(session_path, {}),
+        "chat": _read_json_file(chat_path, []),
+        "events": [],
+        "indices": {},
+        "paths": {
+            "session": session_path,
+            "chat": chat_path,
+            "events": events_path,
+        },
+    }
+
+    if os.path.exists(events_path):
+        try:
+            with open(events_path, "r", encoding="utf-8") as fh:
+                lines = [line.strip() for line in fh if line.strip()]
+            recent_lines = lines[-int(recent_events_limit or 0):] if recent_events_limit else lines
+            snapshot["events"] = [json.loads(line) for line in recent_lines]
+        except Exception:
+            snapshot["events"] = []
+
+    index_files = {
+        "messages": "messages.index.json",
+        "turns": "turns.index.json",
+        "streams": "streams.index.json",
+        "workers": "workers.index.json",
+        "thoughts": "thoughts.index.json",
+        "media": "media.index.json",
+        "links": "links.index.json",
+        "cards": "cards.index.json",
+        "artifacts": "artifacts.index.json",
+        "playback": "playback.index.json",
+        "wegena": "wegena.index.json",
+    }
+    for index_name, filename in index_files.items():
+        path = os.path.join(session_dir, filename)
+        snapshot["indices"][index_name] = _read_json_file(path, {"updated_at": None, "items": {}})
+        snapshot["paths"][index_name] = path
+
+    return snapshot
+
+
 class SessionEventStore:
     def __init__(self, events_path: str):
         self.events_path = os.path.abspath(events_path)
@@ -256,6 +342,13 @@ class SessionEventIndexWriter:
             "turns": os.path.join(self.session_dir, "turns.index.json"),
             "streams": os.path.join(self.session_dir, "streams.index.json"),
             "workers": os.path.join(self.session_dir, "workers.index.json"),
+            "thoughts": os.path.join(self.session_dir, "thoughts.index.json"),
+            "media": os.path.join(self.session_dir, "media.index.json"),
+            "links": os.path.join(self.session_dir, "links.index.json"),
+            "cards": os.path.join(self.session_dir, "cards.index.json"),
+            "artifacts": os.path.join(self.session_dir, "artifacts.index.json"),
+            "playback": os.path.join(self.session_dir, "playback.index.json"),
+            "wegena": os.path.join(self.session_dir, "wegena.index.json"),
         }
         os.makedirs(self.session_dir, exist_ok=True)
 
@@ -417,6 +510,120 @@ class SessionEventIndexWriter:
                     stream_id=key,
                     status="completed" if event_type == "complete" and target == "stream" else None,
                 )
+
+        if category == "reasoning" or event_type in REASONING_EVENT_TYPES:
+            thought_key = str(event.get("thought_id") or payload.get("thought_id") or event.get("event_id") or "").strip()
+            if thought_key:
+                thought_record = {
+                    "thought_id": thought_key,
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "message_id": message_id,
+                    "work_id": work_id,
+                    "sequence": event.get("sequence"),
+                    "timestamp": timestamp,
+                    "visibility": payload.get("visibility") or event.get("visibility") or "private",
+                    "kind": payload.get("kind") or event_type,
+                    "content_ref": payload.get("content_ref"),
+                    "content": payload.get("content") or event.get("content"),
+                    "summary": payload.get("summary") or event.get("summary"),
+                    "event_id": event.get("event_id"),
+                }
+                self._upsert("thoughts", thought_key, thought_record)
+                self._upsert_turn_record(
+                    turn_id,
+                    session_id,
+                    timestamp,
+                    message_id=message_id,
+                    work_id=work_id,
+                )
+
+        if category == "media" or event_type in MEDIA_EVENT_TYPES:
+            media_key = str(event.get("media_id") or payload.get("media_id") or event.get("event_id") or "").strip()
+            if media_key:
+                media_record = {
+                    "media_id": media_key,
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "message_id": message_id,
+                    "work_id": work_id,
+                    "origin_event_id": event.get("event_id"),
+                    "kind": payload.get("kind") or payload.get("type") or event_type,
+                    "mime": payload.get("mime") or payload.get("mime_type") or "",
+                    "path": payload.get("path") or payload.get("url") or "",
+                    "size": payload.get("size"),
+                    "thumbnail_ref": payload.get("thumbnail_ref"),
+                    "delivery_status": payload.get("delivery_status") or payload.get("status") or "",
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
+                    "derived_refs": payload.get("derived_refs") or [],
+                    "event_id": event.get("event_id"),
+                }
+                self._upsert("media", media_key, media_record)
+                self._upsert_turn_record(turn_id, session_id, timestamp, message_id=message_id, work_id=work_id)
+
+        if category == "artifact" or event_type in ARTIFACT_EVENT_TYPES:
+            artifact_key = str(event.get("artifact_id") or payload.get("artifact_id") or event.get("event_id") or "").strip()
+            if artifact_key:
+                artifact_record = {
+                    "artifact_id": artifact_key,
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "message_id": message_id,
+                    "work_id": work_id,
+                    "origin_event_id": event.get("event_id"),
+                    "artifact_type": payload.get("artifact_type") or payload.get("kind") or event_type,
+                    "path": payload.get("path") or payload.get("url") or "",
+                    "content_ref": payload.get("content_ref") or payload.get("content"),
+                    "summary": payload.get("summary") or "",
+                    "status": payload.get("status") or "active",
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
+                    "event_id": event.get("event_id"),
+                }
+                self._upsert("artifacts", artifact_key, artifact_record)
+
+        if category == "card" or event_type in CARD_EVENT_TYPES:
+            card_key = str(event.get("card_id") or payload.get("card_id") or event.get("event_id") or "").strip()
+            if card_key:
+                card_record = {
+                    "card_id": card_key,
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "message_id": message_id,
+                    "work_id": work_id,
+                    "origin_event_id": event.get("event_id"),
+                    "card_type": payload.get("card_type") or payload.get("kind") or event_type,
+                    "payload": payload,
+                    "status": payload.get("status") or "active",
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
+                    "ttl": payload.get("ttl"),
+                    "pinned": bool(payload.get("pinned")),
+                    "event_id": event.get("event_id"),
+                }
+                self._upsert("cards", card_key, card_record)
+                self._upsert_turn_record(turn_id, session_id, timestamp, message_id=message_id, work_id=work_id)
+
+        if category == "visual" or event_type in WEGENA_EVENT_TYPES:
+            scene_key = str(event.get("scene_id") or payload.get("scene_id") or event.get("event_id") or "").strip()
+            if scene_key:
+                wege_record = {
+                    "scene_id": scene_key,
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "trigger_event_id": event.get("event_id"),
+                    "status": payload.get("status") or event_type,
+                    "scene_type": payload.get("scene_type") or payload.get("kind") or event_type,
+                    "composition_ref": payload.get("composition_ref"),
+                    "snapshot_ref": payload.get("snapshot_ref"),
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
+                    "event_id": event.get("event_id"),
+                }
+                self._upsert("wegena", scene_key, wege_record)
+                # Visual events never create messages, but they can still be reflected on the turn lineage.
+                self._upsert_turn_record(turn_id, session_id, timestamp)
 
         if category == "worker" or event_type in WORKER_EVENT_TYPES:
             key = work_id

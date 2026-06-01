@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import json
 
 from core.session import Session
-from core.session_event_pipeline import SessionEventPipeline
+from core.session_event_pipeline import SessionEventPipeline, build_session_snapshot
 
 
 def test_session_event_pipeline_normalizes_and_persists_events(tmp_path):
@@ -148,6 +148,84 @@ def test_session_event_pipeline_updates_indices(tmp_path):
             },
         }
     )
+    reasoning_event = pipeline.process_event(
+        {
+            "type": "reasoning_chunk",
+            "session_id": "sess-4",
+            "turn_id": 4,
+            "work_id": "work-1",
+            "payload": {
+                "thought_id": "thought-1",
+                "visibility": "public",
+                "kind": "reasoning",
+                "content": "reasoning text",
+                "summary": "reasoning summary",
+            },
+        }
+    )
+    media_event = pipeline.process_event(
+        {
+            "type": "media.added",
+            "session_id": "sess-4",
+            "turn_id": 4,
+            "message_id": "msg-1",
+            "work_id": "work-1",
+            "payload": {
+                "media_id": "media-1",
+                "kind": "voice",
+                "mime": "audio/webm",
+                "path": "/tmp/media-1.webm",
+                "size": 1234,
+                "derived_refs": ["artifact-1"],
+            },
+        }
+    )
+    artifact_event = pipeline.process_event(
+        {
+            "type": "artifact.created",
+            "session_id": "sess-4",
+            "turn_id": 4,
+            "message_id": "msg-1",
+            "work_id": "work-1",
+            "payload": {
+                "artifact_id": "artifact-1",
+                "artifact_type": "transcript",
+                "path": "/tmp/artifact-1.txt",
+                "summary": "artifact summary",
+                "status": "ready",
+            },
+        }
+    )
+    card_event = pipeline.process_event(
+        {
+            "type": "card.created",
+            "session_id": "sess-4",
+            "turn_id": 4,
+            "message_id": "msg-1",
+            "work_id": "work-1",
+            "payload": {
+                "card_id": "card-1",
+                "card_type": "summary",
+                "payload": {"title": "Card"},
+                "pinned": True,
+                "ttl": 300,
+            },
+        }
+    )
+    wege_event = pipeline.process_event(
+        {
+            "type": "visual.wegena.scene_reset",
+            "session_id": "sess-4",
+            "turn_id": 4,
+            "payload": {
+                "scene_id": "scene-1",
+                "scene_type": "reset",
+                "composition_ref": "composition-1",
+                "snapshot_ref": "snapshot-1",
+                "status": "ok",
+            },
+        }
+    )
     pipeline.process_event(
         {
             "type": "weg_scene_reset",
@@ -157,17 +235,27 @@ def test_session_event_pipeline_updates_indices(tmp_path):
     )
 
     events_lines = Path(pipeline.events_path).read_text(encoding="utf-8").strip().splitlines()
-    assert len(events_lines) == 5
+    assert len(events_lines) == 10
     assert message_event["category"] == "message"
     assert stream_event["category"] == "stream"
     assert complete_event["category"] == "completion"
     assert worker_event["category"] == "worker"
-    assert len(session.event_timeline) == 5
+    assert reasoning_event["category"] == "reasoning"
+    assert media_event["category"] == "media"
+    assert artifact_event["category"] == "artifact"
+    assert card_event["category"] == "card"
+    assert wege_event["category"] == "visual"
+    assert len(session.event_timeline) == 10
 
     messages_index = json.loads(Path(pipeline.indices_dir, "messages.index.json").read_text(encoding="utf-8"))
     turns_index = json.loads(Path(pipeline.indices_dir, "turns.index.json").read_text(encoding="utf-8"))
     streams_index = json.loads(Path(pipeline.indices_dir, "streams.index.json").read_text(encoding="utf-8"))
     workers_index = json.loads(Path(pipeline.indices_dir, "workers.index.json").read_text(encoding="utf-8"))
+    thoughts_index = json.loads(Path(pipeline.indices_dir, "thoughts.index.json").read_text(encoding="utf-8"))
+    media_index = json.loads(Path(pipeline.indices_dir, "media.index.json").read_text(encoding="utf-8"))
+    artifacts_index = json.loads(Path(pipeline.indices_dir, "artifacts.index.json").read_text(encoding="utf-8"))
+    cards_index = json.loads(Path(pipeline.indices_dir, "cards.index.json").read_text(encoding="utf-8"))
+    wege_index = json.loads(Path(pipeline.indices_dir, "wegena.index.json").read_text(encoding="utf-8"))
 
     assert messages_index["items"]["msg-1"]["message_id"] == "msg-1"
     assert messages_index["items"]["msg-1"]["role"] == "user"
@@ -176,9 +264,40 @@ def test_session_event_pipeline_updates_indices(tmp_path):
     assert streams_index["items"]["stream-1"]["status"] == "completed"
     assert streams_index["items"]["stream-1"]["sequence_last"] == 2
     assert workers_index["items"]["work-1"]["status"] == "completed"
+    assert thoughts_index["items"]["thought-1"]["thought_id"] == "thought-1"
+    assert media_index["items"]["media-1"]["media_id"] == "media-1"
+    assert artifacts_index["items"]["artifact-1"]["artifact_id"] == "artifact-1"
+    assert cards_index["items"]["card-1"]["card_id"] == "card-1"
+    assert wege_index["items"]["scene-1"]["scene_id"] == "scene-1"
+    assert "media-1" not in messages_index["items"]
+    assert "artifact-1" not in messages_index["items"]
+    assert "card-1" not in messages_index["items"]
 
     messages_count = len(messages_index["items"])
     assert messages_count == 1
+
+    snapshot = build_session_snapshot("sess-4", base_data_dir=str(tmp_path), recent_events_limit=3)
+    assert snapshot["session_id"] == "sess-4"
+    assert snapshot["indices"]["messages"]["items"]["msg-1"]["message_id"] == "msg-1"
+    assert snapshot["indices"]["thoughts"]["items"]["thought-1"]["thought_id"] == "thought-1"
+    assert len(snapshot["events"]) == 3
+    assert snapshot["events"][-1]["type"] == "weg_scene_reset"
+
+
+def test_session_snapshot_builder_handles_missing_indexes(tmp_path):
+    session_dir = Path(tmp_path, "sessions", "sess-empty")
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "session.json").write_text(json.dumps({"session_id": "sess-empty"}), encoding="utf-8")
+    (session_dir / "chat.json").write_text(json.dumps([]), encoding="utf-8")
+    (session_dir / "events.jsonl").write_text("", encoding="utf-8")
+
+    snapshot = build_session_snapshot("sess-empty", base_data_dir=str(tmp_path))
+    assert snapshot["session_id"] == "sess-empty"
+    assert snapshot["session"]["session_id"] == "sess-empty"
+    assert snapshot["chat"] == []
+    assert snapshot["events"] == []
+    assert snapshot["indices"]["messages"]["items"] == {}
+    assert snapshot["indices"]["wegena"]["items"] == {}
 
 
 def test_session_add_message_routes_through_session_event_pipeline(tmp_path, monkeypatch):
