@@ -1959,12 +1959,21 @@ class AgentOrchestrator:
                 # Persist
                 self._save_session(session)
                 
-                # Notify UI of the update
-                global_event_bus.emit_threadsafe({
-                    "type": "session_updated",
-                    "session_id": session.session_id,
-                    "name": session.name
-                })
+                # Notify UI of the update through the canonical session event pipeline.
+                from core.session_event_pipeline import record_session_event
+
+                record_session_event(
+                    session,
+                    {
+                        "type": "session_updated",
+                        "session_id": session.session_id,
+                        "name": session.name,
+                        "payload": {"name": session.name},
+                        "source": "orchestrator",
+                    },
+                    defaults={"source": "orchestrator"},
+                    publish=True,
+                )
                 logger.info(f"Auto-named session {session.session_id} to: {session.name}")
         except Exception as e:
             logger.error(f"Error auto-naming session {session.session_id}: {e}")

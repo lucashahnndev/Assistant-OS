@@ -249,16 +249,46 @@ class Session:
                 self.state_summary["last_attachment_delivery_confirmed"] = False
 
         if not silent and self.session_type != SESSION_TYPE_SYSTEM:
-            # Emit event for real-time synchronization
-            global_event_bus.emit_threadsafe({
+            event = {
                 "type": "message_added",
                 "session_id": self.session_id,
                 "role": role,
                 "message": msg,
                 "msg_type": msg_type,
                 "work_id": work_id,
-                "unread_count": self.get_unread_count("assistant")
-            })
+                "unread_count": self.get_unread_count("assistant"),
+                "payload": {
+                    **msg,
+                    "message_id": msg["id"],
+                    "role": role,
+                    "msg_type": msg_type,
+                    "work_id": work_id,
+                    "unread_count": self.get_unread_count("assistant"),
+                },
+                "channel": self.source,
+                "interface": self.source,
+                "source": "session",
+            }
+            try:
+                from core.session_event_pipeline import record_session_event
+
+                record_session_event(
+                    self,
+                    event,
+                    defaults={
+                        "session_id": self.session_id,
+                        "channel": self.source,
+                        "interface": self.source,
+                        "source": "session",
+                        "turn_id": self.turn_id,
+                        "message_id": msg["id"],
+                        "reply_to_message_id": reply_to_message_id,
+                    },
+                    publish=True,
+                )
+            except Exception:
+                # Fallback to the legacy bus path if the pipeline cannot be loaded.
+                global_event_bus.emit_threadsafe(event)
 
         return msg
 

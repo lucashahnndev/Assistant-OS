@@ -591,13 +591,20 @@ def update_session(session_id: str, payload: dict, request: Request, user: User 
         # Persist the change
         orch._save_session(session)
         
-        # Notify web sockets if needed
-        from utils.event_bus import global_event_bus
-        global_event_bus.emit_threadsafe({
-            "type": "session_updated",
-            "session_id": session.session_id,
-            "name": session.name
-        })
+        # Notify web sockets via the canonical session event pipeline.
+        from core.session_event_pipeline import record_session_event
+        record_session_event(
+            session,
+            {
+                "type": "session_updated",
+                "session_id": session.session_id,
+                "name": session.name,
+                "payload": {"name": session.name},
+                "source": "sessions_route",
+            },
+            defaults={"source": "sessions_route"},
+            publish=True,
+        )
         
     return {"status": "success", "session_id": session.session_id, "name": session.name}
 
@@ -892,12 +899,19 @@ async def upload_profile_picture(
     session.profile_picture = relative_path
     orch._save_session(session)
     
-    from utils.event_bus import global_event_bus
-    global_event_bus.emit_threadsafe({
-        "type": "session_updated",
-        "session_id": session.session_id,
-        "profile_picture": session.profile_picture
-    })
+    from core.session_event_pipeline import record_session_event
+    record_session_event(
+        session,
+        {
+            "type": "session_updated",
+            "session_id": session.session_id,
+            "profile_picture": session.profile_picture,
+            "payload": {"profile_picture": session.profile_picture},
+            "source": "sessions_route",
+        },
+        defaults={"source": "sessions_route"},
+        publish=True,
+    )
     
     return {
         "status": "success",

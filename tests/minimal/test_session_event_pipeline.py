@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import json
 
+from core.session import Session
 from core.session_event_pipeline import SessionEventPipeline
 
 
@@ -90,3 +91,112 @@ def test_session_event_pipeline_preserves_event_type_to_type_compatibility(tmp_p
     assert event["event_type"] == "assistant_response"
     assert event["type"] == "assistant_response"
     assert event["category"] == "completion"
+
+
+def test_session_event_pipeline_updates_indices(tmp_path):
+    session = SimpleNamespace(session_id="sess-4", event_timeline=[])
+    pipeline = SessionEventPipeline(session, base_data_dir=str(tmp_path))
+
+    message_event = pipeline.process_event(
+        {
+            "type": "message_added",
+            "session_id": "sess-4",
+            "turn_id": 4,
+            "payload": {
+                "message_id": "msg-1",
+                "id": "msg-1",
+                "role": "user",
+                "content": "hello there",
+            },
+        }
+    )
+    stream_event = pipeline.process_event(
+        {
+            "type": "assistant_chunk",
+            "session_id": "sess-4",
+            "turn_id": 4,
+            "stream_id": "stream-1",
+            "sequence": 1,
+            "payload": {
+                "content": "part one",
+            },
+        }
+    )
+    complete_event = pipeline.process_event(
+        {
+            "type": "complete",
+            "session_id": "sess-4",
+            "turn_id": 4,
+            "stream_id": "stream-1",
+            "sequence": 2,
+            "target": "stream",
+            "payload": {
+                "content": "done",
+            },
+        }
+    )
+    worker_event = pipeline.process_event(
+        {
+            "type": "worker_state",
+            "session_id": "sess-4",
+            "turn_id": 4,
+            "work_id": "work-1",
+            "payload": {
+                "status": "completed",
+                "label": "Task finished",
+                "last_thought": "all done",
+            },
+        }
+    )
+    pipeline.process_event(
+        {
+            "type": "weg_scene_reset",
+            "session_id": "sess-4",
+            "payload": {"scene": "reset"},
+        }
+    )
+
+    events_lines = Path(pipeline.events_path).read_text(encoding="utf-8").strip().splitlines()
+    assert len(events_lines) == 5
+    assert message_event["category"] == "message"
+    assert stream_event["category"] == "stream"
+    assert complete_event["category"] == "completion"
+    assert worker_event["category"] == "worker"
+    assert len(session.event_timeline) == 5
+
+    messages_index = json.loads(Path(pipeline.indices_dir, "messages.index.json").read_text(encoding="utf-8"))
+    turns_index = json.loads(Path(pipeline.indices_dir, "turns.index.json").read_text(encoding="utf-8"))
+    streams_index = json.loads(Path(pipeline.indices_dir, "streams.index.json").read_text(encoding="utf-8"))
+    workers_index = json.loads(Path(pipeline.indices_dir, "workers.index.json").read_text(encoding="utf-8"))
+
+    assert messages_index["items"]["msg-1"]["message_id"] == "msg-1"
+    assert messages_index["items"]["msg-1"]["role"] == "user"
+    assert turns_index["items"]["4"]["user_message_id"] == "msg-1"
+    assert turns_index["items"]["4"]["stream_ids"] == ["stream-1"]
+    assert streams_index["items"]["stream-1"]["status"] == "completed"
+    assert streams_index["items"]["stream-1"]["sequence_last"] == 2
+    assert workers_index["items"]["work-1"]["status"] == "completed"
+
+    messages_count = len(messages_index["items"])
+    assert messages_count == 1
+
+
+def test_session_add_message_routes_through_session_event_pipeline(tmp_path, monkeypatch):
+    monkeypatch.setenv("AOSD_DATA_DIR", str(tmp_path))
+
+    session = Session(session_id="sess-live")
+    msg = session.add_message("user", "hello pipeline")
+
+    events_path = Path(tmp_path, "sessions", "sess-live", "events.jsonl")
+    assert events_path.exists()
+    event = json.loads(events_path.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert event["type"] == "message_added"
+    assert event["event_type"] == "message_added"
+    assert event["category"] == "message"
+    assert event["message_id"] == msg["id"]
+    assert event["payload"]["message_id"] == msg["id"]
+    assert event["message"]["id"] == msg["id"]
+    assert event["role"] == "user"
+
+    messages_index = json.loads(Path(tmp_path, "sessions", "sess-live", "messages.index.json").read_text(encoding="utf-8"))
+    assert messages_index["items"][msg["id"]]["message_id"] == msg["id"]

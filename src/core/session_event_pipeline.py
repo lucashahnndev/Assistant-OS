@@ -7,6 +7,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from config.manager import ConfigManager
+from utils.event_bus import global_event_bus
 
 MESSAGE_EVENT_TYPES = {
     "user_message.created",
@@ -74,10 +75,14 @@ class SessionEventPipeline:
         if not self.session_id:
             raise ValueError("SessionEventPipeline requires a session with a session_id.")
 
-        self.base_data_dir = os.path.abspath(base_data_dir or getattr(ConfigManager(), "base_data_dir", ConfigManager.get_data_dir()))
+        resolved_data_dir = base_data_dir or ConfigManager.get_data_dir()
+        self.base_data_dir = os.path.abspath(resolved_data_dir)
         self.sessions_dir = os.path.join(self.base_data_dir, "sessions")
         self.session_dir = os.path.join(self.sessions_dir, self.session_id)
         self.events_path = os.path.join(self.session_dir, "events.jsonl")
+        self.indices_dir = self.session_dir
+        self.store = SessionEventStore(self.events_path)
+        self.index_writer = SessionEventIndexWriter(self.indices_dir)
         self._lock = threading.Lock()
 
         os.makedirs(self.session_dir, exist_ok=True)
@@ -174,14 +179,265 @@ class SessionEventPipeline:
         if target and "target" not in event:
             event["target"] = target
 
+        preserved_raw_fields = {}
+        for key, value in raw.items():
+            if key in {
+                "payload",
+                "data",
+                "type",
+                "event_type",
+                "event_id",
+                "session_id",
+                "timestamp",
+                "target",
+                "turn_id",
+                "message_id",
+                "reply_to_message_id",
+                "stream_id",
+                "work_id",
+                "sequence",
+                "channel",
+                "interface",
+                "source",
+            }:
+                continue
+            if key not in event:
+                preserved_raw_fields[key] = copy.deepcopy(value)
+        if preserved_raw_fields:
+            event.update(preserved_raw_fields)
+
         return event
 
     def append_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
-        normalized = self.normalize_event(event) if "event_id" not in event or "event_type" not in event else copy.deepcopy(event)
-        os.makedirs(self.session_dir, exist_ok=True)
-        line = json.dumps(normalized, ensure_ascii=False, default=str)
+        return self.process_event(event, publish=False)
+
+    def process_event(self, event: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None, publish: bool = False) -> Dict[str, Any]:
+        normalized = self.normalize_event(event, defaults=defaults)
+        self.store.append(normalized)
+        self.index_writer.update(normalized)
+        if hasattr(self.session, "event_timeline") and isinstance(getattr(self.session, "event_timeline"), list):
+            self.session.event_timeline.append(copy.deepcopy(normalized))
+        if publish:
+            global_event_bus.emit_threadsafe(copy.deepcopy(normalized))
+        return normalized
+
+
+def record_session_event(
+    session,
+    raw_event: Dict[str, Any],
+    defaults: Optional[Dict[str, Any]] = None,
+    publish: bool = False,
+    base_data_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    pipeline = SessionEventPipeline(session, base_data_dir=base_data_dir)
+    return pipeline.process_event(raw_event, defaults=defaults, publish=publish)
+
+
+class SessionEventStore:
+    def __init__(self, events_path: str):
+        self.events_path = os.path.abspath(events_path)
+        self._lock = threading.Lock()
+        os.makedirs(os.path.dirname(self.events_path), exist_ok=True)
+
+    def append(self, event: Dict[str, Any]) -> None:
+        line = json.dumps(event, ensure_ascii=False, default=str)
         with self._lock:
             with open(self.events_path, "a", encoding="utf-8") as fh:
                 fh.write(line)
                 fh.write("\n")
-        return normalized
+
+
+class SessionEventIndexWriter:
+    def __init__(self, session_dir: str):
+        self.session_dir = os.path.abspath(session_dir)
+        self._lock = threading.Lock()
+        self.paths = {
+            "messages": os.path.join(self.session_dir, "messages.index.json"),
+            "turns": os.path.join(self.session_dir, "turns.index.json"),
+            "streams": os.path.join(self.session_dir, "streams.index.json"),
+            "workers": os.path.join(self.session_dir, "workers.index.json"),
+        }
+        os.makedirs(self.session_dir, exist_ok=True)
+
+    @staticmethod
+    def _initial_index() -> Dict[str, Any]:
+        return {"updated_at": time.time(), "items": {}}
+
+    def _load_index(self, path: str) -> Dict[str, Any]:
+        if not os.path.exists(path):
+            return self._initial_index()
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, dict) and isinstance(data.get("items"), dict):
+                return data
+        except Exception:
+            pass
+        return self._initial_index()
+
+    def _atomic_write_json(self, path: str, data: Dict[str, Any]) -> None:
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2, default=str)
+            fh.write("\n")
+        os.replace(tmp_path, path)
+
+    def _upsert(self, name: str, key: Optional[str], record: Dict[str, Any]) -> None:
+        if not key:
+            return
+        path = self.paths[name]
+        with self._lock:
+            data = self._load_index(path)
+            items = data.setdefault("items", {})
+            items[str(key)] = record
+            data["updated_at"] = time.time()
+            self._atomic_write_json(path, data)
+
+    @staticmethod
+    def _preview_text(value: Any, limit: int = 120) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        return text[:limit]
+
+    def _upsert_turn_record(
+        self,
+        turn_id: Any,
+        session_id: str,
+        timestamp: Any,
+        *,
+        message_id: Optional[str] = None,
+        role: Optional[str] = None,
+        stream_id: Optional[str] = None,
+        work_id: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> None:
+        turn_key = str(turn_id or "").strip()
+        if not turn_key:
+            return
+
+        turn_path = self.paths["turns"]
+        with self._lock:
+            data = self._load_index(turn_path)
+            items = data.setdefault("items", {})
+            turn_record = items.get(turn_key, {
+                "turn_id": turn_id,
+                "session_id": session_id,
+                "user_message_id": None,
+                "assistant_message_ids": [],
+                "stream_ids": [],
+                "work_ids": [],
+                "message_ids": [],
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "status": "open",
+            })
+
+            if message_id and message_id not in turn_record["message_ids"]:
+                turn_record["message_ids"].append(message_id)
+            if role == "user" and message_id:
+                turn_record["user_message_id"] = message_id
+            elif role and role != "user" and message_id:
+                if message_id not in turn_record["assistant_message_ids"]:
+                    turn_record["assistant_message_ids"].append(message_id)
+            if stream_id and stream_id not in turn_record["stream_ids"]:
+                turn_record["stream_ids"].append(stream_id)
+            if work_id and work_id not in turn_record["work_ids"]:
+                turn_record["work_ids"].append(work_id)
+            if status:
+                turn_record["status"] = status
+            turn_record["updated_at"] = timestamp
+            items[turn_key] = turn_record
+            data["updated_at"] = time.time()
+            self._atomic_write_json(turn_path, data)
+
+    def update(self, event: Dict[str, Any]) -> None:
+        event_type = str(event.get("event_type") or event.get("type") or "").strip()
+        category = str(event.get("category") or "").strip()
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        session_id = str(event.get("session_id") or "").strip()
+        timestamp = event.get("timestamp")
+        turn_id = event.get("turn_id")
+        message_id = str(event.get("message_id") or payload.get("message_id") or payload.get("id") or "").strip() or None
+        stream_id = str(event.get("stream_id") or payload.get("stream_id") or "").strip() or None
+        work_id = str(event.get("work_id") or payload.get("work_id") or "").strip() or None
+        target = str(event.get("target") or payload.get("target") or "").strip() or None
+
+        if category == "message" or event_type in MESSAGE_EVENT_TYPES:
+            key = message_id
+            if key:
+                role = str(event.get("payload", {}).get("role") or event.get("role") or payload.get("role") or "").strip() or "assistant"
+                record = {
+                    "message_id": key,
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "role": role,
+                    "source": event.get("source") or payload.get("source") or "",
+                    "reply_to_message_id": event.get("reply_to_message_id") or payload.get("reply_to_message_id"),
+                    "stream_id": stream_id,
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
+                    "content_preview": self._preview_text(payload.get("content") or payload.get("message") or event.get("content")),
+                    "status": str(payload.get("status") or event_type),
+                    "work_id": work_id,
+                    "event_id": event.get("event_id"),
+                }
+                self._upsert("messages", key, record)
+                self._upsert_turn_record(
+                    turn_id,
+                    session_id,
+                    timestamp,
+                    message_id=key,
+                    role=role,
+                    stream_id=stream_id,
+                    work_id=work_id,
+                )
+
+        if category == "stream" or event_type in STREAM_EVENT_TYPES or (event_type == "complete" and target == "stream"):
+            key = stream_id
+            if key:
+                stream_record = {
+                    "stream_id": key,
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "message_id": message_id,
+                    "sequence_last": event.get("sequence"),
+                    "status": "completed" if event_type == "complete" and target == "stream" else "streaming",
+                    "started_at": timestamp,
+                    "updated_at": timestamp,
+                    "completed_at": timestamp if event_type == "complete" and target == "stream" else None,
+                    "last_chunk_preview": self._preview_text(payload.get("content") or event.get("content")),
+                    "event_id": event.get("event_id"),
+                }
+                self._upsert("streams", key, stream_record)
+                self._upsert_turn_record(
+                    turn_id,
+                    session_id,
+                    timestamp,
+                    stream_id=key,
+                    status="completed" if event_type == "complete" and target == "stream" else None,
+                )
+
+        if category == "worker" or event_type in WORKER_EVENT_TYPES:
+            key = work_id
+            if key:
+                worker_record = {
+                    "work_id": key,
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "message_id": message_id,
+                    "status": str(payload.get("status") or payload.get("state") or event_type),
+                    "label": payload.get("label") or payload.get("message") or event.get("message") or "",
+                    "last_thought": payload.get("last_thought") or payload.get("thought") or "",
+                    "started_at": timestamp,
+                    "updated_at": timestamp,
+                    "completed_at": timestamp if event_type in {"worker.updated", "worker_state"} and str(payload.get("status") or "").lower() in {"completed", "complete", "succeeded", "failed", "cancelled"} else None,
+                    "event_id": event.get("event_id"),
+                }
+                self._upsert("workers", key, worker_record)
+                self._upsert_turn_record(
+                    turn_id,
+                    session_id,
+                    timestamp,
+                    work_id=key,
+                )
