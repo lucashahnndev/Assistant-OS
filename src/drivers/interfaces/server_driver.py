@@ -10,6 +10,7 @@ import time
 import re
 from http.cookies import SimpleCookie
 from .base_driver import BaseDriver
+from config.manager import ConfigManager
 from core.identity import PrincipalContext
 from utils.logging_config import get_logger
 from server.main import create_app
@@ -110,6 +111,44 @@ class ServerDriver(BaseDriver):
         normalized.setdefault("interface", self.get_interface_id())
         normalized.setdefault("source", "server_driver")
         return normalized
+
+    def _get_pipeline_base_data_dir(self) -> str:
+        kernel_config = getattr(self.kernel, "config_manager", None)
+        base_data_dir = getattr(kernel_config, "base_data_dir", None)
+        if base_data_dir:
+            return os.path.abspath(str(base_data_dir))
+        return os.path.abspath(ConfigManager.get_data_dir())
+
+    def _record_pipeline_event(
+        self,
+        session_id: str,
+        event: Dict[str, Any],
+        *,
+        publish: bool = False,
+    ) -> Dict[str, Any]:
+        session, _ = self._get_session_stream_context(session_id)
+        normalized = self._normalize_ws_event(event, session_id=session_id)
+        if not session:
+            return normalized
+
+        try:
+            from core.session_event_pipeline import record_session_event
+
+            return record_session_event(
+                session,
+                normalized,
+                defaults={
+                    "session_id": session_id,
+                    "channel": normalized.get("channel") or "websocket",
+                    "interface": normalized.get("interface") or self.get_interface_id(),
+                    "source": normalized.get("source") or "server_driver",
+                },
+                publish=publish,
+                base_data_dir=self._get_pipeline_base_data_dir(),
+            )
+        except Exception as exc:
+            logger.debug("ServerDriver: Failed to record pipeline event: %s", exc)
+            return normalized
 
     def _setup_extra_routes(self):
         @self.app.on_event("startup")
@@ -589,7 +628,8 @@ class ServerDriver(BaseDriver):
                 stream_id=stream_id,
                 sequence=sequence,
             )
-            response_payload = json.dumps(response_event)
+            recorded_response_event = self._record_pipeline_event(target, response_event, publish=False)
+            response_payload = json.dumps(recorded_response_event)
             asyncio.run_coroutine_threadsafe(
                 self.connection_manager.send_personal_message(response_payload, target), 
                 self.loop
@@ -600,7 +640,8 @@ class ServerDriver(BaseDriver):
             if assistant_chunk_event is not None:
                 try:
                     from utils.event_bus import global_event_bus
-                    global_event_bus.emit_threadsafe(assistant_chunk_event)
+                    recorded_chunk_event = self._record_pipeline_event(target, assistant_chunk_event, publish=False)
+                    global_event_bus.emit_threadsafe(recorded_chunk_event)
                 except Exception as e:
                     logger.debug(f"ServerDriver: Failed to emit assistant_chunk event: {e}")
             return {
@@ -632,8 +673,7 @@ class ServerDriver(BaseDriver):
         if isinstance(payload, dict):
             display_message = payload.get('label', payload.get('message', str(payload)))
 
-        # Convert the dictionary to a JSON string for sending over WebSocket
-        json_payload = json.dumps(self._normalize_ws_event({
+        recorded_event = self._record_pipeline_event(target, {
             "type": "status",
             "phase": phase,
             "message": display_message,
@@ -641,7 +681,10 @@ class ServerDriver(BaseDriver):
             "model_info": model_info,
             **({"stream_id": stream_id} if stream_id else {}),
             **({"sequence": sequence} if sequence is not None else {}),
-        }, session_id=target))
+        }, publish=False)
+
+        # Convert the dictionary to a JSON string for sending over WebSocket
+        json_payload = json.dumps(recorded_event)
 
         asyncio.run_coroutine_threadsafe(
             self.connection_manager.send_personal_message(json_payload, target), 
@@ -651,12 +694,13 @@ class ServerDriver(BaseDriver):
     def send_reasoning_chunk(self, target, content, stream_id=None, sequence=None):
         """Sends a reasoning step log."""
         if not self.loop or self.loop.is_closed() or not target: return
-        payload = json.dumps(self._normalize_ws_event({
+        recorded_event = self._record_pipeline_event(target, {
             "type": "reasoning_chunk",
             "content": content,
             **({"stream_id": stream_id} if stream_id else {}),
             **({"sequence": sequence} if sequence is not None else {}),
-        }, session_id=target))
+        }, publish=False)
+        payload = json.dumps(recorded_event)
         asyncio.run_coroutine_threadsafe(
             self.connection_manager.send_personal_message(payload, target), 
             self.loop
@@ -681,14 +725,15 @@ class ServerDriver(BaseDriver):
         if isinstance(context, dict):
             context["current_response_stream_completed_at"] = time.time()
         legacy_target = str(complete_target or "").strip().lower() == "legacy"
-        payload = json.dumps(self._normalize_ws_event({
+        recorded_event = self._record_pipeline_event(target, {
             "type": "complete",
             "target": complete_target,
             **({"legacy": True} if legacy_target else {}),
             **({"ambiguous": True} if legacy_target else {}),
             **({"stream_id": stream_id} if stream_id else {}),
             **({"sequence": sequence} if sequence is not None else {}),
-        }, session_id=target))
+        }, publish=False)
+        payload = json.dumps(recorded_event)
         asyncio.run_coroutine_threadsafe(
             self.connection_manager.send_personal_message(payload, target), 
             self.loop

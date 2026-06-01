@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src")))
@@ -10,10 +11,11 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../s
 from drivers.interfaces.server_driver import ServerDriver
 
 
-def _make_driver():
+def _make_driver(base_data_dir=None):
     driver = ServerDriver.__new__(ServerDriver)
     driver.interface_id = "web"
     driver.kernel = SimpleNamespace(
+        config_manager=SimpleNamespace(base_data_dir=base_data_dir) if base_data_dir else SimpleNamespace(),
         orchestrator=SimpleNamespace(
             get_session_robust=lambda session_id: None
         )
@@ -115,3 +117,56 @@ def test_complete_uses_stream_target_and_falls_back_without_stream(monkeypatch):
     assert fallback_complete_event["ambiguous"] is True
     assert "stream_id" not in fallback_complete_event
     assert "message_id" not in fallback_complete_event
+
+
+def test_live_events_are_persisted_through_pipeline(tmp_path, monkeypatch):
+    driver = _make_driver(str(tmp_path))
+    session = SimpleNamespace(
+        session_id="session-1",
+        context={
+            "current_turn_user_message_id": "user-msg-1",
+        },
+        event_timeline=[],
+    )
+    driver.kernel.orchestrator.get_session_robust = lambda session_id: session
+
+    def _run_coro(coro, loop):
+        loop.run_until_complete(coro)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", _run_coro)
+
+    driver.send_response("first response", target="session-1", is_chunk=True)
+    driver.send_status("session-1", "thinking", {"label": "Working"})
+    driver.send_complete("session-1")
+
+    events_path = Path(tmp_path, "sessions", "session-1", "events.jsonl")
+    assert events_path.exists()
+    lines = events_path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 4
+
+    events = [json.loads(line) for line in lines]
+    event_types = [event["type"] for event in events]
+    assert event_types[0] == "final_message_chunk"
+    assert event_types[1] == "assistant_chunk"
+    assert event_types[2] == "status"
+    assert event_types[3] == "complete"
+
+    assert events[0]["event_type"] == "final_message_chunk"
+    assert events[1]["event_type"] == "assistant_chunk"
+    assert events[2]["event_type"] == "status"
+    assert events[3]["event_type"] == "complete"
+    assert events[3]["target"] == "stream"
+    assert events[3]["stream_id"] == events[0]["stream_id"]
+    assert events[0]["sequence"] == 0
+    assert events[1]["sequence"] == 1
+    assert events[2]["category"] == "status"
+    assert events[3]["category"] == "completion"
+
+    messages_index_path = Path(tmp_path, "sessions", "session-1", "messages.index.json")
+    assert not messages_index_path.exists()
+
+    streams_index = json.loads(Path(tmp_path, "sessions", "session-1", "streams.index.json").read_text(encoding="utf-8"))
+
+    assert streams_index["items"][events[0]["stream_id"]]["status"] == "completed"
+    assert streams_index["items"][events[0]["stream_id"]]["sequence_last"] == 2
