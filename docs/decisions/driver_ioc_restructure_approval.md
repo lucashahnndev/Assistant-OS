@@ -147,3 +147,10 @@ Durante qualquer alteração nesta frente:
 2. Não reintroduza parsing/reparo no Core.
 3. Se surgir exceção de provider, classifique no contrato de erro e deixe o fallback do manager agir.
 4. Sempre validar impacto em multi-provider e multi-canal antes de concluir.
+
+## Relacionados
+
+- [../architecture/README.md](../architecture/README.md): base arquitetural para a reestruturação de drivers e contratos.
+- [../policies/README.md](../policies/README.md): camada humana das politicas que cercam o comportamento.
+- [../../agent/specs/atlas_operating_model.spec.md](../../agent/specs/atlas_operating_model.spec.md): contrato operacional que precisa preservar consciencia de interface sem reparo no core.
+- [../../agent/specs/system_architecture.spec.md](../../agent/specs/system_architecture.spec.md): arquitetura do sistema que recebe o ajuste de responsabilidades.

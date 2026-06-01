@@ -202,3 +202,11 @@ Recommended test shape:
 The preferred strategy is to make the backend the canonical source of event
 identity, keep the frontend as a tolerant normalizer, and block empty bubble
 creation unless a message can be correlated to a live stream or persisted message.
+
+## Relacionados
+
+- [session_event_contract_runtime_audit.md](session_event_contract_runtime_audit.md): auditoria de base que motivou a fase B.
+- [session_event_contract_phase_b_checklist.md](session_event_contract_phase_b_checklist.md): checklist de execucao da fase B.
+- [../architecture/README.md](../architecture/README.md): contexto arquitetural do dominio `Session Event Contract`.
+- [../../agent/specs/session-event-contract.spec.md](../../agent/specs/session-event-contract.spec.md): contrato alvo para envelope, correlacao e `target`.
+- [../../agent/specs/session-event-contract.stat.md](../../agent/specs/session-event-contract.stat.md): estado vivo correspondente ao contrato.

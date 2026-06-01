@@ -26,8 +26,20 @@ Este diretório guarda os contratos normativos do projeto alvo que o agente deve
 
 - `session-event-contract.spec.md`
 - `session-event-contract.stat.md`
+- `system_sessions.spec.md`
+- `system_sessions.stat.md`
 
 ## Contrato operacional central
 
 - `atlas_operating_model.spec.md`: contrato ativo do modelo operacional do A.T.L.A.S para agente/runtime, clarificação, approval, grounded response e uso de tools/capabilities.
 - `atlas_operating_model.stat.md`: estado vivo correspondente do contrato operacional.
+
+## Pontos de apoio
+
+- [../policy/overview.md](../policy/overview.md)
+- [../../README.md](../../README.md)
+
+## Relacionados
+
+- [../policy/overview.md](../policy/overview.md)
+- [../../docs/overview.md](../../docs/overview.md)

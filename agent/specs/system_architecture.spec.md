@@ -94,3 +94,7 @@ src/
 ├── utils/          # Helpers (Logging, Text Process)
 └── main.py         # Entry Point
 ```
+## Relacionados
+
+- [system_architecture.stat.md](system_architecture.stat.md)
+- [../README.md](../overview.md)

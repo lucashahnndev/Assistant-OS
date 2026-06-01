@@ -47,3 +47,7 @@ Data da ultima atualizacao: 2026-05-30
   - resumo: expandiu `~` e variaveis de ambiente antes da resolucao de caminhos absolutos no `SafetyService`, alinhando checks de path ao local real do arquivo;
   - validacao: `python3 -m py_compile src/services/safety_service.py` e smoke `PYTHONPATH=src:. env/bin/python - <<'PY' ... SafetyService()._resolve_fs_target('~/Downloads') ... PY` retornando `/home/lucas/Downloads`;
   - falhas conhecidas fora do escopo: os testes antigos de alias/Obsidian em `tests/minimal/test_mcp_llm_alias_and_recovery.py` continuam preexistentes e nao bloqueiam este pacote.
+## Relacionados
+
+- [system_architecture.spec.md](system_architecture.spec.md)
+- [../README.md](../overview.md)

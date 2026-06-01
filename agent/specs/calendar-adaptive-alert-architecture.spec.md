@@ -193,3 +193,7 @@ Requirements:
 - user engagement rate, such as reply, open or snooze
 - false-positive annoyance rate
 - policy change rollback rate
+## Relacionados
+
+- [calendar-adaptive-alert-architecture.stat.md](calendar-adaptive-alert-architecture.stat.md)
+- [../README.md](../overview.md)

@@ -89,3 +89,10 @@ Commit e marco de progresso.
 Spec e contrato.  
 Stat e acompanhamento.  
 Nao misturar os tres.
+
+## Relacionados
+
+- [../README.md](../README.md): indice geral da documentacao humana.
+- [../plans/permission_groups_planner.md](../plans/permission_groups_planner.md): plano que depende de marcos claros de trabalho e commit.
+- [../plans/skills_audit_planner.md](../plans/skills_audit_planner.md): plano que tambem pede etapas bem separadas.
+- [../reports/session_event_contract_phase_b_execution_order.md](../reports/session_event_contract_phase_b_execution_order.md): exemplo de ordem por fatias pequenas antes de commitar.

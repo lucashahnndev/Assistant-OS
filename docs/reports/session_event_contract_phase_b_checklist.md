@@ -167,3 +167,10 @@ only and does not change runtime behavior.
 
 **Suggested test command**
 - `pytest tests/minimal -k "reconcile or session_updated or bubble"`
+
+## Relacionados
+
+- [session_event_contract_runtime_audit.md](session_event_contract_runtime_audit.md): auditoria que contextualiza o problema e os riscos.
+- [session_event_contract_phase_b_plan.md](session_event_contract_phase_b_plan.md): plano que esta checklist operacionaliza.
+- [../../agent/specs/session-event-contract.spec.md](../../agent/specs/session-event-contract.spec.md): contrato a ser validado.
+- [../../agent/specs/session-event-contract.stat.md](../../agent/specs/session-event-contract.stat.md): estado vivo que deve permanecer coerente.

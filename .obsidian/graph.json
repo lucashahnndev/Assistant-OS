@@ -1,0 +1,93 @@
+{
+  "collapse-filter": false,
+  "search": "-changelog -CHANGELOG -path:\"node_modules\" -path:\"vendor\" -path:\"dist\" -path:\"build\" -path:\".venv\" -path:\"venv\" -path:\"site-packages\" -path:\".pytest_cache\" -path:\".mypy_cache\" -path:\".ruff_cache\" -path:\".cache\" -path:\".codex\" -path:\".agents\" -path:\".vite\" -path:\".next\" -path:\".nuxt\" -path:\".svelte-kit\" -path:\".turbo\" -path:\".git\" -path:\".obsidian\"",
+  "showTags": true,
+  "showAttachments": false,
+  "hideUnresolved": false,
+  "showOrphans": true,
+  "collapse-color-groups": true,
+  "colorGroups": [
+    {
+      "query": "path:\"README.md\" OR path:\"AGENTS.md\"",
+      "color": {
+        "a": 1,
+        "rgb": 16761031
+      }
+    },
+    {
+      "query": "path:\"AGENTS.md\" OR path:\"agent-start-here.md\" OR path:\"awc.meta.toon\" OR path:\"agent/README.md\" OR path:\"docs/README.md\" OR path:\"docs/agent-start-here.md\"",
+      "color": {
+        "a": 1,
+        "rgb": 1920728
+      }
+    },
+    {
+      "query": "path:\"agent/specs\" OR path:\"docs/contracts\"",
+      "color": {
+        "a": 1,
+        "rgb": 3900150
+      }
+    },
+    {
+      "query": "path:\"agent/policy\" OR path:\"docs/policies\"",
+      "color": {
+        "a": 1,
+        "rgb": 16096779
+      }
+    },
+    {
+      "query": "path:\"docs/reports\"",
+      "color": {
+        "a": 1,
+        "rgb": 1357990
+      }
+    },
+    {
+      "query": "path:\"docs/plans\"",
+      "color": {
+        "a": 1,
+        "rgb": 9133302
+      }
+    },
+    {
+      "query": "path:\"docs/guides\"",
+      "color": {
+        "a": 1,
+        "rgb": 2278750
+      }
+    },
+    {
+      "query": "path:\"docs/decisions\"",
+      "color": {
+        "a": 1,
+        "rgb": 15381256
+      }
+    },
+    {
+      "query": "path:\"docs/concepts\"",
+      "color": {
+        "a": 1,
+        "rgb": 15485081
+      }
+    },
+    {
+      "query": "path:\"docs/legacy\"",
+      "color": {
+        "a": 1,
+        "rgb": 10265519
+      }
+    }
+  ],
+  "collapse-display": true,
+  "showArrow": false,
+  "textFadeMultiplier": 0,
+  "nodeSizeMultiplier": 1,
+  "lineSizeMultiplier": 1,
+  "collapse-forces": true,
+  "centerStrength": 0.518713248970312,
+  "repelStrength": 10,
+  "linkStrength": 1,
+  "linkDistance": 250,
+  "scale": 0.13348388671875,
+  "close": true
+}

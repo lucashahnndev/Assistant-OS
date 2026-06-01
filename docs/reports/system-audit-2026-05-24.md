@@ -530,3 +530,12 @@ Assistant-OS already contains most of the pieces needed for a high-quality async
 The main issue is not missing infrastructure, but insufficient unification of control logic across those layers.
 
 The most important next move is not "swap to a bigger model". It is to make objective ownership, concurrency policy, and browser resource boundaries explicit and authoritative across the entire stack.
+
+## Relacionados
+
+- [../architecture/README.md](../architecture/README.md): contexto arquitetural do sistema e das areas investigadas.
+- [../guides/browser_control_playbook.md](../guides/browser_control_playbook.md): playbook operacional da parte de browser control citada no audit.
+- [session_event_contract_runtime_audit.md](session_event_contract_runtime_audit.md): auditoria complementar da camada de eventos e persistencia.
+- [atlas-agent-mode-cognition-deep-audit-2026-05-29.md](atlas-agent-mode-cognition-deep-audit-2026-05-29.md): audit complementar da camada de cognicao e continuidade.
+- [../../agent/specs/system_architecture.spec.md](../../agent/specs/system_architecture.spec.md): contrato arquitetural ativo que enquadra o runtime.
+- [../../agent/specs/worker_task_contract.spec.md](../../agent/specs/worker_task_contract.spec.md): contrato de worker/work que sustenta o modelo assíncrono.

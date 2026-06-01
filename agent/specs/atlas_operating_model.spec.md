@@ -48,3 +48,7 @@ O Atlas e um operador agentico dentro de um sistema que valida, aprova, executa 
 Pergunte quando necessario.
 Aja quando suficiente.
 Deixe o runtime gatear o que for sensivel.
+## Relacionados
+
+- [atlas_operating_model.stat.md](atlas_operating_model.stat.md)
+- [../README.md](../overview.md)

@@ -147,3 +147,11 @@ Se uma etapa exigir mexer em cognição, prompt, `LLMResolver` ou decisão agent
 Se uma etapa gerar patch amplo demais, dividir.
 
 Se um evento não tiver correlação suficiente, não inventar balão visual.
+
+## Relacionados
+
+- [session_event_contract_runtime_audit.md](session_event_contract_runtime_audit.md): diagnostico base que motivou a fase B.
+- [session_event_contract_phase_b_plan.md](session_event_contract_phase_b_plan.md): plano macro de implementação.
+- [session_event_contract_phase_b_checklist.md](session_event_contract_phase_b_checklist.md): checklist operacional por passos.
+- [../../agent/specs/session-event-contract.spec.md](../../agent/specs/session-event-contract.spec.md): contrato normativo da fase.
+- [../../agent/specs/session-event-contract.stat.md](../../agent/specs/session-event-contract.stat.md): estado vivo que deve acompanhar a execução.

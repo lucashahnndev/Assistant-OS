@@ -410,3 +410,7 @@ Arquitetura considerada pronta quando:
 5. fronteira planner/runtime estiver implementada com replan events auditáveis.
 
 Com esses fechamentos, a fase de implementação pode iniciar com baixa ambiguidade arquitetural.
+## Relacionados
+
+- [external_rag_final_design_closures.stat.md](external_rag_final_design_closures.stat.md)
+- [../README.md](../overview.md)

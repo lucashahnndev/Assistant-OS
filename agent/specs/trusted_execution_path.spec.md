@@ -19,3 +19,7 @@ This path should be read together with [atlas_operating_model.spec.md](atlas_ope
 1. **Source Authentication**: Implement caller signatures for services.
 2. **Capability Scoping**: Dynamic tool whitelisting per system domain.
 3. **Auditability**: Enhanced logging for automated reasoning loops.
+## Relacionados
+
+- [trusted_execution_path.stat.md](trusted_execution_path.stat.md)
+- [../README.md](../overview.md)

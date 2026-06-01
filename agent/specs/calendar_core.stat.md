@@ -21,3 +21,7 @@ Data da ultima atualizacao: 2026-05-28
 ## Proximo passo recomendado
 
 - usar esta spec como base para evolucoes de sincronizacao e notificacao.
+## Relacionados
+
+- [calendar_core.spec.md](calendar_core.spec.md)
+- [../README.md](../overview.md)

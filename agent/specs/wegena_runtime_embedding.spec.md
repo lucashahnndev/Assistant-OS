@@ -46,3 +46,7 @@ This keeps the user-facing default orb versioned with Atlas while preserving Weg
 - removes hidden coupling through `frontend/public/wegena`
 - makes Atlas behavior versionable and reviewable inside this repository
 - keeps Wegena as a separate source project while giving Atlas a stable embedded runtime
+## Relacionados
+
+- [wegena_runtime_embedding.stat.md](wegena_runtime_embedding.stat.md)
+- [../README.md](../overview.md)

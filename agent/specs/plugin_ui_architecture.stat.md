@@ -12,3 +12,7 @@
 2. **Setup Frontend Registry:** Create `frontend/src/plugins_ui` and standard `registry.js` with `React.lazy()` loading.
 3. **Refactoring Nexus/Overview:** Replace hardcoded `claimAssistCardSlot` logic in `Nexus.jsx` and static welcome logic in `Overview.jsx` with `<DynamicPluginRenderer />`.
 4. **Migrate Existing Plugins:** Move components like the Weather viewer or System Health charts out of the core components and into `plugins_ui`.
+## Relacionados
+
+- [plugin_ui_architecture.spec.md](plugin_ui_architecture.spec.md)
+- [../README.md](../overview.md)

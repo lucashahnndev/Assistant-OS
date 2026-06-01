@@ -242,3 +242,11 @@ Near-term direction for refactor readiness:
 - Decide explicit role of reflex rules (active resolver stage vs deprecated optional metadata).
 
 This keeps current runtime model reusable while reducing ambiguity in what a “skill” is and how it participates in planning, policy, and execution.
+
+## Relacionados
+
+- [../architecture/README.md](../architecture/README.md): contexto de arquitetura do runtime e das capabilities.
+- [../plans/skills_audit_planner.md](../plans/skills_audit_planner.md): plano operacional que acompanha a auditoria.
+- [../policies/README.md](../policies/README.md): governança e documentação das mudanças sugeridas.
+- [../../agent/specs/skill_contract.spec.md](../../agent/specs/skill_contract.spec.md): contrato normativo das skills.
+- [../../agent/specs/system_architecture.spec.md](../../agent/specs/system_architecture.spec.md): arquitetura geral do sistema onde as skills operam.

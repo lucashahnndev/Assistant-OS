@@ -6,6 +6,35 @@ Modular agent platform focused on:
 - multiple drivers (web, telegram, cli, voice);
 - operational memory and loop execution with guardrails.
 
+If you are an agent, start with [`AGENTS.md`](AGENTS.md), then read
+[`project.overview.md`](project.overview.md) and
+[`agent-start-here.md`](agent-start-here.md).
+
+## For agents
+
+### Install
+
+Read [`AGENTS.md`](AGENTS.md), apply `standard` to this project, and before any
+commit show:
+
+- created files;
+- `git status --short`;
+- doubts or conflicts.
+
+### Update
+
+Read [`AGENTS.md`](AGENTS.md). If `awc.meta.toon` diverges, open
+[`project.update.md`](project.update.md) and
+[`project.migrations.md`](project.migrations.md), then continue through
+[`project.overview.md`](project.overview.md) and
+[`agent-start-here.md`](agent-start-here.md). Before any commit show:
+
+- `trace_id`;
+- created files;
+- changed files;
+- `git status --short`;
+- doubts or conflicts.
+
 ## Current State (v2 base)
 - Core architecture in `src/core`, `src/server`, `src/services`, `src/capabilities`.
 - React frontend in `frontend/`.

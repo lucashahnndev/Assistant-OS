@@ -157,3 +157,7 @@ self.kernel.playback_service.end_run(session_id, run_id, "success")
 4. **Resilience**: If an action is long-running, consider emitting status updates via `kernel.orchestrator.send_status`.
 5. **LLM-Friendly Output**: Include a concise `text` summary plus structured fields (`results`, `best`, `count`, etc.).
 6. **Contract Alignment**: Ensure `contract.json` action ids match runtime namespace and registered actions.
+## Relacionados
+
+- [skill_contract.stat.md](skill_contract.stat.md)
+- [../README.md](../overview.md)

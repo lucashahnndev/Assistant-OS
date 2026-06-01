@@ -489,3 +489,7 @@ Deterministic Enforcement
 ```
 
 This model transforms the system from **prompt-centric reasoning** into **retrieval-driven contextual reasoning** while preserving deterministic control over security and execution.
+## Relacionados
+
+- [unified-context-rag-architecture.stat.md](unified-context-rag-architecture.stat.md)
+- [../README.md](../overview.md)

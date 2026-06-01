@@ -1,4 +1,5 @@
 # Session Event Contract
+State mirror: [session-event-contract.stat.md](session-event-contract.stat.md).
 
 ## Purpose
 
@@ -196,6 +197,15 @@ Recommended:
 May create a visible bubble: yes.
 
 ### `assistant_chunk`
+
+## Relacionados
+
+- [session-event-contract.stat.md](session-event-contract.stat.md)
+- [../policy/session-event-contract.policy.md](../policy/session-event-contract.policy.md)
+- [system_sessions.spec.md](system_sessions.spec.md)
+- [system_sessions.stat.md](system_sessions.stat.md)
+- [../README.md](../overview.md)
+- [../../docs/contracts/README.md](../../docs/contracts/README.md)
 
 Updates an existing stream.
 

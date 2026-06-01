@@ -27,3 +27,7 @@ Além disso, introduzimos um mecanismo de persistência de mídia e feedback do 
 
 *   **Custos de Renderização**: Para evitar gargalos no navegador, o histórico de chat não instancia múltiplos WebGLs. Ele exibe um "Card" com o script salvo e um botão que envia o evento para renderizar no motor principal (Orb).
 *   **Aparência Premium**: Ícones referentes ao Wegena devem abandonar metáforas abstratas (estrela) e adotar ícones literais de ambiente (Montanha, Paisagem ou Terra).
+## Relacionados
+
+- [wegena_active_capability.stat.md](wegena_active_capability.stat.md)
+- [../README.md](../overview.md)

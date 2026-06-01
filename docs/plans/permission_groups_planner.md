@@ -55,3 +55,10 @@ Migrar o controle de permissão de *skill por usuário* para um modelo **group-b
 - `master` mantém acesso total por wildcard e novas skills entram automaticamente.
 - Fluxo web usa identidade de usuário (não `session_id`) para autorização.
 - UI permite administrar grupos sem alterar layout base.
+
+## Relacionados
+
+- [../policies/README.md](../policies/README.md): políticas de governança que cercam o plano.
+- [../reports/skills-architecture-audit-2026-03-12.md](../reports/skills-architecture-audit-2026-03-12.md): audit que motiva a padronização de governança.
+- [../../agent/specs/skill_contract.spec.md](../../agent/specs/skill_contract.spec.md): contrato normativo das skills afetadas pelo modelo de permissão.
+- [../../agent/specs/system_architecture.spec.md](../../agent/specs/system_architecture.spec.md): contrato arquitetural do sistema que aplica o gate.

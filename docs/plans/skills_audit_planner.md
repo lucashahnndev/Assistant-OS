@@ -104,3 +104,10 @@ Validar e corrigir o stack de skills ponta-a-ponta, cobrindo:
 - 100% das skills críticas retornam payload estruturado (sem string solta em erro crítico).
 - Weather com previsão operacional (`weather.control.forecast`) via OpenWeather e fallback.
 - Testes de skill stack verdes para fluxos principais.
+
+## Relacionados
+
+- [../policies/README.md](../policies/README.md): politicas de governanca e documentacao que cercam a auditoria.
+- [../reports/README.md](../reports/README.md): saida natural das auditorias e evidencias.
+- [../../agent/specs/skill_contract.spec.md](../../agent/specs/skill_contract.spec.md): contrato normativo das skills.
+- [../../agent/specs/README.md](../../agent/specs/README.md): indice canônico dos contratos normativos do agente.

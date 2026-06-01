@@ -39,3 +39,7 @@ The `calendar` specialist is configured with the following safeguards:
 1. No data loss: never delete an event with meaningful local updates without user confirmation.
 2. Preference: if updates are minor, such as description formatting, prefer the one with the most recent timestamp.
 3. Clarity: when asking the user, show the exact divergence, for example, `Title changed to X in Google, but Y in Atlas`.
+## Relacionados
+
+- [calendar_sync_review.stat.md](calendar_sync_review.stat.md)
+- [../README.md](../overview.md)

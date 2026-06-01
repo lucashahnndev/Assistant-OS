@@ -24,3 +24,11 @@ The initial Phase 5 implementation incorrectly called `orchestrator.notify_user(
 - auditability is preserved because every notification is traceable to a domain-session decision;
 - the scheduler stays decoupled from delivery targets and intents;
 - the calendar domain can decide whether, when and how to notify the user.
+
+## Relacionados
+
+- [../architecture/README.md](../architecture/README.md): contexto atual de arquitetura de notificacoes e calendario.
+- [../guides/README.md](../guides/README.md): guias operacionais ligados ao fluxo corrigido.
+- [../../agent/specs/calendar_core.spec.md](../../agent/specs/calendar_core.spec.md): contrato ativo do dominio de calendario.
+- [../../agent/specs/calendar-adaptive-alert-architecture.spec.md](../../agent/specs/calendar-adaptive-alert-architecture.spec.md): contrato de alertas que substitui a trilha historica.
+- [../../agent/specs/system_sessions.spec.md](../../agent/specs/system_sessions.spec.md): continuidade e isolamento por dominio quando o fluxo chega ao runtime.

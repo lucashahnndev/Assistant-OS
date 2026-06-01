@@ -227,3 +227,7 @@ Contract version: `1.0.0`
 Last updated: `2026-02-23`
 
 If contract-breaking behavior is introduced, increment major version and provide migration notes.
+## Relacionados
+
+- [worker_task_contract.stat.md](worker_task_contract.stat.md)
+- [../README.md](../overview.md)

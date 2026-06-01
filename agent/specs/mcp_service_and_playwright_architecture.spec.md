@@ -238,3 +238,7 @@ Campos minimos:
 - `execution_control`
 - `budget_state`
 - `policy_context`
+## Relacionados
+
+- [mcp_service_and_playwright_architecture.stat.md](mcp_service_and_playwright_architecture.stat.md)
+- [../README.md](../overview.md)

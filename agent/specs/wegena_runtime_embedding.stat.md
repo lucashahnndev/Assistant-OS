@@ -21,3 +21,7 @@ Data da ultima atualizacao: 2026-05-28
 ## Proximo passo recomendado
 
 - usar esta spec como referencia para qualquer ajuste futuro de packaging do runtime Wegena.
+## Relacionados
+
+- [wegena_runtime_embedding.spec.md](wegena_runtime_embedding.spec.md)
+- [../README.md](../overview.md)

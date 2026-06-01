@@ -16,3 +16,7 @@
 
 ## Próximos Passos
 Prosseguir com as adaptações do frontend e a persistência de arquivos gerados pelo observer.
+## Relacionados
+
+- [wegena_active_capability.spec.md](wegena_active_capability.spec.md)
+- [../README.md](../overview.md)

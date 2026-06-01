@@ -21,3 +21,7 @@ Data da ultima atualizacao: 2026-05-28
 ## Proximo passo recomendado
 
 - revisar se as demais propostas de arquitetura ainda devem permanecer como proposta ou seguir o mesmo caminho.
+## Relacionados
+
+- [mcp_service_and_playwright_architecture.spec.md](mcp_service_and_playwright_architecture.spec.md)
+- [../README.md](../overview.md)

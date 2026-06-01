@@ -36,3 +36,10 @@ Se houver evidence de ferramenta ou estado validado, a resposta pode resumir o r
 Recovery e linguagem de apoio.
 Evidência e runtime.
 Nao misturar os dois.
+
+## Relacionados
+
+- [../README.md](../README.md): indice geral da documentacao humana.
+- [../guides/testing_guide.md](../guides/testing_guide.md): guia para validar fluxos de recovery e continuidade.
+- [../reports/atlas-agent-mode-cognition-deep-audit-2026-05-29.md](../reports/atlas-agent-mode-cognition-deep-audit-2026-05-29.md): audit que explica os riscos de fallback narrativo.
+- [../reports/system-audit-2026-05-24.md](../reports/system-audit-2026-05-24.md): audit de base sobre estado, browser e fluxos.

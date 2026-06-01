@@ -21,3 +21,7 @@ Data da ultima atualizacao: 2026-05-28
 ## Proximo passo recomendado
 
 - usar esta spec como base principal e tratar v2 e v3 como evolucao historica da mesma linha de design.
+## Relacionados
+
+- [calendar-adaptive-alert-architecture.spec.md](calendar-adaptive-alert-architecture.spec.md)
+- [../README.md](../overview.md)

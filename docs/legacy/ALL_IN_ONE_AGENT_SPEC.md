@@ -206,3 +206,10 @@ Drivers sao infraestrutura.
 ## 10. Resultado
 
 Uma **plataforma open de agentes**, modular, controlavel e escalavel.
+
+## Relacionados
+
+- [../README.md](../README.md): entrada geral da documentacao humana.
+- [../architecture/README.md](../architecture/README.md): contrato tecnico atual que substituiu esta consolidacao.
+- [../../agent/specs/conversational_core_tool_discovery_architecture.spec.md](../../agent/specs/conversational_core_tool_discovery_architecture.spec.md): contrato discovery-first que superou esta especificacao.
+- [../../agent/specs/atlas_operating_model.spec.md](../../agent/specs/atlas_operating_model.spec.md): contrato operacional moderno que substitui a governanca descrita aqui.

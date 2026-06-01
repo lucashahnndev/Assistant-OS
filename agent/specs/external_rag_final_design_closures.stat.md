@@ -21,3 +21,7 @@ Data da ultima atualizacao: 2026-05-28
 ## Proximo passo recomendado
 
 - usar esta spec como base para refinamentos de `retrieval_plan` e observabilidade.
+## Relacionados
+
+- [external_rag_final_design_closures.spec.md](external_rag_final_design_closures.spec.md)
+- [../README.md](../overview.md)

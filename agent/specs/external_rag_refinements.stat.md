@@ -21,3 +21,7 @@ Data da ultima atualizacao: 2026-05-28
 ## Proximo passo recomendado
 
 - usar esta spec para guiar a consolidacao dos providers externos e dos scorecards operacionais.
+## Relacionados
+
+- [external_rag_refinements.spec.md](external_rag_refinements.spec.md)
+- [../README.md](../overview.md)

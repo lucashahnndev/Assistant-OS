@@ -21,3 +21,7 @@ Data da ultima atualizacao: 2026-05-28
 ## Proximo passo recomendado
 
 - usar esta spec como base para formalizar outros eventos internos relacionados a dominios.
+## Relacionados
+
+- [agent_events.spec.md](agent_events.spec.md)
+- [../README.md](../overview.md)

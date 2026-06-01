@@ -48,3 +48,11 @@ python scripts/test_bridge.py
 - `/skills`: Lista todas as habilidades carregadas.
 - `/context`: Mostra o resumo do estado (TOON) enviado ao LLM.
 - `/clear`: Limpa o histórico da sessão atual.
+
+## Relacionados
+
+- [../README.md](../README.md): indice geral da documentacao humana.
+- [../architecture/README.md](../architecture/README.md): contexto arquitetural para os testes de runtime.
+- [../reports/README.md](../reports/README.md): lugar natural para registrar resultados de teste e diagnósticos.
+- [../policies/README.md](../policies/README.md): regras de governanca que guiam validacoes e rollback.
+- [../../agent/specs/atlas_operating_model.spec.md](../../agent/specs/atlas_operating_model.spec.md): contrato operacional que afeta prompt, discovery, tool use e approval.

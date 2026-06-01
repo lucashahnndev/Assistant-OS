@@ -26,3 +26,7 @@ If a capability requires a highly customized interface that cannot be represente
 ## 4. Operational Constraints
 - No capability-specific logic should exist outside of `frontend/src/plugins_ui/`.
 - Backend capabilities must be written assuming they might be interacting with a generic terminal; the frontend is just an advanced consumer of their schema.
+## Relacionados
+
+- [plugin_ui_architecture.stat.md](plugin_ui_architecture.stat.md)
+- [../README.md](../overview.md)

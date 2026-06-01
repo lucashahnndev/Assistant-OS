@@ -21,3 +21,7 @@ Data da ultima atualizacao: 2026-05-28
 ## Proximo passo recomendado
 
 - alinhar contratos de API e UI com esta spec antes de qualquer refatoracao do worker runtime.
+## Relacionados
+
+- [worker_task_contract.spec.md](worker_task_contract.spec.md)
+- [../README.md](../overview.md)

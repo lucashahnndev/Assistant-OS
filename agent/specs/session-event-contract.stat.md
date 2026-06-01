@@ -1,6 +1,7 @@
 # Session Event Contract Stat
 
 Data da ultima atualizacao: 2026-05-31
+Spec mirror: [session-event-contract.spec.md](session-event-contract.spec.md).
 
 ## Estado atual
 
@@ -19,6 +20,14 @@ Data da ultima atualizacao: 2026-05-31
 - contrato formal criado em `agent/specs/`;
 - o escopo ficou limitado a dados, eventos, persistencia e consumo por interface;
 - o dominio nao mexe em cognicao, prompt ou tool choice.
+
+## Relacionados
+
+- [session-event-contract.spec.md](session-event-contract.spec.md)
+- [../policy/session-event-contract.policy.md](../policy/session-event-contract.policy.md)
+- [system_sessions.spec.md](system_sessions.spec.md)
+- [system_sessions.stat.md](system_sessions.stat.md)
+- [../../docs/contracts/README.md](../../docs/contracts/README.md)
 
 ## Proximo passo recomendado
 

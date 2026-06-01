@@ -9,3 +9,8 @@
 - pare e revise quando o problema pedir abstração nova;
 - faça handoff limpo entre sessões.
 
+## Relacionados
+
+- [../specs/project.spec.md](../specs/project.spec.md)
+- [../specs/project.stat.md](../specs/project.stat.md)
+- [spec-stat.policy.md](spec-stat.policy.md)

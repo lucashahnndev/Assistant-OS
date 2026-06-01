@@ -1,2 +1,3 @@
-convention.version: v1
-convention.source_language: pt-BR
+convention.version: 0.0.1
+convention.version_scheme: semver
+convention.source_language: en

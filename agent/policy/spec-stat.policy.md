@@ -12,3 +12,10 @@
 - spec genérica demais deve ser dividida;
 - atualize `.spec` quando contrato mudar;
 - atualize `.stat` quando o estado mudar.
+
+## Relacionados
+
+- [../specs/README.md](../specs/overview.md)
+- [../specs/project.spec.md](../specs/project.spec.md)
+- [../specs/project.stat.md](../specs/project.stat.md)
+- [linking.policy.md](linking.policy.md)

@@ -21,3 +21,7 @@ Data da ultima atualizacao: 2026-05-28
 ## Proximo passo recomendado
 
 - usar esta spec como base para revisar o comportamento de sync de outros provedores de calendario.
+## Relacionados
+
+- [calendar_sync_review.spec.md](calendar_sync_review.spec.md)
+- [../README.md](../overview.md)

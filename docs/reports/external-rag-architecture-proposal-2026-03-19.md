@@ -345,3 +345,11 @@ A proposta deste documento resolve esse gap com:
 - aprendizado adaptativo com segurança determinística preservada.
 
 Isso permite escalar para YouTube/Deezer/Spotify/Wikipedia/Maps e novos providers com baixo acoplamento, maior robustez e menor risco operacional de ficar “sem dados”.
+
+## Relacionados
+
+- [../architecture/README.md](../architecture/README.md): contexto arquitetural onde a proposta se encaixa.
+- [prompt-reduction-pass5-report.md](prompt-reduction-pass5-report.md): redução dinâmica de prompt que conversa com a camada de evidencias.
+- [../../agent/specs/unified-context-rag-architecture.spec.md](../../agent/specs/unified-context-rag-architecture.spec.md): contrato normativo já ativo para RAG unificado.
+- [../../agent/specs/external_rag_refinements.spec.md](../../agent/specs/external_rag_refinements.spec.md): refinamentos incrementais do desenho externo de RAG.
+- [../../agent/specs/external_rag_final_design_closures.spec.md](../../agent/specs/external_rag_final_design_closures.spec.md): fechamento final do desenho externo de RAG.

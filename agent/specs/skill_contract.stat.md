@@ -21,3 +21,7 @@ Data da ultima atualizacao: 2026-05-28
 ## Proximo passo recomendado
 
 - usar esta spec para validar novas skills antes de introduzir runtime changes.
+## Relacionados
+
+- [skill_contract.spec.md](skill_contract.spec.md)
+- [../README.md](../overview.md)

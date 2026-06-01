@@ -4,6 +4,7 @@ Este diretorio guarda documentacao humana de arquitetura do sistema.
 As specs normativas canônicas vivem em `agent/specs/`.
 
 `Session Event Contract` e o dominio guarda-chuva para sessoes, mensagens, turnos, streams, works, eventos, indices e persistencia. Para trabalho novo em session/event/WebSocket, consulte esse contrato primeiro; `system_sessions` e `agent_events` permanecem como contratos especificos e/ou legados.
+Quando a pergunta for sobre isolamento de dominio e a semantica `system.<domain>`, leia tambem `system_sessions.spec.md` e `system_sessions.stat.md`.
 
 ## Uso
 
@@ -17,6 +18,7 @@ As specs normativas canônicas vivem em `agent/specs/`.
 
 - [system_architecture.spec.md](../../agent/specs/system_architecture.spec.md)
 - [system_sessions.spec.md](../../agent/specs/system_sessions.spec.md)
+- [system_sessions.stat.md](../../agent/specs/system_sessions.stat.md)
 - [trusted_execution_path.spec.md](../../agent/specs/trusted_execution_path.spec.md)
 - [unified-context-rag-architecture.spec.md](../../agent/specs/unified-context-rag-architecture.spec.md)
 
@@ -53,3 +55,17 @@ As specs normativas canônicas vivem em `agent/specs/`.
 Se o documento for decisao fechada, mova para `docs/decisions/`.
 Se for plano de migracao, mova para `docs/plans/`.
 Se for relatorio de auditoria, mova para `docs/reports/`.
+
+## Relacionados
+
+- [../overview.md](../overview.md)
+- [../contracts/README.md](../contracts/README.md)
+- [../policies/README.md](../policies/README.md)
+- [../plans/README.md](../plans/README.md)
+- [../decisions/README.md](../decisions/README.md)
+- [../reports/README.md](../reports/README.md)
+- [../guides/README.md](../guides/README.md)
+- [../concepts/README.md](../concepts/README.md)
+- [../legacy/README.md](../legacy/README.md)
+- [../../agent/overview.md](../../agent/overview.md)
+- [../../agent/specs/overview.md](../../agent/specs/overview.md)

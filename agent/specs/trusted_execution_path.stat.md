@@ -22,3 +22,7 @@ Data da ultima atualizacao: 2026-05-28
 ## Proximo passo recomendado
 
 - alinhar esta spec com a evolucao de `system_sessions.spec.md` e dos contratos de evento interno.
+## Relacionados
+
+- [trusted_execution_path.spec.md](trusted_execution_path.spec.md)
+- [../README.md](../overview.md)

@@ -28,3 +28,7 @@ Data da ultima atualizacao: 2026-05-28
 ## Proximo passo recomendado
 
 - usar esta spec como referencia para qualquer novo fluxo de tools semanticos.
+## Relacionados
+
+- [conversational_core_tool_discovery_architecture.spec.md](conversational_core_tool_discovery_architecture.spec.md)
+- [../README.md](../overview.md)

@@ -218,6 +218,14 @@ Sources:
 3. On send, it appends an optimistic user message with `isSending: true`.
 4. It sends the payload over WebSocket when online, otherwise via `POST /sessions/{id}/message`.
 5. `handleWebSocketMessage` reacts to `status`, `thought`, `assistant_chunk`, `message_added`, and `complete`.
+
+## Relacionados
+
+- [../architecture/README.md](../architecture/README.md): contexto arquitetural do dominio `Session Event Contract`.
+- [session_event_contract_phase_b_plan.md](session_event_contract_phase_b_plan.md): desdobramento da fase B.
+- [session_event_contract_phase_b_checklist.md](session_event_contract_phase_b_checklist.md): execucao passo a passo da fase B.
+- [../../agent/specs/session-event-contract.spec.md](../../agent/specs/session-event-contract.spec.md): contrato normativo que fundamenta a auditoria.
+- [../../agent/specs/session-event-contract.stat.md](../../agent/specs/session-event-contract.stat.md): estado vivo correspondente ao contrato.
 6. `MessageList` merges `messages` with `streamingMessage`.
 7. `MessageItem` renders reasoning, playback, attachments, and a skeleton state when a non-user message is actively streaming without content.
 

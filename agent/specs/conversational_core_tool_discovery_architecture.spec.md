@@ -269,3 +269,7 @@ It should treat discovery output as a constrained proposal, not a hardcoded rank
 - the bibliotecário can inspect shared RAG and prior tool outcomes before choosing a candidate set;
 - the discovery layer may take more than one turn when ambiguity or tradeoff comparison is useful;
 - discovery must not be locked to a fixed exposure policy or fixed-size shortlist.
+## Relacionados
+
+- [conversational_core_tool_discovery_architecture.stat.md](conversational_core_tool_discovery_architecture.stat.md)
+- [../README.md](../overview.md)

@@ -40,3 +40,7 @@ Será adicionado um ícone de **Nuvem (Cloud)** no canto superior direito do pai
 - **Concorrência:** O usuário (ou agente) pode subir o Ngrok para um teste rápido e manter o Cloudflare para uso persistente, sem conflitos.
 - **Isolamento de Falhas:** Se a API do Ngrok cair, o Cloudflare e a capability dele não serão afetados.
 - **Escalabilidade:** Se no futuro houver integração com `LocalTunnel` ou `Pinggy`, basta adicionar um novo plugin sem mexer em código legado.
+## Relacionados
+
+- [remote.stat.md](remote.stat.md)
+- [../README.md](../overview.md)

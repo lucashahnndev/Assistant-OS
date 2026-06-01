@@ -229,3 +229,11 @@ The current changes move Atlas toward a healthier pattern:
 - approval is a first-class pause
 
 That is a much stronger base for the Atlas agent than relying on the model to infer all of it from raw conversation alone.
+
+## Relacionados
+
+- [../architecture/README.md](../architecture/README.md): contexto arquitetural do agent mode e da continuidade.
+- [system-audit-2026-05-24.md](system-audit-2026-05-24.md): audit estrutural complementar que analisa o runtime e o browser control.
+- [../guides/testing_guide.md](../guides/testing_guide.md): guia útil para validar os fluxos descritos no audit.
+- [../../agent/specs/atlas_operating_model.spec.md](../../agent/specs/atlas_operating_model.spec.md): contrato operacional ativo para prompt, discovery e approval.
+- [../../agent/specs/system_sessions.spec.md](../../agent/specs/system_sessions.spec.md): contrato de continuidade e isolamento por dominio.

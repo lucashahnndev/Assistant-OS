@@ -258,3 +258,7 @@ Parar tentativas quando qualquer condicao ocorrer:
 - nao repetir provider no mesmo ciclo apos erro equivalente
 - cooldown curto por erro repetitivo
 - limite de tentativas por reason class (`timeout`, `auth`, `quota`, `empty`)
+## Relacionados
+
+- [external_rag_refinements.stat.md](external_rag_refinements.stat.md)
+- [../README.md](../overview.md)

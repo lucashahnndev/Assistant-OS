@@ -81,3 +81,7 @@ O orchestrator nao deve:
 O sistema prepara o ambiente.
 O agente interpreta o contexto.
 O agente decide semânticamente.
+## Relacionados
+
+- [semantic_decision_boundary.stat.md](semantic_decision_boundary.stat.md)
+- [../README.md](../overview.md)

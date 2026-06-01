@@ -218,6 +218,15 @@ Sinais esperados no retorno de GC:
 
 ## Checklist de Validacao Rapida
 1. `execution_context` possui:
+
+## Relacionados
+
+- [../README.md](../README.md): indice geral da documentacao humana.
+- [../architecture/README.md](../architecture/README.md): contexto tecnico do runtime e do browser.
+- [../policies/README.md](../policies/README.md): regras estaveis que cercam a operacao.
+- [../reports/README.md](../reports/README.md): evidencias e auditorias de operacao.
+- [../../agent/policy/README.md](../../agent/policy/README.md): politicas canônicas do agente.
+- [../../agent/specs/mcp_service_and_playwright_architecture.spec.md](../../agent/specs/mcp_service_and_playwright_architecture.spec.md): contrato tecnico mais proximo do playbook.
    - `browser_instance_id`
    - `tab_id`
    - `debug_port`

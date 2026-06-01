@@ -23,3 +23,7 @@ Data da ultima atualizacao: 2026-05-28
 ## Proximo passo recomendado
 
 - atualizar esta stat quando o plugin tailscale for criado.
+## Relacionados
+
+- [remote.spec.md](remote.spec.md)
+- [../README.md](../overview.md)

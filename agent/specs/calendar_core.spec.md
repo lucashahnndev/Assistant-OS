@@ -39,3 +39,7 @@ The Calendar domain operates as a "trusted capability":
 5. **Orchestrator** manages the agent reasoning flow within the calendar domain context.
 
 This architecture ensures the agent is aware of the user's schedule without manual polling or external dependencies in this phase.
+## Relacionados
+
+- [calendar_core.stat.md](calendar_core.stat.md)
+- [../README.md](../overview.md)

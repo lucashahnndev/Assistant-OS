@@ -8,3 +8,8 @@
 - não commite temporários por acidente;
 - prefira commits pequenos por etapa;
 - se necessário, separe mudança de contrato, implementação e limpeza.
+
+## Relacionados
+
+- [../specs/project.stat.md](../specs/project.stat.md)
+- [spec-stat.policy.md](spec-stat.policy.md)

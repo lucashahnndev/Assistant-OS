@@ -235,3 +235,10 @@ Priority areas:
 - richer evidence summarization before prompt injection
 - better overlap detection between relevant memory, summary, and scratchpad
 - optional compression of worker/supervision signals into state rather than appendices when safe
+
+## Relacionados
+
+- [../architecture/README.md](../architecture/README.md): onde a reducao de prompt cruza com o desenho do runtime e da orchestracao.
+- [../guides/testing_guide.md](../guides/testing_guide.md): guia util para validar o comportamento do prompt composer.
+- [../../agent/specs/atlas_operating_model.spec.md](../../agent/specs/atlas_operating_model.spec.md): contrato que delimita prompt, discovery, tool use e approval.
+- [../../agent/specs/atlas_operating_model.stat.md](../../agent/specs/atlas_operating_model.stat.md): estado vivo do modelo operacional.

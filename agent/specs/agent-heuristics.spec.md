@@ -230,3 +230,7 @@ Nao devemos:
 Uma heuristica esta aceitavel quando:
 
 - melhora o contrato ou a UX sem limitar o agente de forma indevida
+## Relacionados
+
+- [agent-heuristics.stat.md](agent-heuristics.stat.md)
+- [../README.md](../overview.md)

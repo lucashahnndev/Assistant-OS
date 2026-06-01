@@ -187,3 +187,49 @@ tests/*
 data/config.json
 # Legacy browser runtime profiles must never live in source tree
 src/capabilities/browser_control/profiles/
+# AWC base ignore
+
+# Environment and dependency noise
+.env
+.env.*
+*.env
+node_modules/
+vendor/
+dist/
+build/
+coverage/
+.venv/
+venv/
+env/
+virtualenv/
+
+# Python caches and virtualenv artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.dist-info/
+pyvenv.cfg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Tooling caches
+.cache/
+.codex/
+.agents/
+.vite/
+.next/
+.nuxt/
+.svelte-kit/
+.turbo/
+
+# Obsidian vault metadata
+.obsidian/**
+!.obsidian/graph.json
+!.obsidian/graph-tech.json
+
+# Editor and OS noise
+.vscode/
+*.code-workspace
+.DS_Store
+Thumbs.db

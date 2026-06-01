@@ -1,8 +1,16 @@
 # Project Stat
 
-Data da última atualização: 2026-05-28
+Data da última atualização: 2026-05-31
+Spec mirror: [project.spec.md](project.spec.md).
 
 Este é o estado inicial pareado com `project.spec.md`.
+
+## Relacionados
+
+- [project.spec.md](project.spec.md)
+- [README.md](README.md)
+- [../policy/README.md](../policy/overview.md)
+- [../README.md](../overview.md)
 
 ## Estado atual
 
@@ -10,6 +18,7 @@ Este é o estado inicial pareado com `project.spec.md`.
 - estrutura base disponível;
 - domínios reais ainda podem ser separados em specs próprias.
 - artefatos temporarios de validacao foram movidos para `agent/test/` e `agent/scripts/`, reduzindo o uso de `tests/` e `scratch/` para apoio operacional fora da workspace do agente.
+- rastreamento da convenção de entrada alinhado com `trace_id=conv-20260531-root-entry-links`.
 
 ## Pendências
 
@@ -22,6 +31,9 @@ Este é o estado inicial pareado com `project.spec.md`.
 - estrutura do workspace definida;
 - convenção de `.spec` e `.stat` estabelecida.
 - a raiz do repositorio foi limpa de scripts e arquivos de teste temporarios rastreados; os artefatos pontuais de validacao agora vivem na workspace do agente.
+- leitura canônica do agente agora aponta para `agent-start-here.md` na raiz, com `docs/agent-start-here.md` mantido apenas como atalho de navegação.
+- a malha de entrada da convenção foi reforçada com links entre `README.md`, `agent-start-here.md`, `agent/README.md`, `agent/specs/README.md` e `agent/policy/README.md`.
+- a convenção aplicada no projeto foi alinhada com a revisão `v3`, incluindo a regra de que arquivos que não são `.md` devem ser referenciados explicitamente em vez de virarem notas novas.
 
 ## Próximo passo recomendado
 

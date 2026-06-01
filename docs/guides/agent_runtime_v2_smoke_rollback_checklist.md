@@ -31,3 +31,11 @@
 ## Incident Notes
 - If observability fails, execution should continue as non-fatal telemetry.
 - If rollout policy causes regressions, use the PolicyRollout rollback API or flow before a global disable.
+
+## Relacionados
+
+- [../README.md](../README.md): indice geral da documentacao humana.
+- [../architecture/README.md](../architecture/README.md): contexto tecnico do runtime v2.
+- [../policies/README.md](../policies/README.md): regras de governanca e rollback.
+- [../reports/README.md](../reports/README.md): evidencias de smoke e observabilidade.
+- [../../agent/specs/system_architecture.spec.md](../../agent/specs/system_architecture.spec.md): contrato arquitetural do sistema afetado.

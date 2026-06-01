@@ -134,3 +134,7 @@ O foco agora deve ser preservar essa direcao:
   - resumo: endureceu o fluxo de recovery e sanitizacao para evitar claims de execucao/conclusao sem `ActionObservation` fresca, mantendo fallback honesto quando a resposta e apenas orientacao textual;
   - validacao: `python3 -m py_compile src/core/orchestrator.py tests/minimal/test_mcp_llm_alias_and_recovery.py` e `PYTHONPATH=src:. env/bin/python -m pytest tests/minimal/test_mcp_llm_alias_and_recovery.py -q -k 'recovery_reply_without_tool_data or sanitize_user_facing_response_requires_sent_confirmation_for_attachment_claims or sanitize_user_facing_response_blocks_attachment_claim_without_payload or sanitize_user_facing_response_blocks_execution_claim_without_fresh_evidence or sanitize_user_facing_response_allows_grounded_execution_and_attachment_claims_when_evidence_exists'`;
   - falhas conhecidas fora do escopo: tres testes antigos de alias/Obsidian em `tests/minimal/test_mcp_llm_alias_and_recovery.py` continuam preexistentes e nao bloqueiam este bloco.
+## Relacionados
+
+- [agent-heuristics.spec.md](agent-heuristics.spec.md)
+- [../README.md](../overview.md)

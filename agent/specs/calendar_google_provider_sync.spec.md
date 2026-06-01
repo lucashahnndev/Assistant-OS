@@ -44,3 +44,7 @@ Data structure for tracking the synchronization state of individual events.
 2. **Runtime Sync**: CRUD operations in `CalendarService` trigger immediate `push()` calls to the provider.
 3. **Background Sync**: Triggered by the system or on-demand via `sync_all()`.
 4. **Impact**: Synced events are picked up by `CalendarScheduler`, which emits `AgentEvent`s, triggering the standard reasoning-and-notification pipeline.
+## Relacionados
+
+- [calendar_google_provider_sync.stat.md](calendar_google_provider_sync.stat.md)
+- [../README.md](../overview.md)

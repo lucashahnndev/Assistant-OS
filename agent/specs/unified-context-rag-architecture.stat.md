@@ -21,3 +21,7 @@ Data da ultima atualizacao: 2026-05-28
 ## Proximo passo recomendado
 
 - tratar essa spec como contrato raiz para refinamentos de memoria, procedimentos e politicas.
+## Relacionados
+
+- [unified-context-rag-architecture.spec.md](unified-context-rag-architecture.spec.md)
+- [../README.md](../overview.md)

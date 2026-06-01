@@ -21,3 +21,7 @@ Data da ultima atualizacao: 2026-05-28
 ## Proximo passo recomendado
 
 - manter essa spec alinhada aos serviços de provider/sync no backend.
+## Relacionados
+
+- [calendar_google_provider_sync.spec.md](calendar_google_provider_sync.spec.md)
+- [../README.md](../overview.md)

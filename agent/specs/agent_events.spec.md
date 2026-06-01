@@ -54,3 +54,8 @@ AgentEvent(
 ## Difference from WorkerEvent
 - `WorkerEvent`: tracks execution progress of a specific task, such as started, progress or failed. It centers on what the worker is doing.
 - `AgentEvent`: triggers new reasoning or context updates. It centers on what the world is telling the agent.
+## Relacionados
+
+- [agent_events.stat.md](agent_events.stat.md)
+- [system_sessions.spec.md](system_sessions.spec.md)
+- [session-event-contract.spec.md](session-event-contract.spec.md)
