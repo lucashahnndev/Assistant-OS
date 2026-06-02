@@ -31,6 +31,7 @@ import { ChatInputArea } from '../components/chat/ChatInputArea';
 import { MessageList } from '../components/chat/MessageItem';
 import { FilePreviewIcon } from '../components/chat/MessageAttachments';
 import { formatDate } from '../utils/chatHistoryTransform';
+import normalizeSessionEvent from '../utils/normalizeSessionEvent';
 import { TypewriterMarkdown } from '../components/chat/TypewriterMarkdown';
 
 const normalizeLiveTimestamp = (ts) => {
@@ -123,6 +124,73 @@ const mergeSnapshotMessages = (existingMessages = [], snapshotMessages = []) => 
     return merged;
 };
 
+const mergeLiveMessage = (existingMessages = [], incomingMessage = {}) => {
+    if (!incomingMessage || typeof incomingMessage !== 'object') {
+        return Array.isArray(existingMessages) ? existingMessages : [];
+    }
+
+    const next = Array.isArray(existingMessages) ? [...existingMessages] : [];
+    const incomingIdentity = getMessageIdentity(incomingMessage);
+    const incomingSignature = getUserOptimisticSignature(incomingMessage);
+
+    if (incomingSignature) {
+        const optimisticIndex = next.findIndex((message) => (
+            message
+            && message.isSending
+            && String(message.role || '').toLowerCase() === 'user'
+            && getUserOptimisticSignature(message) === incomingSignature
+        ));
+
+        if (optimisticIndex !== -1) {
+            next[optimisticIndex] = {
+                ...next[optimisticIndex],
+                ...incomingMessage,
+                isSending: false,
+            };
+            return next;
+        }
+    }
+
+    const existingIndex = next.findIndex((message) => getMessageIdentity(message) === incomingIdentity);
+    if (existingIndex !== -1) {
+        next[existingIndex] = {
+            ...next[existingIndex],
+            ...incomingMessage,
+        };
+        return next;
+    }
+
+    return [...next, incomingMessage];
+};
+
+const buildCanonicalMessageFromEvent = (event, fallbackRole = 'assistant') => {
+    const rawData = isPlainObject(event?.raw) ? event.raw : {};
+    const payload = isPlainObject(event?.payload) ? event.payload : {};
+    const data = { ...rawData, ...payload };
+    const role = String(data.role || fallbackRole || 'assistant').toLowerCase() || 'assistant';
+    const attachments = Array.isArray(data.attachments) ? data.attachments : [];
+    const contentSegments = Array.isArray(data.contentSegments) ? data.contentSegments : [];
+
+    return {
+        id: event?.messageId || data.message_id || data.messageId || data.id || `msg-${Date.now()}`,
+        role,
+        content: data.content || data.message || data.text || data.full_text || '',
+        timestamp: normalizeLiveTimestamp(data.timestamp || event?.timestamp || rawData.timestamp),
+        turn_id: event?.turnId ?? data.turn_id ?? data.turnId ?? null,
+        reply_to_message_id: event?.replyToMessageId ?? data.reply_to_message_id ?? data.replyToMessageId ?? null,
+        stream_id: event?.streamId ?? data.stream_id ?? data.streamId ?? null,
+        work_id: event?.workId ?? data.work_id ?? data.workId ?? null,
+        model_info: data.model_info || rawData.model_info || null,
+        reasoningTimeline: Array.isArray(data.reasoningTimeline) ? data.reasoningTimeline : [],
+        statusPhase: role === 'assistant' ? (data.statusPhase || 'complete') : data.statusPhase,
+        statusMessage: data.statusMessage || data.status || '',
+        isComplete: role === 'assistant' ? (data.isComplete !== undefined ? Boolean(data.isComplete) : true) : Boolean(data.isComplete),
+        animateTyping: role === 'assistant' ? (data.animateTyping !== undefined ? Boolean(data.animateTyping) : true) : Boolean(data.animateTyping),
+        attachments,
+        contentSegments,
+    };
+};
+
 const buildSessionFromSnapshot = (snapshot, legacySession) => {
     const baseSession = isPlainObject(snapshot?.session) ? snapshot.session : {};
     const current = isPlainObject(snapshot?.current) ? snapshot.current : {};
@@ -210,6 +278,7 @@ const Chat = () => {
     const prevLastMsgIdRef = useRef(null);
     const pendingReasoningRef = useRef([]);
     const streamingMessageRef = useRef(null);
+    const streamingMessageDraftRef = useRef(null);
     const messagesSessionIdRef = useRef(null);
 
     useEffect(() => {
@@ -281,46 +350,54 @@ const Chat = () => {
         const handleWebSocketMessage = (raw) => {
             if (!isSub) return;
             try {
-                if (raw.type === 'ping') return;
+                const event = normalizeSessionEvent(raw);
+                const liveData = isPlainObject(event.payload) ? event.payload : {};
+                const rawData = isPlainObject(event.raw) ? event.raw : {};
+                const eventData = { ...rawData, ...liveData };
+                const eventType = event.eventType;
+                if (eventType === 'ping') return;
 
-                if (raw.type === 'system_metrics' || raw.type === 'system_health') {
-                    if (raw.data?.health) setSystemHealth(raw.data.health);
+                if (eventType === 'system_metrics' || eventType === 'system_health') {
+                    if (eventData.health) setSystemHealth(eventData.health);
                     return;
                 }
 
-                if (raw.type === 'worker_state') {
+                if (eventType === 'worker_state') {
                     // Handled by GlobalSessionContext now
                     return;
                 }
 
-                if (raw.type === 'playback_stream') {
-                    setLatestPlaybackEvent(raw.data);
+                if (eventType === 'playback_stream') {
+                    setLatestPlaybackEvent(eventData);
                     return;
                 }
 
-                if (raw.type === 'status') {
+                if (event.category === 'status' && !event.isLegacy) {
                     setStreamingMessage(prev => {
                         const content = prev ? prev.content : '';
-                        return {
+                        const nextStreamingMessage = {
                             role: 'assistant',
                             content: content,
                             reasoningLines: prev?.reasoningLines || [],
                             reasoningTimeline: prev?.reasoningTimeline || [],
-                            statusPhase: raw.phase || 'thinking',
-                            statusMessage: raw.message || 'Processing...',
+                            statusPhase: eventData.phase || 'thinking',
+                            statusMessage: eventData.message || eventData.status || 'Processing...',
                             isComplete: false,
-                            work_id: raw.work_id || prev?.work_id,
-                            model_info: raw.model_info || prev?.model_info
+                            work_id: eventData.work_id || prev?.work_id,
+                            model_info: eventData.model_info || prev?.model_info,
+                            streamId: event.streamId || prev?.streamId || null,
                         };
+                        streamingMessageDraftRef.current = nextStreamingMessage;
+                        return nextStreamingMessage;
                     });
                     return;
                 }
 
-                if (raw.type === 'thought' || raw.type === 'cognitive_thought' || raw.type === 'assistant_thought' || raw.type === 'reasoning_chunk') {
+                if (event.category === 'reasoning') {
                     setIsThinking(true);
                     
                     let safeThought = '';
-                    const rawThought = raw.thought || raw.content;
+                    const rawThought = eventData.thought || eventData.content;
                     if (typeof rawThought === 'string') {
                         safeThought = rawThought;
                     } else if (Array.isArray(rawThought)) {
@@ -351,79 +428,133 @@ const Chat = () => {
                         const content = prev ? prev.content : '';
                         const currentLines = prev?.reasoningLines || [];
                         const nextLines = trimmedThought ? [...currentLines, trimmedThought] : currentLines;
-                        return {
+                        const nextStreamingMessage = {
                             role: 'assistant',
                             content: content,
                             reasoningLines: nextLines,
                             reasoningTimeline: [...pendingReasoningRef.current],
-                            statusPhase: raw.phase || (prev ? prev.statusPhase : 'thinking'),
+                            statusPhase: eventData.phase || (prev ? prev.statusPhase : 'thinking'),
                             statusMessage: trimmedThought || (prev ? prev.statusMessage : ''),
                             isComplete: false,
-                            work_id: raw.work_id || prev?.work_id,
-                            model_info: raw.model_info || prev?.model_info
+                            work_id: eventData.work_id || prev?.work_id,
+                            model_info: eventData.model_info || prev?.model_info,
+                            streamId: event.streamId || prev?.streamId || null,
                         };
+                        streamingMessageDraftRef.current = nextStreamingMessage;
+                        return nextStreamingMessage;
                     });
                     return;
                 }
 
-                if (raw.type === 'stream' || raw.type === 'final_message_chunk') {
+                if (event.category === 'stream' && event.canUpdateMessage) {
                     setIsSending(false);
                     setIsThinking(false);
 
                     setStreamingMessage(prev => {
-                        const currentContent = prev ? prev.content : '';
-                        const nextContent = currentContent + (raw.chunk || raw.content || '');
-                        return {
+                        const currentContent = prev ? prev.content : (streamingMessageDraftRef.current?.content || '');
+                        const nextContent = currentContent + (eventData.chunk || eventData.content || '');
+                        const nextStreamingMessage = {
                             role: 'assistant',
                             content: nextContent,
                             reasoningLines: prev?.reasoningLines || [],
                             reasoningTimeline: [...pendingReasoningRef.current],
-                            statusPhase: raw.phase || 'responding',
-                            statusMessage: raw.status || 'Streaming response...',
+                            statusPhase: eventData.phase || 'responding',
+                            statusMessage: eventData.status || 'Streaming response...',
                             isComplete: false,
-                            work_id: raw.work_id || prev?.work_id,
-                            model_info: raw.model_info || prev?.model_info
+                            work_id: eventData.work_id || prev?.work_id,
+                            model_info: eventData.model_info || prev?.model_info,
+                            streamId: event.streamId || prev?.streamId || null,
                         };
+                        streamingMessageDraftRef.current = nextStreamingMessage;
+                        return nextStreamingMessage;
                     });
                     return;
                 }
 
-                const isAssistantCompletion = raw.type === 'complete' || raw.type === 'assistant_response' || ((raw.type === 'msg' || raw.type === 'message') && raw.role !== 'user');
-                if (isAssistantCompletion) {
+                if ((event.eventType === 'message_added' || event.eventType === 'message.persisted' || event.eventType === 'user_message.created' || event.eventType === 'assistant_message.created') && (event.canCreateMessage || event.messageId || event.streamId)) {
+                    setIsSending(false);
+                    setIsThinking(false);
+
+                    const finalMessage = buildCanonicalMessageFromEvent(event, String(eventData.role || (event.eventType === 'user_message.created' ? 'user' : 'assistant') || 'assistant').toLowerCase() || 'assistant');
+                    if (String(finalMessage.role || '').toLowerCase() === 'assistant') {
+                        streamingMessageDraftRef.current = finalMessage;
+                        setStreamingMessage(null);
+                        if (thoughtTimeoutRef.current) clearTimeout(thoughtTimeoutRef.current);
+                        if (completeFlushTimeoutRef.current) clearTimeout(completeFlushTimeoutRef.current);
+                        pendingReasoningRef.current = [];
+                    }
+
+                    setMessages(prev => {
+                        const nextMsgs = mergeLiveMessage(prev, finalMessage);
+                        return String(finalMessage.role || '').toLowerCase() === 'user'
+                            ? nextMsgs
+                            : nextMsgs.map((message) => (message.isSending ? { ...message, isSending: false } : message));
+                    });
+
+                    pendingReasoningRef.current = [];
+
+                    setTimeout(() => {
+                        if (scrollRef.current) {
+                            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+                        }
+                    }, 100);
+
+                    fetchSessions();
+                    return;
+                }
+
+                if (event.category === 'completion' || event.eventType === 'assistant_response') {
                     setIsSending(false);
                     setIsThinking(false);
 
                     if (thoughtTimeoutRef.current) clearTimeout(thoughtTimeoutRef.current);
                     if (completeFlushTimeoutRef.current) clearTimeout(completeFlushTimeoutRef.current);
 
-                    const finalContent = raw.content || raw.message || raw.full_text || streamingMessageRef.current?.content || '';
+                    const activeStreamMessage = streamingMessageDraftRef.current || streamingMessageRef.current;
+                    const activeStreamId = activeStreamMessage?.streamId || null;
+                    const canFinalizeStream = event.target === 'stream' && event.streamId && (!activeStreamId || activeStreamId === event.streamId);
+                    const legacyAssistantResponse = event.eventType === 'assistant_response';
+
+                    if (!canFinalizeStream && !legacyAssistantResponse) {
+                        if (event.target === 'legacy' || event.isLegacy) return;
+                        if (!event.canCompleteTarget) return;
+                    }
+
+                    const finalContent = eventData.content || eventData.message || eventData.full_text || activeStreamMessage?.content || '';
                     const finalReasoning = [...(pendingReasoningRef.current || [])];
-                    const finalWorkId = raw.work_id || streamingMessageRef.current?.work_id;
-                    const finalModelInfo = raw.model_info || raw.provenance || streamingMessageRef.current?.model_info;
+                    const finalWorkId = event.workId || activeStreamMessage?.work_id;
+                    const finalModelInfo = eventData.model_info || eventData.provenance || activeStreamMessage?.model_info;
+
+                    if (event.target === 'stream' && !String(finalContent || '').trim()) {
+                        setStreamingMessage(null);
+                        pendingReasoningRef.current = [];
+                        return;
+                    }
 
                     const finalMsg = {
-                        id: raw.message_id || `msg-${Date.now()}`,
-                        role: raw.role || 'assistant',
+                        id: event.messageId || eventData.message_id || activeStreamMessage?.id || `msg-${Date.now()}`,
+                        role: String(eventData.role || 'assistant').toLowerCase() || 'assistant',
                         content: finalContent,
-                        timestamp: normalizeLiveTimestamp(raw.timestamp),
+                        timestamp: normalizeLiveTimestamp(event.timestamp || eventData.timestamp),
                         reasoningTimeline: finalReasoning,
                         work_id: finalWorkId,
                         model_info: finalModelInfo,
                         statusPhase: 'complete',
                         isComplete: true,
                         animateTyping: true,
-                        attachments: raw.attachments || [],
-                        contentSegments: raw.contentSegments || []
+                        attachments: eventData.attachments || [],
+                        contentSegments: eventData.contentSegments || [],
+                        turn_id: event.turnId ?? eventData.turn_id ?? null,
+                        reply_to_message_id: event.replyToMessageId ?? eventData.reply_to_message_id ?? null,
+                        stream_id: event.streamId ?? eventData.stream_id ?? null,
                     };
 
                     setStreamingMessage(null);
                     pendingReasoningRef.current = [];
 
                     setMessages(prev => {
-                        const nextMsgs = [...prev];
-                        if (nextMsgs.some(m => m.id === finalMsg.id)) return nextMsgs;
-                        // Clean up optimistic isSending flag from the user message, so we don't drop it.
-                        return nextMsgs.map(m => m.isSending ? { ...m, isSending: false } : m).concat(finalMsg);
+                        const nextMsgs = mergeLiveMessage(prev, finalMsg);
+                        return nextMsgs.map((message) => (message.isSending ? { ...message, isSending: false } : message));
                     });
 
                     setTimeout(() => {
@@ -433,6 +564,28 @@ const Chat = () => {
                     }, 100);
 
                     fetchSessions();
+                    return;
+                }
+
+                if (event.eventType === 'session_updated' || event.category === 'session') {
+                    const sessionPatch = {
+                        ...eventData,
+                        session_id: event.sessionId || eventData.session_id || selectedId,
+                    };
+                    setCurrentSession(prev => {
+                        if (!prev) return prev;
+                        if (selectedId && prev.session_id && prev.session_id !== selectedId) return prev;
+                        return {
+                            ...prev,
+                            ...sessionPatch,
+                            runtime_metrics: sessionPatch.runtime_metrics || prev.runtime_metrics || {},
+                        };
+                    });
+                    setSessions(prev => prev.map((session) => (
+                        session.session_id === (event.sessionId || selectedId)
+                            ? { ...session, ...sessionPatch }
+                            : session
+                    )));
                     return;
                 }
             } catch (err) {
