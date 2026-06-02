@@ -17,7 +17,7 @@ import { WorkUnitInspector } from './WorkUnitInspector';
 import { TypewriterMarkdown } from './TypewriterMarkdown';
 import { MessageAttachments } from './MessageAttachments';
 import { formatTime, formatDate, normalizeReasoningTimeline, groupHistoryWithReasoning } from '../../utils/chatHistoryTransform';
-import { buildThoughtTimelineBlocks } from './ThoughtTimeline.utils';
+import { buildThoughtTimelineBlocks, normalizeThoughtTimelineItem, formatDurationMs } from './ThoughtTimeline.utils';
 import { ThoughtTimeline } from './ThoughtTimeline';
 
 export const SegmentDivider = () => (
@@ -356,12 +356,74 @@ export const ChatCollapsibleAssistCard = memo(({
     );
 });
 
-export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agentName, latestPlaybackEvent }) => {
-    const [isCognitiveCollapsed, setIsCognitiveCollapsed] = useState(true);
+export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agentName, latestPlaybackEvent, thoughtBlock = null }) => {
     const [isWorkDetailsOpen, setIsWorkDetailsOpen] = useState(false);
+    const [isThoughtOpen, setIsThoughtOpen] = useState(false);
+    const [isCopied, setIsCopied] = useState(false);
+    
+    const handleCopy = () => {
+        const textToCopy = msg.contentSegments?.map(s => s.content).join('\n') || msg.content || '';
+        if (!textToCopy) return;
+        navigator.clipboard.writeText(textToCopy);
+        setIsCopied(true);
+        setTimeout(() => setIsCopied(false), 2000);
+    };
     const isUser = msg.role === 'user';
     const reasoningTimeline = normalizeReasoningTimeline(msg);
-    const hasReasoning = !isUser && reasoningTimeline.length > 0;
+    const displayReasoningTimeline = useMemo(() => {
+        const baseTimeline = reasoningTimeline
+        .map((entry, idx) => normalizeThoughtTimelineItem(entry, {
+            id: `${msg?.id || msg?.message_id || 'msg'}-reasoning-${idx}`,
+            key: `${msg?.id || msg?.message_id || 'msg'}-reasoning-${idx}`,
+            source: 'history',
+            turnId: msg.turn_id ?? msg.turnId ?? null,
+            streamId: msg.stream_id ?? msg.streamId ?? null,
+            workId: msg.work_id ?? msg.workId ?? null,
+            messageId: msg.id ?? msg.message_id ?? msg.messageId ?? null,
+            ts: entry?.ts ?? msg.timestamp ?? null,
+            summary: entry?.summary || entry?.description || entry?.message || '',
+            capability: entry?.capability || entry?.capability_name || entry?.capability_id || null,
+            kind: entry?.kind || entry?.type || entry?.event_type || 'reasoning',
+            visibility: entry?.visibility || null,
+        }))
+        .filter(Boolean);
+
+        const blockEntries = Array.isArray(thoughtBlock?.entries) ? thoughtBlock.entries : [];
+        blockEntries.forEach((entry, idx) => {
+            const normalized = normalizeThoughtTimelineItem(entry, {
+                id: `${thoughtBlock?.key || msg?.id || 'thought'}-${idx}`,
+                key: `${thoughtBlock?.key || msg?.id || 'thought'}-${idx}`,
+                source: thoughtBlock?.source || 'snapshot',
+                turnId: thoughtBlock?.turnId ?? msg.turn_id ?? msg.turnId ?? null,
+                streamId: thoughtBlock?.streamId ?? msg.stream_id ?? msg.streamId ?? null,
+                workId: thoughtBlock?.workId ?? msg.work_id ?? msg.workId ?? null,
+                messageId: thoughtBlock?.messageId ?? msg.id ?? msg.message_id ?? msg.messageId ?? null,
+                ts: entry?.ts ?? entry?.timestamp ?? thoughtBlock?.timestamp ?? msg.timestamp ?? null,
+                summary: entry?.summary || entry?.description || entry?.message || entry?.content || '',
+                capability: entry?.capability || entry?.capability_name || entry?.capability_id || thoughtBlock?.capability || null,
+                kind: entry?.kind || entry?.type || entry?.event_type || thoughtBlock?.kind || 'reasoning',
+                visibility: entry?.visibility || thoughtBlock?.visibility || null,
+                raw: entry?.raw || null,
+            });
+            if (normalized) baseTimeline.push(normalized);
+        });
+
+        return baseTimeline;
+    }, [
+        reasoningTimeline,
+        thoughtBlock,
+        msg?.id,
+        msg?.message_id,
+        msg?.messageId,
+        msg?.turn_id,
+        msg?.turnId,
+        msg?.stream_id,
+        msg?.streamId,
+        msg?.work_id,
+        msg?.workId,
+        msg?.timestamp,
+    ]);
+    const hasReasoning = !isUser && displayReasoningTimeline.length > 0;
     const statusPhaseNormalized = String(msg?.statusPhase || '').toLowerCase();
     const getPhaseColor = (phase) => {
         if (['thinking', 'reasoning'].includes(phase)) return '#a855f7';
@@ -372,7 +434,38 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
     const phaseColor = getPhaseColor(statusPhaseNormalized);
     const isTerminalPhase = ['complete', 'completed', 'succeeded', 'success', 'done', 'failed', 'error', 'aborted', 'cancelled', 'canceled'].includes(statusPhaseNormalized);
     const isActivelyStreaming = isStreaming && !isTerminalPhase;
-    const shouldKeepReasoningOpen = isActivelyStreaming || ['thinking', 'reasoning', 'responding', 'running', 'executing', 'tool_use', 'action'].includes(statusPhaseNormalized);
+    const reasoningBlock = useMemo(() => ({
+        key: `message-${msg?.id || msg?.message_id || msg?.messageId || 'reasoning'}`,
+        title: 'Pensamento',
+        entries: displayReasoningTimeline,
+        isLive: isActivelyStreaming,
+        defaultOpen: false,
+    }), [displayReasoningTimeline, isActivelyStreaming, msg?.id, msg?.message_id, msg?.messageId]);
+    const latestReasoningEntry = displayReasoningTimeline[displayReasoningTimeline.length - 1] || null;
+    const reasoningDurationText = formatDurationMs(
+        latestReasoningEntry?.thinkingDurationMs
+        ?? reasoningBlock?.thinkingDurationMs
+        ?? reasoningBlock?.streamDurationMs
+        ?? reasoningBlock?.turnDurationMs
+        ?? null
+    );
+
+    useEffect(() => {
+        if (!hasReasoning) {
+            setIsThoughtOpen(false);
+            return;
+        }
+
+        if (isActivelyStreaming) {
+            setIsThoughtOpen(true);
+            return;
+        }
+
+        if (msg.statusPhase === 'complete' || msg.isComplete || ['completed', 'succeeded', 'done', 'success'].includes(statusPhaseNormalized)) {
+            setIsThoughtOpen(false);
+        }
+    }, [hasReasoning, isActivelyStreaming, msg.statusPhase, msg.isComplete, statusPhaseNormalized]);
+
     const previewMessageContent = useMemo(() => {
         if (Array.isArray(msg?.contentSegments) && msg.contentSegments.length > 0) {
             return msg.contentSegments
@@ -438,16 +531,6 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
         actionsUsed: actionHints,
         sourcesUsed: sourceHints,
     });
-
-    useEffect(() => {
-        if (shouldKeepReasoningOpen && hasReasoning) {
-            setIsCognitiveCollapsed(false);
-            return;
-        }
-        if (msg.isComplete || msg.statusPhase === 'complete') {
-            setIsCognitiveCollapsed(true);
-        }
-    }, [hasReasoning, msg.isComplete, msg.statusPhase, shouldKeepReasoningOpen]);
 
     return (
         <div className="animate-fade-in" style={{
@@ -515,22 +598,42 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
                             />
                         )}
 
-                        {hasReasoning && (
-                            <button 
-                                onClick={() => setIsCognitiveCollapsed(!isCognitiveCollapsed)}
+                        {!isUser && hasReasoning && (
+                            <button
+                                type="button"
+                                onClick={() => setIsThoughtOpen((prev) => !prev)}
                                 className="btn-ghost"
-                                style={{ 
-                                    padding: '4px', 
-                                    opacity: isCognitiveCollapsed ? 0.4 : 1,
-                                    marginLeft: '4px',
-                                    borderRadius: '6px',
-                                    display: 'flex',
+                                title={isThoughtOpen ? 'Hide reasoning' : 'Show reasoning'}
+                                style={{
+                                    display: 'inline-flex',
                                     alignItems: 'center',
-                                    transition: 'var(--transition)'
+                                    justifyContent: 'center',
+                                    gap: reasoningDurationText ? '6px' : '0',
+                                    width: 'auto',
+                                    height: '22px',
+                                    minWidth: '22px',
+                                    padding: reasoningDurationText ? '0 2px' : 0,
+                                    border: 'none',
+                                    background: 'transparent',
+                                    color: 'var(--text-muted)',
+                                    flexShrink: 0,
+                                    opacity: isThoughtOpen ? 1 : 0.7,
+                                    transition: 'opacity 0.15s ease',
                                 }}
-                                title={isCognitiveCollapsed ? "Show Reasoning" : "Hide Reasoning"}
                             >
-                                <Brain size={14} color="var(--accent-color)" />
+                                <Brain size={11} color="var(--accent-color)" />
+                                {reasoningDurationText && (
+                                    <span style={{
+                                        fontSize: '9px',
+                                        fontWeight: 800,
+                                        color: 'var(--text-muted)',
+                                        opacity: 0.8,
+                                        letterSpacing: '0.04em',
+                                        whiteSpace: 'nowrap',
+                                    }}>
+                                        {reasoningDurationText}
+                                    </span>
+                                )}
                             </button>
                         )}
 
@@ -594,26 +697,6 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
                                 isStreaming={isStreaming}
                                 statusPhase={msg.statusPhase}
                             />
-                        )}
-                        {showInlineThoughtToggle && (
-                            <button
-                                onClick={() => setIsCognitiveCollapsed(false)}
-                                title="Expand Thought"
-                                style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '6px',
-                                    cursor: 'pointer',
-                                    padding: '2px 8px',
-                                    background: 'var(--bg-color)',
-                                    border: '1px solid var(--card-border)',
-                                    borderRadius: '6px',
-                                    flexShrink: 0
-                                }}
-                            >
-                                <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} />
-                                <span style={{ fontSize: '9px', fontWeight: '800', color: 'var(--text-primary)', opacity: 0.7, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Thought</span>
-                            </button>
                         )}
                     </div>
                 </div>
@@ -756,60 +839,10 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
                         <MapAssistCard data={mapCardData} />
                     </ChatCollapsibleAssistCard>
                 )}
+                </div>
 
-                {hasReasoning && (
-                    <div style={{
-                        marginBottom: '12px',
-                        padding: '10px 14px',
-                        borderRadius: '12px',
-                        background: 'rgba(255,255,255,0.03)',
-                        border: '1px solid var(--card-border)',
-                        backdropFilter: 'blur(10px)',
-                        display: isCognitiveCollapsed ? 'none' : 'block',
-                        maxWidth: '100%',
-                        overflow: 'hidden'
-                    }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                            {reasoningTimeline.map((entry, idx) => (
-                                <div key={idx} style={{ 
-                                    display: 'flex', 
-                                    gap: '10px', 
-                                    opacity: idx === (reasoningTimeline.length - 1) ? 1 : 0.6,
-                                    animation: (isStreaming && idx === reasoningTimeline.length - 1) ? 'fadeIn 0.5s ease-out' : 'none'
-                                }}>
-                                    <div style={{ 
-                                        minWidth: '4px', 
-                                        height: 'auto', 
-                                        borderRadius: '2px', 
-                                        background: 'var(--accent-color)', 
-                                        opacity: 0.5 
-                                    }} />
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                        <p style={{ 
-                                            margin: 0, 
-                                            fontSize: '12px', 
-                                            color: 'var(--text-main)', 
-                                            lineHeight: 1.5,
-                                            fontFamily: 'inherit'
-                                        }}>
-                                            {entry.text}
-                                        </p>
-                                        {entry.ts && (
-                                            <span style={{ fontSize: '9px', color: 'var(--text-muted)', opacity: 0.8 }}>
-                                                {formatTime(entry.ts)}
-                                            </span>
-                                        )}
-                                    </div>
-                                </div>
-                            ))}
-                            {isStreaming && (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', opacity: 0.5 }}>
-                                    <RefreshCw size={10} className="animate-spin" />
-                                    <span style={{ fontSize: '10px', fontWeight: '800', letterSpacing: '0.05em' }}>PROCESSING...</span>
-                                </div>
-                            )}
-                        </div>
-                    </div>
+                {hasReasoning && isThoughtOpen && (
+                    <ThoughtTimeline block={reasoningBlock} />
                 )}
 
                 {/* Segments (Playback, Response, etc.) */}
@@ -884,7 +917,22 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
     );
 });
 
-export const MessageList = memo(({ messages, sessionId, streamingMessage, onExpand, scrollRef, agentName, onScroll, latestPlaybackEvent, playbackRuns }) => {
+export const MessageList = memo(({ messages, sessionId, streamingMessage, onExpand, scrollRef, agentName, onScroll, latestPlaybackEvent, playbackRuns, onSuggestionClick, sessionIndices }) => {
+    const displayStreamingMessage = useMemo(() => stripReasoningPresentation(streamingMessage), [streamingMessage]);
+
+    const thoughtBlocks = useMemo(() => buildThoughtTimelineBlocks({
+        sessionIndices,
+        streamingMessage,
+    }), [sessionIndices, streamingMessage]);
+
+    const thoughtBlockMap = useMemo(() => {
+        const map = new Map();
+        thoughtBlocks.forEach((block) => {
+            map.set(block.key, block);
+        });
+        return map;
+    }, [thoughtBlocks]);
+
     const combinedMessages = useMemo(() => {
         const history = (Array.isArray(messages) ? messages : [])
             .filter((msg) => msg && typeof msg === 'object')
@@ -903,20 +951,10 @@ export const MessageList = memo(({ messages, sessionId, streamingMessage, onExpa
     const renderMessagesWithDateDividers = () => {
         const result = [];
         let lastDateStr = null;
-        const renderedThoughtBlocks = new Set();
 
         displayHistory.forEach((msg, i) => {
             const thoughtKey = getThoughtDisplayKey(msg);
             const thoughtBlock = thoughtBlockMap.get(thoughtKey);
-            if (thoughtBlock && msg.role !== 'user' && !renderedThoughtBlocks.has(thoughtBlock.key)) {
-                result.push(
-                    <ThoughtTimeline
-                        key={`thought-${thoughtBlock.key}`}
-                        block={thoughtBlock}
-                    />
-                );
-                renderedThoughtBlocks.add(thoughtBlock.key);
-            }
 
             if (msg.timestamp) {
                 const dateStr = formatDate(msg.timestamp);
@@ -958,6 +996,7 @@ export const MessageList = memo(({ messages, sessionId, streamingMessage, onExpa
                 onExpand={onExpand}
                 agentName={agentName}
                 latestPlaybackEvent={latestPlaybackEvent}
+                thoughtBlock={thoughtBlock}
             />);
         });
 

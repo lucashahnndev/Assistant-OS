@@ -1,4 +1,5 @@
 import copy
+import datetime
 import json
 import os
 import threading
@@ -91,6 +92,70 @@ def _pick_first(*values):
 def _normalize_target(value: Any) -> Optional[str]:
     target = str(value or "").strip()
     return target or None
+
+
+TERMINAL_STATUS_VALUES = {
+    "complete",
+    "completed",
+    "succeeded",
+    "success",
+    "done",
+    "failed",
+    "error",
+    "aborted",
+    "cancelled",
+    "canceled",
+}
+
+
+def _is_terminal_status(value: Any) -> bool:
+    return str(value or "").strip().lower() in TERMINAL_STATUS_VALUES
+
+
+def _timestamp_to_ms(value: Any) -> Optional[int]:
+    if value in (None, "", []):
+        return None
+
+    if isinstance(value, bool):
+        return None
+
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        if numeric >= 1_000_000_000_000:
+            return int(numeric)
+        return int(numeric * 1000)
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    try:
+        numeric = float(text)
+    except Exception:
+        numeric = None
+
+    if numeric is not None:
+        if numeric >= 1_000_000_000_000:
+            return int(numeric)
+        return int(numeric * 1000)
+
+    iso_text = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.datetime.fromisoformat(iso_text)
+    except Exception:
+        return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return int(parsed.timestamp() * 1000)
+
+
+def _duration_ms(start_value: Any, end_value: Any) -> Optional[int]:
+    start_ms = _timestamp_to_ms(start_value)
+    end_ms = _timestamp_to_ms(end_value)
+    if start_ms is None or end_ms is None:
+        return None
+    return max(0, int(end_ms - start_ms))
 
 
 def is_conversational_chat_message(message: Any) -> bool:
@@ -414,6 +479,15 @@ class SessionEventIndexWriter:
             pass
         return self._initial_index()
 
+    def _get_index_record(self, name: str, key: Any) -> Dict[str, Any]:
+        if key in (None, "", []):
+            return {}
+        path = self.paths[name]
+        data = self._load_index(path)
+        items = data.get("items", {})
+        record = items.get(str(key))
+        return copy.deepcopy(record) if isinstance(record, dict) else {}
+
     def _atomic_write_json(self, path: str, data: Dict[str, Any]) -> None:
         tmp_path = f"{path}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as fh:
@@ -438,6 +512,69 @@ class SessionEventIndexWriter:
         if not text:
             return ""
         return text[:limit]
+
+    def _decorate_turn_record(self, turn_record: Dict[str, Any]) -> Dict[str, Any]:
+        if not turn_record:
+            return turn_record
+        turn_record.setdefault("thinking_started_at", turn_record.get("created_at"))
+        turn_record["thinking_updated_at"] = turn_record.get("updated_at")
+        if turn_record.get("status") == "completed" and not turn_record.get("thinking_completed_at"):
+            turn_record["thinking_completed_at"] = turn_record.get("updated_at")
+        end_value = turn_record.get("thinking_completed_at") or turn_record.get("updated_at")
+        turn_record["thinking_duration_ms"] = _duration_ms(turn_record.get("thinking_started_at"), end_value)
+        turn_record["turn_duration_ms"] = _duration_ms(turn_record.get("created_at"), turn_record.get("updated_at"))
+        turn_record["is_active"] = not _is_terminal_status(turn_record.get("status"))
+        return turn_record
+
+    def _decorate_stream_record(self, stream_record: Dict[str, Any]) -> Dict[str, Any]:
+        if not stream_record:
+            return stream_record
+        stream_record.setdefault("thinking_started_at", stream_record.get("started_at"))
+        stream_record["thinking_updated_at"] = stream_record.get("updated_at")
+        if stream_record.get("completed_at") and not stream_record.get("thinking_completed_at"):
+            stream_record["thinking_completed_at"] = stream_record.get("completed_at")
+        end_value = stream_record.get("completed_at") or stream_record.get("updated_at")
+        stream_record["stream_duration_ms"] = _duration_ms(stream_record.get("started_at"), end_value)
+        stream_record["thinking_duration_ms"] = _duration_ms(stream_record.get("thinking_started_at"), end_value)
+        stream_record["is_active"] = not bool(stream_record.get("completed_at")) and not _is_terminal_status(stream_record.get("status"))
+        return stream_record
+
+    def _decorate_thought_record(self, thought_record: Dict[str, Any], turn_record: Optional[Dict[str, Any]] = None, stream_record: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if not thought_record:
+            return thought_record
+
+        turn_record = turn_record or {}
+        stream_record = stream_record or {}
+        started_at = (
+            turn_record.get("thinking_started_at")
+            or turn_record.get("created_at")
+            or thought_record.get("created_at")
+            or thought_record.get("timestamp")
+            or thought_record.get("updated_at")
+        )
+        updated_at = (
+            turn_record.get("thinking_updated_at")
+            or turn_record.get("updated_at")
+            or thought_record.get("updated_at")
+            or thought_record.get("timestamp")
+        )
+        completed_at = (
+            turn_record.get("thinking_completed_at")
+            or turn_record.get("completed_at")
+            or stream_record.get("completed_at")
+            or thought_record.get("thinking_completed_at")
+        )
+
+        thought_record["thinking_started_at"] = started_at
+        thought_record["thinking_updated_at"] = updated_at
+        if completed_at:
+            thought_record["thinking_completed_at"] = completed_at
+        end_value = thought_record.get("thinking_completed_at") or updated_at
+        thought_record["thinking_duration_ms"] = _duration_ms(started_at, end_value)
+        thought_record["turn_duration_ms"] = turn_record.get("turn_duration_ms")
+        thought_record["stream_duration_ms"] = stream_record.get("stream_duration_ms")
+        thought_record["is_active"] = bool(turn_record.get("is_active", True)) and not bool(thought_record.get("thinking_completed_at"))
+        return thought_record
 
     def _upsert_turn_record(
         self,
@@ -486,9 +623,42 @@ class SessionEventIndexWriter:
             if status:
                 turn_record["status"] = status
             turn_record["updated_at"] = timestamp
+            turn_record = self._decorate_turn_record(turn_record)
             items[turn_key] = turn_record
             data["updated_at"] = time.time()
             self._atomic_write_json(turn_path, data)
+
+    def _close_thought_records_for_turn(self, turn_id: Any, completed_at: Any, stream_id: Optional[str] = None) -> None:
+        turn_key = str(turn_id or "").strip()
+        if not turn_key:
+            return
+
+        thoughts_path = self.paths["thoughts"]
+        turn_record = self._get_index_record("turns", turn_key)
+        stream_record = self._get_index_record("streams", stream_id) if stream_id else {}
+        with self._lock:
+            data = self._load_index(thoughts_path)
+            items = data.setdefault("items", {})
+            updated = False
+            for record in items.values():
+                if str(record.get("turn_id") or "").strip() != turn_key:
+                    continue
+                if stream_id and str(record.get("stream_id") or "").strip() not in {"", str(stream_id)}:
+                    continue
+                started_at = record.get("thinking_started_at") or record.get("timestamp") or record.get("created_at") or completed_at
+                record["thinking_completed_at"] = completed_at
+                record["thinking_updated_at"] = completed_at
+                record["thinking_duration_ms"] = _duration_ms(started_at, completed_at)
+                record["turn_duration_ms"] = _duration_ms(turn_record.get("created_at") or started_at, completed_at)
+                if stream_record:
+                    record["stream_duration_ms"] = _duration_ms(stream_record.get("started_at") or started_at, completed_at)
+                record["is_active"] = False
+                record["updated_at"] = completed_at
+                updated = True
+
+            if updated:
+                data["updated_at"] = time.time()
+                self._atomic_write_json(thoughts_path, data)
 
     def update(self, event: Dict[str, Any]) -> None:
         event_type = str(event.get("event_type") or event.get("type") or "").strip()
@@ -535,6 +705,8 @@ class SessionEventIndexWriter:
         if category == "stream" or event_type in STREAM_EVENT_TYPES or (event_type == "complete" and target == "stream"):
             key = stream_id
             if key:
+                current_stream = self._get_index_record("streams", key)
+                current_turn = self._get_index_record("turns", turn_id)
                 stream_record = {
                     "stream_id": key,
                     "session_id": session_id,
@@ -542,12 +714,19 @@ class SessionEventIndexWriter:
                     "message_id": message_id,
                     "sequence_last": event.get("sequence"),
                     "status": "completed" if event_type == "complete" and target == "stream" else "streaming",
-                    "started_at": timestamp,
+                    "started_at": current_stream.get("started_at") or timestamp,
                     "updated_at": timestamp,
-                    "completed_at": timestamp if event_type == "complete" and target == "stream" else None,
+                    "completed_at": timestamp if event_type == "complete" and target == "stream" else current_stream.get("completed_at"),
                     "last_chunk_preview": self._preview_text(payload.get("content") or event.get("content")),
                     "event_id": event.get("event_id"),
+                    "turn_duration_ms": _duration_ms(current_turn.get("created_at") or timestamp, timestamp),
+                    "thinking_duration_ms": _duration_ms(current_turn.get("thinking_started_at") or current_turn.get("created_at") or timestamp, timestamp),
+                    "thinking_started_at": current_turn.get("thinking_started_at") or current_turn.get("created_at") or timestamp,
+                    "thinking_updated_at": timestamp,
+                    "thinking_completed_at": timestamp if event_type == "complete" and target == "stream" else current_stream.get("thinking_completed_at"),
+                    "is_active": not (event_type == "complete" and target == "stream"),
                 }
+                stream_record = self._decorate_stream_record(stream_record)
                 self._upsert("streams", key, stream_record)
                 self._upsert_turn_record(
                     turn_id,
@@ -556,10 +735,14 @@ class SessionEventIndexWriter:
                     stream_id=key,
                     status="completed" if event_type == "complete" and target == "stream" else None,
                 )
+                if event_type == "complete" and target == "stream":
+                    self._close_thought_records_for_turn(turn_id, timestamp, stream_id=key)
 
         if category == "reasoning" or event_type in REASONING_EVENT_TYPES:
             thought_key = str(event.get("thought_id") or payload.get("thought_id") or event.get("event_id") or "").strip()
             if thought_key:
+                current_turn = self._get_index_record("turns", turn_id)
+                current_stream = self._get_index_record("streams", stream_id) if stream_id else {}
                 thought_record = {
                     "thought_id": thought_key,
                     "session_id": session_id,
@@ -574,7 +757,15 @@ class SessionEventIndexWriter:
                     "content": payload.get("content") or event.get("content"),
                     "summary": payload.get("summary") or event.get("summary"),
                     "event_id": event.get("event_id"),
+                    "thinking_started_at": current_turn.get("thinking_started_at") or current_turn.get("created_at") or timestamp,
+                    "thinking_updated_at": timestamp,
+                    "thinking_completed_at": current_turn.get("thinking_completed_at"),
+                    "thinking_duration_ms": _duration_ms(current_turn.get("thinking_started_at") or current_turn.get("created_at") or timestamp, timestamp),
+                    "turn_duration_ms": _duration_ms(current_turn.get("created_at") or timestamp, timestamp),
+                    "stream_duration_ms": _duration_ms(current_stream.get("started_at"), timestamp) if current_stream else None,
+                    "is_active": bool(current_turn.get("is_active", True)),
                 }
+                thought_record = self._decorate_thought_record(thought_record, current_turn, current_stream)
                 self._upsert("thoughts", thought_key, thought_record)
                 self._upsert_turn_record(
                     turn_id,

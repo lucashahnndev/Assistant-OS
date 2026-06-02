@@ -2,12 +2,41 @@ from pathlib import Path
 from types import SimpleNamespace
 import json
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from core.session import Session
 from core.session_event_pipeline import (
     SessionEventPipeline,
     build_session_snapshot,
     filter_conversational_chat_history,
 )
+from server.auth import get_current_user
+from server.routes import sessions as sessions_routes
+
+
+class _OrchestratorStub:
+    def __init__(self, session):
+        self._session = session
+
+    def get_session_robust(self, session_id):
+        if session_id == self._session.session_id:
+            return self._session
+        return None
+
+    def get_runtime_metrics(self, session_id):
+        return {"session_id": session_id, "healthy": True}
+
+
+def _build_client(session, base_data_dir: Path):
+    app = FastAPI()
+    app.state.kernel = SimpleNamespace(
+        orchestrator=_OrchestratorStub(session),
+        config_manager=SimpleNamespace(base_data_dir=str(base_data_dir)),
+    )
+    app.include_router(sessions_routes.router)
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(role="admin", username="tester")
+    return TestClient(app)
 
 
 def test_session_event_pipeline_normalizes_and_persists_events(tmp_path):
@@ -384,3 +413,151 @@ def test_reasoning_messages_are_routed_to_thoughts_and_filtered_from_chat(tmp_pa
         {"role": "assistant", "type": "default", "content": "hello"},
     ])
     assert [entry["role"] for entry in filtered] == ["user", "assistant"]
+
+
+def test_session_thought_duration_fields_are_derived(tmp_path, monkeypatch):
+    monkeypatch.setenv("AOSD_DATA_DIR", str(tmp_path))
+
+    session_id = "sess-duration"
+    session = SimpleNamespace(session_id=session_id, event_timeline=[], context={"current_turn_id": 7}, scratchpad={})
+    pipeline = SessionEventPipeline(session, base_data_dir=str(tmp_path))
+
+    turn_id = 7
+    user_message = pipeline.process_event(
+        {
+            "type": "message_added",
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "timestamp": "2026-06-02T10:00:00Z",
+            "payload": {
+                "message_id": "user-duration",
+                "role": "user",
+                "content": "hello duration",
+            },
+        }
+    )
+    reasoning_event = pipeline.process_event(
+        {
+            "type": "reasoning_chunk",
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "timestamp": "2026-06-02T10:00:01Z",
+            "work_id": "work-duration",
+            "payload": {
+                "thought_id": "thought-duration",
+                "kind": "reasoning",
+                "content": "thinking trace",
+                "summary": "Thinking...",
+            },
+        }
+    )
+    stream_event = pipeline.process_event(
+        {
+            "type": "assistant_chunk",
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "stream_id": "stream-duration",
+            "sequence": 1,
+            "timestamp": "2026-06-02T10:00:01.500000Z",
+            "payload": {"content": "stream part 1"},
+        }
+    )
+    final_chunk = pipeline.process_event(
+        {
+            "type": "final_message_chunk",
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "stream_id": "stream-duration",
+            "sequence": 2,
+            "message_id": "assistant-duration",
+            "timestamp": "2026-06-02T10:00:02.000000Z",
+            "payload": {"content": "stream final chunk"},
+        }
+    )
+    assistant_message = pipeline.process_event(
+        {
+            "type": "message_added",
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "timestamp": "2026-06-02T10:00:02.500000Z",
+            "payload": {
+                "message_id": "assistant-duration",
+                "role": "assistant",
+                "reply_to_message_id": "user-duration",
+                "content": "final answer",
+                "work_id": "work-duration",
+            },
+        }
+    )
+    complete_event = pipeline.process_event(
+        {
+            "type": "complete",
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "stream_id": "stream-duration",
+            "timestamp": "2026-06-02T10:00:03.000000Z",
+            "target": "stream",
+            "payload": {"content": "stream complete"},
+        }
+    )
+
+    session_dir = Path(tmp_path, "sessions", session_id)
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "session.json").write_text(
+        json.dumps({"session_id": session_id, "context": {"current_turn_id": turn_id}}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (session_dir / "chat.json").write_text(
+        json.dumps([
+            {"role": "user", "type": "default", "content": "hello duration"},
+            {"role": "assistant", "type": "default", "content": "final answer"},
+        ], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    client = _build_client(session, Path(tmp_path))
+    response = client.get(f"/api/sessions/{session_id}/snapshot")
+    assert response.status_code == 200
+    route_snapshot = response.json()
+
+    turns_index = json.loads((session_dir / "turns.index.json").read_text(encoding="utf-8"))
+    streams_index = json.loads((session_dir / "streams.index.json").read_text(encoding="utf-8"))
+    thoughts_index = json.loads((session_dir / "thoughts.index.json").read_text(encoding="utf-8"))
+    snapshot = build_session_snapshot(session_id, base_data_dir=str(tmp_path))
+
+    turn_record = turns_index["items"][str(turn_id)]
+    stream_record = streams_index["items"]["stream-duration"]
+    thought_record = thoughts_index["items"]["thought-duration"]
+
+    assert turn_record["thinking_started_at"] == "2026-06-02T10:00:00Z"
+    assert turn_record["thinking_completed_at"] == "2026-06-02T10:00:03.000000Z"
+    assert turn_record["thinking_duration_ms"] == 3000
+    assert turn_record["turn_duration_ms"] == 3000
+    assert turn_record["is_active"] is False
+
+    assert stream_record["thinking_started_at"] == "2026-06-02T10:00:00Z"
+    assert stream_record["thinking_completed_at"] == "2026-06-02T10:00:03.000000Z"
+    assert stream_record["stream_duration_ms"] == 1500
+    assert stream_record["thinking_duration_ms"] == 3000
+    assert stream_record["is_active"] is False
+
+    assert thought_record["thinking_started_at"] == "2026-06-02T10:00:00Z"
+    assert thought_record["thinking_completed_at"] == "2026-06-02T10:00:03.000000Z"
+    assert thought_record["thinking_duration_ms"] == 3000
+    assert thought_record["turn_duration_ms"] == 3000
+    assert thought_record["stream_duration_ms"] == 1500
+    assert thought_record["is_active"] is False
+
+    assert user_message["turn_id"] == turn_id
+    assert assistant_message["turn_id"] == turn_id
+    assert reasoning_event["turn_id"] == turn_id
+    assert stream_event["turn_id"] == turn_id
+    assert final_chunk["turn_id"] == turn_id
+    assert complete_event["turn_id"] == turn_id
+
+    assert snapshot["indices"]["turns"]["items"][str(turn_id)]["thinking_duration_ms"] == 3000
+    assert snapshot["indices"]["streams"]["items"]["stream-duration"]["stream_duration_ms"] == 1500
+    assert snapshot["indices"]["thoughts"]["items"]["thought-duration"]["thinking_duration_ms"] == 3000
+    assert route_snapshot["indices"]["turns"]["items"][str(turn_id)]["thinking_duration_ms"] == 3000
+    assert route_snapshot["indices"]["streams"]["items"]["stream-duration"]["stream_duration_ms"] == 1500
+    assert route_snapshot["indices"]["thoughts"]["items"]["thought-duration"]["thinking_duration_ms"] == 3000
