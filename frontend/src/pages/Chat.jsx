@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../hooks/api';
 import PlaybackCard from '../components/PlaybackCard';
@@ -19,7 +20,9 @@ import {
     Download,
     Bot,
     Zap,
-    MessageSquare
+    MessageSquare,
+    Copy,
+    Check
 } from 'lucide-react';
 
 import { SessionAvatar } from '../components/chat/ChatIcons';
@@ -28,6 +31,7 @@ import { ChatInputArea } from '../components/chat/ChatInputArea';
 import { MessageList } from '../components/chat/MessageItem';
 import { FilePreviewIcon } from '../components/chat/MessageAttachments';
 import { formatDate } from '../utils/chatHistoryTransform';
+import { TypewriterMarkdown } from '../components/chat/TypewriterMarkdown';
 
 const normalizeLiveTimestamp = (ts) => {
     if (!ts) return Date.now() / 1000;
@@ -39,6 +43,108 @@ const normalizeLiveTimestamp = (ts) => {
         return ts / 1000;
     }
     return ts;
+};
+
+const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const normalizeSnapshotMessages = (snapshot) => {
+    const chatMessages = Array.isArray(snapshot?.chat) ? snapshot.chat.map((msg) => ({ ...msg })) : [];
+    if (chatMessages.length > 0) return chatMessages;
+
+    const indexedMessages = snapshot?.indices?.messages?.items;
+    if (!isPlainObject(indexedMessages)) return [];
+
+    return Object.values(indexedMessages).map((item) => ({
+        id: item.message_id || item.id,
+        role: item.role || 'assistant',
+        content: item.content || item.content_preview || '',
+        timestamp: item.created_at || item.updated_at || null,
+        turn_id: item.turn_id ?? null,
+        work_id: item.work_id ?? null,
+        reply_to_message_id: item.reply_to_message_id ?? null,
+        stream_id: item.stream_id ?? null,
+        source: item.source || null,
+        is_read: item.role === 'user',
+    })).filter((msg) => Boolean(msg.id || msg.content));
+};
+
+const getMessageIdentity = (message) => {
+    if (!message || typeof message !== 'object') return '';
+    const explicitId = message.id || message.message_id || message.messageId;
+    if (explicitId) return `id:${String(explicitId)}`;
+    const role = String(message.role || '').trim().toLowerCase();
+    const content = String(message.content || message.message || '').trim();
+    const workId = String(message.work_id || message.workId || '').trim();
+    const timestamp = String(message.timestamp || '');
+    return `${role}:${content}:${workId}:${timestamp}`;
+};
+
+const getUserOptimisticSignature = (message) => {
+    if (!message || typeof message !== 'object') return '';
+    if (String(message.role || '').toLowerCase() !== 'user') return '';
+    const content = String(message.content || message.message || '').trim();
+    const attachments = Array.isArray(message.attachments)
+        ? message.attachments.map((att) => String(att?.id || att?.name || att?.path || '').trim()).filter(Boolean).join('|')
+        : '';
+    return `${content}::${attachments}`;
+};
+
+const mergeSnapshotMessages = (existingMessages = [], snapshotMessages = []) => {
+    const merged = [];
+    const seen = new Map();
+    const optimisticUserSignatures = new Set(
+        (Array.isArray(existingMessages) ? existingMessages : [])
+            .filter((message) => message && message.isSending && String(message.role || '').toLowerCase() === 'user')
+            .map(getUserOptimisticSignature)
+            .filter(Boolean)
+    );
+
+    const pushMessage = (message, preferExisting = false) => {
+        if (!message || typeof message !== 'object') return;
+        const key = getMessageIdentity(message);
+        const signature = getUserOptimisticSignature(message);
+        if (signature && optimisticUserSignatures.has(signature) && !message.isSending) return;
+
+        if (seen.has(key)) {
+            const current = seen.get(key);
+            const next = preferExisting ? current : { ...current, ...message };
+            seen.set(key, next);
+            const index = merged.findIndex((item) => getMessageIdentity(item) === key);
+            if (index !== -1) merged[index] = next;
+            return;
+        }
+
+        seen.set(key, message);
+        merged.push(message);
+    };
+
+    (Array.isArray(existingMessages) ? existingMessages : []).forEach((message) => pushMessage(message, true));
+    (Array.isArray(snapshotMessages) ? snapshotMessages : []).forEach((message) => pushMessage(message, false));
+    return merged;
+};
+
+const buildSessionFromSnapshot = (snapshot, legacySession) => {
+    const baseSession = isPlainObject(snapshot?.session) ? snapshot.session : {};
+    const current = isPlainObject(snapshot?.current) ? snapshot.current : {};
+    const legacy = isPlainObject(legacySession) ? legacySession : {};
+    const mergedContext = isPlainObject(current.context)
+        ? current.context
+        : (isPlainObject(baseSession.context) ? baseSession.context : (isPlainObject(legacy.context) ? legacy.context : {}));
+
+    return {
+        ...legacy,
+        ...baseSession,
+        name: baseSession.name || current.name || legacy.name || '',
+        profile_picture: baseSession.profile_picture || current.profile_picture || legacy.profile_picture || '',
+        source: baseSession.source || current.source || legacy.source || 'web',
+        interface: baseSession.interface || current.interface || baseSession.source || current.source || legacy.interface || legacy.source || 'web',
+        runtime_metrics: snapshot?.runtime_metrics || baseSession.runtime_metrics || legacy.runtime_metrics || {},
+        turn_id: current.turn_id ?? baseSession.turn_id ?? legacy.turn_id ?? 0,
+        current_turn_id: current.current_turn_id ?? baseSession.context?.current_turn_id ?? legacy.current_turn_id ?? baseSession.turn_id ?? legacy.turn_id ?? 0,
+        legacy_turn_id: current.legacy_turn_id ?? baseSession.turn_id ?? legacy.turn_id ?? 0,
+        context: mergedContext,
+        scratchpad: current.scratchpad ?? baseSession.scratchpad ?? legacy.scratchpad ?? '',
+    };
 };
 
 const Chat = () => {
@@ -62,6 +168,8 @@ const Chat = () => {
     const [playbackRuns, setPlaybackRuns] = useState([]);
     const [activeProfileTab, setActiveProfileTab] = useState('media');
     const [expandedProfilePlayback, setExpandedProfilePlayback] = useState(null);
+    const [sessionSnapshot, setSessionSnapshot] = useState(null);
+    const [sessionIndices, setSessionIndices] = useState(null);
     const [isSessionsCollapsed, setIsSessionsCollapsed] = useState(() => {
         return localStorage.getItem('assistant_chat_sessions_collapsed') === 'true';
     });
@@ -102,6 +210,7 @@ const Chat = () => {
     const prevLastMsgIdRef = useRef(null);
     const pendingReasoningRef = useRef([]);
     const streamingMessageRef = useRef(null);
+    const messagesSessionIdRef = useRef(null);
 
     useEffect(() => {
         streamingMessageRef.current = streamingMessage;
@@ -392,12 +501,42 @@ const Chat = () => {
 
     const fetchSessionDetail = async (id) => {
         try {
-            const data = await api.get(`/sessions/${id}`);
+            const isSameSession = messagesSessionIdRef.current === id;
+            if (!isSameSession) {
+                setStreamingMessage(null);
+                setIsThinking(false);
+                setIsSending(false);
+                pendingReasoningRef.current = [];
+            }
+
+            let snapshot = null;
+            try {
+                snapshot = await api.get(`/sessions/${id}/snapshot`);
+            } catch {
+                snapshot = null;
+            }
+
             if (selectedId === id) {
-                setHasMoreHistory(data.history?.length === 15);
-                setHistoryOffset(15);
-                setMessages(data.history || []);
-                setCurrentSession(data);
+                if (snapshot) {
+                    const snapshotMessages = normalizeSnapshotMessages(snapshot);
+                    setSessionSnapshot(snapshot);
+                    setSessionIndices(snapshot.indices || null);
+                    setHasMoreHistory(snapshotMessages.length >= 15);
+                    setHistoryOffset(snapshotMessages.length ? Math.min(15, snapshotMessages.length) : 0);
+                    setMessages(prev => (isSameSession ? mergeSnapshotMessages(prev, snapshotMessages) : snapshotMessages));
+                    setCurrentSession(prev => buildSessionFromSnapshot(snapshot, prev?.session_id === id ? prev : null));
+                } else {
+                    const data = await api.get(`/sessions/${id}`);
+                    const legacyMessages = Array.isArray(data?.history) ? data.history : [];
+                    setSessionSnapshot(null);
+                    setSessionIndices(null);
+                    setHasMoreHistory(legacyMessages.length === 15);
+                    setHistoryOffset(15);
+                    setMessages(prev => (isSameSession ? mergeSnapshotMessages(prev, legacyMessages) : legacyMessages));
+                    setCurrentSession(data);
+                }
+
+                messagesSessionIdRef.current = id;
 
                 setTimeout(() => {
                     if (scrollRef.current) {
@@ -501,12 +640,12 @@ const Chat = () => {
             : 540;
 
         return (
-            <div className="glass animate-slide-in-right" style={{
+            <div className="animate-slide-in-right" style={{
                 width: (isMobile || desktopFullWidth) ? '100%' : `${desktopSplitProfileWidth}px`,
                 height: isMobile ? '100svh' : '100%',
                 display: 'flex',
                 flexDirection: 'column',
-                background: 'var(--card-bg)',
+                background: 'transparent',
                 borderLeft: (isMobile || desktopFullWidth) ? 'none' : '1px solid var(--card-border)',
                 borderRadius: desktopFullWidth ? '0' : (isMobile ? '0' : '8px 0 0 8px'),
                 zIndex: 2500,
@@ -986,6 +1125,9 @@ const Chat = () => {
                 setSelectedId(null);
                 setMessages([]);
                 setCurrentSession(null);
+                setSessionSnapshot(null);
+                setSessionIndices(null);
+                messagesSessionIdRef.current = null;
             }
             fetchSessions();
         } catch (err) {
@@ -999,6 +1141,9 @@ const Chat = () => {
         setSelectedId(null);
         setMessages([]);
         setCurrentSession(null);
+        setSessionSnapshot(null);
+        setSessionIndices(null);
+        messagesSessionIdRef.current = null;
         setPendingFiles([]);
         setStreamingMessage(null);
         if (isMobile) {
@@ -1230,50 +1375,132 @@ def monitor_system():
     };
 
     const PreviewModal = () => {
+        const [mdContent, setMdContent] = useState(null);
+        const [isTextDocument, setIsTextDocument] = useState(false);
+        const [fileExt, setFileExt] = useState('');
+        const [isLoadingMd, setIsLoadingMd] = useState(false);
+        const [copied, setCopied] = useState(false);
+        const [downloaded, setDownloaded] = useState(false);
+
+        useEffect(() => {
+            if (!previewFile) return;
+            const ext = previewFile.name?.split('.').pop()?.toLowerCase() || '';
+            setFileExt(ext);
+            
+            const mimeType = (previewFile.mime || previewFile.type || previewFile.file?.type || '').toLowerCase();
+            const textExtensions = ['md', 'mdx', 'txt', 'js', 'jsx', 'ts', 'tsx', 'py', 'json', 'css', 'html', 'xml', 'csv', 'log', 'sh', 'yaml', 'yml', 'env', 'ini', 'conf', 'toml', 'c', 'cpp', 'h', 'java', 'go', 'rs', 'rb', 'php', 'swift', 'kt', 'sql', 'vue', 'svelte'];
+            const isText = textExtensions.includes(ext) || mimeType.startsWith('text/') || mimeType === 'application/json' || mimeType === 'application/javascript';
+            
+            if (isText) {
+                setIsTextDocument(true);
+                const formatText = (text) => {
+                    if (ext === 'md' || ext === 'mdx') return text;
+                    return `\`\`\`${ext || 'txt'}\n${text}\n\`\`\``;
+                };
+
+                if (previewFile.file && !previewFile.previewUrl) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => setMdContent(formatText(e.target.result));
+                    reader.readAsText(previewFile.file);
+                } else if (previewFile.previewUrl) {
+                    setIsLoadingMd(true);
+                    fetch(previewFile.previewUrl)
+                        .then(res => res.text())
+                        .then(text => {
+                            setMdContent(formatText(text));
+                            setIsLoadingMd(false);
+                        })
+                        .catch(err => {
+                            setMdContent('Failed to load text content.');
+                            setIsLoadingMd(false);
+                        });
+                }
+            } else {
+                setIsTextDocument(false);
+                setMdContent(null);
+            }
+        }, [previewFile]);
+
         if (!previewFile) return null;
         const isPending = pendingFiles.some(f => f.name === previewFile.name);
 
-        return (
-            <div className="preview-modal-overlay" onClick={() => setPreviewFile(null)}>
-                <div className="preview-modal-content" onClick={e => e.stopPropagation()}>
-                    <button
-                        onClick={() => setPreviewFile(null)}
-                        className="btn-ghost"
-                        style={{
-                            position: 'absolute',
-                            top: '16px',
-                            right: '16px',
-                            color: 'white',
-                            background: 'rgba(0,0,0,0.5)',
-                            borderRadius: '50%',
-                            width: '40px',
-                            height: '40px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            zIndex: 100
-                        }}
-                    >
-                        <X size={24} />
-                    </button>
+        const handleCopy = (e) => {
+            e.stopPropagation();
+            if (mdContent) {
+                // If we wrapped it, we unwrap it for the copy button, but TypewriterMarkdown already has a copy button for code blocks anyway.
+                // It's safer to copy exactly what is being rendered, or we can just copy raw. 
+                // Let's copy raw content without the markdown backticks if it's not MD.
+                let rawCopy = mdContent;
+                if (fileExt !== 'md' && fileExt !== 'mdx' && mdContent.startsWith('```')) {
+                    const lines = mdContent.split('\n');
+                    rawCopy = lines.slice(1, -1).join('\n');
+                }
+                navigator.clipboard.writeText(rawCopy);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+            }
+        };
 
-                    <div className="preview-modal-media-container">
-                        {previewFile.type === 'image' && <img src={previewFile.previewUrl} alt="Preview" />}
-                        {previewFile.type === 'video' && <video src={previewFile.previewUrl} controls autoPlay />}
+        const handleDownload = (e) => {
+            e.stopPropagation();
+            setDownloaded(true);
+            setTimeout(() => setDownloaded(false), 2000);
+        };
+
+        return (
+            <div className="modal-overlay" style={{ zIndex: 10005, background: 'rgba(5, 7, 10, 0.9)', backdropFilter: 'blur(20px)' }} onClick={() => setPreviewFile(null)}>
+                <div className="modal-content glass-panel" onClick={e => e.stopPropagation()} style={{
+                    width: isMobile ? '100%' : (isTextDocument ? 'min(90%, 900px)' : 'fit-content'),
+                    height: isMobile ? '100%' : (isTextDocument ? '90vh' : 'auto'),
+                    maxHeight: isMobile ? '100%' : '90vh',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    borderRadius: isMobile ? '0' : '8px',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    boxShadow: '0 24px 60px rgba(0,0,0,0.4)',
+                    overflow: 'hidden'
+                }}>
+                    <div style={{ padding: '16px 24px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.02)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <FilePreviewIcon type={previewFile.type || 'file'} />
+                            <div>
+                                <h3 style={{ fontSize: '15px', fontWeight: '500', color: 'var(--text-main)', margin: 0, fontFamily: 'monospace' }}>{previewFile.name}</h3>
+                                <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '2px 0 0' }}>
+                                    {isTextDocument ? (fileExt === 'md' || fileExt === 'mdx' ? 'Markdown Document' : 'Text Document') : 'File Preview'}
+                                </p>
+                            </div>
+                        </div>
+                        <button
+                            onClick={() => setPreviewFile(null)}
+                            className="btn-ghost"
+                            style={{ padding: '8px', background: 'rgba(255,255,255,0.05)', borderRadius: '6px', cursor: 'pointer' }}
+                        >
+                            <X size={18} />
+                        </button>
                     </div>
 
-                    <div className="preview-modal-footer">
-                        <p style={{ fontWeight: '600', color: 'white', marginBottom: '4px' }}>{previewFile.name}</p>
-                        <div style={{ display: 'flex', gap: '12px' }}>
+                    <div className="preview-modal-media-container custom-scrollbar" style={{ flex: 1, background: 'rgba(0,0,0,0.2)', padding: 0, position: 'relative', display: 'flex', flexDirection: 'column', overflowY: 'hidden' }}>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '4px', padding: '12px 24px 0', position: 'absolute', top: 0, right: 0, zIndex: 10 }}>
+                            {!isPending && isTextDocument && (
+                                <button
+                                    onClick={handleCopy}
+                                    title="Copy Text"
+                                    className="btn-ghost"
+                                    style={{ padding: '6px', color: copied ? 'var(--success)' : 'var(--text-muted)', background: 'transparent', cursor: 'pointer', borderRadius: '6px' }}
+                                >
+                                    {copied ? <Check size={16} /> : <Copy size={16} />}
+                                </button>
+                            )}
                             {!isPending && (
                                 <a
                                     href={previewFile.previewUrl}
                                     download={previewFile.name}
-                                    className="btn-primary"
-                                    style={{ flex: 1, padding: '10px', fontSize: '0.8rem' }}
-                                    onClick={(e) => e.stopPropagation()}
+                                    title="Download File"
+                                    onClick={handleDownload}
+                                    className="btn-ghost"
+                                    style={{ padding: '6px', color: downloaded ? 'var(--success)' : 'var(--text-muted)', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', borderRadius: '6px' }}
                                 >
-                                    <Download size={16} /> Baixar File
+                                    {downloaded ? <Check size={16} /> : <Download size={16} />}
                                 </a>
                             )}
                             {isPending && (
@@ -1283,13 +1510,48 @@ def monitor_system():
                                         if (idx !== -1) removePendingFile(idx);
                                         setPreviewFile(null);
                                     }}
+                                    title="Remove File"
                                     className="btn-ghost"
-                                    style={{ flex: 1, padding: '10px', color: '#ff4444', background: 'rgba(255,68,68,0.1)', border: '1px solid rgba(255,68,68,0.2)' }}
+                                    style={{ padding: '6px', color: '#ff4444', background: 'transparent', cursor: 'pointer', borderRadius: '6px' }}
                                 >
-                                    <Trash2 size={16} /> Remover
+                                    <Trash2 size={16} />
                                 </button>
                             )}
                         </div>
+
+                        {previewFile.type === 'image' && !isTextDocument && <img src={previewFile.previewUrl} alt="Preview" style={{ padding: '24px', maxWidth: '100%', objectFit: 'contain' }} />}
+                        {previewFile.type === 'video' && !isTextDocument && <video src={previewFile.previewUrl} controls autoPlay style={{ padding: '24px', maxWidth: '100%' }} />}
+                        {isTextDocument && (
+                            <div className="custom-scrollbar" style={{ flex: 1, padding: isMobile ? '20px' : '40px', overflowY: 'auto' }}>
+                                <div style={{ maxWidth: '800px', margin: '0 auto', paddingTop: '20px' }}>
+                                    {isLoadingMd ? (
+                                        <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}>Carregando conteúdo...</div>
+                                    ) : (fileExt === 'md' || fileExt === 'mdx') ? (
+                                        <div className="markdown-body" style={{ fontSize: '14px', color: '#f1f5f9', lineHeight: '1.7' }}>
+                                            <ReactMarkdown skipHtml>{mdContent || ''}</ReactMarkdown>
+                                        </div>
+                                    ) : (
+                                        <pre style={{ 
+                                            fontSize: '13px', 
+                                            color: '#f1f5f9', 
+                                            lineHeight: '1.6', 
+                                            whiteSpace: 'pre-wrap', 
+                                            wordBreak: 'break-word', 
+                                            fontFamily: 'monospace',
+                                            margin: 0
+                                        }}>
+                                            {mdContent || ''}
+                                        </pre>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                        {!isTextDocument && previewFile.type !== 'image' && previewFile.type !== 'video' && (
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', color: 'white', padding: '48px' }}>
+                                <FilePreviewIcon type={previewFile.type || 'file'} />
+                                <span>No preview available</span>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>
@@ -1317,7 +1579,7 @@ def monitor_system():
             />
 
             <div className={`mobile-view-container ${mobileView === 'chat' ? 'show-chat' : ''}`} style={{ display: isMobile ? 'flex' : 'contents' }}>
-                <div className={`${isMobile ? 'mobile-view-pane' : ''} glass`} style={{
+                <div className={`${isMobile ? 'mobile-view-pane' : ''}`} style={{
                     width: isMobile ? '50%' : (isSessionsCollapsed ? '60px' : '300px'),
                     height: '100%',
                     display: 'flex',
@@ -1328,18 +1590,18 @@ def monitor_system():
                     borderRight: '1px solid var(--card-border)',
                     borderLeft: 'none'
                 }}>
-                    <div className="glass" style={{
-                        padding: (isSessionsCollapsed && !isMobile) ? '8px 0' : '8px 14px',
-                        margin: '12px 12px 12px 12px',
-                        borderRadius: '8px',
+                    <div style={{
+                        padding: (isSessionsCollapsed && !isMobile) ? '4px 0' : '4px 16px',
+                        minHeight: '52px',
                         display: 'flex',
                         flexDirection: (isSessionsCollapsed && !isMobile) ? 'column' : 'row',
                         alignItems: 'center',
                         justifyContent: 'space-between',
                         gap: '8px',
-                        background: 'rgba(255,255,255,0.03)'
+                        borderBottom: '1px solid var(--card-border)',
+                        background: 'transparent'
                     }}>
-                        {(!isSessionsCollapsed || isMobile) && <h3 style={{ fontSize: '14px', fontWeight: 'bold' }}>Sessions</h3>}
+                        {(!isSessionsCollapsed || isMobile) && <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: 0 }}>Sessions</h3>}
                         <div style={{ display: 'flex', flexDirection: (isSessionsCollapsed && !isMobile) ? 'column' : 'row', gap: '8px' }}>
                             <button onClick={createNewSession} className="btn-ghost" style={{ padding: '4px' }} title="New Session">
                                 <Plus size={16} />
@@ -1427,7 +1689,7 @@ def monitor_system():
                     </div>
                 </div>
 
-                <div ref={chatPaneRef} className={`${isMobile ? 'mobile-view-pane' : ''} glass`} style={{
+                <div ref={chatPaneRef} className={`${isMobile ? 'mobile-view-pane' : ''}`} style={{
                     flex: isMobile ? 'none' : 1,
                     display: 'flex',
                     flexDirection: 'column',
@@ -1470,6 +1732,8 @@ def monitor_system():
                                         onScroll={handleScroll}
                                         latestPlaybackEvent={latestPlaybackEvent}
                                         playbackRuns={playbackRuns}
+                                        sessionSnapshot={sessionSnapshot}
+                                        sessionIndices={sessionIndices}
                                     />
 
                                     {showScrollButton && (
