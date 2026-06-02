@@ -682,6 +682,48 @@ class SessionEventIndexWriter:
                 data["updated_at"] = time.time()
                 self._atomic_write_json(thoughts_path, data)
 
+    def _backlink_thought_records_to_message(
+        self,
+        turn_id: Any,
+        work_id: Optional[str],
+        message_id: Optional[str],
+        completed_at: Any,
+    ) -> None:
+        turn_key = str(turn_id or "").strip()
+        message_key = str(message_id or "").strip()
+        work_key = str(work_id or "").strip()
+        if not turn_key or not message_key:
+            return
+
+        thoughts_path = self.paths["thoughts"]
+        turn_record = self._get_index_record("turns", turn_key)
+        with self._lock:
+            data = self._load_index(thoughts_path)
+            items = data.setdefault("items", {})
+            updated = False
+            for record in items.values():
+                record_turn = str(record.get("turn_id") or "").strip()
+                record_work = str(record.get("work_id") or "").strip()
+                if record_turn != turn_key:
+                    continue
+                if work_key and record_work and record_work != work_key:
+                    continue
+                if record.get("message_id") not in (None, "", message_key):
+                    continue
+                started_at = record.get("thinking_started_at") or record.get("timestamp") or record.get("created_at") or completed_at
+                record["message_id"] = message_key
+                record["thinking_completed_at"] = completed_at
+                record["thinking_updated_at"] = completed_at
+                record["thinking_duration_ms"] = _duration_ms(started_at, completed_at)
+                record["turn_duration_ms"] = _duration_ms(turn_record.get("created_at") or started_at, completed_at)
+                record["is_active"] = False
+                record["updated_at"] = completed_at
+                updated = True
+
+            if updated:
+                data["updated_at"] = time.time()
+                self._atomic_write_json(thoughts_path, data)
+
     def update(self, event: Dict[str, Any]) -> None:
         event_type = str(event.get("event_type") or event.get("type") or "").strip()
         category = str(event.get("category") or "").strip()
@@ -723,6 +765,13 @@ class SessionEventIndexWriter:
                     stream_id=stream_id,
                     work_id=work_id,
                 )
+                if role == "assistant":
+                    self._backlink_thought_records_to_message(
+                        turn_id,
+                        work_id,
+                        key,
+                        timestamp,
+                    )
 
         if category == "stream" or event_type in STREAM_EVENT_TYPES or (event_type == "complete" and target == "stream"):
             key = stream_id

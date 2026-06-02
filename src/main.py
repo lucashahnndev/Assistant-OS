@@ -1172,8 +1172,15 @@ class Kernel:
                 reply_to_message_id = None
                 if isinstance(getattr(session, "context", None), dict):
                     reply_to_message_id = str(session.context.get("current_turn_user_message_id") or "").strip() or None
-                if plan.thought:
-                    session.add_message("system", plan.thought, msg_type="reasoning")
+                reply_reasoning = self.orchestrator._resolve_reply_reasoning(session, plan)
+                if reply_reasoning:
+                    session.add_thought(
+                        reply_reasoning,
+                        summary=reply_reasoning,
+                        phase="response_drafting",
+                        visibility="public",
+                        source="reasoning",
+                    )
                 session.add_message(
                     "assistant",
                     coached_response,
@@ -1183,8 +1190,8 @@ class Kernel:
                 self.orchestrator._save_session(session)
 
                 # Keep thought/protocol hidden from user chat by default.
-                if self._expose_reasoning_to_ui() and hasattr(driver_instance, 'send_reasoning_chunk') and plan.thought:
-                    driver_instance.send_reasoning_chunk(session_id, plan.thought)
+                if self._expose_reasoning_to_ui() and hasattr(driver_instance, 'send_reasoning_chunk') and reply_reasoning:
+                    driver_instance.send_reasoning_chunk(session_id, reply_reasoning)
 
                 # Internal events targeted to a user session must be routed through the
                 # real channel driver (telegram/web/voice), not the InternalDriver itself.

@@ -5,6 +5,7 @@ import json
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from core.orchestrator import AgentOrchestrator
 from core.session import Session
 from core.session_event_pipeline import (
     SessionEventPipeline,
@@ -415,6 +416,42 @@ def test_reasoning_messages_are_routed_to_thoughts_and_filtered_from_chat(tmp_pa
     assert [entry["role"] for entry in filtered] == ["user", "assistant"]
 
 
+def test_short_reply_thoughts_are_indexed_and_backlinked_to_assistant_reply(tmp_path, monkeypatch):
+    monkeypatch.setenv("AOSD_DATA_DIR", str(tmp_path))
+
+    session = Session(session_id="sess-reply-thought")
+    user_msg = session.add_message("user", "Please answer briefly.")
+
+    thought = session.add_thought(
+        "Preparing final response.",
+        work_id="work-reply",
+        source="reasoning",
+    )
+    assistant_msg = session.add_message(
+        "assistant",
+        "Absolutely. Here is the brief answer.",
+        work_id="work-reply",
+        reply_to_message_id=user_msg["id"],
+    )
+
+    thoughts_index = json.loads(Path(tmp_path, "sessions", "sess-reply-thought", "thoughts.index.json").read_text(encoding="utf-8"))
+    thought_record = thoughts_index["items"][thought["id"]]
+
+    assert user_msg["turn_id"] == assistant_msg["turn_id"]
+    assert thought_record["turn_id"] == assistant_msg["turn_id"]
+    assert thought_record["message_id"] == assistant_msg["id"]
+    assert thought_record["work_id"] == "work-reply"
+    assert thought_record["kind"] == "reasoning"
+    assert thought_record["thinking_started_at"] is not None
+    assert thought_record["thinking_duration_ms"] is not None
+    assert thought_record["thinking_completed_at"] is not None
+    assert thought_record["is_active"] is False
+
+    events = Path(tmp_path, "sessions", "sess-reply-thought", "events.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert any(json.loads(line)["type"] == "reasoning_chunk" for line in events)
+    assert any(json.loads(line)["type"] == "message_added" and json.loads(line)["role"] == "assistant" for line in events)
+
+
 def test_session_thought_duration_fields_are_derived(tmp_path, monkeypatch):
     monkeypatch.setenv("AOSD_DATA_DIR", str(tmp_path))
 
@@ -561,3 +598,13 @@ def test_session_thought_duration_fields_are_derived(tmp_path, monkeypatch):
     assert route_snapshot["indices"]["turns"]["items"][str(turn_id)]["thinking_duration_ms"] == 3000
     assert route_snapshot["indices"]["streams"]["items"]["stream-duration"]["stream_duration_ms"] == 1500
     assert route_snapshot["indices"]["thoughts"]["items"]["thought-duration"]["thinking_duration_ms"] == 3000
+
+
+def test_reply_reasoning_falls_back_to_proactive_chunk_when_missing():
+    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+    orchestrator._build_proactive_reasoning_chunk = lambda session, plan: "Preparing final response."
+
+    session = SimpleNamespace(session_id="sess-reply-fallback", context={})
+    plan = SimpleNamespace(action_id="reply", thought="")
+
+    assert AgentOrchestrator._resolve_reply_reasoning(orchestrator, session, plan) == "Preparing final response."
