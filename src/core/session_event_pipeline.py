@@ -122,6 +122,8 @@ class SessionEventPipeline:
             return "legacy"
         if event_type.startswith("visual.") or event_type == "weg_scene_reset":
             return "visual"
+        if event_type == "assistant_visual_intent":
+            return "visual"
         if event_type.startswith("card."):
             return "card"
         if event_type.startswith("artifact."):
@@ -243,7 +245,9 @@ class SessionEventPipeline:
         if hasattr(self.session, "event_timeline") and isinstance(getattr(self.session, "event_timeline"), list):
             self.session.event_timeline.append(copy.deepcopy(normalized))
         if publish:
-            global_event_bus.emit_threadsafe(copy.deepcopy(normalized))
+            published = copy.deepcopy(normalized)
+            published["_pipeline_recorded"] = True
+            global_event_bus.emit_threadsafe(published)
         return normalized
 
 

@@ -150,6 +150,60 @@ class ServerDriver(BaseDriver):
             logger.debug("ServerDriver: Failed to record pipeline event: %s", exc)
             return normalized
 
+    @staticmethod
+    def _bus_event_type(event: Dict[str, Any]) -> str:
+        return str((event or {}).get("type") or (event or {}).get("event_type") or "").strip()
+
+    def _bridge_bus_event_through_pipeline(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(event, dict):
+            return None
+
+        if event.get("_pipeline_recorded"):
+            return None
+
+        event_type = self._bus_event_type(event)
+        if event_type in {
+            "status",
+            "reasoning_chunk",
+            "complete",
+            "assistant_chunk",
+            "final_message_chunk",
+            "message_added",
+            "session_updated",
+            "assistant_response",
+        }:
+            return None
+
+        session_id = str(event.get("session_id") or "").strip()
+        if not session_id:
+            return self._normalize_ws_event(event)
+
+        pipeline_bridge_types = {
+            "worker_state",
+            "worker.updated",
+            "system_metrics",
+            "system_health",
+            "weg_scene_reset",
+            "weg_scene",
+            "assistant_visual_intent",
+            "visual.wegena.scene_reset",
+            "visual.wegena.scene_update",
+            "visual.wegena.composition_ready",
+            "visual.wegena.scene_failed",
+            "media.added",
+            "media.updated",
+            "media.created",
+            "media_message",
+            "artifact.created",
+            "artifact.updated",
+            "card.created",
+            "card.updated",
+        }
+        if event_type in pipeline_bridge_types:
+            return self._record_pipeline_event(session_id, event, publish=False)
+
+        return self._normalize_ws_event(event, session_id=session_id)
+
     def _setup_extra_routes(self):
         @self.app.on_event("startup")
         async def startup_event():
@@ -175,15 +229,10 @@ class ServerDriver(BaseDriver):
                 try:
                     while True:
                         event = await queue.get()
-                        
-                        # FILTER DUPLICATES: Skip events that are already sent via 
-                        # direct driver callback methods (send_status, send_reasoning_chunk, send_complete)
-                        # to avoid duplication in the Web UI.
-                        if event.get("type") in ["status", "reasoning_chunk", "complete"]:
+                        normalized_event = self._bridge_bus_event_through_pipeline(event)
+                        if normalized_event is None:
                             continue
-                        
-                        target = event.get("session_id")
-                        normalized_event = self._normalize_ws_event(event, session_id=target)
+                        target = normalized_event.get("session_id")
                         payload = json.dumps(normalized_event)
                         
                         # List-affecting events should be broadcasted so ALL connected clients
@@ -673,6 +722,7 @@ class ServerDriver(BaseDriver):
                 try:
                     from utils.event_bus import global_event_bus
                     recorded_chunk_event = self._record_pipeline_event(target, assistant_chunk_event, publish=False)
+                    recorded_chunk_event["_pipeline_recorded"] = True
                     global_event_bus.emit_threadsafe(recorded_chunk_event)
                 except Exception as e:
                     logger.debug(f"ServerDriver: Failed to emit assistant_chunk event: {e}")
