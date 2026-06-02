@@ -323,6 +323,23 @@ class Session:
                     t["message_id"] = msg["id"]
 
         context = self._get_context_dict()
+        role_key = str(role or "").strip().lower()
+        msg_type_key = str(msg_type or "").strip().lower()
+        if role_key == "system" and msg_type_key in {"reasoning", "internal_event"}:
+            thought_entry = self.add_thought(
+                content,
+                work_id=work_id,
+                message_id=msg["id"],
+                summary=summary,
+                phase="thinking",
+                visibility="public",
+                source="reasoning",
+            )
+            if thought_entry:
+                msg["thought_id"] = thought_entry.get("id")
+            self.last_interaction = time.time()
+            return msg
+
         if role in {SESSION_TYPE_USER, "notification"}:
             if turn_id is not None:
                 context["current_turn_id"] = turn_id
@@ -396,23 +413,83 @@ class Session:
 
         return msg
 
-    def add_thought(self, thought_text: str, work_id: Optional[str] = None, message_id: Optional[str] = None):
+    def add_thought(
+        self,
+        thought_text: str,
+        work_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+        summary: Optional[str] = None,
+        phase: str = "thinking",
+        visibility: str = "private",
+        source: str = "cognitive_thought",
+    ):
         """Adds a cognitive thought to the dedicated audit trail."""
         thought_entry = {
             "id": str(uuid.uuid4()),
             "message_id": message_id,
             "work_id": work_id,
             "thought": thought_text,
+            "summary": summary or thought_text,
+            "phase": phase,
+            "visibility": visibility,
+            "source": source,
             "timestamp": time.time()
         }
         self.thoughts.append(thought_entry)
-        
+
+        try:
+            from core.session_event_pipeline import record_session_event
+
+            context = self._get_context_dict()
+            associated_turn_id = self._coerce_turn_id(context.get("current_turn_id")) or None
+            record_session_event(
+                self,
+                {
+                    "type": "reasoning_chunk",
+                    "session_id": self.session_id,
+                    **({"turn_id": associated_turn_id} if associated_turn_id is not None else {}),
+                    **({"message_id": message_id} if message_id else {}),
+                    **({"work_id": work_id} if work_id else {}),
+                    "thought_id": thought_entry["id"],
+                    "content": thought_text,
+                    "summary": summary or thought_text,
+                    "visibility": visibility,
+                    "phase": phase,
+                    "kind": source or "reasoning",
+                    "channel": self.source,
+                    "interface": self.source,
+                    "source": "session",
+                    "payload": {
+                        "thought_id": thought_entry["id"],
+                        "message_id": message_id,
+                        "work_id": work_id,
+                        "content": thought_text,
+                        "summary": summary or thought_text,
+                        "visibility": visibility,
+                        "phase": phase,
+                        "kind": source or "reasoning",
+                    },
+                },
+                defaults={
+                    "session_id": self.session_id,
+                    "channel": self.source,
+                    "interface": self.source,
+                    "source": "session",
+                },
+                publish=False,
+            )
+        except Exception:
+            pass
+
         # Emit event for real-time thought syncing in the dashboard
+        bus_event_type = "cognitive_thought" if source == "reasoning" else (source or "cognitive_thought")
         global_event_bus.emit_threadsafe({
-            "type": "cognitive_thought",
+            "type": bus_event_type,
             "session_id": self.session_id,
             "thought": thought_entry
         })
+
+        return thought_entry
 
     def add_media_card(self, card_data: Dict[str, Any]) -> str:
         """

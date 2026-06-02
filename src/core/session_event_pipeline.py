@@ -46,6 +46,11 @@ REASONING_EVENT_TYPES = {
     "reasoning_chunk",
 }
 
+NON_CHAT_MESSAGE_TYPES = {
+    "reasoning",
+    "internal_event",
+}
+
 MEDIA_EVENT_TYPES = {
     "media.added",
     "media.updated",
@@ -86,6 +91,23 @@ def _pick_first(*values):
 def _normalize_target(value: Any) -> Optional[str]:
     target = str(value or "").strip()
     return target or None
+
+
+def is_conversational_chat_message(message: Any) -> bool:
+    if not isinstance(message, dict):
+        return False
+
+    role = str(message.get("role") or "").strip().lower()
+    msg_type = str(message.get("type") or message.get("msg_type") or "").strip().lower()
+    if msg_type in NON_CHAT_MESSAGE_TYPES:
+        return False
+    return role in {"user", "assistant"}
+
+
+def filter_conversational_chat_history(messages: Any) -> list[Dict[str, Any]]:
+    if not isinstance(messages, list):
+        return []
+    return [copy.deepcopy(msg) for msg in messages if is_conversational_chat_message(msg)]
 
 
 class SessionEventPipeline:
@@ -161,6 +183,22 @@ class SessionEventPipeline:
         )
         if payload is None:
             payload = {}
+        msg_type = str(
+            _pick_first(
+                raw.get("msg_type"),
+                defaults.get("msg_type"),
+                payload.get("msg_type") if _is_mapping(payload) else None,
+            )
+            or ""
+        ).strip().lower()
+        role = str(
+            _pick_first(
+                raw.get("role"),
+                defaults.get("role"),
+                payload.get("role") if _is_mapping(payload) else None,
+            )
+            or ""
+        ).strip().lower()
 
         event_type = _pick_first(raw.get("event_type"), raw.get("type"), defaults.get("event_type"), defaults.get("type"))
         event_type = str(event_type or "").strip() or "unknown"
@@ -171,6 +209,8 @@ class SessionEventPipeline:
 
         target = _normalize_target(_pick_first(raw.get("target"), defaults.get("target"), payload.get("target") if _is_mapping(payload) else None))
         category = self._category_for(event_type, target)
+        if category == "message" and (msg_type in NON_CHAT_MESSAGE_TYPES or (role == "system" and msg_type == "reasoning")):
+            category = "reasoning"
 
         event = {
             "event_id": str(_pick_first(raw.get("event_id"), defaults.get("event_id")) or uuid.uuid4()),
@@ -190,6 +230,7 @@ class SessionEventPipeline:
             "stream_id",
             "work_id",
             "sequence",
+            "msg_type",
             "target",
             "channel",
             "interface",
@@ -223,6 +264,7 @@ class SessionEventPipeline:
                 "stream_id",
                 "work_id",
                 "sequence",
+                "msg_type",
                 "channel",
                 "interface",
                 "source",
@@ -283,7 +325,7 @@ def build_session_snapshot(session_id: str, base_data_dir: Optional[str] = None,
     snapshot = {
         "session_id": str(session_id),
         "session": _read_json_file(session_path, {}),
-        "chat": _read_json_file(chat_path, []),
+        "chat": filter_conversational_chat_history(_read_json_file(chat_path, [])),
         "events": [],
         "indices": {},
         "paths": {
@@ -527,7 +569,7 @@ class SessionEventIndexWriter:
                     "sequence": event.get("sequence"),
                     "timestamp": timestamp,
                     "visibility": payload.get("visibility") or event.get("visibility") or "private",
-                    "kind": payload.get("kind") or event_type,
+                    "kind": payload.get("kind") or event.get("msg_type") or event_type,
                     "content_ref": payload.get("content_ref"),
                     "content": payload.get("content") or event.get("content"),
                     "summary": payload.get("summary") or event.get("summary"),
@@ -538,7 +580,6 @@ class SessionEventIndexWriter:
                     turn_id,
                     session_id,
                     timestamp,
-                    message_id=message_id,
                     work_id=work_id,
                 )
 

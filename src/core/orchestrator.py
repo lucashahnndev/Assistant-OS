@@ -1362,7 +1362,9 @@ class AgentOrchestrator:
                 if os.path.exists(session_file_path):
                     with open(session_file_path, 'r', encoding='utf-8') as f:
                         session_data = json.load(f)
-                    fallback_history = session_data.get("history", [])
+                    from core.session_event_pipeline import filter_conversational_chat_history
+
+                    fallback_history = filter_conversational_chat_history(session_data.get("history", []))
                     if isinstance(fallback_history, list):
                         self._atomic_write_json(chat_file_path, fallback_history)
                         logger.warning(
@@ -1374,7 +1376,9 @@ class AgentOrchestrator:
                 logger.error(f"Failed to recreate missing chat.json for {session_id} via get_chat_history: {e}")
             return []
 
-        return self._load_chat_history_resilient(chat_file_path, session_id)
+        from core.session_event_pipeline import filter_conversational_chat_history
+
+        return filter_conversational_chat_history(self._load_chat_history_resilient(chat_file_path, session_id))
 
     @staticmethod
     def _history_message_key(msg: Dict) -> Optional[tuple]:
@@ -1448,8 +1452,12 @@ class AgentOrchestrator:
                 
                 # chat.json is append-only timeline; session.history is mutable context for the AI.
                 chat_file_path = os.path.join(sess_dir, "chat.json")
-                context_history = session.history if isinstance(session.history, list) else []
-                disk_history: List[Dict] = self._load_chat_history_resilient(chat_file_path, session.session_id)
+                from core.session_event_pipeline import filter_conversational_chat_history
+
+                context_history = filter_conversational_chat_history(session.history if isinstance(session.history, list) else [])
+                disk_history: List[Dict] = filter_conversational_chat_history(
+                    self._load_chat_history_resilient(chat_file_path, session.session_id)
+                )
 
                 merged_chat_history = self._merge_chat_history_append_only(disk_history, context_history)
                 if len(disk_history) > len(context_history):
@@ -1495,6 +1503,10 @@ class AgentOrchestrator:
                 session_history = data.get("history", [])
                 if not isinstance(session_history, list):
                     session_history = []
+                else:
+                    from core.session_event_pipeline import filter_conversational_chat_history
+
+                    session_history = filter_conversational_chat_history(session_history)
 
                 # Validate/repair chat timeline file if it exists (context still comes from session.json).
                 chat_file_path = os.path.join(self.sessions_dir, session_id, "chat.json")

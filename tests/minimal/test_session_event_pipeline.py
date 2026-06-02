@@ -3,7 +3,11 @@ from types import SimpleNamespace
 import json
 
 from core.session import Session
-from core.session_event_pipeline import SessionEventPipeline, build_session_snapshot
+from core.session_event_pipeline import (
+    SessionEventPipeline,
+    build_session_snapshot,
+    filter_conversational_chat_history,
+)
 
 
 def test_session_event_pipeline_normalizes_and_persists_events(tmp_path):
@@ -300,6 +304,29 @@ def test_session_snapshot_builder_handles_missing_indexes(tmp_path):
     assert snapshot["indices"]["wegena"]["items"] == {}
 
 
+def test_session_snapshot_filters_reasoning_from_chat(tmp_path):
+    session_dir = Path(tmp_path, "sessions", "sess-filtered")
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "session.json").write_text(json.dumps({
+        "session_id": "sess-filtered",
+        "history": [
+            {"role": "user", "type": "default", "content": "hello"},
+            {"role": "system", "type": "reasoning", "content": "internal thought"},
+            {"role": "assistant", "type": "default", "content": "hi there"},
+        ],
+    }), encoding="utf-8")
+    (session_dir / "chat.json").write_text(json.dumps([
+        {"role": "user", "type": "default", "content": "hello"},
+        {"role": "system", "type": "reasoning", "content": "internal thought"},
+        {"role": "assistant", "type": "default", "content": "hi there"},
+    ]), encoding="utf-8")
+    (session_dir / "events.jsonl").write_text("", encoding="utf-8")
+
+    snapshot = build_session_snapshot("sess-filtered", base_data_dir=str(tmp_path))
+    assert [msg["role"] for msg in snapshot["chat"]] == ["user", "assistant"]
+    assert all(msg.get("type") != "reasoning" for msg in snapshot["chat"])
+
+
 def test_session_add_message_routes_through_session_event_pipeline(tmp_path, monkeypatch):
     monkeypatch.setenv("AOSD_DATA_DIR", str(tmp_path))
 
@@ -319,3 +346,41 @@ def test_session_add_message_routes_through_session_event_pipeline(tmp_path, mon
 
     messages_index = json.loads(Path(tmp_path, "sessions", "sess-live", "messages.index.json").read_text(encoding="utf-8"))
     assert messages_index["items"][msg["id"]]["message_id"] == msg["id"]
+
+
+def test_reasoning_messages_are_routed_to_thoughts_and_filtered_from_chat(tmp_path, monkeypatch):
+    monkeypatch.setenv("AOSD_DATA_DIR", str(tmp_path))
+
+    session = Session(session_id="sess-thoughts")
+    msg = session.add_message(
+        "system",
+        "The user initiated a greeting. I will respond politely and keep it brief.",
+        msg_type="reasoning",
+        work_id="work-thoughts",
+    )
+
+    assert session.history == []
+    assert len(session.thoughts) == 1
+    assert msg.get("thought_id")
+
+    events_path = Path(tmp_path, "sessions", "sess-thoughts", "events.jsonl")
+    assert events_path.exists()
+    stored_event = json.loads(events_path.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert stored_event["category"] == "reasoning"
+    assert stored_event["type"] == "reasoning_chunk"
+    assert stored_event["thought_id"] == msg["thought_id"]
+
+    messages_index_path = Path(tmp_path, "sessions", "sess-thoughts", "messages.index.json")
+    thoughts_index = json.loads(Path(tmp_path, "sessions", "sess-thoughts", "thoughts.index.json").read_text(encoding="utf-8"))
+
+    assert not messages_index_path.exists()
+    assert msg["thought_id"] in thoughts_index["items"]
+    assert thoughts_index["items"][msg["thought_id"]]["content"] == msg["content"]
+    assert thoughts_index["items"][msg["thought_id"]]["message_id"] == msg["id"]
+
+    filtered = filter_conversational_chat_history([
+        {"role": "user", "type": "default", "content": "hi"},
+        {"role": "system", "type": "reasoning", "content": "internal"},
+        {"role": "assistant", "type": "default", "content": "hello"},
+    ])
+    assert [entry["role"] for entry in filtered] == ["user", "assistant"]
