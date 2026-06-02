@@ -17,6 +17,8 @@ import { WorkUnitInspector } from './WorkUnitInspector';
 import { TypewriterMarkdown } from './TypewriterMarkdown';
 import { MessageAttachments } from './MessageAttachments';
 import { formatTime, formatDate, normalizeReasoningTimeline, groupHistoryWithReasoning } from '../../utils/chatHistoryTransform';
+import { buildThoughtTimelineBlocks } from './ThoughtTimeline.utils';
+import { ThoughtTimeline } from './ThoughtTimeline';
 
 export const SegmentDivider = () => (
     <div style={{
@@ -34,6 +36,31 @@ export const SegmentDivider = () => (
 
 const TERMINAL_WORK_STATUSES = new Set(['complete', 'succeeded', 'failed', 'cancelled']);
 const ACTIVE_WORK_STATUSES = new Set(['queued', 'running', 'waiting_user', 'paused', 'thinking', 'responding']);
+
+const getThoughtDisplayKey = (message) => {
+    if (!message || typeof message !== 'object') return 'thought:global';
+    const turnId = message.turn_id ?? message.turnId ?? null;
+    if (turnId !== null && turnId !== undefined && turnId !== '') return `turn:${turnId}`;
+    if (message.stream_id || message.streamId) return `stream:${message.stream_id || message.streamId}`;
+    if (message.work_id || message.workId) return `work:${message.work_id || message.workId}`;
+    if (message.id || message.message_id || message.messageId) return `message:${message.id || message.message_id || message.messageId}`;
+    return 'thought:global';
+};
+
+const stripReasoningPresentation = (message) => {
+    if (!message || typeof message !== 'object') return null;
+
+    const role = String(message.role || '').trim().toLowerCase();
+    const msgType = String(message.type || message.msg_type || '').trim().toLowerCase();
+    if (msgType === 'reasoning' || (role === 'system' && msgType === 'reasoning')) {
+        return null;
+    }
+
+    const next = { ...message };
+    delete next.reasoningLines;
+    delete next.reasoningTimeline;
+    return next;
+};
 
 export const WorkControlButton = memo(({ workId, sessionId, isStreaming, statusPhase }) => {
     const [busy, setBusy] = useState(false);
@@ -335,7 +362,6 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
     const isUser = msg.role === 'user';
     const reasoningTimeline = normalizeReasoningTimeline(msg);
     const hasReasoning = !isUser && reasoningTimeline.length > 0;
-    const showInlineThoughtToggle = hasReasoning && !isStreaming && isCognitiveCollapsed;
     const statusPhaseNormalized = String(msg?.statusPhase || '').toLowerCase();
     const getPhaseColor = (phase) => {
         if (['thinking', 'reasoning'].includes(phase)) return '#a855f7';
@@ -346,6 +372,7 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
     const phaseColor = getPhaseColor(statusPhaseNormalized);
     const isTerminalPhase = ['complete', 'completed', 'succeeded', 'success', 'done', 'failed', 'error', 'aborted', 'cancelled', 'canceled'].includes(statusPhaseNormalized);
     const isActivelyStreaming = isStreaming && !isTerminalPhase;
+    const shouldKeepReasoningOpen = isActivelyStreaming || ['thinking', 'reasoning', 'responding', 'running', 'executing', 'tool_use', 'action'].includes(statusPhaseNormalized);
     const previewMessageContent = useMemo(() => {
         if (Array.isArray(msg?.contentSegments) && msg.contentSegments.length > 0) {
             return msg.contentSegments
@@ -413,10 +440,14 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
     });
 
     useEffect(() => {
+        if (shouldKeepReasoningOpen && hasReasoning) {
+            setIsCognitiveCollapsed(false);
+            return;
+        }
         if (msg.isComplete || msg.statusPhase === 'complete') {
             setIsCognitiveCollapsed(true);
         }
-    }, [msg.isComplete, msg.statusPhase]);
+    }, [hasReasoning, msg.isComplete, msg.statusPhase, shouldKeepReasoningOpen]);
 
     return (
         <div className="animate-fade-in" style={{
@@ -858,19 +889,35 @@ export const MessageList = memo(({ messages, sessionId, streamingMessage, onExpa
         const history = (Array.isArray(messages) ? messages : [])
             .filter((msg) => msg && typeof msg === 'object')
             .filter((msg) => !String(msg.content || '').includes('[SYSTEM_NOTIFICATION]'));
-        if (streamingMessage) {
-            return [...history, streamingMessage];
+        if (displayStreamingMessage) {
+            return [...history, displayStreamingMessage];
         }
         return history;
-    }, [messages, streamingMessage]);
+    }, [messages, displayStreamingMessage]);
 
     const groupedHistory = useMemo(() => groupHistoryWithReasoning(combinedMessages), [combinedMessages]);
+    const displayHistory = useMemo(() => groupedHistory
+        .map(stripReasoningPresentation)
+        .filter(Boolean), [groupedHistory]);
 
     const renderMessagesWithDateDividers = () => {
         const result = [];
         let lastDateStr = null;
+        const renderedThoughtBlocks = new Set();
 
-        groupedHistory.forEach((msg, i) => {
+        displayHistory.forEach((msg, i) => {
+            const thoughtKey = getThoughtDisplayKey(msg);
+            const thoughtBlock = thoughtBlockMap.get(thoughtKey);
+            if (thoughtBlock && msg.role !== 'user' && !renderedThoughtBlocks.has(thoughtBlock.key)) {
+                result.push(
+                    <ThoughtTimeline
+                        key={`thought-${thoughtBlock.key}`}
+                        block={thoughtBlock}
+                    />
+                );
+                renderedThoughtBlocks.add(thoughtBlock.key);
+            }
+
             if (msg.timestamp) {
                 const dateStr = formatDate(msg.timestamp);
 
@@ -898,6 +945,8 @@ export const MessageList = memo(({ messages, sessionId, streamingMessage, onExpa
             const isLatestStreaming = streamingMessage && (
                 (msg.work_id && msg.work_id === streamingMessage.work_id) ||
                 msg.id === streamingMessage.id ||
+                msg.id === displayStreamingMessage?.id ||
+                (msg.stream_id && msg.stream_id === displayStreamingMessage?.stream_id) ||
                 msg === streamingMessage
             );
 
