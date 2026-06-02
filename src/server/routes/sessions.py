@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, File, UploadFile
 from fastapi.responses import StreamingResponse, FileResponse, Response
+import datetime
 from core.identity import PrincipalContext
 from capabilities.weather_control.capability import WeatherCapability
 from ..auth import get_current_user
@@ -266,6 +267,30 @@ def _build_cognitive_state_summary(session_obj) -> dict:
         "checkpoints_preview": _sample_lines(checkpoints),
         "recent_progress_preview": _sample_lines(recent_progress),
     }
+
+
+def _find_feedback_target_message(session_obj, message_id: str) -> dict | None:
+    target_id = str(message_id or "").strip()
+    if not target_id:
+        return None
+
+    history = getattr(session_obj, "history", None)
+    if not isinstance(history, list):
+        return None
+
+    for message in reversed(history):
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("id") or "").strip() != target_id:
+            continue
+        role = str(message.get("role") or "").strip().lower()
+        msg_type = str(message.get("type") or message.get("msg_type") or "").strip().lower()
+        if role != "assistant":
+            return None
+        if msg_type in {"reasoning", "internal_event"}:
+            return None
+        return message
+    return None
 
 
 def _build_projection_summary(session_obj) -> dict:
@@ -959,6 +984,96 @@ async def upload_profile_picture(
     return {
         "status": "success",
         "profile_picture": relative_path
+    }
+
+
+@router.post("/{session_id}/messages/{message_id}/feedback")
+async def upsert_message_feedback(
+    session_id: str,
+    message_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+):
+    """
+    Persist like/dislike feedback for a final assistant response.
+    """
+    kernel = get_kernel(request)
+    orch = kernel.orchestrator
+
+    session = orch.get_session_robust(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    target_message = _find_feedback_target_message(session, message_id)
+    if not target_message:
+        raise HTTPException(status_code=404, detail="Assistant message not found")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Payload must be a JSON object")
+
+    rating = payload.get("rating", None)
+    if rating not in (None, "", "like", "dislike"):
+        raise HTTPException(status_code=400, detail="rating must be 'like', 'dislike', or null")
+
+    feedback_key = f"{session.session_id}:{target_message['id']}"
+    turn_id = target_message.get("turn_id")
+    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    feedback_record = {
+        "feedback_id": feedback_key,
+        "session_id": session.session_id,
+        "turn_id": turn_id,
+        "message_id": target_message["id"],
+        "message_role": "assistant",
+        "message_type": str(target_message.get("type") or target_message.get("msg_type") or "default"),
+        "rating": rating,
+        "reason": payload.get("reason"),
+        "comment": payload.get("comment"),
+        "source": "chat",
+        "user_id": getattr(user, "id", None),
+    }
+
+    from core.session_event_pipeline import record_session_event
+
+    record_session_event(
+        session,
+        {
+            "type": "message.feedback.updated",
+            "event_type": "message.feedback.updated",
+            "session_id": session.session_id,
+            "turn_id": turn_id,
+            "message_id": target_message["id"],
+            "feedback_id": feedback_key,
+            "rating": rating,
+            "reason": payload.get("reason"),
+            "comment": payload.get("comment"),
+            "user_id": getattr(user, "id", None),
+            "timestamp": timestamp,
+            "channel": getattr(session, "source", "web"),
+            "interface": getattr(session, "source", "web"),
+            "source": "sessions_route",
+            "payload": feedback_record,
+        },
+        defaults={
+            "session_id": session.session_id,
+            "turn_id": turn_id,
+            "message_id": target_message["id"],
+            "feedback_id": feedback_key,
+            "timestamp": timestamp,
+            "channel": getattr(session, "source", "web"),
+            "interface": getattr(session, "source", "web"),
+            "source": "sessions_route",
+        },
+        publish=True,
+    )
+
+    return {
+        "status": "success",
+        "feedback": feedback_record,
     }
 
 @router.post("/{session_id}/upload")

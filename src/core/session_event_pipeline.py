@@ -40,6 +40,11 @@ WORKER_EVENT_TYPES = {
     "worker.updated",
 }
 
+FEEDBACK_EVENT_TYPES = {
+    "feedback",
+    "message.feedback.updated",
+}
+
 REASONING_EVENT_TYPES = {
     "thought",
     "cognitive_thought",
@@ -217,6 +222,8 @@ class SessionEventPipeline:
             return "artifact"
         if event_type.startswith("media."):
             return "media"
+        if event_type in FEEDBACK_EVENT_TYPES or event_type.startswith("message.feedback."):
+            return "feedback"
         if event_type == "complete":
             return "completion"
         if event_type == "assistant_response":
@@ -416,6 +423,7 @@ def build_session_snapshot(session_id: str, base_data_dir: Optional[str] = None,
         "workers": "workers.index.json",
         "thoughts": "thoughts.index.json",
         "media": "media.index.json",
+        "feedback": "feedback.index.json",
         "links": "links.index.json",
         "cards": "cards.index.json",
         "artifacts": "artifacts.index.json",
@@ -455,6 +463,7 @@ class SessionEventIndexWriter:
             "workers": os.path.join(self.session_dir, "workers.index.json"),
             "thoughts": os.path.join(self.session_dir, "thoughts.index.json"),
             "media": os.path.join(self.session_dir, "media.index.json"),
+            "feedback": os.path.join(self.session_dir, "feedback.index.json"),
             "links": os.path.join(self.session_dir, "links.index.json"),
             "cards": os.path.join(self.session_dir, "cards.index.json"),
             "artifacts": os.path.join(self.session_dir, "artifacts.index.json"),
@@ -503,6 +512,19 @@ class SessionEventIndexWriter:
             data = self._load_index(path)
             items = data.setdefault("items", {})
             items[str(key)] = record
+            data["updated_at"] = time.time()
+            self._atomic_write_json(path, data)
+
+    def _delete(self, name: str, key: Optional[str]) -> None:
+        if not key:
+            return
+        path = self.paths[name]
+        with self._lock:
+            data = self._load_index(path)
+            items = data.setdefault("items", {})
+            if str(key) not in items:
+                return
+            items.pop(str(key), None)
             data["updated_at"] = time.time()
             self._atomic_write_json(path, data)
 
@@ -884,3 +906,36 @@ class SessionEventIndexWriter:
                     timestamp,
                     work_id=key,
                 )
+
+        if category == "feedback" or event_type in FEEDBACK_EVENT_TYPES or event_type.startswith("message.feedback."):
+            feedback_key = str(
+                _pick_first(
+                    payload.get("feedback_id"),
+                    event.get("feedback_id"),
+                    event.get("message_id"),
+                    payload.get("message_id"),
+                )
+                or ""
+            ).strip()
+            rating = payload.get("rating") if _is_mapping(payload) else None
+            if rating in (None, "", "null"):
+                self._delete("feedback", feedback_key or event.get("message_id"))
+            elif feedback_key:
+                feedback_record = {
+                    "feedback_id": feedback_key,
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "message_id": message_id,
+                    "message_role": payload.get("message_role") or event.get("message_role") or payload.get("role") or event.get("role"),
+                    "message_type": payload.get("message_type") or event.get("message_type") or payload.get("msg_type") or event.get("msg_type"),
+                    "rating": rating,
+                    "reason": payload.get("reason") or event.get("reason"),
+                    "comment": payload.get("comment") or event.get("comment"),
+                    "source": payload.get("source") or event.get("source") or "chat",
+                    "user_id": payload.get("user_id") or event.get("user_id"),
+                    "created_at": payload.get("created_at") or event.get("timestamp") or timestamp,
+                    "updated_at": timestamp,
+                    "event_id": event.get("event_id"),
+                }
+                self._upsert("feedback", feedback_key, feedback_record)
+                self._upsert_turn_record(turn_id, session_id, timestamp)
