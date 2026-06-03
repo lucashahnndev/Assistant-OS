@@ -561,12 +561,18 @@ class VoiceManager:
                     
                     # Queue EOF sentinel for this turn
                     self.manager._queue_tts(self.sid, self.turn_id, None)
- 
+
                     logger.info(f"Interceptor completion for turn {self.turn_id}")
                     self.manager.server_driver.send_voice_event(self.sid, {
                         "type": "agent.final", "turnId": self.turn_id, "turn_id": self.turn_id, "text": self.accumulated_text
                     })
- 
+                    # Close the canonical response stream/turn so the session indices
+                    # finalize exactly like text sessions do.
+                    try:
+                        self.manager.server_driver.send_complete(self.sid, complete_target="stream")
+                    except Exception as e:
+                        logger.debug(f"Voice stream completion failed for {self.sid}: {e}")
+
                 def send_status(self, target, phase, payload=None, model_info=None, **kwargs):
                     self.manager.server_driver.send_status(target, phase, payload)
  

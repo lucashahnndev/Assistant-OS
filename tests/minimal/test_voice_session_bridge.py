@@ -141,6 +141,13 @@ def test_voice_semantics_are_canonical_and_share_the_reserved_turn(tmp_path, mon
         },
     )
 
+    session.context["current_response_stream_id"] = f"stream-{reserved_turn_id}"
+    session.context["current_response_stream_turn_id"] = reserved_turn_id
+    session.context["current_response_stream_user_message_id"] = user_message["id"]
+    session.context["current_response_stream_sequence"] = 2
+    driver.send_complete(session.session_id)
+    complete_payload = json.loads(driver._captured_messages[-1][1])
+
     _write_session_files(session, Path(tmp_path))
     snapshot = build_session_snapshot(session.session_id, base_data_dir=str(tmp_path))
 
@@ -158,6 +165,10 @@ def test_voice_semantics_are_canonical_and_share_the_reserved_turn(tmp_path, mon
     assert playback_chunk["turn_id"] == reserved_turn_id
     assert playback_end["type"] == "playback.completed"
     assert playback_end["turn_id"] == reserved_turn_id
+    assert complete_payload["type"] == "complete"
+    assert complete_payload["target"] == "stream"
+    assert complete_payload["turn_id"] == reserved_turn_id
+    assert complete_payload["stream_id"] == f"stream-{reserved_turn_id}"
 
     events = snapshot["events"]
     event_types = [event["type"] for event in events]
@@ -167,6 +178,7 @@ def test_voice_semantics_are_canonical_and_share_the_reserved_turn(tmp_path, mon
     assert "playback.started" in event_types
     assert "playback.chunk" in event_types
     assert "playback.completed" in event_types
+    assert "complete" in event_types
 
     transcript_index = snapshot["indices"]["transcripts"]["items"][transcript_id]
     assert transcript_index["turn_id"] == reserved_turn_id
@@ -186,6 +198,7 @@ def test_voice_semantics_are_canonical_and_share_the_reserved_turn(tmp_path, mon
     assert assistant_message["id"] in turn_index["assistant_message_ids"]
     assert transcript_id in turn_index["transcript_ids"]
     assert playback_id in turn_index["playback_ids"]
+    assert turn_index["is_active"] is False
 
     chat_roles = [message["role"] for message in snapshot["chat"]]
     assert chat_roles == ["user", "assistant"]
