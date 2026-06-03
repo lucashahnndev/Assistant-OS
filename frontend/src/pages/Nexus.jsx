@@ -5,6 +5,7 @@ import { useVoice } from '../hooks/useVoice';
 import { useTheme } from '../context/ThemeContext';
 import { api } from '../hooks/api';
 import { notify } from '../utils/notify.jsx';
+import normalizeSessionEvent from '../utils/normalizeSessionEvent';
 import { useGlobalSession } from '../context/GlobalSessionContext';
 import {
     Activity,
@@ -146,8 +147,16 @@ function dashboardReducer(state, action) {
             return { ...state, textState: { ...state.textState, isSending: action.payload } };
         case 'ADD_MESSAGE': {
             const history = state.textState.history || [];
-            if (action.payload.id && history.find(m => m.id === action.payload.id)) return state;
-            return { ...state, textState: { ...state.textState, history: [...history, action.payload] } };
+            const payload = action.payload && typeof action.payload === 'object' ? { ...action.payload } : action.payload;
+            const mergeContent = Boolean(payload && typeof payload === 'object' && payload._mergeContent);
+            if (payload && typeof payload === 'object') delete payload._mergeContent;
+            return {
+                ...state,
+                textState: {
+                    ...state.textState,
+                    history: reconcileHistoryMessage(history, payload || {}, { mergeContent }),
+                }
+            };
         }
         case 'SET_HISTORY':
             return { ...state, textState: { ...state.textState, history: action.payload } };
@@ -192,6 +201,149 @@ const getFileUrl = (item, sessionId) => {
 const DASHBOARD_URL_RE = /https?:\/\/[^\s<>)"'\]]+/gi;
 const DASHBOARD_YOUTUBE_RE = /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/)|youtu\.be\/|\[RESOURCE\]\?v=)([\w-]{11})/i;
 const DASHBOARD_DEEZER_TRACK_RE = /(?:deezer\.com\/(?:[a-z]{2}\/)?track\/)(\d+)/i;
+
+const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const normalizeLiveTimestamp = (value) => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value > 10000000000 ? value : value * 1000;
+    }
+    const parsed = Date.parse(String(value || ''));
+    return Number.isNaN(parsed) ? Date.now() : parsed;
+};
+
+const normalizeMessageIdentity = (message = {}) => String(
+    message.id
+    || message.message_id
+    || message.messageId
+    || message.stream_id
+    || message.streamId
+    || ''
+).trim();
+
+const mergeStreamContent = (previous = '', incoming = '') => {
+    const prev = String(previous || '');
+    const next = String(incoming || '');
+    if (!next) return prev;
+    if (!prev) return next;
+    if (next === prev) return prev;
+    if (next.startsWith(prev)) return next;
+    if (prev.startsWith(next)) return prev;
+    if (prev.includes(next)) return prev;
+    if (next.includes(prev)) return next;
+    return `${prev}${next}`;
+};
+
+const buildCanonicalMessageFromEvent = (event, fallbackRole = 'assistant') => {
+    const rawData = isPlainObject(event?.raw) ? event.raw : {};
+    const payload = isPlainObject(event?.payload) ? event.payload : {};
+    const data = { ...rawData, ...payload };
+    const role = String(data.role || fallbackRole || 'assistant').toLowerCase() || 'assistant';
+    const attachments = Array.isArray(data.attachments) ? data.attachments : [];
+
+    return {
+        id: event?.messageId || data.message_id || data.messageId || data.id || event?.streamId || data.stream_id || data.streamId || `msg-${Date.now()}`,
+        role,
+        content: String(data.content || data.message || data.text || data.full_text || ''),
+        timestamp: normalizeLiveTimestamp(data.timestamp || event?.timestamp || rawData.timestamp),
+        turn_id: event?.turnId ?? data.turn_id ?? data.turnId ?? null,
+        reply_to_message_id: event?.replyToMessageId ?? data.reply_to_message_id ?? data.replyToMessageId ?? null,
+        stream_id: event?.streamId ?? data.stream_id ?? data.streamId ?? null,
+        work_id: event?.workId ?? data.work_id ?? data.workId ?? null,
+        model_info: data.model_info || rawData.model_info || null,
+        reasoningTimeline: Array.isArray(data.reasoningTimeline) ? data.reasoningTimeline : [],
+        statusPhase: role === 'assistant' ? (data.statusPhase || 'complete') : data.statusPhase,
+        statusMessage: data.statusMessage || data.status || '',
+        isComplete: role === 'assistant' ? (data.isComplete !== undefined ? Boolean(data.isComplete) : true) : Boolean(data.isComplete),
+        animateTyping: role === 'assistant' ? (data.animateTyping !== undefined ? Boolean(data.animateTyping) : true) : Boolean(data.animateTyping),
+        attachments,
+        contentSegments: Array.isArray(data.contentSegments) ? data.contentSegments : [],
+    };
+};
+
+const extractEventText = (eventData = {}) => {
+    const rawText = eventData?.chunk || eventData?.delta || eventData?.content || eventData?.text || eventData?.message || eventData?.full_text || '';
+    if (typeof rawText === 'string') return rawText;
+    if (Array.isArray(rawText)) {
+        return rawText.map((item) => (typeof item === 'string' ? item : JSON.stringify(item))).join('');
+    }
+    if (isPlainObject(rawText)) {
+        return String(rawText.text || rawText.content || rawText.message || rawText.value || '');
+    }
+    return rawText ? String(rawText) : '';
+};
+
+const reconcileHistoryMessage = (history = [], incomingMessage = {}, { mergeContent = false } = {}) => {
+    const next = Array.isArray(history) ? history.map((item) => ({ ...item })) : [];
+    const incomingIdentity = normalizeMessageIdentity(incomingMessage);
+    if (incomingIdentity) {
+        const existingIndex = next.findIndex((message) => normalizeMessageIdentity(message) === incomingIdentity);
+        if (existingIndex !== -1) {
+            next[existingIndex] = {
+                ...next[existingIndex],
+                ...incomingMessage,
+                content: mergeContent
+                    ? mergeStreamContent(next[existingIndex]?.content || '', incomingMessage.content || '')
+                    : (incomingMessage.content !== undefined ? incomingMessage.content : next[existingIndex]?.content),
+            };
+            return next;
+        }
+    }
+
+    const incomingTurnId = incomingMessage.turn_id ?? incomingMessage.turnId ?? null;
+    const incomingStreamId = String(incomingMessage.stream_id || incomingMessage.streamId || '').trim();
+    const incomingReplyTo = String(incomingMessage.reply_to_message_id || incomingMessage.replyToMessageId || '').trim();
+
+    const matchIndex = next.findIndex((message) => {
+        if (!message || typeof message !== 'object') return false;
+        const messageTurnId = message.turn_id ?? message.turnId ?? null;
+        const messageStreamId = String(message.stream_id || message.streamId || '').trim();
+        const messageReplyTo = String(message.reply_to_message_id || message.replyToMessageId || '').trim();
+        const messageRole = String(message.role || '').toLowerCase();
+        const incomingRole = String(incomingMessage.role || '').toLowerCase();
+
+        if (incomingStreamId && messageStreamId && incomingStreamId === messageStreamId) return true;
+        if (incomingTurnId !== null && incomingTurnId !== undefined && String(messageTurnId ?? '') === String(incomingTurnId)) {
+            if (!incomingRole || !messageRole || incomingRole === messageRole || incomingRole === 'assistant') return true;
+        }
+        if (incomingReplyTo && messageReplyTo && incomingReplyTo === messageReplyTo) return true;
+        return false;
+    });
+
+    if (matchIndex !== -1) {
+        const current = next[matchIndex];
+        next[matchIndex] = {
+            ...current,
+            ...incomingMessage,
+            content: mergeContent
+                ? mergeStreamContent(current?.content || '', incomingMessage.content || '')
+                : (incomingMessage.content !== undefined ? incomingMessage.content : current?.content),
+        };
+        return next;
+    }
+
+    return [...next, incomingMessage];
+};
+
+const normalizeSnapshotHistory = (snapshot = {}) => {
+    const rawHistory = Array.isArray(snapshot?.chat)
+        ? snapshot.chat
+        : Array.isArray(snapshot?.indices?.messages?.items)
+            ? snapshot.indices.messages.items
+            : Array.isArray(snapshot?.history)
+                ? snapshot.history
+                : [];
+    return rawHistory.filter((msg) => {
+        if (!msg) return false;
+        const role = String(msg?.role || '').toLowerCase();
+        const type = String(msg?.type || msg?.msg_type || '').toLowerCase();
+        return !['system', 'reasoning', 'thought'].includes(role) && !['reasoning', 'thought'].includes(type);
+    }).map((msg) => ({
+        ...msg,
+        content: String(msg?.content || msg?.text || msg?.summary || ''),
+        id: msg?.id || msg?.message_id || msg?.messageId || `msg-${Date.now()}`,
+    }));
+};
 
 const extractUrlsFromText = (text) => {
     if (!text || typeof text !== 'string') return [];
@@ -1638,6 +1790,7 @@ const Nexus = () => {
     const [agentThought, setAgentThought] = useState('');
     const [isThinking, setIsThinking] = useState(false);
     const agentThoughtTimeoutRef = useRef(null);
+    const streamingMessageRef = useRef(null);
     const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 640);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [ttsIntensity, setTtsIntensity] = useState(0);
@@ -2202,20 +2355,27 @@ const Nexus = () => {
                 }
 
                 if (activeId) {
-                    const historyData = await api.get(`/sessions/${activeId}`);
-                    if (historyData) {
-                        dispatch({ type: 'SET_SESSION', payload: { id: activeId, name: historyData.name } });
-                        if (historyData.history) {
-                            dispatch({ type: 'SET_HISTORY', payload: historyData.history });
+                    let snapshot = null;
+                    try {
+                        snapshot = await api.get(`/sessions/${activeId}/snapshot`);
+                    } catch (snapshotErr) {
+                        console.warn("Nexus snapshot load failed, falling back to legacy session fetch", snapshotErr);
+                    }
 
-                            // Load deeper history for proper reasoning timeline reconstruction
-                            try {
-                                const extHistory = await api.get(`/sessions/${activeId}/history?limit=100`);
-                                if (extHistory && extHistory.history) {
-                                    dispatch({ type: 'SET_HISTORY', payload: extHistory.history });
-                                }
-                            } catch (e) {
-                                console.error("Failed to load extended history", e);
+                    const snapshotHistory = normalizeSnapshotHistory(snapshot || {});
+                    if (snapshot) {
+                        dispatch({ type: 'SET_SESSION', payload: { id: activeId, name: snapshot.name || snapshot.session_name || '' } });
+                        if (snapshotHistory.length > 0) {
+                            dispatch({ type: 'SET_HISTORY', payload: snapshotHistory });
+                        }
+                    }
+
+                    if (!snapshot || snapshotHistory.length === 0) {
+                        const historyData = await api.get(`/sessions/${activeId}`);
+                        if (historyData) {
+                            dispatch({ type: 'SET_SESSION', payload: { id: activeId, name: historyData.name } });
+                            if (historyData.history) {
+                                dispatch({ type: 'SET_HISTORY', payload: historyData.history });
                             }
                         }
                     }
@@ -2258,13 +2418,19 @@ const Nexus = () => {
 
         const handleWebSocketMessage = (data) => {
             try {
-                if (data.type === 'pong') return;
+                const event = normalizeSessionEvent(data);
+                const rawData = isPlainObject(event.raw) ? event.raw : {};
+                const liveData = isPlainObject(event.payload) ? event.payload : {};
+                const eventData = { ...rawData, ...liveData };
+                const eventType = event.eventType;
+                if (eventType === 'pong') return;
 
                 // ── Worker state updates ──────────────────────────────────
-                if (data.type === 'worker_state') {
-                    if (data.data?.status || data.data?.last_thought) {
-                        const statusLabel = data.data.status ? `[Worker: ${data.data.status}]` : '[Worker]';
-                        const text = data.data.last_thought || `Processando passo '${data.data.label || 'interno'}'...`;
+                if (eventType === 'worker_state' || eventType === 'worker.updated') {
+                    const workerData = eventData.data && typeof eventData.data === 'object' ? eventData.data : eventData;
+                    if (workerData?.status || workerData?.last_thought) {
+                        const statusLabel = workerData.status ? `[Worker: ${workerData.status}]` : '[Worker]';
+                        const text = workerData.last_thought || `Processando passo '${workerData.label || 'interno'}'...`;
                         setAgentThought(`${statusLabel} ${text}`);
                         setIsThinking(true);
                         if (agentThoughtTimeoutRef.current) clearTimeout(agentThoughtTimeoutRef.current);
@@ -2275,14 +2441,14 @@ const Nexus = () => {
                 }
 
                 // ── System metrics push ───────────────────────────────────
-                if (data.type === 'system_metrics' || data.type === 'system_health') {
+                if (eventType === 'system_metrics' || eventType === 'system_health') {
                     // Handled by GlobalSessionContext now
                     return;
                 }
 
                 // ── Agent thought stream ──────────────────────────────────
-                if (data.type === 'thought' || data.type === 'cognitive_thought' || data.type === 'assistant_thought' || data.type === 'reasoning_chunk') {
-                    const thoughtText = data.thought || data.content || '';
+                if (event.category === 'reasoning') {
+                    const thoughtText = extractEventText(eventData) || String(eventData.thought || '');
                     if (thoughtText) setAgentThought(thoughtText);
                     setIsThinking(true);
                     if (agentThoughtTimeoutRef.current) clearTimeout(agentThoughtTimeoutRef.current);
@@ -2290,21 +2456,104 @@ const Nexus = () => {
                     return;
                 }
 
+                if (event.category === 'stream' && event.canUpdateMessage) {
+                    const incomingContent = extractEventText(eventData);
+                    const currentStream = streamingMessageRef.current || {};
+                    const nextMessage = {
+                        ...buildCanonicalMessageFromEvent(event, 'assistant'),
+                        id: event.messageId || currentStream.id || event.streamId || currentStream.stream_id || currentStream.streamId || event.turnId || `msg-${Date.now()}`,
+                        role: 'assistant',
+                        content: mergeStreamContent(currentStream.content || '', incomingContent),
+                        timestamp: normalizeLiveTimestamp(event.timestamp || eventData.timestamp),
+                        turn_id: event.turnId ?? currentStream.turn_id ?? eventData.turn_id ?? null,
+                        reply_to_message_id: event.replyToMessageId ?? currentStream.reply_to_message_id ?? eventData.reply_to_message_id ?? null,
+                        stream_id: event.streamId ?? currentStream.stream_id ?? currentStream.streamId ?? eventData.stream_id ?? null,
+                        work_id: event.workId ?? currentStream.work_id ?? eventData.work_id ?? null,
+                        model_info: eventData.model_info || currentStream.model_info || null,
+                        statusPhase: eventData.phase || eventData.status || eventData.statusPhase || 'responding',
+                        statusMessage: eventData.statusMessage || eventData.message || 'Streaming response...',
+                        isComplete: false,
+                        animateTyping: true,
+                        _mergeContent: true,
+                    };
+                    streamingMessageRef.current = nextMessage;
+                    dispatch({ type: 'ADD_MESSAGE', payload: nextMessage });
+                    return;
+                }
+
+                if (eventType === 'complete' || eventType === 'assistant_response') {
+                    const activeStreamMessage = streamingMessageRef.current || {};
+                    const activeStreamId = activeStreamMessage?.streamId || activeStreamMessage?.stream_id || null;
+                    const canFinalizeStream = event.target === 'stream' && event.streamId && (!activeStreamId || String(activeStreamId) === String(event.streamId));
+                    const legacyAssistantResponse = eventType === 'assistant_response';
+                    if (!canFinalizeStream && !legacyAssistantResponse) {
+                        if (event.target === 'legacy' || event.isLegacy) return;
+                        if (!event.canCompleteTarget) return;
+                    }
+
+                    const finalMessage = {
+                        ...buildCanonicalMessageFromEvent(event, 'assistant'),
+                        id: event.messageId || activeStreamMessage.id || event.streamId || activeStreamMessage.stream_id || activeStreamMessage.streamId || event.turnId || `msg-${Date.now()}`,
+                        role: 'assistant',
+                        content: mergeStreamContent(
+                            activeStreamMessage?.content || '',
+                            extractEventText(eventData) || ''
+                        ),
+                        timestamp: normalizeLiveTimestamp(event.timestamp || eventData.timestamp),
+                        turn_id: event.turnId ?? activeStreamMessage.turn_id ?? eventData.turn_id ?? null,
+                        reply_to_message_id: event.replyToMessageId ?? activeStreamMessage.reply_to_message_id ?? eventData.reply_to_message_id ?? null,
+                        stream_id: event.streamId ?? activeStreamMessage.stream_id ?? activeStreamMessage.streamId ?? eventData.stream_id ?? null,
+                        work_id: event.workId ?? activeStreamMessage.work_id ?? eventData.work_id ?? null,
+                        model_info: eventData.model_info || eventData.provenance || activeStreamMessage.model_info || null,
+                        statusPhase: 'complete',
+                        isComplete: true,
+                        animateTyping: true,
+                        attachments: Array.isArray(eventData.attachments) ? eventData.attachments : [],
+                        contentSegments: Array.isArray(eventData.contentSegments) ? eventData.contentSegments : [],
+                    };
+
+                    if (event.target === 'stream' && !String(finalMessage.content || '').trim()) {
+                        streamingMessageRef.current = null;
+                        dispatch({ type: 'SET_SENDING', payload: false });
+                        setIsThinking(false);
+                        if (agentThoughtTimeoutRef.current) clearTimeout(agentThoughtTimeoutRef.current);
+                        return;
+                    }
+
+                    if (String(finalMessage.content || '').trim() || finalMessage.id || finalMessage.stream_id || finalMessage.turn_id) {
+                        streamingMessageRef.current = finalMessage;
+                        dispatch({ type: 'SET_SENDING', payload: false });
+                        setIsThinking(false);
+                        if (agentThoughtTimeoutRef.current) clearTimeout(agentThoughtTimeoutRef.current);
+
+                        dispatch({ type: 'ADD_MESSAGE', payload: finalMessage });
+                        if (eventType === 'assistant_response') {
+                            routeStructuredArtifacts(finalMessage, sessionId);
+                        }
+                    }
+                    return;
+                }
+
+                if (eventType === 'session_updated' || event.category === 'session') {
+                    // Keep metadata in sync, but don't let session patch overwrite transcript state.
+                    return;
+                }
+
                 // ── Typing / Generation stream ────────────────────────────
-                if (data.type === 'typing') {
+                if (eventType === 'typing') {
                     setAgentThought(`[Transceptor]: Sintetizando resposta verbal/textual...`);
                     setIsThinking(true);
                     if (agentThoughtTimeoutRef.current) clearTimeout(agentThoughtTimeoutRef.current);
                     agentThoughtTimeoutRef.current = setTimeout(() => setIsThinking(false), 6000);
                 }
 
-                if (data.type === 'status') {
-                    const phase = String(data.payload?.status || data.phase || '').toLowerCase();
+                if (event.category === 'status') {
+                    const phase = String(eventData.status || eventData.phase || '').toLowerCase();
                     const isTerminal = ['complete', 'idle', 'succeeded', 'failed'].includes(phase);
-                    const isExecuting = !isTerminal && (['running', 'thinking', 'executing', 'tool_use', 'responding'].includes(phase) || !!data.payload?.work_id);
+                    const isExecuting = !isTerminal && (['running', 'thinking', 'executing', 'tool_use', 'responding'].includes(phase) || !!eventData.work_id);
 
                     if (isExecuting) {
-                        const msg = data.payload?.message || data.message;
+                        const msg = eventData.message || eventData.statusMessage || eventData.status || '';
                         if (msg) setAgentThought(`[Sistema]: ${msg}`);
                         else if (phase) setAgentThought(`[Sistema]: Engajando protocolo '${phase}'...`);
 
@@ -2313,11 +2562,11 @@ const Nexus = () => {
                         agentThoughtTimeoutRef.current = setTimeout(() => setIsThinking(false), 6000);
                     }
 
-                    const statusWorkId = data.payload?.work_id || data.work_id || null;
-                    const approvalReq = (data.payload?.approval_request && typeof data.payload.approval_request === 'object') ? data.payload.approval_request : null;
+                    const statusWorkId = eventData.work_id || event.workId || null;
+                    const approvalReq = (eventData.approval_request && typeof eventData.approval_request === 'object') ? eventData.approval_request : null;
 
                     if (statusWorkId && (phase === 'waiting_user' || approvalReq)) {
-                        const approvalPrompt = String(approvalReq?.prompt || data.payload?.message || data.message || 'Esta tarefa precisa da sua aprovação para continuar.').trim();
+                        const approvalPrompt = String(approvalReq?.prompt || eventData.message || eventData.statusMessage || 'Esta tarefa precisa da sua aprovação para continuar.').trim();
                         const approvalKey = JSON.stringify({
                             workId: String(statusWorkId),
                             action: String(approvalReq?.action_id || approvalReq?.action || ''),
@@ -2329,7 +2578,7 @@ const Nexus = () => {
                             work_id: statusWorkId,
                             approval_request: approvalReq,
                             approval_prompt: approvalPrompt,
-                            status_message: data.payload?.message || data.message || '',
+                            status_message: eventData.message || eventData.statusMessage || '',
                             approval_key: approvalKey,
                             title: 'Permission Required',
                         };
@@ -2349,7 +2598,9 @@ const Nexus = () => {
                                         role: 'assistant',
                                         content: `Preciso da sua aprovação para continuar esta tarefa. ${approvalPrompt}`,
                                         timestamp: Date.now(),
-                                        work_id: statusWorkId
+                                        work_id: statusWorkId,
+                                        stream_id: statusWorkId,
+                                        _mergeContent: false,
                                     }
                                 });
                             }
@@ -2374,7 +2625,7 @@ const Nexus = () => {
                         stopTerminalTracking(statusWorkId);
                     }
 
-                    const statusPlayback = (data.payload?.playback && typeof data.payload.playback === 'object') ? data.payload.playback : null;
+                    const statusPlayback = (eventData.playback && typeof eventData.playback === 'object') ? eventData.playback : null;
                     if (statusPlayback?.run_id) {
                         syncPlaybackCard(statusPlayback.run_id, {
                             sessionId: String(statusPlayback.session_id || state.textState.sessionId || ''),
@@ -2384,68 +2635,73 @@ const Nexus = () => {
                         });
                     }
                 }
-                else if (data.type === 'message_added') {
-                    if (data.session_id === sessionId) {
-                        const normalizedMessage = {
-                            ...data.message,
-                            work_id: data.work_id || data.message?.work_id,
-                            model_info: data.model_info || data.message?.model_info
-                        };
-                        dispatch({ type: 'ADD_MESSAGE', payload: normalizedMessage });
-                        routeStructuredArtifacts(normalizedMessage, sessionId);
+                else if (eventType === 'message_added' || eventType === 'message.persisted' || eventType === 'assistant_message.created' || eventType === 'user_message.created') {
+                    if (event.sessionId === sessionId || eventData.session_id === sessionId || !event.sessionId) {
+                        const msg = eventData.message && typeof eventData.message === 'object' ? eventData.message : eventData;
+                        if (String(msg?.role || '').toLowerCase() === 'system') return;
+                        const canonicalMessage = buildCanonicalMessageFromEvent(event, String(msg?.role || (eventType === 'user_message.created' ? 'user' : 'assistant') || 'assistant').toLowerCase() || 'assistant');
+                        const activeStreamMessage = streamingMessageRef.current || {};
+                        if (String(canonicalMessage.role || '').toLowerCase() === 'assistant') {
+                            canonicalMessage.id = event.messageId || canonicalMessage.id || activeStreamMessage.id || event.streamId || activeStreamMessage.stream_id || event.turnId || `msg-${Date.now()}`;
+                            canonicalMessage.content = mergeStreamContent(activeStreamMessage?.content || '', canonicalMessage.content || '');
+                            canonicalMessage.turn_id = canonicalMessage.turn_id ?? activeStreamMessage.turn_id ?? eventData.turn_id ?? null;
+                            canonicalMessage.reply_to_message_id = canonicalMessage.reply_to_message_id ?? activeStreamMessage.reply_to_message_id ?? eventData.reply_to_message_id ?? null;
+                            canonicalMessage.stream_id = canonicalMessage.stream_id || activeStreamMessage.stream_id || activeStreamMessage.streamId || eventData.stream_id || null;
+                            canonicalMessage.work_id = canonicalMessage.work_id || activeStreamMessage.work_id || eventData.work_id || null;
+                            canonicalMessage.statusPhase = 'complete';
+                            canonicalMessage.isComplete = true;
+                            canonicalMessage.animateTyping = true;
+                            streamingMessageRef.current = canonicalMessage;
+                            dispatch({ type: 'SET_SENDING', payload: false });
+                            setIsThinking(false);
+                        }
+
+                        if (!String(canonicalMessage.content || '').trim()) return;
+                        dispatch({ type: 'ADD_MESSAGE', payload: canonicalMessage });
+                        if (String(canonicalMessage.role || '').toLowerCase() === 'assistant') {
+                            routeStructuredArtifacts(canonicalMessage, sessionId);
+                        }
                     }
                 }
-                else if (data.type === 'weg_scene') {
-                    if (data.session_id === sessionId) {
+                else if (eventType === 'weg_scene') {
+                    if (event.sessionId === sessionId || eventData.session_id === sessionId) {
                         setSceneStreamActive(true);
                         notify.success("Cenário 3D atualizado pelo subagente!", { id: 'weg-scene-toast' });
-                        setWegScript(data.script);
-                        msm.addMedia({ script: data.script, title: data.meta?.label || 'Cena Wegena' }, 'WEGENA', true);
+                        setWegScript(eventData.script);
+                        msm.addMedia({ script: eventData.script, title: eventData.meta?.label || 'Cena Wegena' }, 'WEGENA', true);
                     }
                 }
-                else if (data.type === 'weg_scene_init') {
-                    if (data.session_id === sessionId && particleRef.current) {
+                else if (eventType === 'weg_scene_init') {
+                    if ((event.sessionId === sessionId || eventData.session_id === sessionId) && particleRef.current) {
                         setWegScript('');
                         setSceneStreamActive(true);
-                        particleRef.current.applySceneInit?.({ config: data.config || {} });
+                        particleRef.current.applySceneInit?.({ config: eventData.config || {} });
                     }
                 }
-                else if (data.type === 'weg_scene_reset') {
-                    if (data.session_id === sessionId && particleRef.current) {
+                else if (eventType === 'weg_scene_reset') {
+                    if ((event.sessionId === sessionId || eventData.session_id === sessionId) && particleRef.current) {
                         setWegScript('');
                         setSceneStreamActive(false);
                         particleRef.current.clearScene?.();
                     }
                 }
-                else if (data.type === 'weg_scene_patch') {
-                    if (data.session_id === sessionId && particleRef.current) {
+                else if (eventType === 'weg_scene_patch') {
+                    if ((event.sessionId === sessionId || eventData.session_id === sessionId) && particleRef.current) {
                         setSceneStreamActive(true);
-                        particleRef.current.applyScenePatch?.(data.element || null);
+                        particleRef.current.applyScenePatch?.(eventData.element || null);
                     }
                 }
-                else if (data.type === 'weg_scene_remove') {
-                    if (data.session_id === sessionId && particleRef.current) {
+                else if (eventType === 'weg_scene_remove') {
+                    if ((event.sessionId === sessionId || eventData.session_id === sessionId) && particleRef.current) {
                         setSceneStreamActive(true);
-                        particleRef.current.removeSceneNode?.(data.name || '');
+                        particleRef.current.removeSceneNode?.(eventData.name || '');
                     }
                 }
-                else if (data.type === 'weg_scene_env') {
-                    if (data.session_id === sessionId && particleRef.current) {
+                else if (eventType === 'weg_scene_env') {
+                    if ((event.sessionId === sessionId || eventData.session_id === sessionId) && particleRef.current) {
                         setSceneStreamActive(true);
-                        particleRef.current.applySceneEnv?.(data.env || {});
+                        particleRef.current.applySceneEnv?.(eventData.env || {});
                     }
-                }
-                else if (data.type === 'assistant_response') {
-                    dispatch({
-                        type: 'ADD_MESSAGE',
-                        payload: {
-                            id: `resp_${Date.now()}`,
-                            role: 'assistant',
-                            content: data.content,
-                            timestamp: Date.now(),
-                            model_info: data.model_info
-                        }
-                    });
                 }
                 // Voice Handlers
                 else if (data.type === 'voice.state') {
@@ -2471,205 +2727,91 @@ const Nexus = () => {
                     }
                     isPlayingRef.current = false;
                     setTtsIntensity(0);
-                } else if (data.type === 'media') {
-                    const mediaType = String(data.payload?.media_type || '').toUpperCase() || 'IMAGE';
-                    const payload = data.payload || {};
-                    const rawMediaUrl = String(payload?.url || payload?.link || payload?.canonicalUrl || '').trim();
-                    const rawMediaContent = String(payload?.content || payload?.fullContent || '').trim();
-                    const isYouTubeSystemAsset = mediaType === 'LINK' && !!(extractYouTubeId(rawMediaUrl) || extractYouTubeId(rawMediaContent));
-                    if (isYouTubeSystemAsset) return;
-                    const mediaWorkId = payload.work_id || payload?.context?.work_id || null;
-                    const normalizedPayload = (() => {
-                        if (mediaType !== 'DEEZER') return { ...payload, work_id: mediaWorkId };
-                        const bestCandidate = (payload?.best && typeof payload.best === 'object') ? payload.best : ((Array.isArray(payload?.results) && payload.results.length > 0 && typeof payload.results[0] === 'object') ? payload.results[0] : {});
-                        const explicitTrackId = String(payload?.trackId || payload?.track_id || payload?.id || payload?.best?.id || payload?.result?.id || bestCandidate?.id || '').trim();
-                        const urls = [payload?.url, payload?.best?.url, payload?.result?.url, ...(Array.isArray(payload?.results) ? payload.results.map((r) => r?.url) : [])].map((u) => String(u || '').trim()).filter(Boolean);
-                        const urlTrackIds = urls.map((u) => extractDeezerTrackId(u)).filter(Boolean);
-                        const trackIds = [...new Set([explicitTrackId, ...urlTrackIds].filter(Boolean))];
-                        const inferredMeta = parseDeezerMetaFromText(payload?.content || '');
-                        const bestArtist = typeof bestCandidate?.artist === 'string' ? bestCandidate.artist : (bestCandidate?.artist?.name || '');
-                        return {
-                            ...payload,
-                            work_id: mediaWorkId,
-                            trackId: trackIds[0] || '',
-                            trackIds,
-                            url: urls[0] || (trackIds[0] ? `https://www.deezer.com/track/${trackIds[0]}` : (payload?.url || '')),
-                            title: String(payload?.title || bestCandidate?.title || inferredMeta.title || 'Deezer Track'),
-                            artist: String(payload?.artist || bestArtist || inferredMeta.artist || ''),
-                            cover: String(payload?.cover || bestCandidate?.cover || ''),
-                        };
-                    })();
-                    if (['WEATHER', 'SYSTEM_HEALTH', 'MAP', 'WIKI', 'CHART'].includes(mediaType)) {
-                        if (claimAssistCardSlot(mediaWorkId, mediaType)) {
-                            msmAddRef.current(normalizedPayload, mediaType);
+                } else if (eventType === 'media' || eventType === 'playback' || eventType === 'terminal_update' || eventType?.startsWith('playback.')) {
+                    const mediaData = eventData;
+                    if (eventType === 'media') {
+                        const mediaType = String(mediaData?.media_type || '').toUpperCase() || 'IMAGE';
+                        const payload = mediaData || {};
+                        const rawMediaUrl = String(payload?.url || payload?.link || payload?.canonicalUrl || '').trim();
+                        const rawMediaContent = String(payload?.content || payload?.fullContent || '').trim();
+                        const isYouTubeSystemAsset = mediaType === 'LINK' && !!(extractYouTubeId(rawMediaUrl) || extractYouTubeId(rawMediaContent));
+                        if (isYouTubeSystemAsset) return;
+                        const mediaWorkId = payload.work_id || payload?.context?.work_id || null;
+                        const normalizedPayload = (() => {
+                            if (mediaType !== 'DEEZER') return { ...payload, work_id: mediaWorkId };
+                            const bestCandidate = (payload?.best && typeof payload.best === 'object') ? payload.best : ((Array.isArray(payload?.results) && payload.results.length > 0 && typeof payload.results[0] === 'object') ? payload.results[0] : {});
+                            const explicitTrackId = String(payload?.trackId || payload?.track_id || payload?.id || payload?.best?.id || payload?.result?.id || bestCandidate?.id || '').trim();
+                            const urls = [payload?.url, payload?.best?.url, payload?.result?.url, ...(Array.isArray(payload?.results) ? payload.results.map((r) => r?.url) : [])].map((u) => String(u || '').trim()).filter(Boolean);
+                            const urlTrackIds = urls.map((u) => extractDeezerTrackId(u)).filter(Boolean);
+                            const trackIds = [...new Set([explicitTrackId, ...urlTrackIds].filter(Boolean))];
+                            const inferredMeta = parseDeezerMetaFromText(payload?.content || '');
+                            const bestArtist = typeof bestCandidate?.artist === 'string' ? bestCandidate.artist : (bestCandidate?.artist?.name || '');
+                            return {
+                                ...payload,
+                                work_id: mediaWorkId,
+                                trackId: trackIds[0] || '',
+                                trackIds,
+                                url: urls[0] || (trackIds[0] ? `https://www.deezer.com/track/${trackIds[0]}` : (payload?.url || '')),
+                                title: String(payload?.title || bestCandidate?.title || inferredMeta.title || 'Deezer Track'),
+                                artist: String(payload?.artist || bestArtist || inferredMeta.artist || ''),
+                                cover: String(payload?.cover || bestCandidate?.cover || ''),
+                            };
+                        })();
+                        if (['WEATHER', 'SYSTEM_HEALTH', 'MAP', 'WIKI', 'CHART'].includes(mediaType)) {
+                            if (claimAssistCardSlot(mediaWorkId, mediaType)) {
+                                msmRef.current.addMedia(normalizedPayload, mediaType);
+                            }
+                        } else {
+                            msmRef.current.addMedia(normalizedPayload, mediaType);
                         }
                     } else {
-                        msmAddRef.current(normalizedPayload, mediaType);
-                    }
-                } else if (data.type === 'playback' || data.type === 'terminal_update') {
-                    dispatch({ type: 'START_EXECUTION', payload: { status: 'RUNTIME_ACTIVE' } });
-                    if (data.type === 'terminal_update') {
-                        const termPayload = (data.payload && typeof data.payload === 'object') ? data.payload : {};
-                        const termState = (termPayload.terminal && typeof termPayload.terminal === 'object') ? termPayload.terminal : termPayload;
-                        const workId = termPayload.work_id || termState.work_id || data.work_id || null;
-                        if (workId) {
-                            if (termState && typeof termState === 'object' && (termState.id || termState.command || termState.transcript || termState.output_tail || termState.output_full)) {
-                                syncTerminalCardForWork(workId, {
-                                    id: termState.id || termState.terminal_id || '',
-                                    command: termState.command || '',
-                                    cwd: termState.cwd || '',
-                                    status: termState.status || termState.terminal_status || 'running',
-                                    line_count: termState.line_count || 0,
-                                    transcript: termState.transcript || '',
-                                    output_full: termState.output_full || '',
-                                    output_tail: termState.output_tail || '',
-                                    updated_at: termState.updated_at || Date.now(),
-                                });
-                                if (isTerminalFinal(termState.status || termState.terminal_status || '')) {
-                                    stopTerminalTracking(workId);
+                        const playbackRunId = String(
+                            mediaData.run_id
+                            || mediaData.payload?.run_id
+                            || mediaData.payload?.playback?.run_id
+                            || ''
+                        ).trim();
+                        if (playbackRunId) {
+                            syncPlaybackCard(playbackRunId, {
+                                sessionId: String(mediaData.payload?.session_id || state.textState.sessionId || ''),
+                                status: String(mediaData.payload?.status || eventType || ''),
+                                title: 'Session Playback',
+                            });
+                        }
+                        if (mediaData.payload?.type === 'image' || mediaData.payload?.type === 'video') {
+                            msmRef.current.addMedia(mediaData.payload, mediaData.payload.type.toUpperCase());
+                        } else if (eventType === 'playback' && mediaData.run_id) {
+                            syncPlaybackCard(mediaData.run_id, { title: 'Session Playback' });
+                        } else if (eventType === 'terminal_update') {
+                            dispatch({ type: 'START_EXECUTION', payload: { status: 'RUNTIME_ACTIVE' } });
+                            const termPayload = (mediaData && typeof mediaData === 'object') ? mediaData : {};
+                            const termState = (termPayload.terminal && typeof termPayload.terminal === 'object') ? termPayload.terminal : termPayload;
+                            const workId = termPayload.work_id || termState.work_id || mediaData.work_id || null;
+                            if (workId) {
+                                if (termState && typeof termState === 'object' && (termState.id || termState.command || termState.transcript || termState.output_tail || termState.output_full)) {
+                                    syncTerminalCardForWork(workId, {
+                                        id: termState.id || termState.terminal_id || '',
+                                        command: termState.command || '',
+                                        cwd: termState.cwd || '',
+                                        status: termState.status || termState.terminal_status || 'running',
+                                        line_count: termState.line_count || 0,
+                                        transcript: termState.transcript || '',
+                                        output_full: termState.output_full || '',
+                                        output_tail: termState.output_tail || '',
+                                        updated_at: termState.updated_at || Date.now(),
+                                    });
+                                    if (isTerminalFinal(termState.status || termState.terminal_status || '')) {
+                                        stopTerminalTracking(workId);
+                                    } else {
+                                        startTerminalTracking(workId);
+                                    }
                                 } else {
                                     startTerminalTracking(workId);
                                 }
-                            } else {
-                                startTerminalTracking(workId);
                             }
                         }
                     }
-                }
-
-                if (data.type === 'message_added' && data.session_id === sessionId) {
-                    if (data.message?.role !== 'system') {
-                        const msg = data.message || {};
-                        const content = String(msg.content || '').trim();
-                        if (!content) return;
-                        const hasStructuredPlayback = !!(msg.playback && typeof msg.playback === 'object' && msg.playback.run_id);
-                        const structuredAttachments = Array.isArray(msg.attachments) ? msg.attachments.filter(Boolean) : [];
-                        const hasStructuredAttachments = structuredAttachments.length > 0;
-                        const structuredAttachmentTypes = new Set(
-                            structuredAttachments.map((attachment) => String(attachment?.type || '').toLowerCase()).filter(Boolean)
-                        );
-                        const workId = msg.work_id || msg?.context?.work_id || null;
-                        const capabilityHints = [
-                            ...(Array.isArray(msg?.capabilities_used) ? msg.capabilities_used : []),
-                            ...(Array.isArray(msg?.context?.data?.capabilities_used) ? msg.context.data.capabilities_used : []),
-                        ];
-                        const actionHints = [
-                            ...(Array.isArray(msg?.actions_used) ? msg.actions_used : []),
-                            ...(Array.isArray(msg?.context?.data?.actions_used) ? msg.context.data.actions_used : []),
-                        ];
-                        const sourceHints = [
-                            ...(Array.isArray(msg?.sources_used) ? msg.sources_used : []),
-                            ...(Array.isArray(msg?.context?.data?.sources_used) ? msg.context.data.sources_used : []),
-                        ];
-
-                        const looksLikeNoise = /^(\{|\}|\[|\]|,|:|")+$/.test(content) || /^(thinking|processando|executando|respondendo|aguarde)\.*$/i.test(content);
-                        if (looksLikeNoise) return;
-
-                        const hasSignal = (items, re) => (Array.isArray(items) ? items : []).some((it) => re.test(String(it || '')));
-                        const weatherSignal = hasSignal(capabilityHints, /weather/i) || hasSignal(actionHints, /weather|forecast/i);
-                        const systemSignal = hasSignal(capabilityHints, /system[\._-]?health/i) || hasSignal(actionHints, /system[\._-]?health/i);
-                        const mapSignal = hasSignal(capabilityHints, /maps?/i) || hasSignal(actionHints, /maps?/i);
-                        const wikiSignal = hasSignal(capabilityHints, /wiki/i) || hasSignal(actionHints, /wiki/i);
-                        const chartSignal = !!tryParseMarkdownTable(content);
-                        const weatherReport = /(temperatura|sens[aã]ção|clima)/i.test(content) && /(°c|humidity)/i.test(content);
-                        const systemReport = /(cpu|mem[oó]ria|disco|load)/i.test(content) && /(%|gb)/i.test(content);
-                        const mapReport = /(maps\.google|openstreetmap)/i.test(content);
-                        const wikiReport = /wikipedia\.org\/wiki\//i.test(content);
-
-                        const commonPayload = {
-                            content,
-                            work_id: workId,
-                            capabilities_used: capabilityHints,
-                            actions_used: actionHints,
-                            sources_used: sourceHints,
-                        };
-
-                        const shouldSkipTextMediaPromotion = hasStructuredPlayback || hasStructuredAttachments;
-
-                        const ytMatchId = extractYouTubeId(content);
-                        if (!shouldSkipTextMediaPromotion && ytMatchId && ytMatchId.length === 11) {
-                            const urls = extractUrlsFromText(content);
-                            const rawYtUrl = urls.find((u) => !!extractYouTubeId(u)) || urls[0] || '';
-                            const canonicalYtUrl = `https://www.youtube.com/watch?v=${ytMatchId}`;
-                            msmRef.current.addMedia({ ...commonPayload, videoId: ytMatchId, title: 'YouTube Video', url: rawYtUrl || canonicalYtUrl, canonicalUrl: canonicalYtUrl }, 'YOUTUBE');
-                        } else if (!shouldSkipTextMediaPromotion) {
-                            const urls = extractUrlsFromText(content);
-                            const deezerTrackIds = urls.map((u) => extractDeezerTrackId(u)).filter(Boolean);
-                            if (deezerTrackIds.length > 0) {
-                                const uniqueTrackIds = [...new Set(deezerTrackIds)];
-                                const primaryId = uniqueTrackIds[0];
-                                const primaryUrl = urls.find((u) => extractDeezerTrackId(u) === primaryId) || `https://www.deezer.com/track/${primaryId}`;
-                                msmRef.current.addMedia({ ...commonPayload, trackId: primaryId, trackIds: uniqueTrackIds, url: primaryUrl, title: 'Deezer Track' }, 'DEEZER');
-                                return;
-                            }
-                            const inferred = parseDeezerMetaFromText(content);
-                            if ((/deezer/i.test(content) || /m[úu]sica:/i.test(content)) && (inferred.title || inferred.artist)) {
-                                msmRef.current.addMedia({ ...commonPayload, trackId: '', trackIds: [], url: '', title: inferred.title || 'Deezer Track', artist: inferred.artist || '' }, 'DEEZER');
-                                return;
-                            }
-                        }
-
-                        if (!shouldSkipTextMediaPromotion && content.match(/(\/[a-zA-Z0-9\._\- \/]+\.(png|jpg|jpeg|gif|webp|mp4|webm))/i)) {
-                            const pathMatch = content.match(/(\/[a-zA-Z0-9\._\- \/]+\.(png|jpg|jpeg|gif|webp|mp4|webm))/i);
-                            msmRef.current.addMedia({ ...commonPayload, path: pathMatch[0], title: pathMatch[0].split('/').pop() }, 'IMAGE');
-                        }
-                        else if (!shouldSkipTextMediaPromotion && (content.match(/\.(jpg|jpeg|png|gif|webp|svg)(\?.*)?$/i) || content.startsWith('IMAGE:'))) {
-                            const url = content.replace('IMAGE:', '').trim();
-                            msmRef.current.addMedia({ ...commonPayload, url }, 'IMAGE');
-                        }
-                        else if (!structuredAttachmentTypes.has('file') && content.includes('```')) {
-                            const codeMatch = content.match(/```(?:\w+)?\s*([\s\S]*?)```/);
-                            if (codeMatch && codeMatch[1].trim()) {
-                                msmRef.current.addMedia({ ...commonPayload, code: codeMatch[1].trim() }, 'CODE');
-                            }
-                        }
-                        else if (weatherSignal || weatherReport) {
-                            if (claimAssistCardSlot(workId, 'WEATHER')) msmRef.current.addMedia(commonPayload, 'WEATHER');
-                        }
-                        else if (systemSignal || systemReport) {
-                            if (claimAssistCardSlot(workId, 'SYSTEM_HEALTH')) msmRef.current.addMedia(commonPayload, 'SYSTEM_HEALTH');
-                        }
-                        else if (wikiSignal || wikiReport) {
-                            if (claimAssistCardSlot(workId, 'WIKI')) msmRef.current.addMedia(commonPayload, 'WIKI');
-                        }
-                        else if (mapSignal || mapReport) {
-                            if (claimAssistCardSlot(workId, 'MAP')) msmRef.current.addMedia(commonPayload, 'MAP');
-                        }
-                        else if (chartSignal) {
-                            if (claimAssistCardSlot(workId, 'CHART')) msmRef.current.addMedia(commonPayload, 'CHART');
-                        }
-                        else {
-                            const urlMatch = content.match(/https?:\/\/[^\s]+/);
-                            if (!shouldSkipTextMediaPromotion && urlMatch) {
-                                const fallbackUrl = String(urlMatch[0] || '').trim();
-                                const isYouTubeFallbackLink = !!(extractYouTubeId(fallbackUrl) || extractYouTubeId(content));
-                                if (!isYouTubeFallbackLink) {
-                                    msmRef.current.addMedia({ ...commonPayload, url: fallbackUrl, fullContent: content }, 'LINK');
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (data.type === 'playback' || data.type?.startsWith('playback.')) {
-                    const playbackRunId = String(
-                        data.run_id
-                        || data.payload?.run_id
-                        || data.payload?.playback?.run_id
-                        || ''
-                    ).trim();
-                    if (playbackRunId) {
-                        syncPlaybackCard(playbackRunId, {
-                            sessionId: String(data.payload?.session_id || state.textState.sessionId || ''),
-                            status: String(data.payload?.status || data.type || ''),
-                            title: 'Session Playback',
-                        });
-                    }
-                    if (data.payload?.type === 'image' || data.payload?.type === 'video') {
-                        msmRef.current.addMedia(data.payload, data.payload.type.toUpperCase());
-                    } else if (data.type === 'playback' && data.run_id) {
-                        syncPlaybackCard(data.run_id, { title: 'Session Playback' });
-                    }
+                    return;
                 }
             } catch (e) {
                 console.error("WebSocket payload error:", e);
@@ -2713,6 +2855,7 @@ const Nexus = () => {
 
         dispatch({ type: 'SET_SENDING', payload: true });
         dispatch({ type: 'SET_TEXT', payload: { input: '' } });
+        streamingMessageRef.current = null;
         dispatch({
             type: 'ADD_MESSAGE',
             payload: {
@@ -2745,6 +2888,7 @@ const Nexus = () => {
         dispatch({ type: 'SET_SESSION', payload: null });
         dispatch({ type: 'SET_HISTORY', payload: [] });
         dispatch({ type: 'SET_CONNECTED', payload: false });
+        streamingMessageRef.current = null;
         notify.loading("Provisioning new session...", { id: 'live-reload' });
 
         try {
@@ -2809,7 +2953,7 @@ const Nexus = () => {
 
     return (
         <div className="dashboard-root" style={{
-            height: isMobile ? '100dvh' : '100vh', display: 'flex', overflow: 'hidden', color: 'var(--dashboard-text)',
+            height: '100%', display: 'flex', overflow: 'hidden', color: 'var(--dashboard-text)',
             background: 'var(--dashboard-bg)', position: 'relative'
         }}>
             <RightIntelPanel

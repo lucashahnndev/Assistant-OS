@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ChevronRight, ChevronLeft, Brain, Layers, Clock, Server, GitBranch, ChevronDown, ChevronUp, Zap, MessageSquare, Maximize2, Minimize2, RefreshCw, LayoutGrid, Trash2 } from 'lucide-react';
-import { normalizeHistoryMessageType, extractReasoningLine } from '../utils/chatHistoryTransform';
+import { ChevronRight, ChevronLeft, Brain, Layers, Clock, Server, GitBranch, ChevronDown, ChevronUp, Zap, MessageSquare, Maximize2, Minimize2, RefreshCw, LayoutGrid, Trash2, CloudSun, Play, Music, BarChart2, Mountain, FileText } from 'lucide-react';
 import { WorkUnitInspector } from './chat/WorkUnitInspector';
+import { formatDurationMs, normalizeThoughtTimelineItem } from './chat/ThoughtTimeline.utils';
 import { api } from '../hooks/api';
 import { useGlobalSession } from '../context/GlobalSessionContext';
 
@@ -12,6 +12,56 @@ function loadState() {
     try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') }; } catch { return { ...DEFAULTS }; }
 }
 function saveState(s) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch { } }
+
+const normalizePanelThought = (entry, fallback = {}) => {
+    const normalized = normalizeThoughtTimelineItem(entry, {
+        ...fallback,
+        source: fallback.source || 'nexus',
+    });
+    if (!normalized) return null;
+    return {
+        ...normalized,
+        faviconUrl: normalized.faviconUrl || entry?.faviconUrl || entry?.favicon_url || entry?.iconUrl || entry?.icon_url || entry?.icon || entry?.sourceIcon || entry?.source_icon || null,
+        sourceLabel: normalized.sourceLabel || entry?.source_label || entry?.sourceLabel || entry?.origin || null,
+    };
+};
+
+const normalizePanelThoughtList = (entries = [], fallback = {}) => {
+    const list = Array.isArray(entries) ? entries : [entries];
+    return list.map((entry, index) => normalizePanelThought(entry, {
+        ...fallback,
+        key: `${fallback.source || 'nexus'}-${index}`,
+        ts: entry?.ts ?? entry?.timestamp ?? entry?.created_at ?? entry?.updated_at ?? fallback.ts ?? null,
+        phase: entry?.phase || entry?.statusPhase || fallback.phase || 'thinking',
+        summary: entry?.summary || entry?.content || entry?.text || entry?.thought || entry?.message || '',
+        rawText: entry?.rawText || entry?.content || entry?.text || entry?.thought || entry?.message || '',
+        capability: entry?.capability || entry?.capability_name || entry?.capability_id || fallback.capability || null,
+        kind: entry?.kind || entry?.msg_type || entry?.type || entry?.event_type || fallback.kind || null,
+        visibility: entry?.visibility || fallback.visibility || null,
+        turnId: entry?.turn_id ?? entry?.turnId ?? fallback.turnId ?? null,
+        streamId: entry?.stream_id ?? entry?.streamId ?? fallback.streamId ?? null,
+        workId: entry?.work_id ?? entry?.workId ?? fallback.workId ?? null,
+        messageId: entry?.message_id ?? entry?.messageId ?? fallback.messageId ?? null,
+    })).filter(Boolean);
+};
+
+const mergeThoughtLists = (previous = [], incoming = []) => {
+    const next = Array.isArray(previous) ? previous.map((item) => ({ ...item })) : [];
+    const incomingList = Array.isArray(incoming) ? incoming : [incoming];
+    incomingList.filter(Boolean).forEach((item) => {
+        const identity = String(item.id || item.messageId || item.streamId || item.workId || item.turnId || item.rawText || item.text || '').trim();
+        const existingIndex = next.findIndex((prev) => {
+            const prevIdentity = String(prev.id || prev.messageId || prev.streamId || prev.workId || prev.turnId || prev.rawText || prev.text || '').trim();
+            return identity && prevIdentity && prevIdentity === identity;
+        });
+        if (existingIndex >= 0) {
+            next[existingIndex] = { ...next[existingIndex], ...item };
+        } else {
+            next.push(item);
+        }
+    });
+    return next.slice(-50);
+};
 
 const SectionHeader = ({ icon: Icon, title, open, onToggle, badge, onMaximize, onClear }) => (
     <div style={{
@@ -74,21 +124,34 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
     const { thoughts: ctxThoughts, pushGlobalThought, clearGlobalPanel } = useGlobalSession();
     const [ps, setPs] = useState(loadState);
     const thoughtRef = useRef(null);
-    const [thoughts, setThoughts] = useState(ctxThoughts || []);
+    const [thoughts, setThoughts] = useState(() => normalizePanelThoughtList(ctxThoughts || [], { source: 'context' }));
     const [historicalWorkers, setHistoricalWorkers] = useState([]);
     const [mediaCards, setMediaCards] = useState([]);
 
     useEffect(() => { saveState(ps); }, [ps]);
     const toggle = useCallback((key) => setPs(prev => ({ ...prev, [key]: !prev[key] })), []);
 
+    useEffect(() => {
+        if (!Array.isArray(ctxThoughts) || ctxThoughts.length === 0) return;
+        const normalizedContext = normalizePanelThoughtList(ctxThoughts, { source: 'context' });
+        if (normalizedContext.length === 0) return;
+        setThoughts(prev => mergeThoughtLists(prev, normalizedContext));
+    }, [ctxThoughts]);
+
     // 1. Listen to streamed reasoning chunks
     useEffect(() => {
         if (!agentThought) return;
-        setThoughts(prev => {
-            if (prev[prev.length - 1]?.text === agentThought) return prev;
-            return [...prev, { text: agentThought, ts: Date.now() }].slice(-50);
-        });
-        pushGlobalThought(agentThought);
+        const normalized = normalizePanelThought({
+            content: agentThought,
+            summary: agentThought,
+            rawText: agentThought,
+            phase: isThinking ? 'thinking' : 'response_drafting',
+            source: 'live',
+            ts: Date.now(),
+        }, { source: 'live' });
+        if (!normalized) return;
+        setThoughts(prev => mergeThoughtLists(prev, normalized));
+        pushGlobalThought(normalized.rawText || normalized.displaySummary || agentThought);
     }, [agentThought, pushGlobalThought]);
 
     // 2. Fallback/Reconstruction: fetch cognitive audit trail from thoughts.json
@@ -98,43 +161,42 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
 
         const loadThoughts = async () => {
             try {
-                const res = await api.get(`/sessions/${sessionId}/thoughts`);
-                if (!isSubscribed) return;
-                
-                const remoteThoughts = res.thoughts || [];
-                if (remoteThoughts.length > 0) {
-                    setThoughts(prev => {
-                        let updated = [...prev];
-                        let changed = false;
-                        
-                        remoteThoughts.forEach(rt => {
-                            const text = rt.thought || '';
-                            let baseTs = Date.now();
-                            if (rt.timestamp) {
-                                if (typeof rt.timestamp === 'number') {
-                                    baseTs = rt.timestamp > 9999999999 ? rt.timestamp : rt.timestamp * 1000;
-                                } else {
-                                    const parsed = Date.parse(rt.timestamp);
-                                    if (!isNaN(parsed)) baseTs = parsed;
-                                }
-                            }
-                            
-                            const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-                            lines.forEach((line, idx) => {
-                                const lineTs = baseTs + (idx * 10);
-                                if (!updated.some(t => t.text === line && t.ts === lineTs)) {
-                                    updated.push({ text: line, ts: lineTs });
-                                    changed = true;
-                                }
-                            });
-                        });
+                let res = null;
+                try {
+                    res = await api.get(`/sessions/${sessionId}/snapshot`);
+                } catch (snapshotErr) {
+                    if (!String(snapshotErr).includes('404') && !String(snapshotErr).includes('Not Found')) {
+                        console.error("Failed to load thought snapshot", snapshotErr);
+                    }
+                }
 
-                        if (changed) {
-                            updated.sort((a, b) => a.ts - b.ts);
-                            return updated.slice(-50);
+                const remoteThoughts = Array.isArray(res?.indices?.thoughts?.items)
+                    ? res.indices.thoughts.items
+                    : Array.isArray(res?.thoughts)
+                        ? res.thoughts
+                        : [];
+
+                if (remoteThoughts.length === 0) {
+                    try {
+                        const legacy = await api.get(`/sessions/${sessionId}/thoughts`);
+                        if (!isSubscribed) return;
+                        const legacyThoughts = Array.isArray(legacy?.thoughts) ? legacy.thoughts : [];
+                        const normalizedLegacy = normalizePanelThoughtList(legacyThoughts.map((item) => item?.thought || item), { source: 'legacy' });
+                        if (normalizedLegacy.length > 0) {
+                            setThoughts(prev => mergeThoughtLists(prev, normalizedLegacy));
                         }
-                        return prev;
-                    });
+                    } catch (legacyErr) {
+                        if (!String(legacyErr).includes('404') && !String(legacyErr).includes('Not Found')) {
+                            console.error("Failed to load thoughts.json audit trail", legacyErr);
+                        }
+                    }
+                    return;
+                }
+
+                if (!isSubscribed) return;
+                const normalizedRemote = normalizePanelThoughtList(remoteThoughts, { source: 'snapshot' });
+                if (normalizedRemote.length > 0) {
+                    setThoughts(prev => mergeThoughtLists(prev, normalizedRemote));
                 }
             } catch (err) {
                 if (!String(err).includes('404') && !String(err).includes('Not Found')) {
@@ -229,10 +291,10 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
     const glassBase = {
         position: 'relative', height: '100%', flexShrink: 0,
         zIndex: 10900,
-        background: 'rgba(10, 12, 22, 0.72)',
-        backdropFilter: 'blur(20px)',
-        WebkitBackdropFilter: 'blur(20px)',
-        borderRight: '1px solid rgba(255, 255, 255, 0.05)',
+        background: 'var(--card-bg)',
+        backdropFilter: 'var(--surface-blur)',
+        WebkitBackdropFilter: 'var(--surface-blur)',
+        borderRight: '1px solid var(--card-border)',
         transition: 'width 0.28s cubic-bezier(0.19, 1, 0.22, 1)',
     };
 
@@ -278,7 +340,7 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
 
     // ── EXPANDED — full-height glass sidebar
     return (
-        <div style={{ ...glassBase, width: '280px', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '4px 0 24px rgba(0,0,0,0.4)' }}>
+        <div style={{ ...glassBase, width: '280px', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: 'var(--shadow-xl)' }}>
 
             {/* Collapse tab on right edge */}
             <button
@@ -286,8 +348,8 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
                 title="Colapsar"
                 style={{
                     position: 'absolute', right: '-13px', top: '50%', transform: 'translateY(-50%)',
-                    width: '26px', height: '26px', borderRadius: '0 7px 7px 0',
-                    background: 'rgba(10,12,22,0.85)', border: '1px solid rgba(255,255,255,0.08)',
+                    width: '26px', height: '26px', borderRadius: '0 var(--radius-sm) var(--radius-sm) 0',
+                    background: 'var(--card-bg)', border: '1px solid var(--card-border)',
                     borderLeft: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
                     color: 'var(--text-muted)', zIndex: 1, transition: 'color 0.2s',
                 }}
@@ -334,57 +396,46 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
                         {thoughts.length === 0 ? (
                             <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontStyle: 'italic', marginLeft: '-6px' }}>Aguardando atividade cognitiva…</span>
                         ) : (
-                            <div style={{ position: 'relative', borderLeft: '1px solid rgba(255,255,255,0.1)' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                                 {thoughts.map((t, i) => {
                                     const isLast = i === thoughts.length - 1;
-                                    
-                                    let tag = '';
-                                    let content = typeof t.text === 'string' ? t.text : JSON.stringify(t.text, null, 2);
-                                    let tagColor = 'var(--text-muted)';
-                                    
-                                    // Parse synthetic tags like [Sistema]: or [Worker: xyz]:
-                                    const match = typeof t.text === 'string' ? t.text.match(/^\[(.*?)\]:\s*(.*)/) : null;
-                                    if (match) {
-                                        tag = match[1];
-                                        content = match[2];
-                                        if (tag.toLowerCase().includes('sistema')) tagColor = '#3b82f6';
-                                        else if (tag.toLowerCase().includes('worker')) tagColor = '#10b981';
-                                        else if (tag.toLowerCase().includes('transceptor')) tagColor = '#f59e0b';
-                                        else tagColor = '#a855f7';
-                                    }
-
+                                    const title = t.displayTitle || t.title || 'Pensando na próxima etapa';
+                                    const summary = t.displaySummary || t.summary || t.text || t.rawText || '';
+                                    const thumb = t.faviconUrl || t.iconUrl || t.icon || t.sourceIcon || null;
                                     return (
-                                        <div key={i} style={{ position: 'relative', paddingBottom: isLast ? '2px' : '12px', paddingLeft: '12px' }}>
-                                            {/* Timeline dot */}
-                                            <div style={{
-                                                position: 'absolute', left: '-4.5px', top: '4px', width: '8px', height: '8px', borderRadius: '50%',
-                                                background: isLast ? '#a855f7' : 'rgba(255,255,255,0.15)',
-                                                border: '2px solid rgba(10, 12, 22, 1)',
-                                                boxShadow: isLast && isThinking ? '0 0 6px #a855f7' : 'none'
-                                            }} />
-                                            
-                                            {/* Content */}
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                                                {tag && (
-                                                    <span style={{ fontSize: '9px', fontWeight: '800', color: tagColor, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                                                        {tag}
-                                                    </span>
-                                                )}
-                                                <p style={{
-                                                    margin: 0, fontSize: '10px', lineHeight: '1.5',
-                                                    fontFamily: "'Fira Code', 'JetBrains Mono', monospace",
-                                                    color: isLast ? 'var(--text-primary)' : 'rgba(255,255,255,0.35)',
-                                                    wordBreak: 'break-word',
-                                                    whiteSpace: 'pre-wrap',
-                                                    display: '-webkit-box',
-                                                    WebkitLineClamp: isLast ? 'none' : '3',
-                                                    WebkitBoxOrient: 'vertical',
-                                                    overflow: 'hidden'
+                                        <div key={t.id || `${title}-${i}`} style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                {thumb ? (
+                                                    <img
+                                                        src={thumb}
+                                                        alt=""
+                                                        style={{ width: '12px', height: '12px', borderRadius: '3px', objectFit: 'cover', flexShrink: 0, opacity: isLast ? 0.95 : 0.7 }}
+                                                    />
+                                                ) : null}
+                                                <span style={{
+                                                    fontSize: '9px',
+                                                    fontWeight: '700',
+                                                    letterSpacing: '0.01em',
+                                                    color: isLast ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.42)',
+                                                    textTransform: 'none',
+                                                    lineHeight: '1.3',
                                                 }}>
-                                                    {content}
-                                                    {isLast && isThinking && <span style={{ display: 'inline-block', width: '4px', height: '10px', background: '#a855f7', marginLeft: '4px', verticalAlign: 'text-bottom', borderRadius: '1px', animation: 'intel-blink 0.85s step-end infinite' }} />}
-                                                </p>
+                                                    {title}
+                                                    {isLast && isThinking ? '…' : ''}
+                                                    {t.thinkingDurationMs != null ? ` · ${formatDurationMs(t.thinkingDurationMs)}` : ''}
+                                                </span>
                                             </div>
+                                            <p style={{
+                                                margin: 0,
+                                                fontSize: '11px',
+                                                lineHeight: '1.5',
+                                                color: isLast ? 'rgba(255,255,255,0.82)' : 'rgba(255,255,255,0.58)',
+                                                wordBreak: 'break-word',
+                                                whiteSpace: 'pre-wrap',
+                                                overflow: 'hidden'
+                                            }}>
+                                                {summary}
+                                            </p>
                                         </div>
                                     );
                                 })}
@@ -448,8 +499,8 @@ const RightIntelPanel = ({ sys, activeWorkers = [], agentThought = '', isThinkin
                                     onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; e.currentTarget.style.borderColor = 'var(--accent-color)'; }}
                                     onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.02)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
                                 >
-                                    <span style={{ fontSize: '12px' }}>
-                                        {card.type === 'WEATHER' ? '⛅' : card.type === 'YOUTUBE' ? '▶️' : card.type === 'DEEZER' ? '🎵' : card.type === 'CHART' ? '📊' : card.type === 'WEGENA' ? '🏔️' : '📄'}
+                                    <span style={{ fontSize: '12px', display: 'flex', alignItems: 'center', color: 'var(--text-muted)' }}>
+                                        {card.type === 'WEATHER' ? <CloudSun size={14} /> : card.type === 'YOUTUBE' ? <Play size={14} /> : card.type === 'DEEZER' ? <Music size={14} /> : card.type === 'CHART' ? <BarChart2 size={14} /> : card.type === 'WEGENA' ? <Mountain size={14} /> : <FileText size={14} />}
                                     </span>
                                     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
                                         <span style={{ fontSize: '9px', fontWeight: '800', color: 'var(--text-primary)', textTransform: 'uppercase' }}>
