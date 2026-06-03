@@ -2221,6 +2221,44 @@ const Nexus = () => {
         });
     };
 
+    const reconcileSessionSnapshot = useCallback(async (sessionIdToLoad, attempt = 0) => {
+        const sessionKey = String(sessionIdToLoad || '').trim();
+        if (!sessionKey) return;
+
+        try {
+            const snapshot = await api.get(`/sessions/${sessionKey}/snapshot`);
+            const snapshotHistory = normalizeSnapshotHistory(snapshot || {});
+            if (snapshotHistory.length > 0) {
+                snapshotHistory.forEach((msg) => {
+                    dispatch({ type: 'ADD_MESSAGE', payload: msg });
+                });
+            }
+
+            const hasAssistant = snapshotHistory.some((msg) => String(msg?.role || '').toLowerCase() === 'assistant');
+            if (hasAssistant) {
+                dispatch({ type: 'SET_SENDING', payload: false });
+                dispatch({ type: 'END_EXECUTION' });
+                setIsThinking(false);
+                if (agentThoughtTimeoutRef.current) clearTimeout(agentThoughtTimeoutRef.current);
+                return;
+            }
+
+            if (attempt < 4) {
+                window.setTimeout(() => {
+                    void reconcileSessionSnapshot(sessionKey, attempt + 1);
+                }, 500);
+            }
+        } catch (err) {
+            if (attempt < 2) {
+                window.setTimeout(() => {
+                    void reconcileSessionSnapshot(sessionKey, attempt + 1);
+                }, 750);
+            } else {
+                console.warn('Nexus snapshot reconcile failed:', err);
+            }
+        }
+    }, []);
+
     useEffect(() => () => {
         terminalTrackerTimersRef.current.forEach((timer) => clearInterval(timer));
         terminalTrackerTimersRef.current.clear();
@@ -2872,14 +2910,21 @@ const Nexus = () => {
             timestamp: Date.now()
         };
 
-        if (connectionStatus === 'online') {
-            sendWebSocketMessage(payload);
-        } else {
+        const sentViaWebSocket = sendWebSocketMessage(payload);
+        if (!sentViaWebSocket) {
             try {
                 await api.post(`/sessions/${activeId}/message`, { message: input });
             } catch (err) {
                 notify.error("Transmission failed");
+            } finally {
+                window.setTimeout(() => {
+                    void reconcileSessionSnapshot(activeId);
+                }, 450);
             }
+        } else {
+            window.setTimeout(() => {
+                void reconcileSessionSnapshot(activeId);
+            }, 700);
         }
         dispatch({ type: 'SET_SENDING', payload: false });
     };
@@ -3255,11 +3300,14 @@ const Nexus = () => {
 
                                 <button
                                     type="button"
-                                    onClick={() => {
+                                    onClick={async () => {
                                         const newMode = state.voiceMode === 'live' ? 'manual' : 'live';
                                         dispatch({ type: 'SET_VOICE_MODE', payload: newMode });
                                         if (newMode === 'live') {
-                                            voice.startRecording();
+                                            const started = await voice.startRecording();
+                                            if (!started) {
+                                                dispatch({ type: 'SET_VOICE_MODE', payload: 'manual' });
+                                            }
                                         } else {
                                             voice.stopRecording();
                                         }

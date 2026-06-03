@@ -33,6 +33,7 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
     const mediaRecorderRef = useRef(null);
     const audioStreamRef = useRef(null);
     const vadRef = useRef(null);
+    const vadReadyRef = useRef(false);
     const segmentOpenRef = useRef(false);
     const liveStreamRef = useRef(null);
     const liveAudioContextRef = useRef(null);
@@ -189,13 +190,13 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
     }, [sendMessage, sendPcm16AsChunks, sessionId]);
 
     const startRecording = useCallback(async () => {
-        if (!sendMessage) return;
+        if (!sendMessage) return false;
 
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             const error = new Error("Microphone access is not supported or blocked (likely due to insecure HTTP context). Use localhost or HTTPS.");
             console.error(error);
             if (onError) onError(error);
-            return;
+            return false;
         }
 
         try {
@@ -255,29 +256,65 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
                 vadRef.current = vad;
                 await startLivePipeline();
                 await vad.start();
+                vadReadyRef.current = true;
             } catch (vadError) {
                 console.warn('VAD init failed; falling back to legacy audio pipeline:', vadError);
                 emitVoiceState('vad_failed', { reason: 'vad_init_failed' });
+                vadReadyRef.current = false;
                 await startLegacyRecording();
             }
 
             setIsRecording(true);
+            return true;
         } catch (error) {
             console.error('Error accessing microphone:', error);
             emitVoiceState('vad_failed', { reason: 'mic_error' });
+            vadRef.current = null;
+            vadReadyRef.current = false;
+            stopLivePipeline();
+            stopLegacyPipeline();
+            segmentOpenRef.current = false;
+            setIntensity(0);
             setIsRecording(false);
             if (onError) onError(error);
+            return false;
         }
-    }, [emitVoiceState, sessionId, sendMessage, onError, onTranscriptionResult, startLegacyRecording, startLivePipeline]);
+    }, [emitVoiceState, sessionId, sendMessage, onError, onTranscriptionResult, startLegacyRecording, startLivePipeline, stopLegacyPipeline, stopLivePipeline]);
 
     const stopRecording = useCallback(() => {
-        if (vadRef.current) {
+        const vad = vadRef.current;
+        vadRef.current = null;
+        const canDestroyVad = !!(
+            vad
+            && vadReadyRef.current
+            && vad.initializationState === 'initialized'
+            && vad.listening
+            && vad._stream
+            && vad._audioContext
+            && vad._vadNode
+            && vad._mediaStreamAudioSourceNode
+        );
+
+        if (canDestroyVad) {
             try {
-                vadRef.current.pause();
-                if (vadRef.current.destroy) vadRef.current.destroy();
+                if (typeof vad.destroy === 'function') {
+                    const maybeDestroy = vad.destroy();
+                    if (maybeDestroy && typeof maybeDestroy.then === 'function') {
+                        void maybeDestroy.catch(() => {});
+                    }
+                }
             } catch (_) { /* noop */ }
+        } else {
+            vadReadyRef.current = false;
             vadRef.current = null;
+            stopLivePipeline();
+            stopLegacyPipeline();
+            if (segmentOpenRef.current) {
+                sendMessage({ type: 'input.audio.end' });
+                segmentOpenRef.current = false;
+            }
         }
+        vadReadyRef.current = false;
         stopLivePipeline();
         stopLegacyPipeline();
         if (segmentOpenRef.current) {
