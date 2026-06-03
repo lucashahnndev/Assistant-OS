@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
     buildThoughtTimelineBlocks,
+    buildThoughtTimelineRenderRows,
     formatDurationMs,
     normalizeThoughtTimelineItem,
 } from '../src/components/chat/ThoughtTimeline.utils.js';
@@ -19,6 +20,7 @@ test('raw reasoning text is sanitized into a label and summary', () => {
     assert.equal(entry.phase, 'response_drafting');
     assert.equal(entry.label, 'Montando resposta final');
     assert.equal(entry.summary, 'Montando resposta final');
+    assert.equal(entry.displaySummary, 'Estou preparando uma resposta curta e educada ao usuário.');
     assert.equal(entry.rawText, 'The user greeted me. I will respond politely and keep it short.');
 });
 
@@ -75,7 +77,9 @@ test('thought blocks group snapshot and live entries by turn/stream/work', () =>
     assert.equal(blocks[0].streamId, null);
     assert.equal(blocks[0].entries.length, 2);
     assert.equal(blocks[0].entries[0].label, 'Consultando memória');
+    assert.equal(blocks[0].entries[0].displaySummary, 'Checking memory for prior context');
     assert.equal(blocks[0].entries[1].label, 'Pensando na próxima etapa');
+    assert.equal(blocks[0].entries[1].displaySummary, 'Thinking about the final response');
 });
 
 test('duration formatter keeps stable compact labels', () => {
@@ -110,4 +114,23 @@ test('thought blocks surface backend duration metadata', () => {
     assert.equal(blocks[0].streamDurationMs, 500);
     assert.equal(blocks[0].isActive, false);
     assert.equal(formatDurationMs(blocks[0].thinkingDurationMs), '1.4s');
+});
+
+test('thought render rows expose title and sanitized summary separately', () => {
+    const rows = buildThoughtTimelineRenderRows({
+        entries: [
+            normalizeThoughtTimelineItem({
+                phase: 'response_drafting',
+                content: 'The user has initiated contact with a greeting. I will acknowledge the greeting and confirm my readiness to assist as A.T.L.A.S.',
+            }, {
+                source: 'history',
+                turnId: 'turn-render',
+            }),
+        ],
+    });
+
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].displayTitle, 'Montando resposta final');
+    assert.equal(rows[0].displaySummary, 'O usuário apenas me cumprimentou, então vou responder de forma breve e solícita.');
+    assert.equal(rows[0].isLatest, true);
 });
