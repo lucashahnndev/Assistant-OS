@@ -4,6 +4,7 @@ import time
 import threading
 import queue
 import re
+import uuid
 from typing import Dict, Optional
 from utils.logging_config import get_logger
 from utils.voice_text import sanitize_tts_text, sanitize_voice_text, normalize_agent_name_for_tts
@@ -402,8 +403,22 @@ class VoiceManager:
                 # Optionally send a 'thinking' reset or keep listening state in UI
                 return
 
+            reserved_turn_id = self.server_driver.reserve_canonical_turn(session_id, role="user", now=time.time())
+            if reserved_turn_id is not None:
+                ctx.turn_id = reserved_turn_id
+
+            transcript_id = f"{session_id}:{ctx.turn_id or int(time.time())}"
             logger.info(f"STT Result for {ctx.turn_id}: '{text}'")
-            self.server_driver.send_voice_event(session_id, {"type": "asr.final", "turnId": ctx.turn_id, "text": text})
+            self.server_driver.send_voice_event(session_id, {
+                "type": "asr.final",
+                "turnId": ctx.turn_id,
+                "turn_id": ctx.turn_id,
+                "transcriptId": transcript_id,
+                "transcript_id": transcript_id,
+                "text": text,
+                "content": text,
+                "source": "voice",
+            })
             
             from core.identity import PrincipalContext
             context = PrincipalContext(
@@ -536,7 +551,7 @@ class VoiceManager:
  
                     # Voice protocol events (partial)
                     self.manager.server_driver.send_voice_event(self.sid, {
-                        "type": "agent.partial", "turnId": self.turn_id, "text": raw_text
+                        "type": "agent.partial", "turnId": self.turn_id, "turn_id": self.turn_id, "text": raw_text
                     })
  
                 def send_complete(self, target=None, *args, **kwargs):
@@ -549,7 +564,7 @@ class VoiceManager:
  
                     logger.info(f"Interceptor completion for turn {self.turn_id}")
                     self.manager.server_driver.send_voice_event(self.sid, {
-                        "type": "agent.final", "turnId": self.turn_id, "text": self.accumulated_text
+                        "type": "agent.final", "turnId": self.turn_id, "turn_id": self.turn_id, "text": self.accumulated_text
                     })
  
                 def send_status(self, target, phase, payload=None, model_info=None, **kwargs):
@@ -683,7 +698,15 @@ class VoiceManager:
             if not speak_text:
                 return
 
-            self.server_driver.send_voice_event(session_id, {"type": "tts.start", "turnId": turn_id, "text": speak_text})
+            playback_id = f"{session_id}:{turn_id}:{int(time.time() * 1000)}:{uuid.uuid4().hex[:8]}"
+            self.server_driver.send_voice_event(session_id, {
+                "type": "tts.start",
+                "turnId": turn_id,
+                "turn_id": turn_id,
+                "playbackId": playback_id,
+                "playback_id": playback_id,
+                "text": speak_text,
+            })
             
             logger.info(f"Generating TTS segment for turn {turn_id}: {speak_text[:30]}...")
             audio_content = self.tts_manager.generate(speak_text)
@@ -699,11 +722,23 @@ class VoiceManager:
                     chunk = audio_content[offset : offset + chunk_size]
                     audio_b64 = base64.b64encode(chunk).decode('utf-8')
                     self.server_driver.send_voice_event(session_id, {
-                        "type": "tts.chunk", "turnId": turn_id, "seq": i + 1, "b64": audio_b64
+                        "type": "tts.chunk",
+                        "turnId": turn_id,
+                        "turn_id": turn_id,
+                        "playbackId": playback_id,
+                        "playback_id": playback_id,
+                        "seq": i + 1,
+                        "b64": audio_b64,
                     })
                     time.sleep(0.01)
                 
-            self.server_driver.send_voice_event(session_id, {"type": "tts.end", "turnId": turn_id})
+            self.server_driver.send_voice_event(session_id, {
+                "type": "tts.end",
+                "turnId": turn_id,
+                "turn_id": turn_id,
+                "playbackId": playback_id,
+                "playback_id": playback_id,
+            })
         except Exception as e:
             logger.error(f"TTS Segment Error: {e}")
         finally:

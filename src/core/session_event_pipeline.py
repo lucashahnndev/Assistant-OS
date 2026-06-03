@@ -29,6 +29,7 @@ STATUS_EVENT_TYPES = {
     "status",
     "system_metrics",
     "system_health",
+    "voice.state",
 }
 
 SESSION_EVENT_TYPES = {
@@ -50,6 +51,22 @@ REASONING_EVENT_TYPES = {
     "cognitive_thought",
     "assistant_thought",
     "reasoning_chunk",
+}
+
+TRANSCRIPT_EVENT_TYPES = {
+    "transcript.partial",
+    "transcript.final",
+    "asr.partial",
+    "asr.final",
+}
+
+PLAYBACK_EVENT_TYPES = {
+    "playback.started",
+    "playback.chunk",
+    "playback.completed",
+    "tts.start",
+    "tts.chunk",
+    "tts.end",
 }
 
 NON_CHAT_MESSAGE_TYPES = {
@@ -216,6 +233,8 @@ class SessionEventPipeline:
             return "visual"
         if event_type == "assistant_visual_intent":
             return "visual"
+        if event_type == "orb.intensity":
+            return "visual"
         if event_type.startswith("card."):
             return "card"
         if event_type.startswith("artifact."):
@@ -224,6 +243,10 @@ class SessionEventPipeline:
             return "media"
         if event_type in FEEDBACK_EVENT_TYPES or event_type.startswith("message.feedback."):
             return "feedback"
+        if event_type in TRANSCRIPT_EVENT_TYPES or event_type.startswith("transcript."):
+            return "transcript"
+        if event_type in PLAYBACK_EVENT_TYPES or event_type.startswith("playback."):
+            return "playback"
         if event_type == "complete":
             return "completion"
         if event_type == "assistant_response":
@@ -300,6 +323,8 @@ class SessionEventPipeline:
             "message_id",
             "reply_to_message_id",
             "stream_id",
+            "transcript_id",
+            "playback_id",
             "work_id",
             "sequence",
             "msg_type",
@@ -334,6 +359,8 @@ class SessionEventPipeline:
                 "message_id",
                 "reply_to_message_id",
                 "stream_id",
+                "transcript_id",
+                "playback_id",
                 "work_id",
                 "sequence",
                 "msg_type",
@@ -421,6 +448,7 @@ def build_session_snapshot(session_id: str, base_data_dir: Optional[str] = None,
         "turns": "turns.index.json",
         "streams": "streams.index.json",
         "workers": "workers.index.json",
+        "transcripts": "transcripts.index.json",
         "thoughts": "thoughts.index.json",
         "media": "media.index.json",
         "feedback": "feedback.index.json",
@@ -461,6 +489,7 @@ class SessionEventIndexWriter:
             "turns": os.path.join(self.session_dir, "turns.index.json"),
             "streams": os.path.join(self.session_dir, "streams.index.json"),
             "workers": os.path.join(self.session_dir, "workers.index.json"),
+            "transcripts": os.path.join(self.session_dir, "transcripts.index.json"),
             "thoughts": os.path.join(self.session_dir, "thoughts.index.json"),
             "media": os.path.join(self.session_dir, "media.index.json"),
             "feedback": os.path.join(self.session_dir, "feedback.index.json"),
@@ -607,6 +636,8 @@ class SessionEventIndexWriter:
         message_id: Optional[str] = None,
         role: Optional[str] = None,
         stream_id: Optional[str] = None,
+        transcript_id: Optional[str] = None,
+        playback_id: Optional[str] = None,
         work_id: Optional[str] = None,
         status: Optional[str] = None,
     ) -> None:
@@ -624,6 +655,8 @@ class SessionEventIndexWriter:
                 "user_message_id": None,
                 "assistant_message_ids": [],
                 "stream_ids": [],
+                "transcript_ids": [],
+                "playback_ids": [],
                 "work_ids": [],
                 "message_ids": [],
                 "created_at": timestamp,
@@ -640,6 +673,10 @@ class SessionEventIndexWriter:
                     turn_record["assistant_message_ids"].append(message_id)
             if stream_id and stream_id not in turn_record["stream_ids"]:
                 turn_record["stream_ids"].append(stream_id)
+            if transcript_id and transcript_id not in turn_record["transcript_ids"]:
+                turn_record["transcript_ids"].append(transcript_id)
+            if playback_id and playback_id not in turn_record["playback_ids"]:
+                turn_record["playback_ids"].append(playback_id)
             if work_id and work_id not in turn_record["work_ids"]:
                 turn_record["work_ids"].append(work_id)
             if status:
@@ -724,6 +761,45 @@ class SessionEventIndexWriter:
                 data["updated_at"] = time.time()
                 self._atomic_write_json(thoughts_path, data)
 
+    def _backlink_transcript_records_to_message(
+        self,
+        turn_id: Any,
+        message_id: Optional[str],
+        completed_at: Any,
+    ) -> None:
+        turn_key = str(turn_id or "").strip()
+        message_key = str(message_id or "").strip()
+        if not turn_key or not message_key:
+            return
+
+        transcripts_path = self.paths.get("transcripts")
+        turn_record = self._get_index_record("turns", turn_key)
+        if not transcripts_path:
+            return
+
+        with self._lock:
+            data = self._load_index(transcripts_path)
+            items = data.setdefault("items", {})
+            updated = False
+            for record in items.values():
+                if str(record.get("turn_id") or "").strip() != turn_key:
+                    continue
+                if str(record.get("source") or "").strip().lower() not in {"voice", "transcript", ""}:
+                    continue
+                if record.get("message_id") not in (None, "", message_key):
+                    continue
+                started_at = record.get("created_at") or record.get("timestamp") or completed_at
+                record["message_id"] = message_key
+                record["completed_at"] = record.get("completed_at") or completed_at
+                record["updated_at"] = completed_at
+                record["turn_duration_ms"] = _duration_ms(turn_record.get("created_at") or started_at, completed_at)
+                record["is_active"] = False
+                updated = True
+
+            if updated:
+                data["updated_at"] = time.time()
+                self._atomic_write_json(transcripts_path, data)
+
     def update(self, event: Dict[str, Any]) -> None:
         event_type = str(event.get("event_type") or event.get("type") or "").strip()
         category = str(event.get("category") or "").strip()
@@ -765,6 +841,8 @@ class SessionEventIndexWriter:
                     stream_id=stream_id,
                     work_id=work_id,
                 )
+                if role == "user":
+                    self._backlink_transcript_records_to_message(turn_id, key, timestamp)
                 if role == "assistant":
                     self._backlink_thought_records_to_message(
                         turn_id,
@@ -808,6 +886,109 @@ class SessionEventIndexWriter:
                 )
                 if event_type == "complete" and target == "stream":
                     self._close_thought_records_for_turn(turn_id, timestamp, stream_id=key)
+
+        if category == "transcript" or event_type in TRANSCRIPT_EVENT_TYPES:
+            transcript_key = str(
+                _pick_first(
+                    event.get("transcript_id"),
+                    payload.get("transcript_id"),
+                    event.get("event_id"),
+                )
+                or ""
+            ).strip()
+            if transcript_key:
+                current_transcript = self._get_index_record("transcripts", transcript_key)
+                raw_kind = str(payload.get("kind") or event.get("msg_type") or event_type).strip() or event_type
+                status = str(payload.get("status") or event.get("status") or "").strip().lower()
+                if not status:
+                    status = "final" if event_type in {"transcript.final", "asr.final"} else "partial"
+                content = (
+                    payload.get("content")
+                    or payload.get("text")
+                    or event.get("content")
+                    or event.get("text")
+                    or ""
+                )
+                transcript_record = {
+                    "transcript_id": transcript_key,
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "message_id": message_id,
+                    "source": payload.get("source") or event.get("source") or "voice",
+                    "category": "transcript",
+                    "kind": raw_kind,
+                    "status": status,
+                    "content": content,
+                    "content_preview": self._preview_text(content),
+                    "summary": payload.get("summary") or event.get("summary") or "",
+                    "raw_type": payload.get("raw_type") or event.get("raw_type") or event_type,
+                    "created_at": current_transcript.get("created_at") or timestamp,
+                    "updated_at": timestamp,
+                    "completed_at": timestamp if status in {"final", "completed"} else current_transcript.get("completed_at"),
+                    "event_id": event.get("event_id"),
+                    "is_active": status not in {"final", "completed"},
+                }
+                self._upsert("transcripts", transcript_key, transcript_record)
+                self._upsert_turn_record(
+                    turn_id,
+                    session_id,
+                    timestamp,
+                    message_id=message_id,
+                    transcript_id=transcript_key,
+                    work_id=work_id,
+                )
+
+        if category == "playback" or event_type in PLAYBACK_EVENT_TYPES:
+            playback_key = str(
+                _pick_first(
+                    event.get("playback_id"),
+                    payload.get("playback_id"),
+                    event.get("event_id"),
+                )
+                or ""
+            ).strip()
+            if playback_key:
+                current_playback = self._get_index_record("playback", playback_key)
+                raw_kind = str(payload.get("kind") or event.get("msg_type") or event_type).strip() or event_type
+                status = str(payload.get("status") or event.get("status") or "").strip().lower()
+                if not status:
+                    status = "completed" if event_type in {"playback.completed", "tts.end"} else "streaming"
+                content = (
+                    payload.get("content")
+                    or payload.get("text")
+                    or event.get("content")
+                    or event.get("text")
+                    or ""
+                )
+                playback_record = {
+                    "playback_id": playback_key,
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "message_id": message_id,
+                    "source": payload.get("source") or event.get("source") or "voice",
+                    "category": "playback",
+                    "kind": raw_kind,
+                    "status": status,
+                    "content_preview": self._preview_text(content),
+                    "content": content,
+                    "summary": payload.get("summary") or event.get("summary") or "",
+                    "raw_type": payload.get("raw_type") or event.get("raw_type") or event_type,
+                    "started_at": current_playback.get("started_at") or timestamp,
+                    "updated_at": timestamp,
+                    "completed_at": timestamp if status in {"completed", "final"} else current_playback.get("completed_at"),
+                    "event_id": event.get("event_id"),
+                    "chunk_count": int(current_playback.get("chunk_count") or 0) + (1 if event_type in {"playback.chunk", "tts.chunk"} else 0),
+                    "is_active": status not in {"completed", "final"},
+                }
+                self._upsert("playback", playback_key, playback_record)
+                self._upsert_turn_record(
+                    turn_id,
+                    session_id,
+                    timestamp,
+                    message_id=message_id,
+                    playback_id=playback_key,
+                    work_id=work_id,
+                )
 
         if category == "reasoning" or event_type in REASONING_EVENT_TYPES:
             thought_key = str(event.get("thought_id") or payload.get("thought_id") or event.get("event_id") or "").strip()

@@ -18,6 +18,9 @@ const MIC_CONSTRAINTS = {
     }
 };
 
+const getVadAssetBasePath = () => `${window.location.origin}/node_modules/@ricky0123/vad-web/dist/`;
+const getOrtWasmBasePath = () => `${window.location.origin}/node_modules/onnxruntime-web/dist/`;
+
 /**
  * useVoice Hook
  * Enables voice capture and streams speech segments to backend.
@@ -36,6 +39,19 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
     const liveSourceRef = useRef(null);
     const liveProcessorRef = useRef(null);
     const speechStartedAtRef = useRef(0);
+
+    const emitVoiceState = useCallback((state, extra = {}) => {
+        if (!sendMessage) return;
+        try {
+            sendMessage({
+                type: 'voice.state',
+                state,
+                ...extra,
+            });
+        } catch (_) {
+            // best-effort telemetry only
+        }
+    }, [sendMessage]);
 
     const sendPcm16AsChunks = useCallback((floatAudio) => {
         if (!floatAudio || !floatAudio.length) return;
@@ -196,6 +212,8 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
                 const vad = await MicVAD.new({
                     startOnLoad: false,
                     ...VAD_NOISE_PROFILE,
+                    baseAssetPath: getVadAssetBasePath(),
+                    onnxWASMBasePath: getOrtWasmBasePath(),
                     getStream: () => navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS),
                     onFrameProcessed: (_, frame) => {
                         if (!frame || !frame.length) return;
@@ -239,16 +257,18 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
                 await vad.start();
             } catch (vadError) {
                 console.warn('VAD init failed; falling back to legacy audio pipeline:', vadError);
+                emitVoiceState('vad_failed', { reason: 'vad_init_failed' });
                 await startLegacyRecording();
             }
 
             setIsRecording(true);
         } catch (error) {
             console.error('Error accessing microphone:', error);
+            emitVoiceState('vad_failed', { reason: 'mic_error' });
             setIsRecording(false);
             if (onError) onError(error);
         }
-    }, [sessionId, sendMessage, onError, onTranscriptionResult, startLegacyRecording, startLivePipeline]);
+    }, [emitVoiceState, sessionId, sendMessage, onError, onTranscriptionResult, startLegacyRecording, startLivePipeline]);
 
     const stopRecording = useCallback(() => {
         if (vadRef.current) {

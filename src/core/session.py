@@ -164,8 +164,12 @@ class Session:
         current_turn_id = self._coerce_turn_id(context.get("current_turn_id"))
         current_user_message_id = str(context.get("current_turn_user_message_id") or "").strip() or None
         current_closed_at = context.get("current_turn_closed_at")
+        current_reserved_for = str(context.get("current_turn_reserved_for") or "").strip().lower() or None
 
         if role_key in {"user", "notification"}:
+            if current_turn_id and not current_closed_at and current_reserved_for == role_key:
+                return current_turn_id
+            context.pop("current_turn_reserved_for", None)
             return self._start_canonical_turn(role_key)
 
         if role_key == "assistant":
@@ -348,6 +352,7 @@ class Session:
             context["current_turn_message_id"] = msg["id"]
             context["current_turn_closed_at"] = None
             context["current_turn_role"] = str(role or "").strip().lower() or "user"
+            context.pop("current_turn_reserved_for", None)
         elif role == "assistant":
             if turn_id is not None:
                 context["current_turn_id"] = turn_id

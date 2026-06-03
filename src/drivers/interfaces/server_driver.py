@@ -565,6 +565,177 @@ class ServerDriver(BaseDriver):
             context = session.context
         return session, context
 
+    def reserve_canonical_turn(self, session_id: str, role: str = "user", now: Optional[float] = None):
+        session, context = self._get_session_stream_context(session_id)
+        if not session:
+            return None
+
+        turn_id = None
+        try:
+            resolver = getattr(session, "_start_canonical_turn", None)
+            if callable(resolver):
+                turn_id = resolver(role, now=now)
+            else:
+                turn_id = self._coerce_turn_id(context.get("current_turn_id")) if isinstance(context, dict) else None
+        except Exception as exc:
+            logger.debug("ServerDriver: Failed to reserve canonical turn for %s: %s", session_id, exc)
+            turn_id = None
+
+        if isinstance(context, dict) and turn_id is not None:
+            context["current_turn_id"] = turn_id
+            context["current_turn_reserved_for"] = str(role or "").strip().lower() or "user"
+            context["current_turn_started_by"] = str(role or "").strip().lower() or "user"
+            context["current_turn_closed_at"] = None
+        return turn_id
+
+    def _build_voice_pipeline_event(self, session_id: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        raw = dict(payload or {})
+        raw_type = str(raw.get("type") or "").strip()
+        if not raw_type:
+            return None
+
+        session, context = self._get_session_stream_context(session_id)
+        turn_id = self._coerce_turn_id(
+            raw.get("turn_id")
+            or raw.get("turnId")
+            or (context.get("current_turn_id") if isinstance(context, dict) else None)
+        )
+        message_id = str(
+            raw.get("message_id")
+            or raw.get("messageId")
+            or (context.get("current_turn_assistant_message_id") if isinstance(context, dict) else "")
+            or (context.get("current_response_stream_message_id") if isinstance(context, dict) else "")
+            or ""
+        ).strip() or None
+        voice_source = str(raw.get("source") or "voice").strip() or "voice"
+        content = raw.get("content") or raw.get("text") or ""
+
+        if raw_type == "asr.final":
+            if turn_id is None:
+                turn_id = self.reserve_canonical_turn(session_id, role="user", now=time.time())
+            transcript_id = str(
+                raw.get("transcript_id")
+                or raw.get("transcriptId")
+                or f"{session_id}:{turn_id or uuid.uuid4()}"
+            ).strip()
+            return {
+                "type": "transcript.final",
+                "event_type": "transcript.final",
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "transcript_id": transcript_id,
+                "message_id": message_id,
+                "source": voice_source,
+                "category": "transcript",
+                "payload": {
+                    "transcript_id": transcript_id,
+                    "turn_id": turn_id,
+                    "message_id": message_id,
+                    "source": voice_source,
+                    "category": "transcript",
+                    "status": "final",
+                    "kind": "transcript",
+                    "content": content,
+                    "summary": raw.get("summary") or "",
+                    "raw_type": raw_type,
+                },
+                "text": content,
+            }
+
+        if raw_type == "asr.partial":
+            if turn_id is None:
+                return None
+            transcript_id = str(
+                raw.get("transcript_id")
+                or raw.get("transcriptId")
+                or (turn_id if turn_id is not None else f"{session_id}:{uuid.uuid4()}")
+            ).strip()
+            return {
+                "type": "transcript.partial",
+                "event_type": "transcript.partial",
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "transcript_id": transcript_id,
+                "source": voice_source,
+                "category": "transcript",
+                "payload": {
+                    "transcript_id": transcript_id,
+                    "turn_id": turn_id,
+                    "source": voice_source,
+                    "category": "transcript",
+                    "status": "partial",
+                    "kind": "transcript",
+                    "content": content,
+                    "summary": raw.get("summary") or "",
+                    "raw_type": raw_type,
+                    "seq": raw.get("seq"),
+                },
+                "text": content,
+            }
+
+        if raw_type in {"tts.start", "tts.chunk", "tts.end"}:
+            if turn_id is None:
+                return None
+            playback_id = str(
+                raw.get("playback_id")
+                or raw.get("playbackId")
+                or raw.get("audio_id")
+                or raw.get("audioId")
+                or raw.get("event_id")
+                or f"{session_id}:{turn_id or uuid.uuid4()}"
+            ).strip()
+            playback_type = {
+                "tts.start": "playback.started",
+                "tts.chunk": "playback.chunk",
+                "tts.end": "playback.completed",
+            }.get(raw_type, "playback.started")
+            status = {
+                "tts.start": "streaming",
+                "tts.chunk": "streaming",
+                "tts.end": "completed",
+            }.get(raw_type, "streaming")
+            return {
+                "type": playback_type,
+                "event_type": playback_type,
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "playback_id": playback_id,
+                "message_id": message_id,
+                "source": voice_source,
+                "category": "playback",
+                "payload": {
+                    "playback_id": playback_id,
+                    "turn_id": turn_id,
+                    "message_id": message_id,
+                    "source": voice_source,
+                    "category": "playback",
+                    "status": status,
+                    "kind": "tts",
+                    "content": content,
+                    "summary": raw.get("summary") or "",
+                    "raw_type": raw_type,
+                    "seq": raw.get("seq"),
+                    "b64": raw.get("b64"),
+                },
+            }
+
+        if raw_type in {"voice.state", "orb.intensity"}:
+            if turn_id is None:
+                return None
+            normalized = dict(raw)
+            if turn_id is not None and "turn_id" not in normalized:
+                normalized["turn_id"] = turn_id
+            if "turnId" not in normalized and turn_id is not None:
+                normalized["turnId"] = turn_id
+            if raw_type == "voice.state":
+                normalized.setdefault("category", "status")
+            else:
+                normalized.setdefault("category", "visual")
+            normalized.setdefault("source", voice_source)
+            return normalized
+
+        return None
+
     @staticmethod
     def _coerce_turn_id(value):
         if value in (None, "", []):
@@ -889,10 +1060,23 @@ class ServerDriver(BaseDriver):
 
     def send_voice_event(self, session_id, payload):
         """Standardized method to send Voice Protocol events to the client."""
-        if not self.loop or self.loop.is_closed() or not session_id: return
-        
+        if not session_id:
+            return None
+
+        canonical_event = None
+        try:
+            canonical_event = self._build_voice_pipeline_event(session_id, payload)
+            if canonical_event is not None:
+                self._record_pipeline_event(session_id, canonical_event, publish=False)
+        except Exception as exc:
+            logger.debug("ServerDriver: Failed to persist voice event for %s: %s", session_id, exc)
+
+        if not self.loop or self.loop.is_closed():
+            return canonical_event
+
         json_payload = json.dumps(payload)
         asyncio.run_coroutine_threadsafe(
-            self.connection_manager.send_personal_message(json_payload, session_id), 
+            self.connection_manager.send_personal_message(json_payload, session_id),
             self.loop
         )
+        return canonical_event
