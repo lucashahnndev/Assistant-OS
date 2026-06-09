@@ -76,23 +76,45 @@ class LLMResolver(IntentResolver):
                 )
                 intent.action = canonical_action
 
-            # Prevent pure hallucination loops where intent is just an empty dict parsed as reply
-            if intent.action == "reply" and not intent.response_text and not intent.thought:
-                 raise ValueError("VALIDATION_ERROR: Empty 'reply' action. Provider must provide either 'response_text' or 'thought'.")
+            # Prevent empty semantic replies from being treated as valid intent.
+            if intent.action == "reply" and not str(intent.response_text or "").strip():
+                 raise ValueError("VALIDATION_ERROR: Empty 'reply' action. Provider must provide non-empty response_text.")
 
             confidence, notes = self._estimate_confidence(intent, local_context)
+            confidence_diagnostics = self._build_confidence_diagnostics(
+                intent=intent,
+                context=local_context,
+                score=confidence,
+                notes=notes,
+            )
             
             if confidence < self.threshold:
                 logger.warning(
                     f"LLM confidence {confidence:.2f} below threshold {self.threshold:.2f} "
                     f"for action '{intent.action}' | notes={notes}"
+                    ,
+                    extra={
+                        "confidence_diagnostics": confidence_diagnostics,
+                        "confidence_reason_codes": list(confidence_diagnostics.get("reason_codes") or []),
+                        "confidence_reason_types": list(confidence_diagnostics.get("reason_types") or []),
+                        "confidence_threshold": self.threshold,
+                        "confidence_score": confidence,
+                        "confidence_action": intent.action,
+                        "confidence_action_is_reply": bool(confidence_diagnostics.get("action_is_reply")),
+                    },
                 )
                 return ActionPlan(
                     action_id="error",
                     confidence=confidence,
                     source="llm_low_confidence",
                     model_used=intent.model_used,
-                    metadata={"error_code": "low_confidence", "notes": notes, "attempted_action": intent.action}
+                    metadata={
+                        "error_code": "low_confidence",
+                        "notes": notes,
+                        "attempted_action": intent.action,
+                        "confidence_diagnostics": confidence_diagnostics,
+                        "confidence_reason_codes": list(confidence_diagnostics.get("reason_codes") or []),
+                    }
                 )
 
             return ActionPlan(
@@ -109,19 +131,54 @@ class LLMResolver(IntentResolver):
                     "state_summary": intent.state_summary,
                     "task_label": intent.task_label,
                     "confidence_notes": notes,
+                    "confidence_diagnostics": confidence_diagnostics,
+                    "confidence_reason_codes": list(confidence_diagnostics.get("reason_codes") or []),
                 }
             )
         except Exception as e:
             logger.error(f"LLM resolution failed: {e}")
             # The Orchestrator handles high-level recovery/fallback.
             # We return an ActionPlan(action_id="error") to signal failure to the kernel.
-            error_code = ErrorCode.PLANNER_SCHEMA_MISMATCH if "json" in str(e).lower() else ErrorCode.UNKNOWN_ERROR
+            error_text = str(e).lower()
+            if "empty 'reply'" in error_text or "non-empty response_text" in error_text or "missing action" in error_text or "invalid action" in error_text or "missing_provider_diagnostics" in error_text:
+                error_code = ErrorCode.PLANNER_SCHEMA_MISMATCH
+                if "reply" in error_text:
+                    reason_codes = ["invalid_reply_payload"]
+                    error_reason = "missing_response_text"
+                elif "missing_provider_diagnostics" in error_text:
+                    reason_codes = ["missing_provider_diagnostics"]
+                    error_reason = "missing_provider_diagnostics"
+                else:
+                    reason_codes = ["invalid_intent_payload"]
+                    error_reason = "invalid_intent_payload"
+            elif "json" in error_text or "parse" in error_text:
+                error_code = ErrorCode.PLANNER_INVALID_JSON
+                reason_codes = ["provider_parse"]
+                error_reason = "provider_parse"
+            else:
+                error_code = ErrorCode.UNKNOWN_ERROR
+                reason_codes = ["provider_error"]
+                error_reason = "provider_error"
             return ActionPlan(
                 action_id="error",
                 args={},
                 source="llm_error",
                 thought=f"Planning failed: {str(e)}",
-                metadata={"error_code": error_code.value}
+                metadata={
+                    "error_code": error_code.value,
+                    "confidence_diagnostics": {
+                        "score": 0.0,
+                        "threshold": float(self.threshold),
+                        "reason_codes": reason_codes,
+                        "reason_types": ["format" if error_code == ErrorCode.PLANNER_SCHEMA_MISMATCH else "provider_parse" if error_code == ErrorCode.PLANNER_INVALID_JSON else "provider_error"],
+                        "semantic_authority": False,
+                        "source": "llm_error",
+                        "diagnostic_source": "llm_resolver",
+                        "error_stage": "resolver",
+                        "error_type": error_code.value.lower(),
+                        "error_reason": error_reason,
+                    },
+                }
             )
 
     def _canonicalize_action_id(self, action_id: str, context: Dict[str, Any]) -> str:
@@ -248,3 +305,94 @@ class LLMResolver(IntentResolver):
         # Keep score in [0, 1]
         score = max(0.0, min(1.0, score))
         return score, notes
+
+    @staticmethod
+    def _confidence_reason_type(reason_code: str) -> str:
+        code = str(reason_code or "").strip().lower()
+        mapping = {
+            "reply_with_text": "format",
+            "reply_with_attachments_no_text": "format",
+            "reply_with_thought_only": "format",
+            "reply_without_text_or_thought": "empty_output",
+            "action_allowed_for_principal": "permission",
+            "action_outside_allowed_scope": "permission",
+            "action_registered": "structural",
+            "action_not_registered": "structural",
+            "params_present": "structural",
+            "params_empty": "structural",
+            "params_not_object": "schema",
+            "thought_present": "structural",
+            "thought_too_short": "format",
+            "plan_present": "structural",
+        }
+        return mapping.get(code, "structural")
+
+    def _build_confidence_diagnostics(
+        self,
+        *,
+        intent: Any,
+        context: Dict[str, Any],
+        score: float,
+        notes: List[str],
+    ) -> Dict[str, Any]:
+        breakdown: List[Dict[str, Any]] = []
+        for note in notes:
+            breakdown.append(
+                {
+                    "reason_code": note,
+                    "reason_type": self._confidence_reason_type(note),
+                }
+            )
+
+        action = self._canonicalize_action_id(getattr(intent, "action", ""), context)
+        provider_diagnostics = self._extract_provider_diagnostics(getattr(intent, "state_summary", None))
+        return {
+            "score": round(float(score), 4),
+            "threshold": round(float(self.threshold), 4),
+            "reason_codes": list(notes),
+            "reason_types": sorted({item["reason_type"] for item in breakdown}) if breakdown else [],
+            "reason_breakdown": breakdown,
+            "semantic_authority": False,
+            "action": action,
+            "action_is_reply": action == "reply",
+            "attachment_count": len(getattr(intent, "attachments", None) or []),
+            "model_used": getattr(intent, "model_used", None),
+            "diagnostic_source": "llm_resolver",
+            "error_stage": "resolver",
+            "error_type": "confidence_assessment" if score >= self.threshold else "confidence_rejection",
+            "error_reason": "low_confidence" if score < self.threshold else "ok",
+            "provider_diagnostics": provider_diagnostics,
+            "provider_parse_status": provider_diagnostics.get("provider_parse_status") if provider_diagnostics else None,
+            "provider_fallback_reason": provider_diagnostics.get("provider_fallback_reason") if provider_diagnostics else None,
+            "raw_preview": provider_diagnostics.get("raw_preview") if provider_diagnostics else "",
+            "raw_preview_truncated": provider_diagnostics.get("raw_preview_truncated") if provider_diagnostics else False,
+            "raw_preview_chars": provider_diagnostics.get("raw_preview_chars") if provider_diagnostics else 0,
+        }
+
+    @staticmethod
+    def _extract_provider_diagnostics(state_summary: Any) -> Dict[str, Any]:
+        if not isinstance(state_summary, dict):
+            return {}
+        keys = (
+            "provider_used",
+            "provider_attempts",
+            "provider_attempts_total",
+            "provider_fallback_reason",
+            "provider_parse_status",
+            "provider_schema_mode",
+            "provider_contract_mode",
+            "error_stage",
+            "error_type",
+            "error_reason",
+            "diagnostic_source",
+            "raw_preview",
+            "raw_preview_truncated",
+            "raw_preview_chars",
+            "semantic_authority",
+        )
+        out = {}
+        for key in keys:
+            value = state_summary.get(key)
+            if value not in (None, "", [], {}):
+                out[key] = value
+        return out

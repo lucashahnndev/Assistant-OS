@@ -189,19 +189,55 @@ class OpenAIChatProvider(ILLMProvider):
 
             if not response.choices:
                 logger.error("OpenAI returned an empty response.")
-                raise ValueError("OpenAI returned an empty response.")
+                raise ILLMProvider.contract_error(
+                    "OpenAI returned an empty response.",
+                    provider_used="openai",
+                    error_stage="provider",
+                    error_type="provider_exception",
+                    error_reason="empty_output",
+                    raw_response=response,
+                    provider_parse_status="empty_output",
+                    provider_fallback_reason="provider_empty_output",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "openai"},
+                )
 
             content = self._extract_response_content(response.choices[0].message)
             if not content:
                 logger.error("OpenAI returned an empty response payload.")
-                raise ValueError("OpenAI returned an empty response payload.")
+                raise ILLMProvider.contract_error(
+                    "OpenAI returned an empty response payload.",
+                    provider_used="openai",
+                    error_stage="provider",
+                    error_type="provider_exception",
+                    error_reason="empty_output",
+                    raw_response=content,
+                    provider_parse_status="empty_output",
+                    provider_fallback_reason="provider_empty_output",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "openai"},
+                )
             
             # Use specialized parser
             data = extract_and_parse_json(content)
             
             if not data:
                 logger.error("Failed to extract valid JSON from OpenAI response.")
-                raise ProviderContractError("Failed to fulfill AgentIntent contract: Invalid JSON.")
+                raise ILLMProvider.contract_error(
+                    "Failed to fulfill AgentIntent contract: Invalid JSON.",
+                    provider_used="openai",
+                    error_stage="provider",
+                    error_type="provider_exception",
+                    error_reason="invalid_json",
+                    raw_response=content,
+                    provider_parse_status="invalid_json",
+                    provider_fallback_reason="provider_parse_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "openai"},
+                )
 
             # Normalization
             attachments = data.get("attachments")
@@ -211,6 +247,50 @@ class OpenAIChatProvider(ILLMProvider):
                 data.get("response_text", data.get("reply", "")),
                 fallback="",
             )
+            action = str(data.get("action", "") or "").strip()
+            allowed_actions = kwargs.get("allowed_actions")
+            if not action:
+                raise ILLMProvider.contract_error(
+                    "OpenAI intent missing action.",
+                    provider_used="openai",
+                    error_stage="provider",
+                    error_type="provider_contract_error",
+                    error_reason="missing_action",
+                    raw_response=data,
+                    provider_parse_status="missing_action",
+                    provider_fallback_reason="provider_contract_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "openai"},
+                )
+            if action == "reply" and not response_text.strip():
+                raise ILLMProvider.contract_error(
+                    "OpenAI reply missing response_text.",
+                    provider_used="openai",
+                    error_stage="provider",
+                    error_type="provider_contract_error",
+                    error_reason="missing_response_text",
+                    raw_response=data,
+                    provider_parse_status="missing_response_text",
+                    provider_fallback_reason="provider_contract_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "openai"},
+                )
+            if isinstance(allowed_actions, (list, tuple, set)) and action not in {str(item).strip() for item in allowed_actions if str(item or "").strip()}:
+                raise ILLMProvider.contract_error(
+                    f"OpenAI returned unsupported action: {action}.",
+                    provider_used="openai",
+                    error_stage="provider",
+                    error_type="provider_contract_error",
+                    error_reason="unsupported_action",
+                    raw_response=data,
+                    provider_parse_status="unsupported_action",
+                    provider_fallback_reason="provider_contract_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "openai"},
+                )
 
             # Mandatory thought enforcement
             thought = str(data.get("thought", "")).strip()
@@ -220,7 +300,7 @@ class OpenAIChatProvider(ILLMProvider):
             return AgentIntent(
                 thought=thought,
                 plan=data.get("plan", []),
-                action=data.get("action", "reply"),
+                action=str(data.get("action", "") or "").strip(),
                 params=data.get("params", {}),
                 state_summary=data.get("state_summary", {}),
                 response_text=response_text,
@@ -239,15 +319,51 @@ class OpenAIChatProvider(ILLMProvider):
                 )
                 if not response.choices:
                     logger.error("OpenAI returned an empty response.")
-                    raise ValueError("OpenAI returned an empty response.")
+                    raise ILLMProvider.contract_error(
+                        "OpenAI returned an empty response.",
+                        provider_used="openai",
+                        error_stage="provider",
+                        error_type="provider_exception",
+                        error_reason="empty_output",
+                        raw_response=response,
+                        provider_parse_status="empty_output",
+                        provider_fallback_reason="provider_empty_output",
+                        provider_schema_mode="intent_json",
+                        provider_contract_mode="intent",
+                        extra={"diagnostic_source": "openai"},
+                    )
                 content = self._extract_response_content(response.choices[0].message)
                 if not content:
                     logger.error("OpenAI returned an empty response payload.")
-                    raise ValueError("OpenAI returned an empty response payload.")
+                    raise ILLMProvider.contract_error(
+                        "OpenAI returned an empty response payload.",
+                        provider_used="openai",
+                        error_stage="provider",
+                        error_type="provider_exception",
+                        error_reason="empty_output",
+                        raw_response=content,
+                        provider_parse_status="empty_output",
+                        provider_fallback_reason="provider_empty_output",
+                        provider_schema_mode="intent_json",
+                        provider_contract_mode="intent",
+                        extra={"diagnostic_source": "openai"},
+                    )
                 data = extract_and_parse_json(content)
                 if not data:
                     logger.error("Failed to extract valid JSON from OpenAI response.")
-                    raise ProviderContractError("Failed to fulfill AgentIntent contract: Invalid JSON.")
+                    raise ILLMProvider.contract_error(
+                        "Failed to fulfill AgentIntent contract: Invalid JSON.",
+                        provider_used="openai",
+                        error_stage="provider",
+                        error_type="provider_exception",
+                        error_reason="invalid_json",
+                        raw_response=content,
+                        provider_parse_status="invalid_json",
+                        provider_fallback_reason="provider_parse_error",
+                        provider_schema_mode="intent_json",
+                        provider_contract_mode="intent",
+                        extra={"diagnostic_source": "openai"},
+                    )
                 attachments = data.get("attachments")
                 if not attachments and isinstance(data.get("params"), dict):
                     attachments = data.get("params", {}).get("attachments")
@@ -255,11 +371,40 @@ class OpenAIChatProvider(ILLMProvider):
                     data.get("response_text", data.get("reply", "")),
                     fallback="",
                 )
+                action = str(data.get("action", "") or "").strip()
+                if not action:
+                    raise ILLMProvider.contract_error(
+                        "OpenAI intent missing action.",
+                        provider_used="openai",
+                        error_stage="provider",
+                        error_type="provider_contract_error",
+                        error_reason="missing_action",
+                        raw_response=data,
+                        provider_parse_status="missing_action",
+                        provider_fallback_reason="provider_contract_error",
+                        provider_schema_mode="intent_json",
+                        provider_contract_mode="intent",
+                        extra={"diagnostic_source": "openai"},
+                    )
+                if action == "reply" and not response_text.strip():
+                    raise ILLMProvider.contract_error(
+                        "OpenAI reply missing response_text.",
+                        provider_used="openai",
+                        error_stage="provider",
+                        error_type="provider_contract_error",
+                        error_reason="missing_response_text",
+                        raw_response=data,
+                        provider_parse_status="missing_response_text",
+                        provider_fallback_reason="provider_contract_error",
+                        provider_schema_mode="intent_json",
+                        provider_contract_mode="intent",
+                        extra={"diagnostic_source": "openai"},
+                    )
                 thought = str(data.get("thought", "")).strip() or "OpenAI processing turn."
                 return AgentIntent(
                     thought=thought,
                     plan=data.get("plan", []),
-                    action=data.get("action", "reply"),
+                    action=action,
                     params=data.get("params", {}),
                     state_summary=data.get("state_summary", {}),
                     response_text=response_text,

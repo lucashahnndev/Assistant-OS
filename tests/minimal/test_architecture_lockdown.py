@@ -21,6 +21,7 @@ from core.resolution.action_plan import ActionPlan
 from core.resolution.llm_resolver import LLMResolver
 from core.output_governor import OutputGovernor
 from services.llm.prompt_composer import PromptComposer
+from drivers.llm.base import ProviderContractError, ILLMProvider
 from src.drivers.providers.gemini import llm as gemini_llm
 from src.drivers.providers.huggingface import llm as hf_llm
 from src.drivers.providers.ollama import llm as ollama_llm
@@ -88,6 +89,22 @@ def _intent_payload(action: str = "demo.action") -> str:
             "action": action,
             "params": {"text": "hello"},
             "response_text": "hello",
+            "plan": [],
+            "state_summary": {},
+            "task_label": "label",
+            "attachments": [],
+        },
+        ensure_ascii=False,
+    )
+
+
+def _empty_reply_payload(action: str = "reply") -> str:
+    return json.dumps(
+        {
+            "thought": "test thought",
+            "action": action,
+            "params": {},
+            "response_text": "",
             "plan": [],
             "state_summary": {},
             "task_label": "label",
@@ -414,6 +431,121 @@ def test_providers_preserve_action_id_without_fallback(monkeypatch, provider_cls
 
     assert isinstance(intent, AgentIntent)
     assert intent.action == expected_action
+
+
+@pytest.mark.parametrize(
+    "provider_cls, module, factory_attr",
+    [
+        (openai_llm.OpenAIChatProvider, openai_llm, "OpenAI"),
+        (openrouter_llm.OpenRouterProvider, openrouter_llm, "OpenAI"),
+        (hf_llm.HuggingFaceProvider, hf_llm, "requests"),
+        (ollama_llm.OllamaProvider, ollama_llm, "requests"),
+        (gemini_llm.GeminiProvider, gemini_llm, "genai"),
+    ],
+)
+def test_providers_reject_invalid_json_without_fabricating_reply(monkeypatch, provider_cls, module, factory_attr):
+    if factory_attr == "OpenAI":
+        monkeypatch.setattr(module, "OpenAI", lambda **kwargs: _FakeOpenAIClient("not-json"))
+    elif factory_attr == "requests":
+        monkeypatch.setattr(module.requests, "post", lambda *args, **kwargs: _FakeRequestsResponse("not-json"))
+    elif factory_attr == "genai":
+        monkeypatch.setattr(module, "genai", SimpleNamespace(Client=lambda **kwargs: _FakeGeminiClient("not-json")))
+        monkeypatch.setattr(
+            module,
+            "types",
+            SimpleNamespace(GenerateContentConfig=lambda **kwargs: SimpleNamespace(**kwargs)),
+        )
+
+    if provider_cls.__name__ == "OpenAIChatProvider":
+        provider = provider_cls({"base_url": "http://localhost:1", "model": "gpt-4o-mini", "secret_ref": ""})
+    elif provider_cls.__name__ == "OpenRouterProvider":
+        provider = provider_cls({"secret_ref": "", "model": "openai/gpt-4o-mini"})
+    elif provider_cls.__name__ == "HuggingFaceProvider":
+        provider = provider_cls({"api_key": "", "model": "test"})
+    elif provider_cls.__name__ == "OllamaProvider":
+        provider = provider_cls({"url": "http://localhost:11434/api/chat", "model": "llama3"})
+    else:
+        provider = provider_cls({"secret_ref": "", "model": "gemini-2.0-flash"})
+
+    with pytest.raises(ProviderContractError) as excinfo:
+        provider.generate_intent("hello", [], "system")
+
+    details = excinfo.value.details
+    assert details["semantic_authority"] is False
+    assert details["provider_parse_status"] == "invalid_json"
+    assert details["provider_fallback_reason"] == "provider_parse_error"
+    assert details["error_stage"] == "provider"
+    assert details["error_reason"] == "invalid_json"
+    assert details["raw_preview"]
+    assert details["raw_preview_chars"] >= len(details["raw_preview"])
+
+
+@pytest.mark.parametrize(
+    "provider_cls, module, factory_attr, response_payload",
+    [
+        (openai_llm.OpenAIChatProvider, openai_llm, "OpenAI", _empty_reply_payload("reply")),
+        (openrouter_llm.OpenRouterProvider, openrouter_llm, "OpenAI", _empty_reply_payload("reply")),
+        (hf_llm.HuggingFaceProvider, hf_llm, "requests", _empty_reply_payload("reply")),
+        (ollama_llm.OllamaProvider, ollama_llm, "requests", _empty_reply_payload("reply")),
+        (gemini_llm.GeminiProvider, gemini_llm, "genai", _empty_reply_payload("reply")),
+    ],
+)
+def test_providers_reject_reply_without_response_text(monkeypatch, provider_cls, module, factory_attr, response_payload):
+    if factory_attr == "OpenAI":
+        monkeypatch.setattr(module, "OpenAI", lambda **kwargs: _FakeOpenAIClient(response_payload))
+    elif factory_attr == "requests":
+        monkeypatch.setattr(module.requests, "post", lambda *args, **kwargs: _FakeRequestsResponse(response_payload))
+    elif factory_attr == "genai":
+        monkeypatch.setattr(module, "genai", SimpleNamespace(Client=lambda **kwargs: _FakeGeminiClient(response_payload)))
+        monkeypatch.setattr(
+            module,
+            "types",
+            SimpleNamespace(GenerateContentConfig=lambda **kwargs: SimpleNamespace(**kwargs)),
+        )
+
+    if provider_cls.__name__ == "OpenAIChatProvider":
+        provider = provider_cls({"base_url": "http://localhost:1", "model": "gpt-4o-mini", "secret_ref": ""})
+    elif provider_cls.__name__ == "OpenRouterProvider":
+        provider = provider_cls({"secret_ref": "", "model": "openai/gpt-4o-mini"})
+    elif provider_cls.__name__ == "HuggingFaceProvider":
+        provider = provider_cls({"api_key": "", "model": "test"})
+    elif provider_cls.__name__ == "OllamaProvider":
+        provider = provider_cls({"url": "http://localhost:11434/api/chat", "model": "llama3"})
+    else:
+        provider = provider_cls({"secret_ref": "", "model": "gemini-2.0-flash"})
+
+    with pytest.raises(ProviderContractError) as excinfo:
+        provider.generate_intent("hello", [], "system")
+
+    details = excinfo.value.details
+    assert details["semantic_authority"] is False
+    assert details["provider_parse_status"] == "missing_response_text"
+    assert details["provider_fallback_reason"] == "provider_contract_error"
+    assert details["error_stage"] == "provider"
+    assert details["error_reason"] == "missing_response_text"
+    assert details["raw_preview"]
+
+
+def test_provider_raw_preview_is_truncated_and_redacted():
+    payload = {
+        "raw": "x" * 2000 + " api_key=secret-value Authorization: Bearer token123",
+    }
+    preview = ILLMProvider.build_raw_preview(payload, limit=120)
+    assert preview["raw_preview_truncated"] is True
+    assert preview["raw_preview_chars"] >= 2000
+    assert len(preview["raw_preview"]) <= 120
+    assert "secret-value" not in preview["raw_preview"]
+    assert "token123" not in preview["raw_preview"]
+
+
+def test_provider_diagnostic_taxonomy_covers_core_parse_failures():
+    assert ILLMProvider.normalize_provider_parse_status("", raw_empty=True) == "empty_output"
+    assert ILLMProvider.normalize_provider_parse_status("", error_reason="schema mismatch") == "invalid_schema"
+    assert ILLMProvider.normalize_provider_parse_status("", error_reason="missing action") == "missing_action"
+    assert ILLMProvider.normalize_provider_parse_status("", error_reason="missing response_text") == "missing_response_text"
+    assert ILLMProvider.normalize_provider_fallback_reason("", parse_status="empty_output") == "provider_empty_output"
+    assert ILLMProvider.normalize_provider_fallback_reason("", parse_status="invalid_json") == "provider_contract_error"
+    assert ILLMProvider.normalize_provider_fallback_reason("", parse_status="timeout") == "provider_timeout"
 
 
 def test_openai_provider_extracts_tool_call_arguments(monkeypatch):

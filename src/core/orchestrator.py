@@ -743,6 +743,38 @@ class AgentOrchestrator:
         diagnostics = plan.metadata.get("confidence_diagnostics")
         if not isinstance(diagnostics, dict):
             return None
+        provider_state = plan.metadata.get("state_summary")
+        provider_diagnostics = {}
+        if isinstance(provider_state, dict):
+            for key in (
+                "provider_used",
+                "provider_attempts",
+                "provider_attempts_total",
+                "provider_fallback_reason",
+                "provider_schema_mode",
+                "provider_contract_mode",
+                "provider_parse_status",
+                "error_stage",
+                "error_type",
+                "error_reason",
+                "diagnostic_source",
+                "raw_preview",
+                "raw_preview_truncated",
+                "raw_preview_chars",
+                "strict_mode",
+                "paranoid_mode",
+                "intent_repair_attempts",
+                "allowed_actions_count",
+                "semantic_authority",
+            ):
+                value = provider_state.get(key)
+                if value not in (None, "", [], {}):
+                    provider_diagnostics[key] = value
+        confidence_provider_diagnostics = diagnostics.get("provider_diagnostics")
+        if isinstance(confidence_provider_diagnostics, dict):
+            for key, value in confidence_provider_diagnostics.items():
+                if value not in (None, "", [], {}):
+                    provider_diagnostics.setdefault(key, value)
 
         attempted_action = str(plan.metadata.get("attempted_action") or plan.action_id or "").strip()
         model_used = str(getattr(plan, "model_used", "") or diagnostics.get("model_used") or "").strip()
@@ -769,6 +801,8 @@ class AgentOrchestrator:
         if isinstance(session.context, dict):
             session.context["last_confidence_diagnostics"] = dict(diagnostics)
             session.context["last_confidence_rejection"] = dict(rejection)
+            if provider_diagnostics:
+                session.context["last_provider_diagnostics"] = dict(provider_diagnostics)
         if isinstance(session.state_summary, dict):
             session.state_summary["last_confidence_diagnostics"] = dict(diagnostics)
             session.state_summary["last_confidence_rejection"] = dict(rejection)
@@ -780,6 +814,8 @@ class AgentOrchestrator:
             session.state_summary["last_confidence_action_is_reply"] = action_is_reply
             session.state_summary["last_confidence_model_used"] = model_used or None
             session.state_summary["last_confidence_semantic_authority"] = bool(diagnostics.get("semantic_authority", False))
+            if provider_diagnostics:
+                session.state_summary["last_provider_diagnostics"] = dict(provider_diagnostics)
 
         if work_id:
             self._touch_work_context(
@@ -801,6 +837,7 @@ class AgentOrchestrator:
                     "data": {
                         "last_confidence_diagnostics": dict(diagnostics),
                         "last_confidence_rejection": dict(rejection),
+                        "last_provider_diagnostics": dict(provider_diagnostics) if provider_diagnostics else {},
                     },
                 },
             )
@@ -815,6 +852,7 @@ class AgentOrchestrator:
             extra={
                 "confidence_diagnostics": dict(diagnostics),
                 "confidence_rejection": dict(rejection),
+                "provider_diagnostics": dict(provider_diagnostics),
                 "stage": stage,
                 "error_code": rejection.get("error_code"),
             },
@@ -1359,7 +1397,7 @@ class AgentOrchestrator:
         tmp_path = f"{file_path}.tmp.{os.getpid()}.{threading.get_ident()}"
         try:
             with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(payload, f, indent=4, ensure_ascii=False)
+                json.dump(payload, f, indent=4, ensure_ascii=False, default=str)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp_path, file_path)
@@ -5466,19 +5504,6 @@ class AgentOrchestrator:
         history = session.get_context_for_llm(limit_msgs=5)
         locale = self._session_locale(session)
         is_pt = str(locale or "").lower().startswith("pt")
-        guidance_prefix = (
-            "Nota: ainda não houve execução real nesta tentativa; isto é apenas orientação textual."
-            if is_pt
-            else "Note: no real execution has happened in this attempt yet; this is only textual guidance."
-        )
-        execution_blocker = (
-            "Ainda não houve execução real nesta tentativa; isto é apenas orientação textual. "
-            "Preciso acionar a ferramenta correta para confirmar de fato."
-            if is_pt
-            else "No real execution has happened in this attempt yet; this is only textual guidance. "
-            "I need to trigger the appropriate tool to confirm this for real."
-        )
-        
         context_block = f"Reason for recovery: {reason}\n"
         if last_action_id:
             context_block += f"Last attempted action: {last_action_id}\n"
@@ -5566,52 +5591,57 @@ class AgentOrchestrator:
                         reason,
                     )
                     try:
+                        fallback_reply = self._build_honest_fallback_reply(
+                            language=locale,
+                            reason_code="recovery_sanitized_empty",
+                        )
                         session.context["last_recovery_sanitization"] = {
                             "changed": True,
                             "reason_code": "no_fresh_tool_evidence",
                             "evidence_required": "fresh_action_observation",
                             "original_text": reply,
-                            "sanitized_text": execution_blocker,
+                            "sanitized_text": fallback_reply,
+                            "error_stage": "sanitizer",
+                            "error_type": "sanitizer_block",
+                            "error_reason": "no_fresh_tool_evidence",
+                            "diagnostic_source": "orchestrator",
+                            "semantic_authority": False,
+                            "raw_preview": self._clip_text(reply, 1200),
+                            "raw_preview_truncated": len(str(reply or "")) > 1200,
+                            "raw_preview_chars": len(str(reply or "")),
                         }
                     except Exception:
                         pass
-                    return execution_blocker
-                if not last_tool_data and not self._looks_like_guidance_only_reply(reply):
-                    reply = f"{guidance_prefix} {reply}".strip()
-                    if isinstance(sanitization_audit, dict) and not sanitization_audit.get("reason_code"):
-                        sanitization_audit.update(
-                            {
-                                "changed": True,
-                                "reason_code": "guidance_only",
-                                "evidence_required": "fresh_action_observation",
-                                "original_text": response.strip(),
-                                "sanitized_text": reply,
-                            }
-                        )
-                        try:
-                            session.context["last_recovery_sanitization"] = dict(sanitization_audit)
-                        except Exception:
-                            pass
+                    return fallback_reply
                 logger.info(f"Recovery reply generated | session={session.session_id} latency_ms={latency} source=recovery_llm")
                 return reply
             
             # If still unsuccessful, yield a structured failure label
             logger.warning(f"Recovery reply empty | session={session.session_id} latency_ms={latency}")
+            fallback_reply = self._build_honest_fallback_reply(language=locale, reason_code="recovery_empty")
             try:
                 session.context["last_recovery_sanitization"] = {
                     "changed": True,
-                    "reason_code": "no_fresh_tool_evidence",
-                    "evidence_required": "fresh_action_observation",
+                    "reason_code": "recovery_empty",
+                    "evidence_required": "final_response",
                     "original_text": "",
-                    "sanitized_text": execution_blocker,
+                    "sanitized_text": fallback_reply,
+                    "error_stage": "recovery",
+                    "error_type": "recovery_empty",
+                    "error_reason": "empty_output",
+                    "diagnostic_source": "orchestrator",
+                    "semantic_authority": False,
+                    "raw_preview": "",
+                    "raw_preview_truncated": False,
+                    "raw_preview_chars": 0,
                 }
             except Exception:
                 pass
-            return execution_blocker
+            return fallback_reply
             
         except Exception as e:
             logger.error(f"Error in LLM Recovery Loop: {e}")
-            return "SYSTEM_ERROR: Conversational recovery failed."
+            return self._build_honest_fallback_reply(language=locale, reason_code="recovery_error", detail=str(e))
 
     @staticmethod
     def _extract_attachment_paths_from_result(structured_result: Optional[Dict[str, Any]]) -> List[str]:
@@ -5930,6 +5960,46 @@ class AgentOrchestrator:
         )
         return any(marker in t for marker in markers)
 
+    @staticmethod
+    def _build_honest_fallback_reply(language: str = "en", reason_code: str = "", detail: str = "") -> str:
+        is_pt = str(language or "").lower().startswith("pt")
+        reason = str(reason_code or "").strip().lower()
+        detail_text = str(detail or "").strip()
+
+        if reason in {"no_fresh_tool_evidence", "overlay_protocol_leak"}:
+            if is_pt:
+                base = "Tentei consolidar a resposta, mas não havia evidência suficiente para publicar uma resposta final honesta."
+            else:
+                base = "I tried to consolidate the response, but there was not enough evidence to publish an honest final reply."
+        elif reason in {"attachment_not_confirmed", "attachment_delivery_failed", "attachment_delivery_partial"}:
+            if is_pt:
+                base = "Preparei a resposta, mas a entrega dos anexos não pôde ser confirmada. Registrei a falha de entrega."
+            else:
+                base = "I prepared the reply, but attachment delivery could not be confirmed. I recorded the delivery failure."
+        elif reason in {"recovery_empty", "recovery_sanitized_empty", "empty_response"}:
+            if is_pt:
+                base = "Tentei responder, mas a execução falhou antes de produzir uma resposta final útil."
+            else:
+                base = "I tried to respond, but execution failed before producing a useful final reply."
+        else:
+            if is_pt:
+                base = "Tentei responder, mas ocorreu uma falha técnica antes da mensagem final."
+            else:
+                base = "I tried to respond, but a technical failure happened before the final message."
+
+        if detail_text:
+            clipped_detail = detail_text[:180].rstrip()
+            if is_pt:
+                return f"{base} Motivo registrado: {clipped_detail}."
+            return f"{base} Recorded reason: {clipped_detail}."
+
+        if reason:
+            if is_pt:
+                return f"{base} Motivo registrado: {reason}."
+            return f"{base} Recorded reason: {reason}."
+
+        return base
+
     @classmethod
     def _normalize_context_reset_reply(cls, response_text: str, language: str = "en") -> str:
         text = (response_text or "").strip()
@@ -5986,17 +6056,26 @@ class AgentOrchestrator:
     ) -> str:
         text = str(response_text or "").strip()
         if not text:
+            sanitized = cls._build_honest_fallback_reply(language=language, reason_code="empty_response")
             if isinstance(audit, dict):
                 audit.update(
                     {
-                        "changed": False,
-                        "reason_code": None,
-                        "evidence_required": None,
+                        "changed": sanitized != text,
+                        "reason_code": "empty_response",
+                        "evidence_required": "final_response",
                         "original_text": text,
-                        "sanitized_text": text,
+                        "sanitized_text": sanitized,
+                        "error_stage": "sanitizer",
+                        "error_type": "sanitizer_block",
+                        "error_reason": "empty_response",
+                        "diagnostic_source": "orchestrator",
+                        "semantic_authority": False,
+                        "raw_preview": text[:1200],
+                        "raw_preview_truncated": len(text) > 1200,
+                        "raw_preview_chars": len(text),
                     }
                 )
-            return text
+            return sanitized
         lowered = text.lower()
         is_pt = str(language or "").lower().startswith("pt")
         # Block protocol/tool leakage from overlay worker outputs.
@@ -6014,6 +6093,14 @@ class AgentOrchestrator:
                         "evidence_required": "overlay_result",
                         "original_text": text,
                         "sanitized_text": sanitized,
+                        "error_stage": "sanitizer",
+                        "error_type": "sanitizer_block",
+                        "error_reason": "overlay_protocol_leak",
+                        "diagnostic_source": "orchestrator",
+                        "semantic_authority": False,
+                        "raw_preview": text[:1200],
+                        "raw_preview_truncated": len(text) > 1200,
+                        "raw_preview_chars": len(text),
                     }
                 )
             return sanitized
@@ -6057,11 +6144,7 @@ class AgentOrchestrator:
             reason_code = "attachment_not_confirmed"
             if attachment_status in {"failed", "partial"} or failure_reason:
                 if attachment_status == "partial":
-                    sanitized = (
-                        "Enviei parte dos arquivos, mas houve falha em um ou mais envios no Telegram. Não há confirmação de anexo completo nesta tentativa."
-                        if is_pt
-                        else "I sent part of the files, but one or more Telegram sends failed. There is no confirmation of a complete attachment in this attempt."
-                    )
+                    sanitized = cls._build_honest_fallback_reply(language=language, reason_code="attachment_delivery_partial")
                     reason_code = "attachment_delivery_partial"
                     if isinstance(audit, dict):
                         audit.update(
@@ -6071,15 +6154,19 @@ class AgentOrchestrator:
                                 "evidence_required": "sent_attachments",
                                 "original_text": text,
                                 "sanitized_text": sanitized,
+                                "error_stage": "sanitizer",
+                                "error_type": "sanitizer_block",
+                                "error_reason": reason_code,
+                                "diagnostic_source": "orchestrator",
+                                "semantic_authority": False,
+                                "raw_preview": text[:1200],
+                                "raw_preview_truncated": len(text) > 1200,
+                                "raw_preview_chars": len(text),
                             }
                         )
                     return sanitized
                 if failure_reason == "timeout":
-                    sanitized = (
-                        "Encontrei e preparei os arquivos, mas o envio pelo Telegram falhou por timeout. Não há confirmação de anexo enviado nesta tentativa."
-                        if is_pt
-                        else "I found and prepared the files, but Telegram delivery failed due to a timeout. There is no confirmed attachment in this attempt."
-                    )
+                    sanitized = cls._build_honest_fallback_reply(language=language, reason_code="attachment_delivery_failed", detail="timeout")
                     reason_code = "attachment_delivery_failed"
                     if isinstance(audit, dict):
                         audit.update(
@@ -6089,15 +6176,19 @@ class AgentOrchestrator:
                                 "evidence_required": "sent_attachments",
                                 "original_text": text,
                                 "sanitized_text": sanitized,
+                                "error_stage": "sanitizer",
+                                "error_type": "sanitizer_block",
+                                "error_reason": reason_code,
+                                "diagnostic_source": "orchestrator",
+                                "semantic_authority": False,
+                                "raw_preview": text[:1200],
+                                "raw_preview_truncated": len(text) > 1200,
+                                "raw_preview_chars": len(text),
                             }
                         )
                     return sanitized
                 if failure_reason:
-                    sanitized = (
-                        f"Encontrei e preparei os arquivos, mas o envio pelo Telegram falhou: {failure_reason}. Não há confirmação de anexo enviado nesta tentativa."
-                        if is_pt
-                        else f"I found and prepared the files, but Telegram delivery failed: {failure_reason}. There is no confirmed attachment in this attempt."
-                    )
+                    sanitized = cls._build_honest_fallback_reply(language=language, reason_code="attachment_delivery_failed", detail=failure_reason)
                     reason_code = "attachment_delivery_failed"
                     if isinstance(audit, dict):
                         audit.update(
@@ -6111,11 +6202,7 @@ class AgentOrchestrator:
                         )
                     return sanitized
             if attachment_prepared:
-                sanitized = (
-                    "Encontrei/validei os arquivos, mas ainda não há confirmação de envio/anexo nesta resposta."
-                    if is_pt
-                    else "I found/validated the files, but there is no confirmed attachment in this response yet."
-                )
+                sanitized = cls._build_honest_fallback_reply(language=language, reason_code=reason_code)
                 if isinstance(audit, dict):
                     audit.update(
                         {
@@ -6124,14 +6211,18 @@ class AgentOrchestrator:
                             "evidence_required": "sent_attachments",
                             "original_text": text,
                             "sanitized_text": sanitized,
+                            "error_stage": "sanitizer",
+                            "error_type": "sanitizer_block",
+                            "error_reason": reason_code,
+                            "diagnostic_source": "orchestrator",
+                            "semantic_authority": False,
+                            "raw_preview": text[:1200],
+                            "raw_preview_truncated": len(text) > 1200,
+                            "raw_preview_chars": len(text),
                         }
-                    )
+                )
                 return sanitized
-            sanitized = (
-                "Não há confirmação de anexo nesta tentativa; isto é apenas orientação textual."
-                if is_pt
-                else "There is no confirmed attachment in this attempt; this is only textual guidance."
-            )
+            sanitized = cls._build_honest_fallback_reply(language=language, reason_code=reason_code)
             if isinstance(audit, dict):
                 audit.update(
                     {
@@ -6148,11 +6239,7 @@ class AgentOrchestrator:
             (cls._looks_like_success_claim(text) or cls._looks_like_unverified_progress_claim(text))
             and not has_fresh_tool_evidence
         ):
-            sanitized = (
-                "Ainda não houve execução real nesta tentativa; isto é apenas orientação textual."
-                if is_pt
-                else "No real execution has happened in this attempt yet; this is only textual guidance."
-            )
+            sanitized = cls._build_honest_fallback_reply(language=language, reason_code="no_fresh_tool_evidence")
             if isinstance(audit, dict):
                 audit.update(
                     {
@@ -6161,6 +6248,14 @@ class AgentOrchestrator:
                         "evidence_required": "fresh_action_observation",
                         "original_text": text,
                         "sanitized_text": sanitized,
+                        "error_stage": "sanitizer",
+                        "error_type": "sanitizer_block",
+                        "error_reason": "no_fresh_tool_evidence",
+                        "diagnostic_source": "orchestrator",
+                        "semantic_authority": False,
+                        "raw_preview": text[:1200],
+                        "raw_preview_truncated": len(text) > 1200,
+                        "raw_preview_chars": len(text),
                     }
                 )
             return sanitized
@@ -6173,6 +6268,14 @@ class AgentOrchestrator:
                     "evidence_required": None,
                     "original_text": text,
                     "sanitized_text": text,
+                    "error_stage": "sanitizer",
+                    "error_type": "none",
+                    "error_reason": "ok",
+                    "diagnostic_source": "orchestrator",
+                    "semantic_authority": False,
+                    "raw_preview": text[:1200],
+                    "raw_preview_truncated": len(text) > 1200,
+                    "raw_preview_chars": len(text),
                 }
             )
         return text

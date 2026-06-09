@@ -149,21 +149,57 @@ class LlamaServerChatProvider(ILLMProvider):
 
             if not response or not response.choices:
                 logger.error("LlamaServer returned an empty response.")
-                raise ValueError("LlamaServer returned an empty response.")
+                raise ILLMProvider.contract_error(
+                    "LlamaServer returned an empty response.",
+                    provider_used="llama_server",
+                    error_stage="provider",
+                    error_type="provider_exception",
+                    error_reason="empty_output",
+                    raw_response=response,
+                    provider_parse_status="empty_output",
+                    provider_fallback_reason="provider_empty_output",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "llama_server"},
+                )
 
             message = response.choices[0].message
             content = (message.content or "").strip() if getattr(message, "content", None) is not None else ""
             
             if not content:
                 logger.error("LlamaServer returned an empty response.")
-                raise ValueError("LlamaServer returned an empty response.")
+                raise ILLMProvider.contract_error(
+                    "LlamaServer returned an empty response.",
+                    provider_used="llama_server",
+                    error_stage="provider",
+                    error_type="provider_exception",
+                    error_reason="empty_output",
+                    raw_response=content,
+                    provider_parse_status="empty_output",
+                    provider_fallback_reason="provider_empty_output",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "llama_server"},
+                )
                 
             # Use specialized parser directly on the raw text content
             data = extract_and_parse_json(content)
             
             if not data:
                 logger.error("Failed to extract valid JSON from LlamaServer response.")
-                raise ProviderContractError("Failed to fulfill AgentIntent contract: Invalid JSON.")
+                raise ILLMProvider.contract_error(
+                    "Failed to fulfill AgentIntent contract: Invalid JSON.",
+                    provider_used="llama_server",
+                    error_stage="provider",
+                    error_type="provider_exception",
+                    error_reason="invalid_json",
+                    raw_response=content,
+                    provider_parse_status="invalid_json",
+                    provider_fallback_reason="provider_parse_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "llama_server"},
+                )
 
             attachments_value = data.get("attachments")
             normalized_attachments: Optional[List[str]] = None
@@ -187,19 +223,65 @@ class LlamaServerChatProvider(ILLMProvider):
             task_label = data.get("task_label")
             if task_label is not None:
                 task_label = str(task_label)
+            action = str(data.get("action", "") or "").strip()
+            if not action:
+                raise ILLMProvider.contract_error(
+                    "LlamaServer intent missing action.",
+                    provider_used="llama_server",
+                    error_stage="provider",
+                    error_type="provider_contract_error",
+                    error_reason="missing_action",
+                    raw_response=data,
+                    provider_parse_status="missing_action",
+                    provider_fallback_reason="provider_contract_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "llama_server"},
+                )
+            response_text = str(data.get("response_text", data.get("reply", "")) or "")
+            if action == "reply" and not response_text.strip():
+                raise ILLMProvider.contract_error(
+                    "LlamaServer reply missing response_text.",
+                    provider_used="llama_server",
+                    error_stage="provider",
+                    error_type="provider_contract_error",
+                    error_reason="missing_response_text",
+                    raw_response=data,
+                    provider_parse_status="missing_response_text",
+                    provider_fallback_reason="provider_contract_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "llama_server"},
+                )
+            if isinstance(allowed_actions, (list, tuple, set)):
+                allowed = {str(item).strip() for item in allowed_actions if str(item or "").strip()}
+                if allowed and action not in allowed:
+                    raise ILLMProvider.contract_error(
+                        f"LlamaServer returned unsupported action: {action}.",
+                        provider_used="llama_server",
+                        error_stage="provider",
+                        error_type="provider_contract_error",
+                        error_reason="unsupported_action",
+                        raw_response=data,
+                        provider_parse_status="unsupported_action",
+                        provider_fallback_reason="provider_contract_error",
+                        provider_schema_mode="intent_json",
+                        provider_contract_mode="intent",
+                        extra={"diagnostic_source": "llama_server"},
+                    )
 
             logger.info(
                 "LlamaServer parsed intent | syntax_valid=true action_candidate=%s",
-                str(data.get("action", "") or "").strip(),
+                action,
             )
             intent = AgentIntent(
                 thought=str(data.get("thought", "") or ""),
                 plan=normalized_plan,
-                action=str(data.get("action", "") or "").strip(),
+                action=action,
                 params=params,
                 state_summary=state_summary,
                 task_label=task_label,
-                response_text=str(data.get("response_text", data.get("reply", "")) or ""),
+                response_text=response_text,
                 attachments=normalized_attachments,
                 model_used=self.model
             )

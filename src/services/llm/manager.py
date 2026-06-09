@@ -1,6 +1,6 @@
 from typing import List, Dict, Optional, Any
 from core.intent import AgentIntent
-from drivers.llm.base import ILLMProvider
+from drivers.llm.base import ILLMProvider, ProviderContractError
 from utils.plugin_loader import PluginLoader
 from config import ConfigManager
 from utils.contract_artifacts import write_contract_violation
@@ -77,7 +77,7 @@ class LLMManager:
                 prov_name = inst_cfg.get('provider', '')
                 norm = normalize_name(prov_name)
                 
-                # Match driver class. If local compatible OpenAI server, map to standard OpenAI driver.
+                # Match driver class by provider name.
                 cls = next((c for n, c in loaded_classes.items() if normalize_name(n) == norm), None)
                 if not cls and norm in ['local_openai', 'local_qwen']:
                     cls = next((c for n, c in loaded_classes.items() if normalize_name(n) == 'openai'), None)
@@ -131,10 +131,17 @@ class LLMManager:
         total_providers = len(pool)
         self._last_router_meta = {}
         last_error = ""
+        last_error_details: Dict[str, Any] = {}
+        attempt_log: List[Dict[str, Any]] = []
+        strict_mode = kwargs.get("strict_mode")
+        paranoid_mode = kwargs.get("paranoid_mode")
+        intent_repair_attempts = kwargs.get("intent_repair_attempts")
+        allowed_actions = kwargs.get("allowed_actions")
         for idx, item in enumerate(pool, start=1):
             provider_id = item['id']
             instance = item['instance']
             provider_name = str(item.get("provider") or provider_id or "")
+            model_hint = self._provider_model_hint(instance)
             
             # Inject limits if the method accepts them (for generate_intent)
             if method_name == 'generate_intent':
@@ -143,16 +150,80 @@ class LLMManager:
             try:
                 method = getattr(instance, method_name)
                 result = method(*args, **kwargs)
+                if method_name == "generate_intent":
+                    self._validate_provider_intent_contract(result, provider_name, method_name)
                 self._last_router_meta = {
                     "provider_id": str(provider_id),
                     "provider": provider_name,
                     "attempt": idx,
                     "max_attempts": total_providers,
-                    "model": self._provider_model_hint(instance),
+                    "model": model_hint,
+                    "provider_used": provider_name,
+                    "provider_parse_status": "ok",
+                    "provider_attempts": attempt_log + [
+                        {
+                            "provider_id": str(provider_id),
+                            "provider": provider_name,
+                            "model": model_hint,
+                            "attempt": idx,
+                            "status": "success",
+                            "reason_code": None,
+                            "provider_parse_status": "ok",
+                        }
+                    ],
+                    "provider_attempts_total": total_providers,
+                    "provider_fallback_reason": None,
+                    "fallback_stage": "provider_success",
+                    "error_stage": None,
+                    "error_type": None,
+                    "error_reason": None,
+                    "diagnostic_source": provider_name,
+                    "raw_preview": "",
+                    "raw_preview_truncated": False,
+                    "raw_preview_chars": 0,
+                    "semantic_authority": False,
+                    "provider_schema_mode": self._provider_schema_mode(method_name, instance, kwargs),
+                    "provider_contract_mode": "structured" if "structured" in str(method_name or "") else "intent",
+                    "strict_mode": bool(strict_mode) if strict_mode is not None else None,
+                    "paranoid_mode": bool(paranoid_mode) if paranoid_mode is not None else None,
+                    "intent_repair_attempts": int(intent_repair_attempts) if intent_repair_attempts is not None else None,
+                    "allowed_actions_count": len(allowed_actions) if isinstance(allowed_actions, (list, set, tuple)) else None,
                 }
                 return result, None
             except Exception as e:
                 error_msg = str(e)
+                reason_code = self._categorize_provider_error(e)
+                error_details = self._extract_exception_diagnostics(
+                    e,
+                    provider_name=provider_name,
+                    method_name=method_name,
+                    model_hint=model_hint,
+                    attempt=idx,
+                    max_attempts=total_providers,
+                    error_msg=error_msg,
+                )
+                if error_details:
+                    last_error_details = dict(error_details)
+                attempt_log.append(
+                    {
+                        "provider_id": str(provider_id),
+                        "provider": provider_name,
+                        "model": model_hint,
+                        "attempt": idx,
+                        "status": "failed",
+                        "reason_code": reason_code,
+                        "error": error_msg,
+                        "provider_parse_status": error_details.get("provider_parse_status") if error_details else reason_code,
+                        "provider_fallback_reason": error_details.get("provider_fallback_reason") if error_details else None,
+                        "error_stage": error_details.get("error_stage") if error_details else "provider",
+                        "error_type": error_details.get("error_type") if error_details else type(e).__name__,
+                        "error_reason": error_details.get("error_reason") if error_details else error_msg,
+                        "diagnostic_source": error_details.get("diagnostic_source") if error_details else "llm_manager",
+                        "raw_preview": error_details.get("raw_preview") if error_details else "",
+                        "raw_preview_truncated": error_details.get("raw_preview_truncated") if error_details else False,
+                        "raw_preview_chars": error_details.get("raw_preview_chars") if error_details else 0,
+                    }
+                )
                 if provider_id in self.provider_health:
                     self.provider_health[provider_id]["last_error"] = error_msg
                 logger.warning(f"Provider {provider_id} failed ({method_name}): {error_msg}. Falling back to next...")
@@ -172,8 +243,121 @@ class LLMManager:
                     )
                 last_error = error_msg
                 continue
-        self._last_router_meta = {}
+        self._last_router_meta = {
+            "provider_used": None,
+            "provider_attempts": attempt_log,
+            "provider_attempts_total": total_providers,
+            "provider_fallback_reason": last_error_details.get("provider_fallback_reason") or self._categorize_router_fallback_reason(last_error),
+            "provider_parse_status": last_error_details.get("provider_parse_status") or self._categorize_router_fallback_reason(last_error),
+            "fallback_stage": "router_exhausted",
+            "semantic_authority": False,
+            "provider_schema_mode": self._provider_schema_mode(method_name, None, kwargs),
+            "provider_contract_mode": "structured" if "structured" in str(method_name or "") else "intent",
+            "strict_mode": bool(strict_mode) if strict_mode is not None else None,
+            "paranoid_mode": bool(paranoid_mode) if paranoid_mode is not None else None,
+            "intent_repair_attempts": int(intent_repair_attempts) if intent_repair_attempts is not None else None,
+            "allowed_actions_count": len(allowed_actions) if isinstance(allowed_actions, (list, set, tuple)) else None,
+            "error_stage": last_error_details.get("error_stage") or "llm_manager",
+            "error_type": last_error_details.get("error_type") or "provider_error",
+            "error_reason": last_error_details.get("error_reason") or last_error,
+            "diagnostic_source": last_error_details.get("diagnostic_source") or "llm_manager",
+            "raw_preview": last_error_details.get("raw_preview") or "",
+            "raw_preview_truncated": bool(last_error_details.get("raw_preview_truncated")),
+            "raw_preview_chars": int(last_error_details.get("raw_preview_chars") or 0),
+        }
         return None, f"All providers failed. Last error: {last_error}"
+
+    @staticmethod
+    def _categorize_provider_error(error: Exception) -> str:
+        text = f"{type(error).__name__}: {error}".lower()
+        if "timeout" in text or "timed out" in text:
+            return "timeout"
+        if "rate" in text and "limit" in text:
+            return "rate_limit"
+        if "schema" in text or "json_schema" in text or "json object" in text or "format" in text:
+            return "schema_error"
+        if "json" in text or "parse" in text or "invalid json" in text:
+            return "provider_parse_error"
+        if "auth" in text or "unauthor" in text or "api key" in text:
+            return "authentication_error"
+        return "provider_error"
+
+    @staticmethod
+    def _categorize_router_fallback_reason(last_error: str) -> str:
+        text = str(last_error or "").lower()
+        if not text:
+            return "all_providers_failed"
+        if "timeout" in text or "timed out" in text:
+            return "timeout"
+        if "rate" in text and "limit" in text:
+            return "rate_limit"
+        if "schema" in text or "json_schema" in text or "json object" in text or "format" in text:
+            return "schema_error"
+        if "json" in text or "parse" in text or "invalid json" in text:
+            return "provider_parse_error"
+        if "auth" in text or "unauthor" in text or "api key" in text:
+            return "authentication_error"
+        return "provider_error"
+
+    @staticmethod
+    def _extract_exception_diagnostics(
+        error: Exception,
+        *,
+        provider_name: str,
+        method_name: str,
+        model_hint: str,
+        attempt: int,
+        max_attempts: int,
+        error_msg: str,
+    ) -> Dict[str, Any]:
+        details = getattr(error, "details", None)
+        if isinstance(details, dict) and details:
+            out = dict(details)
+        else:
+            out = {}
+        if not out:
+            return {}
+        out.setdefault("provider_used", provider_name)
+        out.setdefault("provider_attempts", [])
+        out.setdefault("provider_attempts_total", max_attempts)
+        out.setdefault("provider_schema_mode", LLMManager._provider_schema_mode(method_name, None, {}))
+        out.setdefault("provider_contract_mode", "structured" if "structured" in str(method_name or "") else "intent")
+        out.setdefault("diagnostic_source", provider_name or "provider")
+        out.setdefault("error_stage", out.get("error_stage") or "provider")
+        out.setdefault("error_type", out.get("error_type") or type(error).__name__)
+        out.setdefault("error_reason", out.get("error_reason") or error_msg)
+        out.setdefault("provider_parse_status", out.get("provider_parse_status") or "unknown_error")
+        out.setdefault("provider_fallback_reason", out.get("provider_fallback_reason") or "provider_exception")
+        out.setdefault("semantic_authority", bool(out.get("semantic_authority", False)))
+        preview = LLMManager._normalize_preview_fields(out.get("raw_preview"), out.get("raw_preview_truncated"), out.get("raw_preview_chars"))
+        out.update(preview)
+        return out
+
+    @staticmethod
+    def _normalize_preview_fields(raw_preview: Any, truncated: Any, chars: Any) -> Dict[str, Any]:
+        preview = str(raw_preview or "")
+        try:
+            chars_i = int(chars or len(preview))
+        except Exception:
+            chars_i = len(preview)
+        return {
+            "raw_preview": preview,
+            "raw_preview_truncated": bool(truncated),
+            "raw_preview_chars": max(0, chars_i),
+        }
+
+    @staticmethod
+    def _provider_schema_mode(method_name: str, instance: Any = None, kwargs: Optional[Dict[str, Any]] = None) -> str:
+        method = str(method_name or "").strip().lower()
+        if method == "generate_structured":
+            return "structured_json"
+        if method == "analyze_image_structured":
+            return "structured_json_vision"
+        if method == "generate_intent":
+            return "intent_json"
+        if method == "generate_text":
+            return "text"
+        return "unknown"
 
     @staticmethod
     def _provider_model_hint(instance: Any) -> str:
@@ -185,6 +369,90 @@ class LLMManager:
             if value:
                 return str(value)
         return "unknown"
+
+    @staticmethod
+    def _intent_has_provider_diagnostics(intent: AgentIntent) -> bool:
+        state_summary = getattr(intent, "state_summary", None)
+        if not isinstance(state_summary, dict):
+            return False
+        diagnostic_keys = (
+            "provider_parse_status",
+            "provider_fallback_reason",
+            "provider_used",
+            "provider_attempts",
+            "provider_attempts_total",
+            "provider_schema_mode",
+            "provider_contract_mode",
+            "error_code",
+            "semantic_authority",
+        )
+        for key in diagnostic_keys:
+            value = state_summary.get(key)
+            if value not in (None, "", [], {}):
+                return True
+        return False
+
+    @classmethod
+    def _validate_provider_intent_contract(cls, intent: AgentIntent, provider_name: str, method_name: str) -> None:
+        if not isinstance(intent, AgentIntent):
+            raise ProviderContractError(f"{provider_name} returned a non-AgentIntent payload for {method_name}.")
+
+        action = str(getattr(intent, "action", "") or "").strip()
+        response_text = str(getattr(intent, "response_text", "") or "").strip()
+
+        if not action:
+            raise ProviderContractError(
+                f"{provider_name} returned an intent without action for {method_name}.",
+                details=ILLMProvider.build_contract_diagnostics(
+                    provider_used=provider_name,
+                    error_stage="llm_manager",
+                    error_type="provider_contract_error",
+                    error_reason="missing_action",
+                    raw_response=getattr(intent, "state_summary", None),
+                    provider_parse_status="missing_action",
+                    provider_fallback_reason="provider_contract_error",
+                    provider_schema_mode=cls._provider_schema_mode(method_name, None, {}),
+                    provider_contract_mode="intent",
+                    semantic_authority=False,
+                    diagnostic_source="llm_manager",
+                ),
+            )
+
+        if action == "reply" and not response_text:
+            raise ProviderContractError(
+                f"{provider_name} returned reply without response_text for {method_name}.",
+                details=ILLMProvider.build_contract_diagnostics(
+                    provider_used=provider_name,
+                    error_stage="llm_manager",
+                    error_type="provider_contract_error",
+                    error_reason="missing_response_text",
+                    raw_response=getattr(intent, "state_summary", None),
+                    provider_parse_status="missing_response_text",
+                    provider_fallback_reason="provider_contract_error",
+                    provider_schema_mode=cls._provider_schema_mode(method_name, None, {}),
+                    provider_contract_mode="intent",
+                    semantic_authority=False,
+                    diagnostic_source="llm_manager",
+                ),
+            )
+
+        if action in {"unknown", "error"} and not cls._intent_has_provider_diagnostics(intent):
+            raise ProviderContractError(
+                f"{provider_name} returned {action} without provider diagnostics for {method_name}.",
+                details=ILLMProvider.build_contract_diagnostics(
+                    provider_used=provider_name,
+                    error_stage="llm_manager",
+                    error_type="provider_contract_error",
+                    error_reason="missing_provider_diagnostics",
+                    raw_response=getattr(intent, "state_summary", None),
+                    provider_parse_status="unknown_error",
+                    provider_fallback_reason="provider_contract_error",
+                    provider_schema_mode=cls._provider_schema_mode(method_name, None, {}),
+                    provider_contract_mode="intent",
+                    semantic_authority=False,
+                    diagnostic_source="llm_manager",
+                ),
+            )
 
     @staticmethod
     def _extract_router_prompt(args: Any, kwargs: Dict[str, Any]) -> str:
@@ -236,22 +504,63 @@ class LLMManager:
         except Exception as artifact_err:
             logger.warning("LLM router contract artifact failed: %s", artifact_err)
 
-    def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] = None) -> AgentIntent:
+    def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] = None, **kwargs) -> AgentIntent:
         result, err = self._execute_with_router(
             self.chat_pool, 'generate_intent', 
-            user_input, history, system_prompt, attachments=attachments
+            user_input, history, system_prompt, attachments=attachments, **kwargs
         )
         if result:
             if not result.model_used:
                 result.model_used = self._last_router_meta.get("model")
+            if isinstance(result.state_summary, dict):
+                result.state_summary.setdefault("provider_used", self._last_router_meta.get("provider_used"))
+                result.state_summary.setdefault("provider_attempts", self._last_router_meta.get("provider_attempts"))
+                result.state_summary.setdefault("provider_attempts_total", self._last_router_meta.get("provider_attempts_total"))
+                result.state_summary.setdefault("provider_fallback_reason", self._last_router_meta.get("provider_fallback_reason"))
+                result.state_summary.setdefault("provider_parse_status", self._last_router_meta.get("provider_parse_status"))
+                result.state_summary.setdefault("provider_schema_mode", self._last_router_meta.get("provider_schema_mode"))
+                result.state_summary.setdefault("provider_contract_mode", self._last_router_meta.get("provider_contract_mode"))
+                result.state_summary.setdefault("error_stage", self._last_router_meta.get("error_stage"))
+                result.state_summary.setdefault("error_type", self._last_router_meta.get("error_type"))
+                result.state_summary.setdefault("error_reason", self._last_router_meta.get("error_reason"))
+                result.state_summary.setdefault("diagnostic_source", self._last_router_meta.get("diagnostic_source"))
+                result.state_summary.setdefault("raw_preview", self._last_router_meta.get("raw_preview"))
+                result.state_summary.setdefault("raw_preview_truncated", self._last_router_meta.get("raw_preview_truncated"))
+                result.state_summary.setdefault("raw_preview_chars", self._last_router_meta.get("raw_preview_chars"))
+                result.state_summary.setdefault("semantic_authority", False)
             return result
             
-        return AgentIntent(
+        fallback = AgentIntent(
             thought=f"Router Error: {err}",
             action="error",
             params={"error": "router_failure", "details": err},
             response_text="I couldn't contact my brain providers after trying all fallbacks."
         )
+        fallback.state_summary = {
+            "provider_used": self._last_router_meta.get("provider_used"),
+            "provider_attempts": self._last_router_meta.get("provider_attempts"),
+            "provider_attempts_total": self._last_router_meta.get("provider_attempts_total"),
+            "provider_fallback_reason": self._last_router_meta.get("provider_fallback_reason") or "all_providers_failed",
+            "provider_parse_status": self._last_router_meta.get("provider_parse_status") or "unknown_error",
+            "provider_schema_mode": self._last_router_meta.get("provider_schema_mode"),
+            "provider_contract_mode": self._last_router_meta.get("provider_contract_mode"),
+            "strict_mode": self._last_router_meta.get("strict_mode"),
+            "paranoid_mode": self._last_router_meta.get("paranoid_mode"),
+            "intent_repair_attempts": self._last_router_meta.get("intent_repair_attempts"),
+            "allowed_actions_count": self._last_router_meta.get("allowed_actions_count"),
+            "error_stage": self._last_router_meta.get("error_stage") or "llm_manager",
+            "error_type": self._last_router_meta.get("error_type") or "provider_error",
+            "error_reason": self._last_router_meta.get("error_reason") or err,
+            "diagnostic_source": self._last_router_meta.get("diagnostic_source") or "llm_manager",
+            "raw_preview": self._last_router_meta.get("raw_preview") or "",
+            "raw_preview_truncated": self._last_router_meta.get("raw_preview_truncated") or False,
+            "raw_preview_chars": self._last_router_meta.get("raw_preview_chars") or 0,
+            "semantic_authority": False,
+        }
+        return fallback
+
+    def get_last_router_meta(self) -> Dict[str, Any]:
+        return dict(self._last_router_meta or {})
 
     def analyze_image(self, image_path: str, prompt: str) -> str:
         """

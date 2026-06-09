@@ -2,7 +2,7 @@ from typing import List, Dict, Any, Optional
 import json
 import requests
 from core.intent import AgentIntent
-from drivers.llm.base import ILLMProvider
+from drivers.llm.base import ILLMProvider, ProviderContractError
 from utils.logging_config import get_logger
 
 logger = get_logger("OllamaDriver")
@@ -10,7 +10,7 @@ logger = get_logger("OllamaDriver")
 class OllamaProvider(ILLMProvider):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         if config:
-            self.api_url = config.get("url", "http://localhost:11434/api/chat")
+            self.api_url = config.get("base_url") or config.get("url") or "http://localhost:11434/api/chat"
             self.model = config.get("model", "llama3")
             self.max_tokens = int(config.get("max_tokens", 4096))
         else:
@@ -85,20 +85,74 @@ class OllamaProvider(ILLMProvider):
                 attachments = data.get("attachments")
                 if not attachments and isinstance(data.get("params"), dict):
                     attachments = data.get("params", {}).get("attachments")
+                action = str(data.get("action", "") or "").strip()
+                if not action:
+                    raise ILLMProvider.contract_error(
+                        "Ollama intent missing action.",
+                        provider_used="ollama",
+                        error_stage="provider",
+                        error_type="provider_contract_error",
+                        error_reason="missing_action",
+                        raw_response=data,
+                        provider_parse_status="missing_action",
+                        provider_fallback_reason="provider_contract_error",
+                        provider_schema_mode="intent_json",
+                        provider_contract_mode="intent",
+                        extra={"diagnostic_source": "ollama"},
+                    )
+                response_text = self._normalize_response_text(data.get("response_text", data.get("reply", "")), fallback="")
+                if action == "reply" and not response_text.strip():
+                    raise ILLMProvider.contract_error(
+                        "Ollama reply missing response_text.",
+                        provider_used="ollama",
+                        error_stage="provider",
+                        error_type="provider_contract_error",
+                        error_reason="missing_response_text",
+                        raw_response=data,
+                        provider_parse_status="missing_response_text",
+                        provider_fallback_reason="provider_contract_error",
+                        provider_schema_mode="intent_json",
+                        provider_contract_mode="intent",
+                        extra={"diagnostic_source": "ollama"},
+                    )
+                allowed_actions = kwargs.get("allowed_actions")
+                if isinstance(allowed_actions, (list, tuple, set)):
+                    allowed = {str(item).strip() for item in allowed_actions if str(item or "").strip()}
+                    if allowed and action not in allowed:
+                        raise ILLMProvider.contract_error(
+                            f"Ollama returned unsupported action: {action}.",
+                            provider_used="ollama",
+                            error_stage="provider",
+                            error_type="provider_contract_error",
+                            error_reason="unsupported_action",
+                            raw_response=data,
+                            provider_parse_status="unsupported_action",
+                            provider_fallback_reason="provider_contract_error",
+                            provider_schema_mode="intent_json",
+                            provider_contract_mode="intent",
+                            extra={"diagnostic_source": "ollama"},
+                        )
 
                 return AgentIntent(
                     thought=str(data.get("thought", "") or ""),
-                    action=data.get("action", "unknown"),
+                    action=action,
                     params=data.get("params", {}),
-                    response_text=self._normalize_response_text(data.get("response_text", data.get("reply", "")), fallback=""),
+                    response_text=response_text,
                     attachments=attachments
                 )
             except (json.JSONDecodeError, ValueError, AttributeError, TypeError):
-                return AgentIntent(
-                     thought="Model failed to return JSON",
-                     action="unknown",
-                     params={},
-                     response_text="" # Trigger Orchestrator recovery
+                raise ILLMProvider.contract_error(
+                    "Ollama structured output is not valid JSON.",
+                    provider_used="ollama",
+                    error_stage="provider",
+                    error_type="provider_exception",
+                    error_reason="invalid_json",
+                    raw_response=content,
+                    provider_parse_status="invalid_json",
+                    provider_fallback_reason="provider_parse_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "ollama"},
                 )
 
         except Exception as e:

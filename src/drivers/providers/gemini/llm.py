@@ -64,21 +64,69 @@ class GeminiProvider(ILLMProvider):
         """
         text = str(raw_text or "").strip()
         if not text:
-            raise ProviderContractError("Gemini structured output is empty.")
+            raise ILLMProvider.contract_error(
+                "Gemini structured output is empty.",
+                provider_used="gemini",
+                error_stage="provider",
+                error_type="provider_exception",
+                error_reason="empty_output",
+                raw_response=raw_text,
+                provider_parse_status="empty_output",
+                provider_fallback_reason="provider_empty_output",
+                provider_schema_mode="structured_json",
+                provider_contract_mode="structured",
+                extra={"diagnostic_source": "gemini"},
+            )
 
         # Accept fenced JSON only when fence fully wraps the payload.
         if text.startswith("```"):
             match = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, flags=re.IGNORECASE | re.DOTALL)
             if not match:
-                raise ProviderContractError("Gemini structured output fence is malformed.")
+                raise ILLMProvider.contract_error(
+                    "Gemini structured output fence is malformed.",
+                    provider_used="gemini",
+                    error_stage="provider",
+                    error_type="provider_contract_error",
+                    error_reason="invalid_schema",
+                    raw_response=raw_text,
+                    provider_parse_status="invalid_schema",
+                    provider_fallback_reason="provider_schema_error",
+                    provider_schema_mode="structured_json",
+                    provider_contract_mode="structured",
+                    extra={"diagnostic_source": "gemini"},
+                )
             text = match.group(1).strip()
 
         try:
             payload = json.loads(text)
         except Exception as exc:
-            raise ProviderContractError(f"Gemini structured output is not valid JSON: {exc}") from exc
+            raise ILLMProvider.contract_error(
+                f"Gemini structured output is not valid JSON: {exc}",
+                provider_used="gemini",
+                error_stage="provider",
+                error_type="provider_exception",
+                error_reason="invalid_json",
+                raw_response=raw_text,
+                provider_parse_status="invalid_json",
+                provider_fallback_reason="provider_parse_error",
+                provider_schema_mode="structured_json",
+                provider_contract_mode="structured",
+                extra={"diagnostic_source": "gemini"},
+            ) from exc
         if not isinstance(payload, dict):
-            raise ProviderContractError("Gemini structured output must be a JSON object.")
+            raise ILLMProvider.contract_error(
+                "Gemini structured output must be a JSON object.",
+                provider_used="gemini",
+                error_stage="provider",
+                error_type="provider_contract_error",
+                error_reason="invalid_schema",
+                raw_response=raw_text,
+                provider_parse_status="invalid_schema",
+                provider_fallback_reason="provider_schema_error",
+                provider_schema_mode="structured_json",
+                provider_contract_mode="structured",
+                extra={"diagnostic_source": "gemini"},
+            )
         return payload
 
     @staticmethod
@@ -162,7 +210,19 @@ class GeminiProvider(ILLMProvider):
 
             if not response.text:
                 logger.error("Gemini returned an empty response.")
-                raise ValueError("Gemini returned an empty response.")
+                raise ILLMProvider.contract_error(
+                    "Gemini returned an empty response.",
+                    provider_used="gemini",
+                    error_stage="provider",
+                    error_type="provider_exception",
+                    error_reason="empty_output",
+                    raw_response=response,
+                    provider_parse_status="empty_output",
+                    provider_fallback_reason="provider_empty_output",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "gemini"},
+                )
 
             content = response.text.strip()
             
@@ -171,7 +231,19 @@ class GeminiProvider(ILLMProvider):
             
             if not data:
                 logger.error("Failed to extract valid JSON from Gemini response.")
-                raise ProviderContractError("Failed to fulfill AgentIntent contract: Invalid JSON.")
+                raise ILLMProvider.contract_error(
+                    "Failed to fulfill AgentIntent contract: Invalid JSON.",
+                    provider_used="gemini",
+                    error_stage="provider",
+                    error_type="provider_exception",
+                    error_reason="invalid_json",
+                    raw_response=content,
+                    provider_parse_status="invalid_json",
+                    provider_fallback_reason="provider_parse_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "gemini"},
+                )
 
             attachments = data.get("attachments")
             if not attachments and isinstance(data.get("params"), dict):
@@ -181,6 +253,52 @@ class GeminiProvider(ILLMProvider):
                 data.get("response_text", data.get("reply", "")),
                 fallback="",
             )
+            action = str(data.get("action", "") or "").strip()
+            if not action:
+                raise ILLMProvider.contract_error(
+                    "Gemini intent missing action.",
+                    provider_used="gemini",
+                    error_stage="provider",
+                    error_type="provider_contract_error",
+                    error_reason="missing_action",
+                    raw_response=data,
+                    provider_parse_status="missing_action",
+                    provider_fallback_reason="provider_contract_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "gemini"},
+                )
+            if action == "reply" and not response_text.strip():
+                raise ILLMProvider.contract_error(
+                    "Gemini reply missing response_text.",
+                    provider_used="gemini",
+                    error_stage="provider",
+                    error_type="provider_contract_error",
+                    error_reason="missing_response_text",
+                    raw_response=data,
+                    provider_parse_status="missing_response_text",
+                    provider_fallback_reason="provider_contract_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "gemini"},
+                )
+            allowed_actions = kwargs.get("allowed_actions")
+            if isinstance(allowed_actions, (list, tuple, set)):
+                allowed = {str(item).strip() for item in allowed_actions if str(item or "").strip()}
+                if allowed and action not in allowed:
+                    raise ILLMProvider.contract_error(
+                        f"Gemini returned unsupported action: {action}.",
+                        provider_used="gemini",
+                        error_stage="provider",
+                        error_type="provider_contract_error",
+                        error_reason="unsupported_action",
+                        raw_response=data,
+                        provider_parse_status="unsupported_action",
+                        provider_fallback_reason="provider_contract_error",
+                        provider_schema_mode="intent_json",
+                        provider_contract_mode="intent",
+                        extra={"diagnostic_source": "gemini"},
+                    )
 
             # Ensure 'thought' is never truly empty to satisfy validation
             thought = str(data.get("thought", "")).strip()
@@ -190,7 +308,7 @@ class GeminiProvider(ILLMProvider):
             return AgentIntent(
                 thought=thought,
                 plan=data.get("plan", []),
-                action=data.get("action", "reply"), # Default to reply
+                action=action,
                 params=data.get("params", {}),
                 state_summary=data.get("state_summary", {}),
                 response_text=response_text,
@@ -303,8 +421,18 @@ class GeminiProvider(ILLMProvider):
                         str(last_error),
                     )
                     continue
-            raise ProviderContractError(
-                f"Gemini failed structured contract after {max_attempts} attempts: {last_error}"
+            raise ILLMProvider.contract_error(
+                f"Gemini failed structured contract after {max_attempts} attempts: {last_error}",
+                provider_used="gemini",
+                error_stage="provider",
+                error_type="provider_contract_error",
+                error_reason="invalid_schema" if "schema" in str(last_error or "").lower() else "invalid_json",
+                raw_response=last_error,
+                provider_parse_status="invalid_schema" if "schema" in str(last_error or "").lower() else "invalid_json",
+                provider_fallback_reason="provider_schema_error" if "schema" in str(last_error or "").lower() else "provider_parse_error",
+                provider_schema_mode="structured_json",
+                provider_contract_mode="structured",
+                extra={"diagnostic_source": "gemini"},
             )
         except Exception as e:
             logger.error(f"Gemini generate_structured error: {e}")
@@ -344,7 +472,19 @@ class GeminiProvider(ILLMProvider):
         Structured vision output in provider layer.
         """
         if not os.path.exists(image_path):
-            raise ProviderContractError(f"Image file not found: {image_path}")
+            raise ILLMProvider.contract_error(
+                f"Image file not found: {image_path}",
+                provider_used="gemini",
+                error_stage="provider",
+                error_type="provider_contract_error",
+                error_reason="missing_attachment",
+                raw_response=image_path,
+                provider_parse_status="unknown_error",
+                provider_fallback_reason="provider_contract_error",
+                provider_schema_mode="structured_json",
+                provider_contract_mode="structured",
+                extra={"diagnostic_source": "gemini"},
+            )
         try:
             artifact_emitted = False
             import mimetypes
@@ -375,8 +515,18 @@ class GeminiProvider(ILLMProvider):
             )
             payload = extract_and_parse_json(raw_text)
             if not isinstance(payload, dict) or not payload:
-                err = ProviderContractError(
-                    f"Gemini vision structured output invalid. raw_preview={self._preview(raw_text)}"
+                err = ILLMProvider.contract_error(
+                    "Gemini vision structured output invalid.",
+                    provider_used="gemini",
+                    error_stage="provider",
+                    error_type="provider_exception",
+                    error_reason="invalid_json",
+                    raw_response=raw_text,
+                    provider_parse_status="invalid_json",
+                    provider_fallback_reason="provider_parse_error",
+                    provider_schema_mode="structured_json_vision",
+                    provider_contract_mode="structured",
+                    extra={"diagnostic_source": "gemini"},
                 )
                 self._emit_contract_artifact(
                     contract=str(kwargs.get("contract", "") or ""),

@@ -81,7 +81,19 @@ class OpenRouterProvider(ILLMProvider):
             
             if not response.choices or not response.choices[0].message.content:
                 logger.error("OpenRouter returned an empty response.")
-                raise ValueError("Provider returned an empty response.")
+                raise ILLMProvider.contract_error(
+                    "OpenRouter returned an empty response.",
+                    provider_used="openrouter",
+                    error_stage="provider",
+                    error_type="provider_exception",
+                    error_reason="empty_output",
+                    raw_response=response,
+                    provider_parse_status="empty_output",
+                    provider_fallback_reason="provider_empty_output",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "openrouter"},
+                )
 
             content = response.choices[0].message.content.strip()
             logger.info(f"Raw LLM Response (Len: {len(content)}): {content[:100]}...")
@@ -120,7 +132,19 @@ class OpenRouterProvider(ILLMProvider):
             data = extract_and_parse_json(content)
             if not data:
                 logger.warning("Could not parse JSON intent from OpenRouter.")
-                raise ProviderContractError("Failed to fulfill AgentIntent contract: Invalid JSON.")
+                raise ILLMProvider.contract_error(
+                    "Failed to fulfill AgentIntent contract: Invalid JSON.",
+                    provider_used="openrouter",
+                    error_stage="provider",
+                    error_type="provider_exception",
+                    error_reason="invalid_json",
+                    raw_response=content,
+                    provider_parse_status="invalid_json",
+                    provider_fallback_reason="provider_parse_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "openrouter"},
+                )
 
             # VALIDATION & EXTRACTION
             thought = str(data.get("thought", "") or "").strip() or "Reasoning omitted by model."
@@ -144,9 +168,50 @@ class OpenRouterProvider(ILLMProvider):
                 response_text = str(response_text_raw)
 
             if not action:
-                action = "reply"
-            if action == "reply" and not response_text:
-                response_text = thought
+                raise ILLMProvider.contract_error(
+                    "OpenRouter intent missing action.",
+                    provider_used="openrouter",
+                    error_stage="provider",
+                    error_type="provider_contract_error",
+                    error_reason="missing_action",
+                    raw_response=data,
+                    provider_parse_status="missing_action",
+                    provider_fallback_reason="provider_contract_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "openrouter"},
+                )
+            if action == "reply" and not str(response_text or "").strip():
+                raise ILLMProvider.contract_error(
+                    "OpenRouter reply missing response_text.",
+                    provider_used="openrouter",
+                    error_stage="provider",
+                    error_type="provider_contract_error",
+                    error_reason="missing_response_text",
+                    raw_response=data,
+                    provider_parse_status="missing_response_text",
+                    provider_fallback_reason="provider_contract_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "openrouter"},
+                )
+            allowed_actions = kwargs.get("allowed_actions")
+            if isinstance(allowed_actions, (list, tuple, set)):
+                allowed = {str(item).strip() for item in allowed_actions if str(item or "").strip()}
+                if allowed and action not in allowed:
+                    raise ILLMProvider.contract_error(
+                        f"OpenRouter returned unsupported action: {action}.",
+                        provider_used="openrouter",
+                        error_stage="provider",
+                        error_type="provider_contract_error",
+                        error_reason="unsupported_action",
+                        raw_response=data,
+                        provider_parse_status="unsupported_action",
+                        provider_fallback_reason="provider_contract_error",
+                        provider_schema_mode="intent_json",
+                        provider_contract_mode="intent",
+                        extra={"diagnostic_source": "openrouter"},
+                    )
             
             normalized_plan = self._normalize_plan_field(data.get("plan", []))
             state_summary = data.get("state_summary", {})

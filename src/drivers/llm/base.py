@@ -11,13 +11,47 @@ class ProviderContractError(Exception):
     (e.g., persistent malformed JSON after repair attempts).
     Triggers the Kernel's fallback mechanism.
     """
-    pass
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.message = message
+        self.details = details or {}
 
 class ILLMProvider(ABC):
     """
     Interface for LLM Providers (OpenAI, Ollama, etc.).
     Responsible for connecting to the model and parsing the response into an AgentIntent.
     """
+
+    RAW_PREVIEW_LIMIT = 1200
+    _REDACTION_PATTERNS = (
+        (re.compile(r'(?i)("?(?:api[_-]?key|secret|token|password|authorization)"?\s*[:=]\s*")([^"\n]{4,})(")'), r'\1<redacted>\3'),
+        (re.compile(r'(?i)(authorization\s*:\s*bearer\s+)([A-Za-z0-9._\-+/=]+)'), r'\1<redacted>'),
+        (re.compile(r'(?i)(secret_ref\s*[:=]\s*)([^\s,"\'}]+)'), r'\1<redacted>'),
+    )
+    _ALLOWED_ERROR_STAGES = {"provider", "llm_manager", "resolver", "gatekeeper", "orchestrator", "recovery", "sanitizer", "session_pipeline"}
+    _ALLOWED_PARSE_STATUSES = {
+        "ok",
+        "empty_output",
+        "invalid_json",
+        "invalid_schema",
+        "missing_action",
+        "missing_response_text",
+        "unsupported_action",
+        "provider_exception",
+        "timeout",
+        "unknown_error",
+    }
+    _ALLOWED_FALLBACK_REASONS = {
+        "none",
+        "provider_parse_error",
+        "provider_schema_error",
+        "provider_empty_output",
+        "provider_timeout",
+        "provider_exception",
+        "provider_contract_error",
+        "all_providers_failed",
+        "fallback_provider_used",
+    }
 
     @abstractmethod
     def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] | None = None, **kwargs) -> AgentIntent:
@@ -42,6 +76,170 @@ class ILLMProvider(ABC):
         Used for internal utilities like summarization and log compression.
         """
         pass
+
+    @classmethod
+    def _sanitize_raw_text(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            text = value
+        else:
+            try:
+                text = json.dumps(value, ensure_ascii=False, default=str)
+            except Exception:
+                text = str(value)
+        redacted = text
+        for pattern, replacement in cls._REDACTION_PATTERNS:
+            redacted = pattern.sub(replacement, redacted)
+        return redacted
+
+    @classmethod
+    def build_raw_preview(cls, value: Any, limit: Optional[int] = None) -> Dict[str, Any]:
+        limit_value = int(limit or cls.RAW_PREVIEW_LIMIT)
+        limit_value = max(64, min(limit_value, 4096))
+        text = cls._sanitize_raw_text(value)
+        chars = len(text)
+        truncated = chars > limit_value
+        preview = text[:limit_value]
+        return {
+            "raw_preview": preview,
+            "raw_preview_truncated": truncated,
+            "raw_preview_chars": chars,
+        }
+
+    @classmethod
+    def normalize_provider_parse_status(cls, value: Optional[str], *, raw_empty: bool = False, error_reason: str = "") -> str:
+        candidate = str(value or "").strip().lower()
+        if candidate in cls._ALLOWED_PARSE_STATUSES:
+            return candidate
+        if raw_empty:
+            return "empty_output"
+        reason = str(error_reason or "").strip().lower()
+        if "timeout" in reason:
+            return "timeout"
+        if "invalid json" in reason or "json" in reason or "parse" in reason:
+            return "invalid_json"
+        if "missing response_text" in reason:
+            return "missing_response_text"
+        if "missing action" in reason or "invalid action" in reason:
+            return "missing_action"
+        if "schema" in reason:
+            return "invalid_schema"
+        if "unsupported" in reason:
+            return "unsupported_action"
+        if "contract" in reason:
+            return "provider_exception"
+        return "unknown_error"
+
+    @classmethod
+    def normalize_provider_fallback_reason(cls, value: Optional[str], *, parse_status: str = "", error_reason: str = "") -> str:
+        candidate = str(value or "").strip().lower()
+        if candidate in cls._ALLOWED_FALLBACK_REASONS and candidate != "none":
+            return candidate
+        status = str(parse_status or "").strip().lower()
+        if status == "empty_output":
+            return "provider_empty_output"
+        if status in {"invalid_json", "invalid_schema", "missing_action", "missing_response_text", "unsupported_action"}:
+            return "provider_contract_error"
+        if status == "timeout":
+            return "provider_timeout"
+        if status == "provider_exception":
+            return "provider_exception"
+        reason = str(error_reason or "").strip().lower()
+        if "timeout" in reason:
+            return "provider_timeout"
+        if "schema" in reason:
+            return "provider_schema_error"
+        if "json" in reason or "parse" in reason:
+            return "provider_parse_error"
+        if "contract" in reason:
+            return "provider_contract_error"
+        if reason:
+            return "provider_exception"
+        return "none"
+
+    @classmethod
+    def build_contract_diagnostics(
+        cls,
+        *,
+        provider_used: str,
+        error_stage: str,
+        error_type: str,
+        error_reason: str,
+        raw_response: Any = None,
+        provider_parse_status: str = "",
+        provider_fallback_reason: str = "",
+        provider_schema_mode: str = "",
+        provider_contract_mode: str = "intent",
+        semantic_authority: bool = False,
+        diagnostic_source: str = "provider",
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        preview = cls.build_raw_preview(raw_response)
+        parse_status = cls.normalize_provider_parse_status(
+            provider_parse_status,
+            raw_empty=not bool(str(raw_response or "").strip()),
+            error_reason=error_reason,
+        )
+        fallback_reason = cls.normalize_provider_fallback_reason(
+            provider_fallback_reason,
+            parse_status=parse_status,
+            error_reason=error_reason,
+        )
+        payload: Dict[str, Any] = {
+            "diagnostic_source": diagnostic_source,
+            "error_stage": error_stage,
+            "error_type": error_type,
+            "error_reason": error_reason,
+            "provider_used": provider_used,
+            "provider_parse_status": parse_status,
+            "provider_fallback_reason": fallback_reason,
+            "provider_schema_mode": provider_schema_mode,
+            "provider_contract_mode": provider_contract_mode,
+            "semantic_authority": semantic_authority,
+        }
+        payload.update(preview)
+        if extra:
+            for key, value in extra.items():
+                if value not in (None, "", [], {}):
+                    payload[key] = value
+        return payload
+
+    @classmethod
+    def contract_error(
+        cls,
+        message: str,
+        *,
+        provider_used: str,
+        error_stage: str,
+        error_type: str,
+        error_reason: str,
+        raw_response: Any = None,
+        provider_parse_status: str = "",
+        provider_fallback_reason: str = "",
+        provider_schema_mode: str = "",
+        provider_contract_mode: str = "intent",
+        semantic_authority: bool = False,
+        diagnostic_source: str = "provider",
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> ProviderContractError:
+        return ProviderContractError(
+            message,
+            details=cls.build_contract_diagnostics(
+                provider_used=provider_used,
+                error_stage=error_stage,
+                error_type=error_type,
+                error_reason=error_reason,
+                raw_response=raw_response,
+                provider_parse_status=provider_parse_status,
+                provider_fallback_reason=provider_fallback_reason,
+                provider_schema_mode=provider_schema_mode,
+                provider_contract_mode=provider_contract_mode,
+                semantic_authority=semantic_authority,
+                diagnostic_source=diagnostic_source,
+                extra=extra,
+            ),
+        )
 
     @staticmethod
     def _to_float(value: Any, default: float = 0.0) -> float:

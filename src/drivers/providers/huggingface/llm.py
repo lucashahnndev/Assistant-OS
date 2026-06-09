@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from core.intent import AgentIntent
-from drivers.llm.base import ILLMProvider
+from drivers.llm.base import ILLMProvider, ProviderContractError
 from server.core.secret_manager import resolve_secret_ref
 from utils.logging_config import get_logger
 
@@ -148,14 +148,35 @@ class HuggingFaceProvider(ILLMProvider):
             content = self._chat_completion(messages)
             data = self._extract_json(content)
             if not data:
-                return AgentIntent(
-                    thought="Model returned non-JSON output.",
-                    action="reply",
-                    params={},
-                    response_text="", # Trigger Orchestrator recovery
+                raise ILLMProvider.contract_error(
+                    "HuggingFace structured output is not valid JSON.",
+                    provider_used="huggingface",
+                    error_stage="provider",
+                    error_type="provider_exception",
+                    error_reason="invalid_json",
+                    raw_response=content,
+                    provider_parse_status="invalid_json",
+                    provider_fallback_reason="provider_parse_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "huggingface"},
                 )
 
-            action = str(data.get("action") or "reply").strip() or "reply"
+            action = str(data.get("action") or "").strip()
+            if not action:
+                raise ILLMProvider.contract_error(
+                    "HuggingFace intent missing action.",
+                    provider_used="huggingface",
+                    error_stage="provider",
+                    error_type="provider_contract_error",
+                    error_reason="missing_action",
+                    raw_response=data,
+                    provider_parse_status="missing_action",
+                    provider_fallback_reason="provider_contract_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "huggingface"},
+                )
             params = data.get("params", {})
             if not isinstance(params, dict):
                 params = {}
@@ -163,6 +184,38 @@ class HuggingFaceProvider(ILLMProvider):
             out_attachments = data.get("attachments")
             if not out_attachments and isinstance(params, dict):
                 out_attachments = params.get("attachments")
+            response_text = self._normalize_response_text(data.get("response_text", data.get("reply", "")), fallback="")
+            if action == "reply" and not response_text.strip():
+                raise ILLMProvider.contract_error(
+                    "HuggingFace reply missing response_text.",
+                    provider_used="huggingface",
+                    error_stage="provider",
+                    error_type="provider_contract_error",
+                    error_reason="missing_response_text",
+                    raw_response=data,
+                    provider_parse_status="missing_response_text",
+                    provider_fallback_reason="provider_contract_error",
+                    provider_schema_mode="intent_json",
+                    provider_contract_mode="intent",
+                    extra={"diagnostic_source": "huggingface"},
+                )
+            allowed_actions = kwargs.get("allowed_actions")
+            if isinstance(allowed_actions, (list, tuple, set)):
+                allowed = {str(item).strip() for item in allowed_actions if str(item or "").strip()}
+                if allowed and action not in allowed:
+                    raise ILLMProvider.contract_error(
+                        f"HuggingFace returned unsupported action: {action}.",
+                        provider_used="huggingface",
+                        error_stage="provider",
+                        error_type="provider_contract_error",
+                        error_reason="unsupported_action",
+                        raw_response=data,
+                        provider_parse_status="unsupported_action",
+                        provider_fallback_reason="provider_contract_error",
+                        provider_schema_mode="intent_json",
+                        provider_contract_mode="intent",
+                        extra={"diagnostic_source": "huggingface"},
+                    )
 
             return AgentIntent(
                 thought=str(data.get("thought", "") or ""),
@@ -171,7 +224,7 @@ class HuggingFaceProvider(ILLMProvider):
                 action=action,
                 params=params,
                 task_label=data.get("task_label"),
-                response_text=self._normalize_response_text(data.get("response_text", data.get("reply", "")), fallback=""),
+                response_text=response_text,
                 attachments=out_attachments,
             )
         except Exception as e:
