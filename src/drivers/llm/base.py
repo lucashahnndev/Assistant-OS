@@ -23,6 +23,7 @@ class ILLMProvider(ABC):
     """
 
     RAW_PREVIEW_LIMIT = 1200
+    _TECHNICAL_CONTEXT_LABEL = "TECHNICAL CONTEXT - NOT USER SPEECH"
     _REDACTION_PATTERNS = (
         (re.compile(r'(?i)("?(?:api[_-]?key|secret|token|password|authorization)"?\s*[:=]\s*")([^"\n]{4,})(")'), r'\1<redacted>\3'),
         (re.compile(r'(?i)(authorization\s*:\s*bearer\s+)([A-Za-z0-9._\-+/=]+)'), r'\1<redacted>'),
@@ -76,6 +77,134 @@ class ILLMProvider(ABC):
         Used for internal utilities like summarization and log compression.
         """
         pass
+
+    @classmethod
+    def _normalize_chat_role(cls, message: Dict[str, Any]) -> str:
+        role = str(
+            message.get("role")
+            or message.get("origin_role")
+            or message.get("kind")
+            or message.get("msg_type")
+            or "context"
+        ).strip().lower()
+        if role in {"user", "assistant", "system", "tool"}:
+            return role
+        if role in {"context", "evidence", "diagnostic", "recovery"}:
+            return role
+        return "context"
+
+    @classmethod
+    def _format_technical_context_block(
+        cls,
+        message: Dict[str, Any],
+        technical_context_label: Optional[str] = None,
+    ) -> str:
+        label = str(technical_context_label or cls._TECHNICAL_CONTEXT_LABEL).strip() or cls._TECHNICAL_CONTEXT_LABEL
+        role = str(
+            message.get("role")
+            or message.get("origin_role")
+            or message.get("kind")
+            or message.get("msg_type")
+            or "context"
+        ).strip().lower()
+        origin = str(message.get("origin") or message.get("source") or "session").strip() or "session"
+        kind = str(message.get("kind") or message.get("type") or message.get("msg_type") or "").strip()
+        bits = [f"origin={origin}", f"role={role}"]
+        if kind:
+            bits.append(f"kind={kind}")
+        turn_id = message.get("turn_id")
+        if turn_id not in (None, "", [], {}):
+            bits.append(f"turn_id={turn_id}")
+        work_id = str(message.get("work_id") or "").strip()
+        if work_id:
+            bits.append(f"work_id={work_id}")
+        message_id = str(message.get("message_id") or message.get("id") or "").strip()
+        if message_id:
+            bits.append(f"message_id={message_id}")
+        header = f"[{label} | " + " | ".join(bits) + "]"
+        content = str(message.get("content") or message.get("summary") or "").strip()
+        return header if not content else f"{header}\n{content}"
+
+    @classmethod
+    def build_chat_messages(
+        cls,
+        *,
+        history: Optional[List[Dict[str, Any]]],
+        user_input: str,
+        system_prompt: str = "",
+        allow_tool_role: bool = False,
+        technical_context_label: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        messages: List[Dict[str, Any]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": str(system_prompt)})
+
+        for message in history or []:
+            if not isinstance(message, dict):
+                continue
+            role = cls._normalize_chat_role(message)
+            content = str(message.get("content") or message.get("summary") or "").strip()
+            if role in {"user", "assistant", "system"}:
+                messages.append({"role": role, "content": content})
+                continue
+            if role == "tool" and allow_tool_role:
+                tool_call_id = str(message.get("tool_call_id") or message.get("tool_id") or "").strip()
+                if tool_call_id:
+                    tool_message: Dict[str, Any] = {"role": "tool", "content": content, "tool_call_id": tool_call_id}
+                    tool_name = str(message.get("name") or message.get("tool_name") or "").strip()
+                    if tool_name:
+                        tool_message["name"] = tool_name
+                    messages.append(tool_message)
+                    continue
+            messages.append(
+                {
+                    "role": "system",
+                    "content": cls._format_technical_context_block(
+                        message,
+                        technical_context_label=technical_context_label,
+                    ),
+                }
+            )
+
+        messages.append({"role": "user", "content": str(user_input or "")})
+        return messages
+
+    @classmethod
+    def build_gemini_payload(
+        cls,
+        *,
+        history: Optional[List[Dict[str, Any]]],
+        user_input: str,
+        system_prompt: str = "",
+        technical_context_label: Optional[str] = None,
+    ) -> tuple[str, List[Dict[str, Any]]]:
+        system_parts: List[str] = []
+        if system_prompt:
+            system_parts.append(str(system_prompt).strip())
+
+        contents: List[Dict[str, Any]] = []
+        for message in history or []:
+            if not isinstance(message, dict):
+                continue
+            role = cls._normalize_chat_role(message)
+            content = str(message.get("content") or message.get("summary") or "").strip()
+            if role == "user":
+                contents.append({"role": "user", "parts": [{"text": content}]})
+            elif role == "assistant":
+                contents.append({"role": "model", "parts": [{"text": content}]})
+            else:
+                system_parts.append(
+                    cls._format_technical_context_block(
+                        message,
+                        technical_context_label=technical_context_label,
+                    )
+                )
+
+        if user_input:
+            contents.append({"role": "user", "parts": [{"text": str(user_input or "").strip()}]})
+
+        system_instruction = "\n\n".join(part for part in system_parts if part).strip()
+        return system_instruction, contents
 
     @classmethod
     def _sanitize_raw_text(cls, value: Any) -> str:
@@ -239,6 +368,34 @@ class ILLMProvider(ABC):
                 diagnostic_source=diagnostic_source,
                 extra=extra,
             ),
+        )
+
+    @classmethod
+    def contract_text_empty_error(
+        cls,
+        message: str,
+        *,
+        provider_used: str,
+        raw_response: Any = "",
+        provider_schema_mode: str = "text",
+        provider_contract_mode: str = "text",
+        diagnostic_source: str = "provider",
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> ProviderContractError:
+        return cls.contract_error(
+            message,
+            provider_used=provider_used,
+            error_stage="provider",
+            error_type="provider_empty_output",
+            error_reason="generate_text_empty_output",
+            raw_response=raw_response,
+            provider_parse_status="empty_output",
+            provider_fallback_reason="provider_empty_output",
+            provider_schema_mode=provider_schema_mode,
+            provider_contract_mode=provider_contract_mode,
+            semantic_authority=False,
+            diagnostic_source=diagnostic_source,
+            extra=extra,
         )
 
     @staticmethod

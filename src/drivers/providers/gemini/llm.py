@@ -184,19 +184,17 @@ class GeminiProvider(ILLMProvider):
         }
 
     def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] | None = None, **kwargs) -> AgentIntent:
-        contents = []
-        for msg in history:
-            role = "user" if msg["role"] == "user" else "model"
-            contents.append({"role": role, "parts": [{"text": msg["content"]}]})
-        
-        user_parts = [{"text": user_input}]
-        contents.append({"role": "user", "parts": user_parts})
+        system_instruction, contents = self.build_gemini_payload(
+            history=history or [],
+            user_input=user_input,
+            system_prompt=system_prompt,
+        )
 
         # Structured output prompt
         try:
             # We use GenerateContentConfig for the newer SDK
             config = types.GenerateContentConfig(
-                system_instruction=system_prompt,
+                system_instruction=system_instruction,
                 response_mime_type="application/json",
                 temperature=0.2, # Lower temperature for more consistent JSON
                 max_output_tokens=kwargs.get("max_tokens", self.max_tokens)
@@ -332,7 +330,17 @@ class GeminiProvider(ILLMProvider):
                 contents=[prompt],
                 config=config
             )
-            return response.text.strip() if response.text else "ERROR_EMPTY_RESPONSE"
+            content = str(response.text or "").strip()
+            if not content:
+                raise ILLMProvider.contract_text_empty_error(
+                    "Gemini generate_text returned empty output.",
+                    provider_used="gemini",
+                    raw_response="",
+                    provider_schema_mode="text",
+                    provider_contract_mode="text",
+                    diagnostic_source="gemini",
+                )
+            return content
         except Exception as e:
             logger.error(f"Gemini generate_text error: {e}")
             raise e

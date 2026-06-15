@@ -868,7 +868,13 @@ class Session:
             if total_tokens + msg_tokens > limit_tokens or len(context) >= limit_msgs:
                 break
             
-            clean_role = str(msg.get("role", "user"))
+            clean_role = str(
+                msg.get("role")
+                or msg.get("origin_role")
+                or msg.get("kind")
+                or msg.get("msg_type")
+                or "context"
+            ).strip().lower()
             actor = msg.get("actor") if isinstance(msg.get("actor"), dict) else {}
             actor_label = str(actor.get("display_name") or actor.get("name") or actor.get("id") or "").strip()
             actor_kind = str(actor.get("kind") or "").strip().lower()
@@ -895,31 +901,58 @@ class Session:
                 if any(m in txt_lower for m in error_markers):
                     continue
 
+            summary_str = str(msg.get("summary") or "").strip()
             # Preferences: Use summary if older than recent threshold, else content
             if is_recent:
                 llm_content = content_str
             else:
-                summary_str = msg.get("summary")
-                llm_content = str(summary_str) if summary_str else content_str
+                llm_content = summary_str if summary_str else content_str
                 # Add demotion label prefix
                 if llm_content and not llm_content.startswith("[COMPRESSED"):
                     llm_content = f"[COMPRESSED TURN]: {llm_content}"
-            
-            if clean_role == "system":
-                clean_role = "user"
-                llm_content = f"[SYSTEM/OBSERVATION]:\n{llm_content}"
-            elif clean_role not in {"user", "assistant"}:
-                # Multi-role compatibility layer: preserve role semantics as prefixed content
-                # while mapping to user role for downstream model APIs.
-                clean_role = "user"
-                role_tag = str(msg.get("role") or "event").upper()
-                llm_content = f"[ROLE:{role_tag}]:\n{llm_content}"
+
+            source_role = clean_role
+            role_out = source_role if source_role in {"user", "assistant", "system", "tool", "context", "evidence", "diagnostic", "recovery", "policy", "developer"} else "context"
+
+            metadata: Dict[str, Any] = {
+                "origin_role": source_role,
+                "is_recent": bool(is_recent),
+                "source": "session",
+            }
+            if summary_str:
+                metadata["summary"] = summary_str
+            if actor_label:
+                metadata["actor_label"] = actor_label
+            if actor_kind:
+                metadata["actor_kind"] = actor_kind
+            if msg.get("file"):
+                metadata["file"] = msg.get("file")
+            if msg.get("attachments"):
+                metadata["attachments"] = msg.get("attachments")
+            if msg.get("work_id"):
+                metadata["work_id"] = msg.get("work_id")
+            if msg.get("type"):
+                metadata["kind"] = msg.get("type")
+            if msg.get("msg_type"):
+                metadata["msg_type"] = msg.get("msg_type")
 
             # Distinguish multi-user/group actors without forcing everything into a single "user" identity.
-            if clean_role == "user" and actor_kind in {"group_participant", "participant", "human_user"} and actor_label:
-                llm_content = f"[FROM:{actor_label}]\n{llm_content}"
-                
-            clean_msg: Dict[str, Any] = {"role": clean_role, "content": llm_content}
+            if role_out == "user" and actor_kind in {"group_participant", "participant", "human_user"} and actor_label:
+                metadata["speaker"] = actor_label
+
+            clean_msg: Dict[str, Any] = {
+                "role": role_out,
+                "content": llm_content,
+                "origin": str(msg.get("origin") or msg.get("source") or "session"),
+                "kind": str(msg.get("kind") or msg.get("type") or msg.get("msg_type") or source_role or "message"),
+                "metadata": metadata,
+            }
+            if msg.get("id"):
+                clean_msg["message_id"] = msg["id"]
+            if msg.get("turn_id") is not None:
+                clean_msg["turn_id"] = msg.get("turn_id")
+            if msg.get("work_id"):
+                clean_msg["work_id"] = msg.get("work_id")
             
             if "attachments" in msg:
                 clean_msg["attachments"] = msg["attachments"]

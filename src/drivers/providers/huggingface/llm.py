@@ -122,9 +122,12 @@ class HuggingFaceProvider(ILLMProvider):
         attachments: List[str] | None = None,
         **kwargs
     ) -> AgentIntent:
-        messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
-        messages.extend(history or [])
-        messages.append({"role": "user", "content": user_input})
+        messages: List[Dict[str, Any]] = self.build_chat_messages(
+            history=history or [],
+            user_input=user_input,
+            system_prompt=system_prompt,
+            allow_tool_role=False,
+        )
 
         schema_hint = {
             "thought": "Reasoning process",
@@ -237,7 +240,17 @@ class HuggingFaceProvider(ILLMProvider):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
         try:
-            return self._chat_completion(messages, max_tokens=min(self.max_tokens, 512), temperature=0.3)
+            content = str(self._chat_completion(messages, max_tokens=min(self.max_tokens, 512), temperature=0.3) or "").strip()
+            if not content:
+                raise ILLMProvider.contract_text_empty_error(
+                    "HuggingFace generate_text returned empty output.",
+                    provider_used="huggingface",
+                    raw_response="",
+                    provider_schema_mode="text",
+                    provider_contract_mode="text",
+                    diagnostic_source="huggingface",
+                )
+            return content
         except Exception as e:
             logger.error(f"HuggingFace generate_text error: {e}")
             raise e

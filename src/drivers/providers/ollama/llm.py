@@ -40,13 +40,17 @@ class OllamaProvider(ILLMProvider):
         return str(value)
 
     def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] | None = None, **kwargs) -> AgentIntent:
-        # Construct messages
-        messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(history)
+        # Construct messages without reclassifying technical context as user speech.
+        messages = self.build_chat_messages(
+            history=history,
+            user_input=user_input,
+            system_prompt=system_prompt,
+            allow_tool_role=False,
+        )
         user_message = {"role": "user", "content": user_input}
         if attachments:
             user_message["images"] = attachments
-        messages.append(user_message)
+        messages[-1] = user_message
 
         schema = AgentIntent.model_json_schema()
         payload = {
@@ -180,7 +184,19 @@ class OllamaProvider(ILLMProvider):
             response = requests.post(self.api_url, json=payload, timeout=120)
             response.raise_for_status()
             data = response.json()
-            return data['message']['content'].strip() if 'message' in data else "ERROR_EMPTY_RESPONSE"
+            content = ""
+            if isinstance(data, dict) and isinstance(data.get("message"), dict):
+                content = str(data.get("message", {}).get("content", "") or "").strip()
+            if not content:
+                raise ILLMProvider.contract_text_empty_error(
+                    "Ollama generate_text returned empty output.",
+                    provider_used="ollama",
+                    raw_response="",
+                    provider_schema_mode="text",
+                    provider_contract_mode="text",
+                    diagnostic_source="ollama",
+                )
+            return content
         except Exception as e:
             logger.error(f"Ollama generate_text error: {e}")
             raise e

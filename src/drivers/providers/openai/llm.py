@@ -122,10 +122,13 @@ class OpenAIChatProvider(ILLMProvider):
         }
 
     def generate_intent(self, user_input: str, history: List[Dict[str, str]], system_prompt: str, attachments: List[str] | None = None, **kwargs) -> AgentIntent:
-        # Construct messages
-        messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(history)
-        messages.append({"role": "user", "content": user_input})
+        # Construct messages without collapsing non-user roles into user.
+        messages = self.build_chat_messages(
+            history=history,
+            user_input=user_input,
+            system_prompt=system_prompt,
+            allow_tool_role=True,
+        )
 
         # Define the function schema for structured output
         tools = [
@@ -429,7 +432,20 @@ class OpenAIChatProvider(ILLMProvider):
                 temperature=0.3,
                 max_tokens=kwargs.get("max_tokens", self.max_tokens)
             )
-            return response.choices[0].message.content.strip() if response.choices else "ERROR_EMPTY_RESPONSE"
+            content = ""
+            if response.choices:
+                content = getattr(response.choices[0].message, "content", "") or ""
+            content = str(content).strip()
+            if not content:
+                raise ILLMProvider.contract_text_empty_error(
+                    "OpenAI generate_text returned empty output.",
+                    provider_used="openai",
+                    raw_response="",
+                    provider_schema_mode="text",
+                    provider_contract_mode="text",
+                    diagnostic_source="openai",
+                )
+            return content
         except Exception as e:
             logger.error(f"OpenAI generate_text error: {e}")
             raise e
