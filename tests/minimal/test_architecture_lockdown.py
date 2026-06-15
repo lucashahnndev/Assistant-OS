@@ -24,6 +24,7 @@ from services.llm.prompt_composer import PromptComposer
 from drivers.llm.base import ProviderContractError, ILLMProvider
 from src.drivers.providers.gemini import llm as gemini_llm
 from src.drivers.providers.huggingface import llm as hf_llm
+from src.drivers.providers.llama_server import llm as llama_server_llm
 from src.drivers.providers.ollama import llm as ollama_llm
 from src.drivers.providers.openai import llm as openai_llm
 from src.drivers.providers.openai.parser import extract_and_parse_json as openai_parse
@@ -80,6 +81,14 @@ class _FakeGeminiClient:
 
     def _generate_content(self, **kwargs):
         return SimpleNamespace(text=self._response_text)
+
+
+class _WhitespaceTextProvider:
+    def __init__(self, model: str):
+        self.model = model
+
+    def generate_text(self, *args, **kwargs):
+        return "   "
 
 
 def _intent_payload(action: str = "demo.action") -> str:
@@ -438,6 +447,7 @@ def test_providers_preserve_action_id_without_fallback(monkeypatch, provider_cls
     [
         (openai_llm.OpenAIChatProvider, openai_llm, "OpenAI"),
         (openrouter_llm.OpenRouterProvider, openrouter_llm, "OpenAI"),
+        (llama_server_llm.LlamaServerChatProvider, llama_server_llm, "OpenAI"),
         (hf_llm.HuggingFaceProvider, hf_llm, "requests"),
         (ollama_llm.OllamaProvider, ollama_llm, "requests"),
         (gemini_llm.GeminiProvider, gemini_llm, "genai"),
@@ -485,6 +495,7 @@ def test_providers_reject_invalid_json_without_fabricating_reply(monkeypatch, pr
     [
         (openai_llm.OpenAIChatProvider, openai_llm, "OpenAI", _empty_reply_payload("reply")),
         (openrouter_llm.OpenRouterProvider, openrouter_llm, "OpenAI", _empty_reply_payload("reply")),
+        (llama_server_llm.LlamaServerChatProvider, llama_server_llm, "OpenAI", _empty_reply_payload("reply")),
         (hf_llm.HuggingFaceProvider, hf_llm, "requests", _empty_reply_payload("reply")),
         (ollama_llm.OllamaProvider, ollama_llm, "requests", _empty_reply_payload("reply")),
         (gemini_llm.GeminiProvider, gemini_llm, "genai", _empty_reply_payload("reply")),
@@ -524,6 +535,65 @@ def test_providers_reject_reply_without_response_text(monkeypatch, provider_cls,
     assert details["error_stage"] == "provider"
     assert details["error_reason"] == "missing_response_text"
     assert details["raw_preview"]
+
+
+@pytest.mark.parametrize(
+    "provider_cls, module, factory_attr",
+    [
+        (openai_llm.OpenAIChatProvider, openai_llm, "OpenAI"),
+        (openrouter_llm.OpenRouterProvider, openrouter_llm, "OpenAI"),
+        (llama_server_llm.LlamaServerChatProvider, llama_server_llm, "OpenAI"),
+        (hf_llm.HuggingFaceProvider, hf_llm, "hf_text"),
+        (ollama_llm.OllamaProvider, ollama_llm, "requests"),
+        (gemini_llm.GeminiProvider, gemini_llm, "genai"),
+    ],
+)
+def test_providers_reject_empty_generate_text_output(monkeypatch, provider_cls, module, factory_attr):
+    if factory_attr == "OpenAI":
+        monkeypatch.setattr(module, "OpenAI", lambda **kwargs: _FakeOpenAIClient("   "))
+    elif factory_attr == "requests":
+        class _WhitespaceOllamaResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"message": {"content": "   "}}
+
+        monkeypatch.setattr(module.requests, "post", lambda *args, **kwargs: _WhitespaceOllamaResponse())
+    elif factory_attr == "genai":
+        monkeypatch.setattr(module, "genai", SimpleNamespace(Client=lambda **kwargs: _FakeGeminiClient("   ")))
+        monkeypatch.setattr(
+            module,
+            "types",
+            SimpleNamespace(GenerateContentConfig=lambda **kwargs: SimpleNamespace(**kwargs)),
+        )
+    elif factory_attr == "hf_text":
+        monkeypatch.setattr(module.HuggingFaceProvider, "_chat_completion", lambda self, *args, **kwargs: "   ")
+
+    if provider_cls.__name__ == "OpenAIChatProvider":
+        provider = provider_cls({"base_url": "http://localhost:1", "model": "gpt-4o-mini", "secret_ref": ""})
+    elif provider_cls.__name__ == "OpenRouterProvider":
+        provider = provider_cls({"secret_ref": "", "model": "openai/gpt-4o-mini"})
+    elif provider_cls.__name__ == "LlamaServerChatProvider":
+        provider = provider_cls({"base_url": "http://localhost:1", "model": "gpt-4o-mini", "secret_ref": ""})
+    elif provider_cls.__name__ == "HuggingFaceProvider":
+        provider = provider_cls({"api_key": "", "model": "test"})
+    elif provider_cls.__name__ == "OllamaProvider":
+        provider = provider_cls({"url": "http://localhost:11434/api/chat", "model": "llama3"})
+    else:
+        provider = provider_cls({"secret_ref": "", "model": "gemini-2.0-flash"})
+
+    with pytest.raises(ProviderContractError) as excinfo:
+        provider.generate_text("hello", "system")
+
+    details = excinfo.value.details
+    assert details["semantic_authority"] is False
+    assert details["provider_parse_status"] == "empty_output"
+    assert details["provider_fallback_reason"] == "provider_empty_output"
+    assert details["error_stage"] == "provider"
+    assert details["error_type"] == "provider_empty_output"
+    assert details["error_reason"] == "generate_text_empty_output"
+    assert details["raw_preview_chars"] == 0
 
 
 def test_provider_raw_preview_is_truncated_and_redacted():

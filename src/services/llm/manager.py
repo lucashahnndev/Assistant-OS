@@ -618,7 +618,37 @@ class LLMManager:
             self.chat_pool, 'generate_text', 
             prompt=prompt, system_prompt=system_prompt, **kwargs
         )
-        return result
+        text = str(result or "").strip()
+        if text and text != "ERROR_EMPTY_RESPONSE":
+            return text
+
+        meta = self.get_last_router_meta()
+        diagnostics = ILLMProvider.build_contract_diagnostics(
+            provider_used=str(meta.get("provider_used") or meta.get("provider") or ""),
+            error_stage="llm_manager",
+            error_type="manager_empty_output",
+            error_reason="generate_text_returned_empty",
+            raw_response=text,
+            provider_parse_status=str(meta.get("provider_parse_status") or "empty_output"),
+            provider_fallback_reason=str(meta.get("provider_fallback_reason") or "provider_empty_output"),
+            provider_schema_mode=str(meta.get("provider_schema_mode") or "text"),
+            provider_contract_mode=str(meta.get("provider_contract_mode") or "text"),
+            semantic_authority=False,
+            diagnostic_source="llm_manager",
+            extra={
+                "provider_attempts": meta.get("provider_attempts"),
+                "provider_attempts_total": meta.get("provider_attempts_total"),
+                "provider_used": meta.get("provider_used"),
+                "provider_id": meta.get("provider_id"),
+                "provider_model": meta.get("model"),
+                "provider_diagnostics": dict(meta),
+                "router_error": err or "",
+            },
+        )
+        raise ProviderContractError(
+            "LLMManager generate_text returned empty output.",
+            details=diagnostics,
+        )
 
     def generate_structured_text(self, prompt: str, system_prompt: str = None, **kwargs) -> Optional[Dict[str, Any]]:
         """
@@ -669,8 +699,9 @@ class LLMManager:
             system_prompt=sys_prompt
         )
         
-        if result:
-            return result
+        normalized = str(result or "").strip()
+        if normalized and normalized != "ERROR_EMPTY_RESPONSE":
+            return normalized
             
         logger.error(f"Summarizer router failed: {err}")
         return text[:500] + "... (Summary Failed)"

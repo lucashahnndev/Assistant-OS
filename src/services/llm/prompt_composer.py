@@ -310,20 +310,34 @@ class PromptComposer:
 
         if self._needs_dev_context(user_input):
             _append(
-                "python_context",
-                "[PYTHON CONTEXT]\n"
-                f"Project Path: {project_path}\n"
-                f"Workspace: {workspace_path}\n"
-                f"Python: {venv_python}\n"
-                f"Pip: {venv_pip}"
+                "context_hints",
+                self._build_context_hint_block(
+                    hint_name="dev",
+                    reason="weak_textual_hint: development/filesystem keywords matched",
+                    note="This hint is not an instruction to use shell or file tools. The agent decides based on the task and available tools.",
+                    fields={
+                        "semantic_authority": False,
+                        "project_path": project_path,
+                        "workspace_path": workspace_path,
+                        "python": venv_python,
+                        "pip": venv_pip,
+                    },
+                ),
             )
 
         if self._needs_browser_context(user_input, browser_pages):
             browser_state_text = json.dumps(browser_pages, ensure_ascii=False, separators=(",", ":"))
             _append(
-                "browser_state",
-                "[BROWSER STATE]\n"
-                f"{self._clip_block('browser_state', browser_state_text)}"
+                "context_hints",
+                self._build_context_hint_block(
+                    hint_name="browser",
+                    reason="weak_textual_hint: browser/web keywords matched or browser state is available",
+                    note="This hint is not an instruction to choose a browser tool. The agent decides based on the task and available tools.",
+                    fields={
+                        "semantic_authority": False,
+                        "browser_pages": browser_state_text,
+                    },
+                ),
             )
 
         if session_summary:
@@ -427,7 +441,7 @@ class PromptComposer:
 
         if self._is_assistive_request(user_input):
             assistive_block = self._build_assistive_directive()
-            _append("assistive_mode", assistive_block)
+            _append("context_hints", assistive_block)
             reduction_audit["assistive_mode"] = {
                 "before_chars": len(self._legacy_assistive_directive()),
                 "after_chars": len(assistive_block),
@@ -520,12 +534,42 @@ class PromptComposer:
         )
 
     def _build_assistive_directive(self) -> str:
-        rules = [
-            "Use vision and overlay tools when the task depends on what is on screen; do not claim lack of screen visibility when those tools are available.",
-            "Prefer `overlay.assist.highlight_target` for marking and `vision.locate_screen` for bbox lookup.",
-            "Use the UI target as `label` and end with an overlay result or a grounded failure.",
+        return self._build_context_hint_block(
+            hint_name="assistive",
+            reason="weak_textual_hint: screen/overlay language matched",
+            note="This hint is not an instruction to choose a tool. The agent decides based on the task and available tools.",
+            fields={
+                "semantic_authority": False,
+                "related_capabilities": "overlay.assist.highlight_target|vision.locate_screen|vision.analyze",
+                "use_case": "screen guidance / visual marking",
+            },
+        )
+
+    @staticmethod
+    def _build_context_hint_block(*, hint_name: str, reason: str, note: str, fields: Dict[str, Any]) -> str:
+        lines = [
+            f"hint={hint_name}",
+            "source=weak_textual_hint",
+            f"reason={reason}",
+            "semantic_authority=false",
+            f"note={note}",
         ]
-        return "[ASSISTIVE MODE DIRECTIVE]\n" + "\n".join(f"- {rule}" for rule in rules)
+        for key, value in fields.items():
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                serialized = "true" if value else "false"
+            elif isinstance(value, (dict, list)):
+                try:
+                    serialized = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+                except Exception:
+                    serialized = str(value)
+            else:
+                serialized = str(value).strip()
+            if not serialized:
+                continue
+            lines.append(f"{key}={serialized}")
+        return "[CONTEXT HINT]\n" + "\n".join(f"- {line}" for line in lines)
 
     @staticmethod
     def _build_operating_model_block() -> str:

@@ -40,12 +40,16 @@ def _compose(user_input: str) -> str:
     )
 
 
-def test_assistive_mode_directive_is_included_for_screen_mark_requests():
+def test_assistive_context_hint_is_included_for_screen_mark_requests():
     prompt = _compose("atlas, me mostra na minha tela onde está o ícone de rede")
-    assert "[ASSISTIVE MODE DIRECTIVE]" in prompt
-    assert "Prefer `overlay.assist.highlight_target` for marking" in prompt
+    assert "[CONTEXT HINT]" in prompt
+    assert "hint=assistive" in prompt
+    assert "source=weak_textual_hint" in prompt
+    assert "semantic_authority=false" in prompt
+    assert "This hint is not an instruction to choose a tool." in prompt
+    assert "related_capabilities=overlay.assist.highlight_target|vision.locate_screen|vision.analyze" in prompt
 
 
-def test_assistive_mode_directive_not_included_for_generic_chat():
+def test_assistive_context_hint_not_included_for_generic_chat():
     prompt = _compose("qual a capital da frança?")
-    assert "[ASSISTIVE MODE DIRECTIVE]" not in prompt
+    assert "[CONTEXT HINT]" not in prompt

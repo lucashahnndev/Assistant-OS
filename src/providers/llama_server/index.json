@@ -1,6 +1,6 @@
 {
   "provider": "llama_server",
-  "display_name": "Llama Server (llama.cpp)",
+  "display_name": "Llama.cpp local",
   "supports": [
     "chat",
     "vision"

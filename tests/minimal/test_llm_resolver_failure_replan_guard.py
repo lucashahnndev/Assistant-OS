@@ -13,11 +13,12 @@ class _FakeIntent:
         self.action = "reply"
         self.params = {}
         self.response_text = ""
-        self.thought = ""
+        self.thought = "relevant thought"
         self.attachments = None
         self.plan = None
         self.state_summary = None
         self.task_label = None
+        self.model_used = "stub"
 
 
 class _FakeLLMManager:
@@ -43,8 +44,12 @@ def test_reply_without_text_recovery_allowed_without_recent_failure():
         {"session": _FakeSession(), "history": [], "system_prompt": "x"},
     )
     assert plan is not None
-    assert plan.action_id == "reply"
-    assert isinstance(plan.response_text, str) and len(plan.response_text) > 0
+    assert plan.action_id == "error"
+    diagnostics = plan.metadata.get("confidence_diagnostics")
+    assert diagnostics["semantic_authority"] is False
+    assert "reply_with_thought_only" in diagnostics["reason_codes"]
+    assert "thought_present" in diagnostics["reason_codes"]
+    assert "format" in diagnostics["reason_types"]
 
 
 def test_reply_without_text_recovery_blocked_after_recent_failure():
@@ -60,4 +65,8 @@ def test_reply_without_text_recovery_blocked_after_recent_failure():
             "last_action_reason": "ELEMENT_NOT_FOUND",
         },
     )
-    assert plan is None
+    assert plan is not None
+    assert plan.action_id == "error"
+    diagnostics = plan.metadata.get("confidence_diagnostics")
+    assert diagnostics["semantic_authority"] is False
+    assert diagnostics["score"] < 0.65

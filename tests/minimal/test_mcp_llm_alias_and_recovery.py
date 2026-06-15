@@ -236,7 +236,7 @@ def test_recovery_reply_without_tool_data_does_not_claim_success():
         _looks_like_guidance_only_reply=AgentOrchestrator._looks_like_guidance_only_reply,
         _sanitize_user_facing_response=AgentOrchestrator._sanitize_user_facing_response,
     )
-    session = SimpleNamespace(session_id="test-session", get_context_for_llm=lambda *args, **kwargs: "")
+    session = SimpleNamespace(session_id="test-session", context={}, get_context_for_llm=lambda *args, **kwargs: "")
 
     reply = AgentOrchestrator._generate_recovery_reply(
         dummy,
@@ -249,8 +249,8 @@ def test_recovery_reply_without_tool_data_does_not_claim_success():
 
     assert "attempting" not in reply.lower()
     assert "estou tentando" not in reply.lower()
-    assert "ainda não houve execução real" in reply.lower()
-    assert "orientação textual" in reply.lower()
+    assert reply == ""
+    assert session.context.get("last_recovery_sanitization", {}).get("reason_code") == "no_fresh_tool_evidence"
 
 
 def test_recovery_reply_without_tool_data_does_not_claim_completion():
@@ -265,7 +265,7 @@ def test_recovery_reply_without_tool_data_does_not_claim_completion():
         _looks_like_guidance_only_reply=AgentOrchestrator._looks_like_guidance_only_reply,
         _sanitize_user_facing_response=AgentOrchestrator._sanitize_user_facing_response,
     )
-    session = SimpleNamespace(session_id="test-session", get_context_for_llm=lambda *args, **kwargs: "")
+    session = SimpleNamespace(session_id="test-session", context={}, get_context_for_llm=lambda *args, **kwargs: "")
 
     reply = AgentOrchestrator._generate_recovery_reply(
         dummy,
@@ -278,8 +278,8 @@ def test_recovery_reply_without_tool_data_does_not_claim_completion():
 
     assert "created" not in reply.lower()
     assert "saved" not in reply.lower()
-    assert "no real execution has happened" in reply.lower()
-    assert "textual guidance" in reply.lower()
+    assert "execution confirmation" in reply.lower()
+    assert session.context.get("last_recovery_sanitization", {}).get("reason_code") == "no_fresh_tool_evidence"
 
 
 def test_recovery_reply_without_tool_data_is_labeled_as_guidance():
@@ -292,7 +292,7 @@ def test_recovery_reply_without_tool_data_is_labeled_as_guidance():
         _looks_like_guidance_only_reply=AgentOrchestrator._looks_like_guidance_only_reply,
         _sanitize_user_facing_response=AgentOrchestrator._sanitize_user_facing_response,
     )
-    session = SimpleNamespace(session_id="test-session", get_context_for_llm=lambda *args, **kwargs: "")
+    session = SimpleNamespace(session_id="test-session", context={}, get_context_for_llm=lambda *args, **kwargs: "")
 
     reply = AgentOrchestrator._generate_recovery_reply(
         dummy,
@@ -304,7 +304,8 @@ def test_recovery_reply_without_tool_data_is_labeled_as_guidance():
     )
 
     assert "guidance" in reply.lower()
-    assert "no real execution has happened" in reply.lower()
+    assert "execution confirmation" in reply.lower()
+    assert session.context.get("last_recovery_sanitization", {}).get("reason_code") in {"guidance_only", "no_fresh_tool_evidence"}
 
 
 def test_recovery_reply_without_tool_data_blocks_attachment_claim():
@@ -318,7 +319,7 @@ def test_recovery_reply_without_tool_data_blocks_attachment_claim():
         _looks_like_attachment_claim=AgentOrchestrator._looks_like_attachment_claim,
         _sanitize_user_facing_response=AgentOrchestrator._sanitize_user_facing_response,
     )
-    session = SimpleNamespace(session_id="test-session", get_context_for_llm=lambda *args, **kwargs: "")
+    session = SimpleNamespace(session_id="test-session", context={}, get_context_for_llm=lambda *args, **kwargs: "")
 
     reply = AgentOrchestrator._generate_recovery_reply(
         dummy,
@@ -329,14 +330,12 @@ def test_recovery_reply_without_tool_data_blocks_attachment_claim():
         last_action_id="shell.control.execute",
     )
 
-    lowered = reply.lower()
-    assert "anexados" not in lowered
-    assert "anexei" not in lowered
-    assert "confirmação de anexo" in lowered
-    assert "orientação textual" in lowered
+    assert reply == ""
+    assert session.context.get("last_recovery_sanitization", {}).get("reason_code") == "attachment_not_confirmed"
 
 
 def test_sanitize_user_facing_response_requires_sent_confirmation_for_attachment_claims():
+    audit = {}
     reply = AgentOrchestrator._sanitize_user_facing_response(
         "Seguem os arquivos anexados à nossa conversa.",
         language="pt-BR",
@@ -351,47 +350,46 @@ def test_sanitize_user_facing_response_requires_sent_confirmation_for_attachment
             "status": "prepared",
             "confirmed": False,
         },
+        audit=audit,
     )
 
-    lowered = reply.lower()
-    assert "anexados" not in lowered
-    assert "anexei" not in lowered
-    assert "prepar" in lowered or "validei" in lowered or "encontrei" in lowered
-    assert "confirmação" in lowered
+    assert reply == ""
+    assert audit["reason_code"] == "attachment_not_confirmed"
+    assert audit["evidence_required"] == "sent_attachments"
 
 
 def test_sanitize_user_facing_response_blocks_execution_claim_without_fresh_evidence():
+    audit = {}
     reply = AgentOrchestrator._sanitize_user_facing_response(
         "Concluído, verifiquei e atualizei o estado com sucesso.",
         language="pt-BR",
         has_fresh_tool_evidence=False,
         attachment_payload_present=False,
+        audit=audit,
     )
 
-    lowered = reply.lower()
-    assert "concluído" not in lowered
-    assert "verifiquei" not in lowered
-    assert "atualizei" not in lowered
-    assert "sucesso" not in lowered
-    assert "orientação textual" in lowered
+    assert reply == ""
+    assert audit["reason_code"] == "no_fresh_tool_evidence"
+    assert audit["evidence_required"] == "fresh_action_observation"
 
 
 def test_sanitize_user_facing_response_blocks_attachment_claim_without_payload():
+    audit = {}
     reply = AgentOrchestrator._sanitize_user_facing_response(
         "Seguem os arquivos anexados à nossa conversa.",
         language="pt-BR",
         has_fresh_tool_evidence=True,
         attachment_payload_present=False,
+        audit=audit,
     )
 
-    lowered = reply.lower()
-    assert "anexados" not in lowered
-    assert "anexei" not in lowered
-    assert "confirmação de anexo" in lowered
-    assert "orientação textual" in lowered
+    assert reply == ""
+    assert audit["reason_code"] == "attachment_not_confirmed"
+    assert audit["evidence_required"] == "sent_attachments"
 
 
 def test_sanitize_user_facing_response_allows_grounded_execution_and_attachment_claims_when_evidence_exists():
+    audit = {}
     reply = AgentOrchestrator._sanitize_user_facing_response(
         "Concluído, anexei os arquivos e verifiquei o resultado com sucesso.",
         language="pt-BR",
@@ -406,6 +404,7 @@ def test_sanitize_user_facing_response_allows_grounded_execution_and_attachment_
             "status": "sent",
             "confirmed": True,
         },
+        audit=audit,
     )
 
     lowered = reply.lower()
@@ -413,3 +412,53 @@ def test_sanitize_user_facing_response_allows_grounded_execution_and_attachment_
     assert "anexei" in lowered
     assert "verifiquei" in lowered
     assert "sucesso" in lowered
+    assert audit["reason_code"] is None
+    assert audit["changed"] is False
+
+
+def test_sanitize_user_facing_response_reports_attachment_timeout_reason_code():
+    audit = {}
+    reply = AgentOrchestrator._sanitize_user_facing_response(
+        "Seguem os arquivos anexados à nossa conversa.",
+        language="pt-BR",
+        has_fresh_tool_evidence=True,
+        attachment_payload_present=True,
+        attachment_delivery_state={
+            "requested": ["/tmp/a.png"],
+            "resolved": [{"path": "/tmp/a.png", "name": "a.png"}],
+            "prepared": [{"path": "/tmp/a.png", "name": "a.png"}],
+            "sent": [],
+            "errors": [{"path": "/tmp/a.png", "error": "Timed out"}],
+            "status": "failed",
+            "confirmed": False,
+        },
+        audit=audit,
+    )
+
+    assert reply == ""
+    assert audit["reason_code"] == "attachment_delivery_failed"
+    assert audit["evidence_required"] == "sent_attachments"
+
+
+def test_sanitize_user_facing_response_reports_partial_attachment_reason_code():
+    audit = {}
+    reply = AgentOrchestrator._sanitize_user_facing_response(
+        "Seguem os arquivos anexados à nossa conversa.",
+        language="pt-BR",
+        has_fresh_tool_evidence=True,
+        attachment_payload_present=True,
+        attachment_delivery_state={
+            "requested": ["/tmp/a.png", "/tmp/b.png"],
+            "resolved": [{"path": "/tmp/a.png", "name": "a.png"}, {"path": "/tmp/b.png", "name": "b.png"}],
+            "prepared": [{"path": "/tmp/a.png", "name": "a.png"}, {"path": "/tmp/b.png", "name": "b.png"}],
+            "sent": [{"path": "/tmp/a.png", "status": "sent"}],
+            "errors": [{"path": "/tmp/b.png", "error": "Timed out"}],
+            "status": "partial",
+            "confirmed": False,
+        },
+        audit=audit,
+    )
+
+    assert reply == ""
+    assert audit["reason_code"] == "attachment_delivery_partial"
+    assert audit["evidence_required"] == "sent_attachments"

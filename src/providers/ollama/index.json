@@ -1,6 +1,6 @@
 {
   "provider": "ollama",
-  "display_name": "Ollama (Local)",
+  "display_name": "Ollama",
   "supports": [
     "chat"
   ],

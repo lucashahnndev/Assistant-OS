@@ -130,7 +130,18 @@ class TelegramDriver(BaseDriver):
                             )
                         if self.bot:
                             self.bot.send_action_to(chat_id, action="typing")
-                
+                sent_count = len(delivery_report["sent_attachments"])
+                error_count = len(delivery_report["attachment_errors"])
+                if attachments:
+                    if sent_count and error_count:
+                        delivery_report["status"] = "partial"
+                    elif error_count and not sent_count:
+                        delivery_report["status"] = "failed"
+                    elif sent_count:
+                        delivery_report["status"] = "sent"
+                    else:
+                        delivery_report["status"] = "prepared"
+                delivery_report["confirmed"] = bool(sent_count and not error_count and delivery_report["status"] == "sent")
                 logger.debug(f"TelegramDriver sent response to {chat_id}")
                 return delivery_report
             except Exception as e:
@@ -142,6 +153,7 @@ class TelegramDriver(BaseDriver):
                     "attachment_errors": [{"bridge": "telegram", "status": "error", "error": str(e)}],
                     "text_sent": False,
                     "caption_sent": False,
+                    "confirmed": False,
                 }
         else:
             logger.warning(f"TelegramDriver cannot send response. Bot: {self.bot}, Target: {target}")
@@ -152,6 +164,7 @@ class TelegramDriver(BaseDriver):
                 "attachment_errors": [{"bridge": "telegram", "status": "error", "error": "bot_or_target_missing"}],
                 "text_sent": False,
                 "caption_sent": False,
+                "confirmed": False,
             }
 
     def send_file(self, target, file_path, caption=None):

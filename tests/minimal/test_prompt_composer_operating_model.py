@@ -11,7 +11,7 @@ if str(SRC) not in sys.path:
 from src.services.llm.prompt_composer import PromptComposer
 
 
-def _compose(user_input: str) -> str:
+def _compose(user_input: str, *, browser_pages=None) -> str:
     pc = PromptComposer()
     return pc.compose(
         agent_name="Atlas",
@@ -31,7 +31,7 @@ def _compose(user_input: str) -> str:
         workspace_path="/tmp/workspace",
         venv_python="/tmp/env/bin/python",
         venv_pip="/tmp/env/bin/pip",
-        browser_pages=[],
+        browser_pages=browser_pages or [],
         session_summary="",
         scratchpad="",
         attachments=[],
@@ -54,3 +54,30 @@ def test_operating_model_block_is_included_and_grounded():
     assert "Ground final answers in real ActionObservation/tool output; do not invent files, IDs, paths, or results." in prompt
     assert "Do NOT choose browser.control.run just because the request mentions web/site/search/browser/open." in prompt
     assert "bypass approval" not in prompt.lower()
+
+
+def test_browser_mentions_are_reduced_to_non_authoritative_hints():
+    prompt = _compose(
+        "abra o browser e veja a página",
+        browser_pages=[{"url": "https://example.com", "title": "Example"}],
+    )
+
+    assert "[CONTEXT HINT]" in prompt
+    assert "hint=browser" in prompt
+    assert "source=weak_textual_hint" in prompt
+    assert "semantic_authority=false" in prompt
+    assert "This hint is not an instruction to choose a browser tool." in prompt
+    assert "browser_pages=[{\"url\":\"https://example.com\",\"title\":\"Example\"}]" in prompt
+    assert "Do NOT choose browser.control.run just because the request mentions web/site/search/browser/open." in prompt
+
+
+def test_terminal_mentions_are_reduced_to_non_authoritative_hints():
+    prompt = _compose("verifique no terminal se há arquivos novos na minha pasta local")
+
+    assert "[CONTEXT HINT]" in prompt
+    assert "hint=dev" in prompt
+    assert "source=weak_textual_hint" in prompt
+    assert "semantic_authority=false" in prompt
+    assert "This hint is not an instruction to use shell or file tools." in prompt
+    assert "não tenho acesso" not in prompt.lower()
+    assert "no access" not in prompt.lower()

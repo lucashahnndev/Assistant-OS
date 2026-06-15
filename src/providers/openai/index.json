@@ -31,6 +31,14 @@
   },
   "settings_fields": [
     {
+      "key": "base_url",
+      "type": "string",
+      "title": "Base URL override",
+      "required": false,
+      "description": "Optional local or proxy endpoint. Leave empty to use the default OpenAI API.",
+      "placeholder": "http://127.0.0.1:8009/v1"
+    },
+    {
       "key": "organization_id",
       "type": "secret_ref",
       "title": "Organization ID",

@@ -18,6 +18,26 @@ from server.auth import decode_access_token
 
 logger = get_logger("ServerDriver")
 
+
+def _json_safe_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, set):
+        return [_json_safe_value(item) for item in value]
+
+    item = getattr(value, "item", None)
+    if callable(item):
+        try:
+            return _json_safe_value(item())
+        except Exception:
+            pass
+
+    return value
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, set] = {}
@@ -1065,7 +1085,8 @@ class ServerDriver(BaseDriver):
 
         canonical_event = None
         try:
-            canonical_event = self._build_voice_pipeline_event(session_id, payload)
+            safe_payload = _json_safe_value(dict(payload or {}))
+            canonical_event = self._build_voice_pipeline_event(session_id, safe_payload)
             if canonical_event is not None:
                 self._record_pipeline_event(session_id, canonical_event, publish=False)
         except Exception as exc:
@@ -1074,7 +1095,7 @@ class ServerDriver(BaseDriver):
         if not self.loop or self.loop.is_closed():
             return canonical_event
 
-        json_payload = json.dumps(payload)
+        json_payload = json.dumps(_json_safe_value(dict(payload or {})))
         asyncio.run_coroutine_threadsafe(
             self.connection_manager.send_personal_message(json_payload, session_id),
             self.loop

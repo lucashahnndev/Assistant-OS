@@ -11,6 +11,7 @@ if str(SRC) not in sys.path:
 
 from core.orchestrator import AgentOrchestrator
 from core.resolution.action_plan import ActionPlan
+from drivers.llm.base import ProviderContractError
 
 
 class _FakeIntent:
@@ -34,7 +35,24 @@ class _FakeLLMManager:
         return _FakeIntent()
 
     def generate_text(self, prompt, system_prompt, max_tokens=256, temperature=0.7):
-        return ""
+        raise ProviderContractError(
+            "LLMManager generate_text returned empty output.",
+            details={
+                "error_stage": "llm_manager",
+                "error_type": "manager_empty_output",
+                "error_reason": "generate_text_returned_empty",
+                "provider_used": "openai",
+                "provider_parse_status": "empty_output",
+                "provider_fallback_reason": "provider_empty_output",
+                "provider_schema_mode": "text",
+                "provider_contract_mode": "text",
+                "raw_preview": "",
+                "raw_preview_truncated": False,
+                "raw_preview_chars": 0,
+                "semantic_authority": False,
+                "diagnostic_source": "llm_manager",
+            },
+        )
 
 
 class _FakeSession:
@@ -117,7 +135,7 @@ def test_sanitize_user_facing_response_turns_empty_into_honest_failure():
     assert audit["sanitized_text"] == reply
 
 
-def test_generate_recovery_reply_returns_honest_fallback_when_llm_is_empty():
+def test_generate_recovery_reply_records_diagnostic_when_text_recovery_fails():
     orchestrator = object.__new__(AgentOrchestrator)
     orchestrator.llm_manager = _FakeLLMManager()
     orchestrator.i18n = SimpleNamespace(t=lambda key, locale=None, **kwargs: key)
@@ -132,6 +150,9 @@ def test_generate_recovery_reply_returns_honest_fallback_when_llm_is_empty():
 
     assert reply
     assert "falh" in reply.lower() or "tentei responder" in reply.lower()
+    assert session.context["last_recovery_failure"]["error_stage"] == "recovery"
+    assert session.context["last_recovery_failure"]["provider_used"] == "openai"
+    assert session.state_summary["last_recovery_failure"]["error_type"] == "recovery_error"
 
 
 def test_persist_confidence_diagnostics_stores_provider_diagnostics():

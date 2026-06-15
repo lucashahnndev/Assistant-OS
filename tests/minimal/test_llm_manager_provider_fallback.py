@@ -2,6 +2,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -74,6 +76,14 @@ class _WorkingIntentProvider:
             state_summary={"semantic_authority": False},
             model_used=self.model,
         )
+
+
+class _WhitespaceTextProvider:
+    def __init__(self, model: str):
+        self.model = model
+
+    def generate_text(self, *args, **kwargs):
+        return "   "
 
 
 def _make_manager(*providers):
@@ -155,3 +165,19 @@ def test_intent_router_propagates_raw_preview_and_parse_status():
     assert meta["provider_parse_status"] == "missing_response_text"
     assert meta["provider_fallback_reason"] == "provider_contract_error"
     assert meta["error_stage"] == "provider"
+
+
+def test_generate_text_rejects_blank_success_and_emits_manager_diagnostics():
+    manager = _make_manager(_WhitespaceTextProvider("model-a"))
+
+    with pytest.raises(ProviderContractError) as excinfo:
+        manager.generate_text("hello", "system")
+
+    details = excinfo.value.details
+    assert details["error_stage"] == "llm_manager"
+    assert details["error_type"] == "manager_empty_output"
+    assert details["error_reason"] == "generate_text_returned_empty"
+    assert details["semantic_authority"] is False
+    assert details["provider_used"] == "provider_1"
+    assert details["provider_parse_status"] == "ok"
+    assert details["raw_preview_chars"] == 0

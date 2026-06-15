@@ -23,10 +23,23 @@ def test_action_observation_creates_structured_envelope_and_prompt_summary():
             "error_code": "BROKEN_LINK",
             "validation_failures": ["url"],
             "retryable": True,
+            "freshness": {
+                "source": "cache",
+                "resolved_at": "2026-06-11T12:00:00Z",
+                "stale": True,
+                "ttl_seconds": 120,
+            },
         },
         raw_result_preview='{"status":"failure","error_code":"BROKEN_LINK"}',
         state_changes={"cursor": "1/4"},
         artifacts={"attachments": ["/tmp/example.png"]},
+        raw_result_ref={"kind": "none", "available": False, "redacted": False},
+        raw_result_redaction={
+            "applied": True,
+            "removed_fields": ["text", "message", "reply"],
+            "reason": "prevent_prompt_contamination",
+            "preview_sanitized": True,
+        },
         repair_context={"hint": "search another candidate"},
         requires_replan=True,
         work_id="work-123",
@@ -41,13 +54,25 @@ def test_action_observation_creates_structured_envelope_and_prompt_summary():
     assert payload["requires_replan"] is True
     assert payload["repair_context"]["error_code"] == "BROKEN_LINK"
     assert payload["state_changes"]["cursor"] == "1/4"
+    assert payload["raw_result_ref"]["available"] is False
+    assert payload["raw_result_redaction"]["applied"] is True
+    assert payload["raw_result_redaction"]["removed_fields"] == ["text", "message", "reply"]
+    assert payload["freshness"]["source"] == "cache"
+    assert payload["freshness"]["stale"] is True
+    assert payload["freshness"]["ttl_seconds"] == 120
+    assert payload["freshness_note"] == "fresh_current_turn"
 
     prompt_summary = obs.to_prompt_summary()
     assert "action=browser.control.run" in prompt_summary
     assert "status=failure" in prompt_summary
     assert "replan=yes" in prompt_summary
+    assert "freshness_detail=" in prompt_summary
+    assert "raw_result_ref=" in prompt_summary
+    assert "raw_result_redaction=" in prompt_summary
 
     state_update = obs.to_state_summary_update()
+    assert state_update["last_observation_freshness_source"] == "cache"
+    assert state_update["last_observation_freshness_stale"] is True
     encoded = encode_state_summary(
         {
             "goal": "Task",
