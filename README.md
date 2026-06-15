@@ -5,104 +5,83 @@
 </p>
 
 <p align="center">
-  <strong>An operator-grade runtime for Atlas.</strong><br>
-  Capability-based action orchestration, guarded execution, and session memory that keeps the system honest.
+  <strong>Atlas is the assistant experience.</strong><br>
+  Assistant-OS is the runtime that keeps it fast, memoryful, and safe to operate.
 </p>
 
 <p align="center">
-  <a href="#what-it-is">What it is</a> ·
-  <a href="#why-it-exists">Why it exists</a> ·
-  <a href="#architecture">Architecture</a> ·
-  <a href="#getting-started">Getting started</a> ·
-  <a href="#for-agents">For agents</a>
+  <a href="#meet-atlas">Meet Atlas</a> ·
+  <a href="#what-it-does">What it does</a> ·
+  <a href="#why-it-feels-different">Why it feels different</a> ·
+  <a href="#see-it">See it</a> ·
+  <a href="#get-started">Get started</a>
 </p>
 
 <p align="center">
   <img src="images/bg/elegant-wave.webp" alt="Assistant-OS visual banner" width="100%">
 </p>
 
-## What it is
+## Meet Atlas
 
-Assistant-OS is a modular runtime platform built to let Atlas operate with structure, memory, and guardrails.
+Atlas is the assistant layer you interact with day to day. It is designed to feel present, persistent, and useful across sessions instead of restarting from zero every time.
 
-It is designed to:
+Assistant-OS powers that experience behind the scenes.
 
-- orchestrate actions through capabilities instead of hard-coded monoliths;
-- enforce granular access control by user or group;
-- support multiple drivers such as web, Telegram, CLI, and voice;
-- keep operational memory, snapshots, and live sessions coherent;
-- separate semantic intent from execution so the runtime can validate, gate, and record.
+## What it does
 
-The runtime is not the semantic agent.
-Atlas holds semantic authority. Assistant-OS provides the track, contract, brake, and black box.
+Atlas is built to:
 
-## Why it exists
+- help you move from intent to action without losing context;
+- remember sessions, thoughts, feedback, and playback traces;
+- work across web, voice, Telegram, and CLI;
+- keep execution guarded by permissions and session contracts;
+- make the system easier to trust, debug, and extend.
 
-Most assistant stacks fail in the same places: they blur intent and execution, they lose state across channels, and they make debugging feel like archaeology.
+## Why it feels different
 
-Assistant-OS exists to solve that problem with a cleaner operating model:
+Most assistant experiences fail in the same places: they forget what happened, they mix up conversation with execution, and they are hard to inspect when something goes wrong.
 
-- predictable session contracts;
-- canonical event pipelines;
-- snapshot + WebSocket reconciliation;
-- voice and transcript support under the same session model;
-- durable indexes for thoughts, messages, feedback, playback, and audit trails.
+Atlas aims to avoid that by keeping the runtime explicit:
 
-## What makes it different
+- the session is canonical;
+- the event log is coherent;
+- the UI can reload from a snapshot;
+- voice and text share the same underlying flow;
+- feedback and reasoning stay visible as part of the timeline.
 
-<table>
-  <tr>
-    <td><strong>Capability-first</strong><br>Each action lives behind a contract, not just a prompt.</td>
-    <td><strong>Session-native</strong><br>Messages, thoughts, streams, and feedback share a canonical timeline.</td>
-  </tr>
-  <tr>
-    <td><strong>Multi-channel</strong><br>Web, voice, Telegram, and CLI can converge on the same runtime.</td>
-    <td><strong>Guardrailed</strong><br>The runtime validates, gates, records, and executes before anything becomes user-visible truth.</td>
-  </tr>
-</table>
+That makes the product feel less like a chat box and more like an assistant workspace.
 
-## Architecture
+## What you can do
 
-```text
-src/
-  core/        orchestration, session, ACL, intent resolution
-  server/      FastAPI API and routes
-  drivers/     channel and interface integrations
-  services/    LLM, memory, workspace, and safety services
-  capabilities/  action plugins with contract + runtime
-frontend/      React web panel
-data/          configuration, sessions, identities, artifacts
-tests/         automated contract and behavior checks
-scripts/       operational utilities
-```
+- talk to Atlas through the web app;
+- move between text and voice without losing the thread;
+- inspect conversation history, thoughts, and playback;
+- let Atlas coordinate capabilities like browser, calendar, memory, and system actions;
+- rely on a safer execution model instead of ad hoc prompts.
 
-At a high level:
+## See it
 
-1. Atlas decides meaning and intent.
-2. Assistant-OS resolves, validates, and routes the action.
-3. Capabilities execute under policy and access control.
-4. Sessions persist the canonical record for replay, audit, and recovery.
+<p align="center">
+  <img src="images/bg/elegant-wave.webp" alt="Assistant-OS visual accent" width="100%">
+</p>
 
-## Core capabilities
+The current interface already gives a sense of the product:
 
-- action orchestration
-- memory management
-- browser control
-- calendar and notifications
-- system control and system apps
-- vision and assistive overlay
-- logs, search, and retrieval
-- voice-aware session handling
-- feedback and reasoning timelines
+- a focused login entry;
+- a dark, high-contrast visual style;
+- a product surface that feels closer to an operating console than a generic chatbot.
 
-## Product surfaces
+## Under the hood
 
-- `frontend/` for the React-based web panel
-- `src/server/` for the API and session routes
-- `src/capabilities/` for modular runtime actions
-- `docs/` for human-readable continuity, guides, and reports
+The repo is organized around a few stable layers:
 
-## Getting started
+- `src/core/` for orchestration, session flow, ACL, and intent resolution
+- `src/server/` for the API and route layer
+- `src/capabilities/` for modular actions
+- `frontend/` for the React web panel
+- `docs/` for the human-readable history and design notes
+
+## Get started
 
 ### 1. Create a virtual environment
 
@@ -143,7 +122,7 @@ PYTHONPATH=src ./env/bin/python -m pytest -q tests
 
 ## In practice
 
-This repository currently emphasizes:
+The current work in this repository is centered on:
 
 - canonical session snapshots;
 - live event reconciliation;
@@ -152,13 +131,13 @@ This repository currently emphasizes:
 - feedback persistence;
 - capability contracts and test coverage.
 
-That makes the system easier to observe, safer to extend, and much easier to debug when multiple drivers are active at once.
+That keeps Atlas easier to trust, easier to extend, and easier to debug when multiple drivers are active at once.
 
-## For agents
+## For builders
 
-If you are an agent working in this repository:
+If you are building on the project:
 
-1. Read [`AGENTS.md`](AGENTS.md).
+1. Read [`AGENTS.md`](AGENTS.md) for the workspace convention.
 2. Continue with [`project.overview.md`](project.overview.md).
 3. Then open [`agent-start-here.md`](agent-start-here.md).
 
