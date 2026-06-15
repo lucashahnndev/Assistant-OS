@@ -4,11 +4,12 @@ Data: 2026-05-29
 
 ## Propósito
 
-Esta spec define a fronteira entre orquestração técnica e decisão agentica/semântica no Atlas.
-Ela deve ser lida junto de [atlas_operating_model.spec.md](atlas_operating_model.spec.md), que define como o agente opera dentro do runtime seguro.
+Esta spec define a fronteira entre orquestracao tecnica e decisao semantica no Atlas.
+Ela deve ser lida junto de [atlas_operating_model.spec.md](atlas_operating_model.spec.md), que define como o Atlas opera dentro do runtime seguro.
 
-O sistema pode preparar o ambiente, validar contratos e aplicar segurança.
-O sistema nao deve decidir o significado final da intenção do usuário por heuristicas fixas.
+O runtime pode preparar o ambiente, validar contratos e aplicar seguranca.
+O runtime nao deve decidir o significado final da intencao do usuario por heuristicas fixas.
+Atlas decide semanticamente.
 
 ## 1. Fronteira obrigatória
 
@@ -26,7 +27,7 @@ O sistema nao deve decidir o significado final da intenção do usuário por heu
 - decidir personalidade, modo cognitivo, conclusão agentica ou escolha de ação por keyword matching, regex ou mapas fixos;
 - substituir a interpretação do LLM por `if/else` que simula julgamento semântico;
 - transformar heurísticas em verdade final semântica;
-- reescrever a escolha do agente por preferência textual do orquestrador.
+- reescrever a escolha do Atlas por preferência textual do orquestrador.
 
 ## 2. Heurísticas e hints
 
@@ -45,7 +46,7 @@ Reflexes sao permitidos apenas para:
 - fallback de segurança.
 
 Reflexes nao devem ser usados como trilha principal para interpretar linguagem natural comum.
-Regex de linguagem natural nao deve bypassar o LLM como decisão agentica principal.
+Regex de linguagem natural nao deve bypassar o LLM/Atlas como decisão semantica principal.
 
 ## 4. Orchestrator
 
@@ -61,14 +62,14 @@ O orchestrator pode:
 O orchestrator nao deve:
 
 - corrigir semanticamente a escolha do modelo por heurística textual;
-- trocar a ação escolhida pelo agente salvo por segurança, schema, disponibilidade ou fallback técnico;
+- trocar a ação escolhida pelo Atlas salvo por segurança, schema, disponibilidade ou fallback técnico;
 - assumir que um padrão textual equivale a uma decisão cognitiva.
 
 ## 5. Retrieval, memória e policies
 
 - Retrieval, memória e policies devem alimentar contexto e evidência.
 - Esses subsistemas nao devem decidir semântica final por `if/else` rígido.
-- Eles podem priorizar, supor, sugerir ou reduzir ruido, mas nao substituir a decisão do agente.
+- Eles podem priorizar, supor, sugerir ou reduzir ruido, mas nao substituir a decisão do Atlas.
 
 ## 6. Prompt composition
 
@@ -78,9 +79,9 @@ O orchestrator nao deve:
 
 ## 7. Regra final
 
-O sistema prepara o ambiente.
-O agente interpreta o contexto.
-O agente decide semânticamente.
+O runtime prepara o ambiente.
+Atlas interpreta o contexto.
+Atlas decide semanticamente.
 ## Relacionados
 
 - [semantic_decision_boundary.stat.md](semantic_decision_boundary.stat.md)

@@ -231,3 +231,43 @@ def test_telegram_driver_marks_failed_when_all_attachment_sends_timeout():
     assert report["confirmed"] is False
     assert report["sent_attachments"] == []
     assert report["attachment_errors"]
+
+
+def test_web_delivery_report_is_normalized_as_sent_when_payload_contains_sent_attachments():
+    state = AgentOrchestrator._merge_attachment_delivery_report(
+        {
+            "requested": ["/tmp/a.png"],
+            "resolved": [{"path": "/tmp/a.png", "name": "a.png"}],
+            "prepared": [{"path": "/tmp/a.png", "name": "a.png"}],
+            "sent": [],
+            "errors": [],
+            "bridge": "web",
+            "source_action": "shell.control.execute",
+            "status": "prepared",
+            "confirmed": False,
+        },
+        {
+            "bridge": "web",
+            "status": "sent_to_web_payload",
+            "text_sent": True,
+            "caption_sent": False,
+            "sent_attachments": [
+                {"bridge": "web", "status": "sent", "path": "/tmp/a.png", "url": "/api/sessions/web-123/files/a.png"}
+            ],
+            "attachment_errors": [],
+        },
+    )
+
+    reply = AgentOrchestrator._sanitize_user_facing_response(
+        "Seguem os arquivos anexados à nossa conversa.",
+        language="pt-BR",
+        has_fresh_tool_evidence=True,
+        attachment_payload_present=True,
+        attachment_delivery_state=state,
+    )
+
+    assert state["status"] == "sent"
+    assert state["confirmed"] is True
+    assert state["sent"]
+    assert not state["errors"]
+    assert "anexados" in reply.lower()

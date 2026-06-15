@@ -14,8 +14,8 @@ Contract reference: [../specs/session-event-contract.spec.md](../specs/session-e
 
 ## Relacionados
 
-- [README.md](README.md)
-- [../specs/README.md](../specs/overview.md)
+- [overview.md](overview.md)
+- [../specs/overview.md](../specs/overview.md)
 - [../specs/session-event-contract.spec.md](../specs/session-event-contract.spec.md)
 - [../specs/session-event-contract.stat.md](../specs/session-event-contract.stat.md)
 - [../specs/system_sessions.spec.md](../specs/system_sessions.spec.md)

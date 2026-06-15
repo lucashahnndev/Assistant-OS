@@ -3,9 +3,9 @@
 ## Relacionados
 
 - [README.md](../../README.md)
-- [../README.md](README.md)
+- [overview.md](overview.md)
 - [../workspace.policy.md](workspace.policy.md)
-- [../specs/README.md](../specs/overview.md)
+- [../specs/overview.md](../specs/overview.md)
 - [../specs/project.stat.md](../specs/project.stat.md)
 
 - esta policy orienta o modo de adequação pós-instalação da convenção;

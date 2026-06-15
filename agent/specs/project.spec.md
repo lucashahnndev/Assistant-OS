@@ -6,8 +6,8 @@ Esta é uma spec fundacional inicial.
 ## Relacionados
 
 - [project.stat.md](project.stat.md)
-- [README.md](README.md)
-- [../policy/README.md](../policy/overview.md)
+- [../../README.md](../../README.md)
+- [../policy/overview.md](../policy/overview.md)
 
 Ela existe para servir de ponto de partida até que os domínios reais do projeto fiquem claros.
 

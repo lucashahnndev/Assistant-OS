@@ -218,6 +218,18 @@ pyvenv.cfg
 .codex/
 .agents/
 .vite/
+
+# Local workspace noise and ad-hoc artifacts
+.playwright-mcp/
+.nexus_voice_smoke.*
+nexus*.png
+net.txt
+Pendentes.md
+patch_*.py
+replace_*.py
+home/
+frontend/out.*
+frontend/test_render.js
 .next/
 .nuxt/
 .svelte-kit/

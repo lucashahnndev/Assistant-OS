@@ -1,6 +1,7 @@
 # Guides
 
 Guias praticos e playbooks operacionais.
+Use-os para orientar o uso do runtime que Atlas dirige semanticamente.
 
 ## Uso
 

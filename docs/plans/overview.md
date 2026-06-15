@@ -11,3 +11,4 @@ Planos de migracao, fases de trabalho e listas de execucao.
 
 - [../overview.md](../overview.md)
 - [../../agent/specs/overview.md](../../agent/specs/overview.md)
+- [browser_control_implementation.md](browser_control_implementation.md)

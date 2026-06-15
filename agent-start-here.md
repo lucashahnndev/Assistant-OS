@@ -1,6 +1,9 @@
 # Agent Start Here
 
-This is the agent entry point for this project.
+This is the operational entry point for agents working on this project.
+
+The runtime is not the agent. The runtime enforces contracts, gates, records, and executes.
+Atlas holds semantic authority.
 
 Read this file first.
 Then follow the order below.
@@ -22,7 +25,7 @@ Then follow the order below.
 - `.stat` é estado vivo.
 - `agent/` é workspace operacional.
 - as regras detalhadas ficam em `agent/policy/`.
-- `project.overview.md` is the conceptual map for agent-oriented navigation.
+- `project.overview.md` is the conceptual map for runtime-aware navigation.
 - `project.update.md` is the update index for already-installed workspaces.
 - `project.migrations.md` is the version-by-version migration ledger.
 

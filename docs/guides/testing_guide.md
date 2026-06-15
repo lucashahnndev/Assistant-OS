@@ -1,6 +1,6 @@
 # Guia de Comunicação e Testes do Atlas
 
-Este guia descreve as formas de interagir com o agente Atlas para testar fluxos de resposta, memória, contexto e habilidades.
+Este guia descreve as formas de interagir com o Atlas atraves dos canais do runtime para testar fluxos de resposta, memoria, contexto e habilidades.
 
 ## 1. Canais de Comunicação Existentes
 
@@ -36,7 +36,7 @@ Para testes avançados e depuração técnica, criamos a ferramenta `scripts/tes
 - **Chat Direto**: Conversa direta com o `AgentOrchestrator` sem drivers externos.
 - **Inspeção de Memória**: Veja o estado atual da sessão e histórico consolidado.
 - **Teste de Skills**: Force o disparo de uma habilidade específica.
-- **Injeção de Contexto**: Simule estados complexos para testar a coerência do agente.
+- **Injeção de Contexto**: Simule estados complexos para testar a coerencia do runtime e a coerencia semantica do Atlas.
 
 ### Como usar:
 ```bash
@@ -51,7 +51,7 @@ python scripts/test_bridge.py
 
 ## Relacionados
 
-- [../README.md](../README.md): indice geral da documentacao humana.
+- [../overview.md](../overview.md): indice geral da documentacao humana.
 - [../architecture/README.md](../architecture/README.md): contexto arquitetural para os testes de runtime.
 - [../reports/README.md](../reports/README.md): lugar natural para registrar resultados de teste e diagnósticos.
 - [../policies/README.md](../policies/README.md): regras de governanca que guiam validacoes e rollback.

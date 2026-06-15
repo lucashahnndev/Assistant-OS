@@ -31,8 +31,18 @@ Este diretório guarda os contratos normativos do projeto alvo que o agente deve
 
 ## Contrato operacional central
 
-- `atlas_operating_model.spec.md`: contrato ativo do modelo operacional do A.T.L.A.S para agente/runtime, clarificação, approval, grounded response e uso de tools/capabilities.
+- `atlas_operating_model.spec.md`: contrato ativo do modelo operacional do Atlas para separacao entre semantica do Atlas e execucao do runtime, clarificacao, approval, grounded response e uso de tools/capabilities.
 - `atlas_operating_model.stat.md`: estado vivo correspondente do contrato operacional.
+
+## Contrato de Payloads LLM
+
+- `llm-payload-role-contract.spec.md`: contrato de papéis e payloads para preservar `user` como fala real do usuário e manter system/tool/evidence/diagnóstico fora do `user`.
+- `llm-payload-role-contract.stat.md`: estado vivo correspondente do contrato de papéis.
+
+## Subagentes Operacionais
+
+- `browser-subagent-internal-contract.spec.md`: contrato interno do `BrowserSubagent` como subagente operacional do browser, com thought somente diagnóstico e controle estruturado de fluxo.
+- `browser-subagent-internal-contract.stat.md`: estado vivo correspondente do contrato interno do subagente browser.
 
 ## Pontos de apoio
 

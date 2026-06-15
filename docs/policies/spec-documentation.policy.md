@@ -115,7 +115,7 @@ Ela faz parte da definicao de pronto quando a mudanca toca contrato, UX, integra
 
 ## Relacionados
 
-- [../README.md](../README.md): indice geral da documentacao humana.
+- [../overview.md](../overview.md): indice geral da documentacao humana.
 - [../plans/skills_audit_planner.md](../plans/skills_audit_planner.md): plano que operacionaliza auditar contrato, runtime e docs.
 - [../plans/permission_groups_planner.md](../plans/permission_groups_planner.md): plano que leva a policy de documentacao para governance prática.
 - [../reports/system-audit-2026-05-24.md](../reports/system-audit-2026-05-24.md): exemplo de audit que exige fechamento documental.

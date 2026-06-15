@@ -1,7 +1,7 @@
 # Policies
 
 Regras humanas de uso e governanca que complementam as policies duraveis do
-agente.
+Atlas e do runtime.
 
 ## Uso
 

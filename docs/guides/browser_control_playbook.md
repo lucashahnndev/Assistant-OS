@@ -221,7 +221,7 @@ Sinais esperados no retorno de GC:
 
 ## Relacionados
 
-- [../README.md](../README.md): indice geral da documentacao humana.
+- [../overview.md](../overview.md): indice geral da documentacao humana.
 - [../architecture/README.md](../architecture/README.md): contexto tecnico do runtime e do browser.
 - [../policies/README.md](../policies/README.md): regras estaveis que cercam a operacao.
 - [../reports/README.md](../reports/README.md): evidencias e auditorias de operacao.

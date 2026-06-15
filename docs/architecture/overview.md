@@ -2,8 +2,9 @@
 
 Este diretorio guarda documentacao humana de arquitetura do sistema.
 As specs normativas canônicas vivem em `agent/specs/`.
+O runtime executa e valida; Atlas carrega a autoridade semantica.
 
-`Session Event Contract` e o dominio guarda-chuva para sessoes, mensagens, turnos, streams, works, eventos, indices e persistencia. Para trabalho novo em session/event/WebSocket, consulte esse contrato primeiro; `system_sessions` e `agent_events` permanecem como contratos especificos e/ou legados.
+`Session Event Contract` e o dominio guarda-chuva para sessoes, mensagens, turnos, streams, works, eventos, indices e persistencia. Para trabalho novo em session/event/WebSocket, consulte esse contrato primeiro; `system_sessions` e `agent_events` permanecem como contratos especificos e complementares.
 Quando a pergunta for sobre isolamento de dominio e a semantica `system.<domain>`, leia tambem `system_sessions.spec.md` e `system_sessions.stat.md`.
 
 ## Uso
@@ -22,7 +23,7 @@ Quando a pergunta for sobre isolamento de dominio e a semantica `system.<domain>
 - [trusted_execution_path.spec.md](../../agent/specs/trusted_execution_path.spec.md)
 - [unified-context-rag-architecture.spec.md](../../agent/specs/unified-context-rag-architecture.spec.md)
 
-### Agent and Runtime
+### Atlas and Runtime
 
 - [agent_events.spec.md](../../agent/specs/agent_events.spec.md)
 - [agent_events.stat.md](../../agent/specs/agent_events.stat.md)
@@ -59,13 +60,13 @@ Se for relatorio de auditoria, mova para `docs/reports/`.
 ## Relacionados
 
 - [../overview.md](../overview.md)
-- [../contracts/README.md](../contracts/README.md)
-- [../policies/README.md](../policies/README.md)
-- [../plans/README.md](../plans/README.md)
-- [../decisions/README.md](../decisions/README.md)
-- [../reports/README.md](../reports/README.md)
-- [../guides/README.md](../guides/README.md)
-- [../concepts/README.md](../concepts/README.md)
-- [../legacy/README.md](../legacy/README.md)
+- [../contracts/overview.md](../contracts/overview.md)
+- [../policies/overview.md](../policies/overview.md)
+- [../plans/overview.md](../plans/overview.md)
+- [../decisions/overview.md](../decisions/overview.md)
+- [../reports/overview.md](../reports/overview.md)
+- [../guides/overview.md](../guides/overview.md)
+- [../concepts/overview.md](../concepts/overview.md)
+- [../legacy/overview.md](../legacy/overview.md)
 - [../../agent/overview.md](../../agent/overview.md)
 - [../../agent/specs/overview.md](../../agent/specs/overview.md)

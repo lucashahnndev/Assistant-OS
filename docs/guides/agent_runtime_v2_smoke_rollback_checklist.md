@@ -34,7 +34,7 @@
 
 ## Relacionados
 
-- [../README.md](../README.md): indice geral da documentacao humana.
+- [../overview.md](../overview.md): indice geral da documentacao humana.
 - [../architecture/README.md](../architecture/README.md): contexto tecnico do runtime v2.
 - [../policies/README.md](../policies/README.md): regras de governanca e rollback.
 - [../reports/README.md](../reports/README.md): evidencias de smoke e observabilidade.

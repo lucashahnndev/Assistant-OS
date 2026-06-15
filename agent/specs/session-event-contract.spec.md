@@ -198,15 +198,6 @@ May create a visible bubble: yes.
 
 ### `assistant_chunk`
 
-## Relacionados
-
-- [session-event-contract.stat.md](session-event-contract.stat.md)
-- [../policy/session-event-contract.policy.md](../policy/session-event-contract.policy.md)
-- [system_sessions.spec.md](system_sessions.spec.md)
-- [system_sessions.stat.md](system_sessions.stat.md)
-- [../README.md](../overview.md)
-- [../../docs/contracts/README.md](../../docs/contracts/README.md)
-
 Updates an existing stream.
 
 Required:
@@ -439,6 +430,32 @@ A skeleton with no final content must:
 - channel and interface differences must preserve the same correlation semantics;
 - cards, media, and visual artifacts should be recoverable without becoming accidental text bubbles;
 - stream completion must reconcile with the existing message rather than creating a second final bubble.
+
+## Voice Transport Bridge
+
+The session-event contract does not redefine the voice protocol itself, but
+Nexus-style live surfaces may consume the voice transport as a bridge into the
+same turn model.
+
+- `voice.state` is status metadata for the live surface, not a separate session
+  branch.
+- `asr.partial` and `transcript.partial` belong to the current user turn and
+  must accumulate within that turn instead of resetting on every chunk.
+- `asr.final` and `transcript.final` close the current user-side transcript and
+  may transition the live surface toward thinking/responding.
+- `tts.chunk` belongs to the same turn and advances the assistant-side live
+  output.
+- The live transcript surface must reset once per new turn, using `turn_id` as
+  the cycle boundary, while the collapsible history remains the durable record.
+
+## Relacionados
+
+- [session-event-contract.stat.md](session-event-contract.stat.md)
+- [../policy/session-event-contract.policy.md](../policy/session-event-contract.policy.md)
+- [system_sessions.spec.md](system_sessions.spec.md)
+- [system_sessions.stat.md](system_sessions.stat.md)
+- [../README.md](../overview.md)
+- [../../docs/contracts/overview.md](../../docs/contracts/overview.md)
 
 ## Related Specs
 

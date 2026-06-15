@@ -1,9 +1,12 @@
 # Project Overview
 
-This is the root overview for agent-oriented navigation in Assistant-OS.
+This is the root overview for runtime-aware navigation in Assistant-OS.
+
+The runtime is not the semantic agent. It is the track, contract, brake, and black-box.
+Atlas is the semantic driver.
 
 If you are human, start with `README.md`.
-If you are an agent, use this file as the map, then continue to
+If you are an agent working on the repository, use this file as the map, then continue to
 `agent-start-here.md`.
 
 ## What lives where
@@ -11,10 +14,10 @@ If you are an agent, use this file as the map, then continue to
 - `README.md`: human landing page.
 - `project.update.md`: update index for existing installations.
 - `project.migrations.md`: version-to-version migration ledger.
-- `agent-start-here.md`: operational entry point for the agent.
-- `agent/overview.md`: workspace map for the agent.
+- `agent-start-here.md`: operational entry point for the repository workspace.
+- `agent/overview.md`: workspace map for the operator working on Atlas.
 - `agent/specs/overview.md`: normative contracts and state.
-- `agent/policy/overview.md`: durable agent rules.
+- `agent/policy/overview.md`: durable rules for Atlas-facing operations in the workspace.
 - `docs/overview.md`: human-facing documentation, context, and continuity.
 
 ## Suggested reading order for agents

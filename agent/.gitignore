@@ -9,3 +9,5 @@ reports/*
 
 note/*
 !note/.gitkeep
+
+.obsidian/

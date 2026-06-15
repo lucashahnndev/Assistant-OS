@@ -14,6 +14,7 @@ Este diretório guarda regras completas para o agente.
 - [agent-workflow.policy.md](agent-workflow.policy.md): fluxo de trabalho, validação e handoff;
 - [spec-stat.policy.md](spec-stat.policy.md): relação entre contrato e estado;
 - [linking.policy.md](linking.policy.md): ligações úteis entre documentos e relações de domínio;
+- [observability.policy.md](observability.policy.md): production observability, diagnostics, and log privacy;
 - [official-documentation.policy.md](official-documentation.policy.md): regra de documentação oficial viva;
 - [workspace.policy.md](workspace.policy.md): organização do workspace operacional;
 - [commit-safety.policy.md](commit-safety.policy.md): segurança e higiene de commits.
@@ -25,6 +26,7 @@ Este diretório guarda regras completas para o agente.
 - [spec-stat.policy.md](spec-stat.policy.md): referencia para a ligação entre contrato e estado;
 - [commit-safety.policy.md](commit-safety.policy.md): regras de rastreabilidade e higiene de commit.
 - [linking.policy.md](linking.policy.md): regras de ligação entre documentos e relações de domínio.
+- [observability.policy.md](observability.policy.md): regras de observabilidade, diagnóstico e privacidade de logs.
 
 ## Relacionados
 
