@@ -528,10 +528,18 @@ class BrowserControlCapability(CapabilityBase):
             try:
                 intent_class = self._resolve_intent_class(params.get("intent_class"))
             except ValueError as exc:
-                return {"ok": False, "error": str(exc)}
+                return self._operational_envelope(
+                    status="blocked",
+                    success=False,
+                    result_summary=str(exc),
+                    structured_result={"action": "run"},
+                    reason="INVALID_INTENT_CLASS",
+                    requires_followup=True,
+                    diagnostics={"action": "run"},
+                )
             completion_mode = str(params.get("completion_mode") or "").strip().lower()
             logger.info(f"Resolved goal for 'run': '{goal}' (from params keys: {list(params.keys())})")
-            return self._run_sync(
+            result = self._run_sync(
                 self.run_goal(
                     goal,
                     headless=headless,
@@ -541,6 +549,39 @@ class BrowserControlCapability(CapabilityBase):
                     context=run_context,
                 )
             )
+            if isinstance(result, dict):
+                structured = dict(result.get("result") or {})
+                confirmed = bool(structured.get("confirmed", False))
+                status = str(structured.get("status") or result.get("status") or "").strip().lower()
+                if status in {"failed", "error"} or result.get("ok") is False:
+                    final_status = "failed"
+                elif status == "partial" or not confirmed:
+                    final_status = "partial"
+                else:
+                    final_status = "success"
+                return self._operational_envelope(
+                    status=final_status,
+                    success=final_status == "success",
+                    result_summary=str(structured.get("result_summary") or "Browser goal executed.").strip(),
+                    structured_result={
+                        "goal": goal,
+                        "final_url": structured.get("final_url") or structured.get("url") or "",
+                        "title": structured.get("title") or "",
+                        "steps_completed": structured.get("steps_completed") if isinstance(structured.get("steps_completed"), list) else [],
+                        "steps_failed": structured.get("steps_failed") if isinstance(structured.get("steps_failed"), list) else [],
+                        "observations": structured.get("observations") if isinstance(structured.get("observations"), list) else [],
+                        "confirmed": confirmed,
+                        "raw_result": structured,
+                        "execution_context": result.get("execution_context", {}),
+                    },
+                    reason=None if final_status == "success" else "OBJECTIVE_NOT_CONFIRMED" if final_status == "partial" else str(result.get("error") or "BROWSER_RUN_FAILED"),
+                    freshness={"source": "live", "resolved_at": None, "stale": False, "ttl_seconds": None},
+                    truncated=bool(structured.get("truncated", False)),
+                    requires_followup=final_status != "success",
+                    next_step_context=structured.get("next_step_context") if isinstance(structured.get("next_step_context"), dict) else {},
+                    diagnostics={"action": "run", "intent_class": intent_class, "recovery": structured.get("recovery", {}) if isinstance(structured.get("recovery"), dict) else {}},
+                )
+            return result
         elif action == "step":
             instruction = (
                 params.get("instruction")
@@ -550,7 +591,40 @@ class BrowserControlCapability(CapabilityBase):
                 or ctx.get("prompt")
                 or ""
             )
-            return self._run_sync(self.step(instruction, context=ctx))
+            result = self._run_sync(self.step(instruction, context=ctx))
+            if isinstance(result, dict):
+                structured = dict(result.get("result") or {})
+                confirmed = bool(structured.get("confirmed", False))
+                status = str(structured.get("status") or result.get("status") or "").strip().lower()
+                if status in {"failed", "error"} or result.get("ok") is False:
+                    final_status = "failed"
+                elif status == "partial" or not confirmed:
+                    final_status = "partial"
+                else:
+                    final_status = "success"
+                return self._operational_envelope(
+                    status=final_status,
+                    success=final_status == "success",
+                    result_summary=str(structured.get("result_summary") or "Browser step executed.").strip(),
+                    structured_result={
+                        "goal": instruction,
+                        "final_url": structured.get("final_url") or structured.get("url") or "",
+                        "title": structured.get("title") or "",
+                        "steps_completed": structured.get("steps_completed") if isinstance(structured.get("steps_completed"), list) else [],
+                        "steps_failed": structured.get("steps_failed") if isinstance(structured.get("steps_failed"), list) else [],
+                        "observations": structured.get("observations") if isinstance(structured.get("observations"), list) else [],
+                        "confirmed": confirmed,
+                        "raw_result": structured,
+                        "execution_context": result.get("execution_context", {}),
+                    },
+                    reason=None if final_status == "success" else "OBJECTIVE_NOT_CONFIRMED" if final_status == "partial" else str(result.get("error") or "BROWSER_STEP_FAILED"),
+                    freshness={"source": "live", "resolved_at": None, "stale": False, "ttl_seconds": None},
+                    truncated=bool(structured.get("truncated", False)),
+                    requires_followup=final_status != "success",
+                    next_step_context=structured.get("next_step_context") if isinstance(structured.get("next_step_context"), dict) else {},
+                    diagnostics={"action": "step", "recovery": structured.get("recovery", {}) if isinstance(structured.get("recovery"), dict) else {}},
+                )
+            return result
         elif action == "close":
             return self._run_sync(self.close())
         elif action == "inspect":
@@ -570,7 +644,14 @@ class BrowserControlCapability(CapabilityBase):
         elif action == "health":
             return self._run_sync(self.health(params=params, context=ctx))
         
-        return {"error": f"Unknown action: {action_id}"}
+        return self._operational_envelope(
+            status="failed",
+            success=False,
+            result_summary=f"Unknown action: {action_id}",
+            structured_result={"action_id": action_id},
+            reason="UNKNOWN_ACTION",
+            diagnostics={"action": action, "action_id": action_id},
+        )
 
     @staticmethod
     def _resolve_intent_class(raw: Any) -> str:
@@ -608,6 +689,38 @@ class BrowserControlCapability(CapabilityBase):
             "intent_class": intent_class,
             "reused_instance": bool(reused),
             "policy_decision": policy_decision or {},
+        }
+
+    @staticmethod
+    def _operational_envelope(
+        *,
+        status: str,
+        success: bool,
+        result_summary: str,
+        structured_result: Dict[str, Any],
+        reason: Optional[str] = None,
+        freshness: Optional[Dict[str, Any]] = None,
+        artifacts: Optional[List[Dict[str, Any]]] = None,
+        truncated: bool = False,
+        requires_followup: bool = False,
+        next_step_context: Optional[Dict[str, Any]] = None,
+        diagnostics: Optional[Dict[str, Any]] = None,
+        attachment_delivery: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return {
+            "ok": bool(success),
+            "success": bool(success),
+            "status": status,
+            "reason": reason,
+            "result_summary": str(result_summary or "").strip(),
+            "structured_result": structured_result,
+            "freshness": freshness or {"source": "unknown", "resolved_at": None, "stale": False, "ttl_seconds": None},
+            "artifacts": artifacts or [],
+            "truncated": bool(truncated),
+            "requires_followup": bool(requires_followup),
+            "next_step_context": next_step_context or {},
+            "diagnostics": diagnostics or {},
+            "attachment_delivery": attachment_delivery or {"status": "none", "confirmed": False},
         }
 
     @staticmethod
@@ -1065,7 +1178,15 @@ class BrowserControlCapability(CapabilityBase):
         try:
             intent_class = self._resolve_intent_class(intent_class)
         except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
+            return self._operational_envelope(
+                status="blocked",
+                success=False,
+                result_summary=str(exc),
+                structured_result={"action": "run_goal"},
+                reason="INVALID_INTENT_CLASS",
+                requires_followup=True,
+                diagnostics={"action": "run_goal"},
+            )
         callbacks = ctx.get("callbacks") if isinstance(ctx.get("callbacks"), dict) else {}
         planner_callbacks = self._build_planner_callbacks(ctx, callbacks)
         gc_info = self._maybe_run_registry_gc(ctx)
@@ -1187,7 +1308,15 @@ class BrowserControlCapability(CapabilityBase):
                     }
                 },
             )
-            return {"ok": False, "error": reason, "execution_context": exec_ctx}
+            return self._operational_envelope(
+                status="blocked",
+                success=False,
+                result_summary=reason,
+                structured_result={"execution_context": exec_ctx, "confirmed": False},
+                reason="INSTANCE_LOCK_DENIED",
+                requires_followup=True,
+                diagnostics={"action": "run_goal", "error": reason},
+            )
         try:
             self._apply_runtime_trace_context(ctx)
             tab_lock_info = await self._acquire_tab_execution_lock(browser_instance_id, tab_id, ctx)
@@ -1204,7 +1333,15 @@ class BrowserControlCapability(CapabilityBase):
                         }
                     },
                 )
-                return {"ok": False, "error": reason, "execution_context": exec_ctx}
+                return self._operational_envelope(
+                    status="blocked",
+                    success=False,
+                    result_summary=reason,
+                    structured_result={"execution_context": exec_ctx, "confirmed": False},
+                    reason="TAB_LOCK_DENIED",
+                    requires_followup=True,
+                    diagnostics={"action": "run_goal", "error": reason},
+                )
             # subagent.run_to_goal returns a ToonResponse Pydantic model
             response = await self._subagent.run_to_goal(
                 goal,
@@ -1325,9 +1462,9 @@ class BrowserControlCapability(CapabilityBase):
         planner_callbacks = self._build_planner_callbacks(ctx, callbacks)
         gc_info = self._maybe_run_registry_gc(ctx)
         if not self._runtime or not self._subagent:
-            return {"ok": False, "error": "No active browser runtime. Run browser.control.run first."}
+            return self._operational_envelope(status="failed", success=False, result_summary="No active browser runtime. Run browser.control.run first.", structured_result={"action": "step"}, reason="NO_ACTIVE_RUNTIME", requires_followup=True, diagnostics={"action": "step"})
         if not str(instruction or "").strip():
-            return {"ok": False, "error": "instruction is required"}
+            return self._operational_envelope(status="blocked", success=False, result_summary="instruction is required", structured_result={"action": "step"}, reason="MISSING_INSTRUCTION", requires_followup=True, diagnostics={"action": "step"})
 
         reattach_ok = False
         recovery: Dict[str, Any] = {"ok": False, "strategy": "skipped"}
@@ -1483,16 +1620,36 @@ class BrowserControlCapability(CapabilityBase):
         await self._close_registered_instance(reason="capability_close")
         self._owner_session_id = None
         self._runtime_intent_class = None
-        return {"ok": True}
+        return self._operational_envelope(
+            status="success",
+            success=True,
+            result_summary="Browser runtime closed.",
+            structured_result={"closed": True},
+            diagnostics={"action": "close"},
+        )
 
     async def inspect(self, params: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         p = params or {}
         ctx = context or {}
         if not self._registry_enabled:
-            return {"ok": False, "error": "browser registry disabled by feature flag"}
+            return self._operational_envelope(
+                status="blocked",
+                success=False,
+                result_summary="browser registry disabled by feature flag",
+                structured_result={"instances": []},
+                reason="REGISTRY_DISABLED",
+                diagnostics={"action": "inspect"},
+            )
         registry = getattr(self.kernel, "browser_session_registry", None) if self.kernel else None
         if not registry:
-            return {"ok": False, "error": "browser registry not available"}
+            return self._operational_envelope(
+                status="failed",
+                success=False,
+                result_summary="browser registry not available",
+                structured_result={"instances": []},
+                reason="REGISTRY_UNAVAILABLE",
+                diagnostics={"action": "inspect"},
+            )
 
         only_current_session = bool(p.get("only_current_session", False))
         include_tabs = bool(p.get("include_tabs", True))
@@ -1521,34 +1678,83 @@ class BrowserControlCapability(CapabilityBase):
                     row["tabs"] = []
             rows.append(row)
 
-        return {
-            "ok": True,
-            "instances": rows,
-            "count": len(rows),
-            "current_execution": {
-                "browser_instance_id": self._browser_instance_id,
-                "tab_id": self._tab_id,
-                "owner_session_id": self._owner_session_id,
-                "last_vision_observation": self._get_last_vision_observation() if include_last_vision else {},
+        return self._operational_envelope(
+            status="success" if rows else "partial",
+            success=bool(rows),
+            result_summary="Browser inspection completed." if rows else "No active browser instances found.",
+            structured_result={
+                "observations": rows,
+                "confirmed": bool(rows),
+                "instances": rows,
+                "count": len(rows),
+                "current_execution": {
+                    "browser_instance_id": self._browser_instance_id,
+                    "tab_id": self._tab_id,
+                    "owner_session_id": self._owner_session_id,
+                    "last_vision_observation": self._get_last_vision_observation() if include_last_vision else {},
+                },
             },
-        }
+            reason=None if rows else "NO_ACTIVE_INSTANCES",
+            freshness={"source": "live", "resolved_at": None, "stale": False, "ttl_seconds": None},
+            requires_followup=not bool(rows),
+            next_step_context={"suggestion": "Run browser.control.run first."} if not rows else {},
+            diagnostics={"action": "inspect"},
+        )
 
     async def close_instance(self, instance_id: str, context: Optional[Dict[str, Any]] = None, force: bool = False) -> Dict[str, Any]:
         ctx = context or {}
         if not self._registry_enabled:
-            return {"ok": False, "error": "browser registry disabled by feature flag"}
+            return self._operational_envelope(
+                status="failed",
+                success=False,
+                result_summary="browser registry disabled by feature flag",
+                structured_result={},
+                reason="REGISTRY_DISABLED",
+                diagnostics={"action": "close_instance"},
+            )
         registry = getattr(self.kernel, "browser_session_registry", None) if self.kernel else None
         if not registry:
-            return {"ok": False, "error": "browser registry not available"}
+            return self._operational_envelope(
+                status="failed",
+                success=False,
+                result_summary="browser registry not available",
+                structured_result={},
+                reason="REGISTRY_UNAVAILABLE",
+                diagnostics={"action": "close_instance"},
+            )
         target = str(instance_id or "").strip() or str(self._browser_instance_id or "")
         if not target:
-            return {"ok": False, "error": "instance_id required"}
+            return self._operational_envelope(
+                status="blocked",
+                success=False,
+                result_summary="instance_id required",
+                structured_result={},
+                reason="INSTANCE_ID_REQUIRED",
+                requires_followup=True,
+                diagnostics={"action": "close_instance"},
+            )
         inst = registry.get_instance(target)
         if not isinstance(inst, dict):
-            return {"ok": False, "error": f"instance not found: {target}"}
+            return self._operational_envelope(
+                status="partial",
+                success=False,
+                result_summary=f"instance not found: {target}",
+                structured_result={"instance_id": target},
+                reason="INSTANCE_NOT_FOUND",
+                requires_followup=True,
+                diagnostics={"action": "close_instance"},
+            )
         guard = self._validate_close_guard(inst, context=ctx, force=force)
         if not guard.get("allowed"):
-            return {"ok": False, "error": str(guard.get("reason") or "close blocked by ownership/in_use guard")}
+            return self._operational_envelope(
+                status="blocked",
+                success=False,
+                result_summary=str(guard.get("reason") or "close blocked by ownership/in_use guard"),
+                structured_result={"instance_id": target},
+                reason="CLOSE_BLOCKED",
+                requires_followup=True,
+                diagnostics={"action": "close_instance"},
+            )
 
         if target == self._browser_instance_id and self._runtime:
             await self._runtime.close()
@@ -1560,7 +1766,13 @@ class BrowserControlCapability(CapabilityBase):
             self._browser_instance_id = None
 
         registry.close_instance(target, reason="close_instance_action")
-        return {"ok": True, "closed_instance_id": target}
+        return self._operational_envelope(
+            status="success",
+            success=True,
+            result_summary="Browser instance closed.",
+            structured_result={"closed_instance_id": target, "confirmed": True},
+            diagnostics={"action": "close_instance"},
+        )
 
     @staticmethod
     def _validate_close_guard(instance: Dict[str, Any], context: Optional[Dict[str, Any]] = None, force: bool = False) -> Dict[str, Any]:
@@ -1587,13 +1799,13 @@ class BrowserControlCapability(CapabilityBase):
     async def close_tab(self, tab_id: str, context: Optional[Dict[str, Any]] = None, force: bool = False) -> Dict[str, Any]:
         ctx = context or {}
         if not self._registry_enabled:
-            return {"ok": False, "error": "browser registry disabled by feature flag"}
+            return self._operational_envelope(status="failed", success=False, result_summary="browser registry disabled by feature flag", structured_result={}, reason="REGISTRY_DISABLED", diagnostics={"action": "close_tab"})
         registry = getattr(self.kernel, "browser_session_registry", None) if self.kernel else None
         if not registry:
-            return {"ok": False, "error": "browser registry not available"}
+            return self._operational_envelope(status="failed", success=False, result_summary="browser registry not available", structured_result={}, reason="REGISTRY_UNAVAILABLE", diagnostics={"action": "close_tab"})
         wanted_tab = str(tab_id or "").strip() or str(self._tab_id or "")
         if not wanted_tab:
-            return {"ok": False, "error": "tab_id required"}
+            return self._operational_envelope(status="blocked", success=False, result_summary="tab_id required", structured_result={}, reason="TAB_ID_REQUIRED", requires_followup=True, diagnostics={"action": "close_tab"})
 
         owner_instance_id = ""
         for inst in registry.list_instances():
@@ -1604,13 +1816,13 @@ class BrowserControlCapability(CapabilityBase):
                 owner_instance_id = str(inst.get("instance_id") or "")
                 break
         if not owner_instance_id:
-            return {"ok": False, "error": f"tab not found: {wanted_tab}"}
+            return self._operational_envelope(status="partial", success=False, result_summary=f"tab not found: {wanted_tab}", structured_result={"tab_id": wanted_tab}, reason="TAB_NOT_FOUND", requires_followup=True, diagnostics={"action": "close_tab"})
         inst = registry.get_instance(owner_instance_id)
         if not isinstance(inst, dict):
-            return {"ok": False, "error": f"instance not found: {owner_instance_id}"}
+            return self._operational_envelope(status="partial", success=False, result_summary=f"instance not found: {owner_instance_id}", structured_result={"tab_id": wanted_tab, "instance_id": owner_instance_id}, reason="INSTANCE_NOT_FOUND", requires_followup=True, diagnostics={"action": "close_tab"})
         guard = self._validate_close_guard(inst, context=ctx, force=force)
         if not guard.get("allowed"):
-            return {"ok": False, "error": str(guard.get("reason") or "close blocked by ownership/in_use guard")}
+            return self._operational_envelope(status="blocked", success=False, result_summary=str(guard.get("reason") or "close blocked by ownership/in_use guard"), structured_result={"tab_id": wanted_tab, "instance_id": owner_instance_id}, reason="CLOSE_BLOCKED", requires_followup=True, diagnostics={"action": "close_tab"})
 
         # If this is the live bound tab, close the runtime target by closing runtime instance.
         if wanted_tab == self._tab_id and owner_instance_id == self._browser_instance_id and self._runtime:
@@ -1622,28 +1834,37 @@ class BrowserControlCapability(CapabilityBase):
             self._runtime_intent_class = None
             self._browser_instance_id = None
             registry.close_instance(owner_instance_id, reason="close_tab_action_current_target")
-            return {"ok": True, "closed_tab_id": wanted_tab, "closed_instance_id": owner_instance_id}
+            return self._operational_envelope(status="success", success=True, result_summary="Browser tab closed.", structured_result={"closed_tab_id": wanted_tab, "closed_instance_id": owner_instance_id, "confirmed": True}, diagnostics={"action": "close_tab"})
 
         registry.close_tab(owner_instance_id, wanted_tab, reason="close_tab_action")
-        return {"ok": True, "closed_tab_id": wanted_tab, "instance_id": owner_instance_id}
+        return self._operational_envelope(status="success", success=True, result_summary="Browser tab closed.", structured_result={"closed_tab_id": wanted_tab, "instance_id": owner_instance_id, "confirmed": True}, diagnostics={"action": "close_tab"})
 
     async def sync_registry(self, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not self._registry_enabled:
-            return {"ok": False, "error": "browser registry disabled by feature flag"}
+            return self._operational_envelope(status="failed", success=False, result_summary="browser registry disabled by feature flag", structured_result={}, reason="REGISTRY_DISABLED", diagnostics={"action": "sync_registry"})
         ctx = context or {}
         intent_class = self._runtime_intent_class or self._resolve_intent_class(None)
         instance_id = await self._ensure_registry_instance(ctx, intent_class)
         tab_id = await self._sync_registry_tab()
         last_vision = self._get_last_vision_observation()
-        return {
-            "ok": True,
-            "browser_instance_id": instance_id,
-            "tab_id": tab_id,
-            "debug_port": getattr(self._runtime, "remote_debugging_port", None) if self._runtime else None,
-            "cdp_target_id": self._current_target_id(),
-            "registry_snapshot": self._build_registry_snapshot(ctx),
-            "last_vision_observation": last_vision if last_vision else {},
-        }
+        return self._operational_envelope(
+            status="success" if instance_id and tab_id else "partial",
+            success=bool(instance_id and tab_id),
+            result_summary="Browser registry synchronized.",
+            structured_result={
+                "browser_instance_id": instance_id,
+                "tab_id": tab_id,
+                "debug_port": getattr(self._runtime, "remote_debugging_port", None) if self._runtime else None,
+                "cdp_target_id": self._current_target_id(),
+                "registry_snapshot": self._build_registry_snapshot(ctx),
+                "last_vision_observation": last_vision if last_vision else {},
+                "confirmed": bool(instance_id and tab_id),
+            },
+            reason=None if instance_id and tab_id else "PARTIAL_SYNC",
+            requires_followup=not bool(instance_id and tab_id),
+            next_step_context={"suggestion": "Run browser.control.run or inspect registry."} if not bool(instance_id and tab_id) else {},
+            diagnostics={"action": "sync_registry"},
+        )
 
     async def gc(self, params: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         p = params or {}
@@ -1657,11 +1878,18 @@ class BrowserControlCapability(CapabilityBase):
             keep_current_instance=keep_current,
             enabled_required=False,
         )
-        return {
-            "ok": bool(run_gc.get("ok", False)),
-            "gc": run_gc,
-            "registry_snapshot": self._build_registry_snapshot(ctx),
-        }
+        return self._operational_envelope(
+            status="success" if bool(run_gc.get("ok", False)) else "failed",
+            success=bool(run_gc.get("ok", False)),
+            result_summary="Browser GC completed." if bool(run_gc.get("ok", False)) else "Browser GC failed.",
+            structured_result={
+                "gc": run_gc,
+                "registry_snapshot": self._build_registry_snapshot(ctx),
+                "confirmed": bool(run_gc.get("ok", False)),
+            },
+            reason=None if bool(run_gc.get("ok", False)) else str(run_gc.get("reason") or "gc_failed"),
+            diagnostics={"action": "gc"},
+        )
 
     async def health(self, params: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         p = params or {}
@@ -1698,14 +1926,20 @@ class BrowserControlCapability(CapabilityBase):
         if isinstance(snapshot, dict) and int(snapshot.get("count_instances", 0) or 0) == 0:
             issues.append("no_registry_instances_for_scope")
 
-        return {
-            "ok": True,
-            "health": {
-                "status": "ok" if not issues else "degraded",
-                "issues": issues,
+        return self._operational_envelope(
+            status="success" if not issues else "partial",
+            success=not bool(issues),
+            result_summary="Browser health ok." if not issues else "Browser health degraded.",
+            structured_result={
+                "health": {"status": "ok" if not issues else "degraded", "issues": issues},
+                "inspect": inspect_result,
+                "sync": sync_result,
+                "gc": gc_result,
+                "registry_snapshot": snapshot,
+                "confirmed": not issues,
             },
-            "inspect": inspect_result,
-            "sync": sync_result,
-            "gc": gc_result,
-            "registry_snapshot": snapshot,
-        }
+            reason=None if not issues else "HEALTH_DEGRADED",
+            requires_followup=bool(issues),
+            next_step_context={"suggestion": "Inspect browser registry and runtime state."} if issues else {},
+            diagnostics={"action": "health", "issues": issues},
+        )

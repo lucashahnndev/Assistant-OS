@@ -61,13 +61,48 @@ class AssistiveOverlayCapability(CapabilityBase):
 
     @staticmethod
     def _ok(text: str, **extra: Any) -> Dict[str, Any]:
-        payload = {"ok": True, "status": "success"}
+        structured = dict(extra)
+        artifacts = []
+        for key in ("debug_image_path", "screenshot_path", "path"):
+            value = structured.get(key)
+            if isinstance(value, str) and value.strip():
+                artifacts.append({"kind": "file", "path": value.strip()})
+        payload = {
+            "ok": True,
+            "success": True,
+            "status": "success",
+            "reason": None,
+            "result_summary": str(text or "").strip() or "Overlay action completed.",
+            "structured_result": structured,
+            "artifacts": artifacts,
+            "attachment_delivery": {"status": "none", "confirmed": False},
+            "freshness": {"status": "current", "source": "assistive_overlay"},
+            "truncated": False,
+            "requires_followup": False,
+            "next_step_context": {},
+            "diagnostics": {"capability": "assistive_overlay"},
+        }
         payload.update(extra)
         return payload
 
     @staticmethod
     def _err(code: str, text: str, **extra: Any) -> Dict[str, Any]:
-        payload = {"ok": False, "status": "error", "error": code}
+        payload = {
+            "ok": False,
+            "success": False,
+            "status": "error",
+            "error": code,
+            "reason": code,
+            "result_summary": str(text or "").strip() or "Overlay action failed.",
+            "structured_result": dict(extra),
+            "artifacts": [],
+            "attachment_delivery": {"status": "none", "confirmed": False},
+            "freshness": {"status": "current", "source": "assistive_overlay"},
+            "truncated": False,
+            "requires_followup": False,
+            "next_step_context": {},
+            "diagnostics": {"capability": "assistive_overlay", "error": code},
+        }
         payload.update(extra)
         return payload
 

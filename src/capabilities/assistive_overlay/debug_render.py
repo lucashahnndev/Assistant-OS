@@ -68,8 +68,19 @@ def render_overlay_debug_image(
     if not reference_image_path or not os.path.isfile(reference_image_path):
         return {
             "ok": False,
+            "success": False,
             "status": "error",
             "error": "DEBUG_REFERENCE_NOT_FOUND",
+            "reason": "DEBUG_REFERENCE_NOT_FOUND",
+            "result_summary": f"Reference image not found: {reference_image_path}",
+            "structured_result": {"reference_image_path": reference_image_path, "command": dict(command or {})},
+            "artifacts": [],
+            "attachment_delivery": {"status": "none", "confirmed": False},
+            "freshness": {"status": "current", "source": "assistive_overlay"},
+            "truncated": False,
+            "requires_followup": False,
+            "next_step_context": {},
+            "diagnostics": {"parse_status": "missing_reference"},
             "text": f"Reference image not found: {reference_image_path}",
         }
 
@@ -131,14 +142,40 @@ def render_overlay_debug_image(
         composed.save(output_path)
         return {
             "ok": True,
+            "success": True,
             "status": "success",
             "path": os.path.abspath(output_path),
+            "reason": None,
+            "result_summary": "Overlay debug image rendered.",
+            "structured_result": {
+                "path": os.path.abspath(output_path),
+                "reference_image_path": reference_image_path,
+                "command": dict(command or {}),
+            },
+            "artifacts": [{"kind": "file", "path": os.path.abspath(output_path)}],
+            "attachment_delivery": {"status": "none", "confirmed": False},
+            "freshness": {"status": "current", "source": "assistive_overlay"},
+            "truncated": False,
+            "requires_followup": False,
+            "next_step_context": {},
+            "diagnostics": {"parse_status": "ok"},
             "text": "Overlay debug image rendered.",
         }
     except Exception as exc:
         return {
             "ok": False,
+            "success": False,
             "status": "error",
             "error": "DEBUG_RENDER_FAILED",
+            "reason": "DEBUG_RENDER_FAILED",
+            "result_summary": str(exc),
+            "structured_result": {"reference_image_path": reference_image_path, "command": dict(command or {})},
+            "artifacts": [],
+            "attachment_delivery": {"status": "none", "confirmed": False},
+            "freshness": {"status": "current", "source": "assistive_overlay"},
+            "truncated": False,
+            "requires_followup": False,
+            "next_step_context": {},
+            "diagnostics": {"parse_status": "render_failed"},
             "text": str(exc),
         }

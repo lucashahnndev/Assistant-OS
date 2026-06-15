@@ -112,6 +112,32 @@ class MCPDynamicCapability(CapabilityBase):
             "server_id": server.id,
             "read_only": descriptor.read_only,
         }
+        response.update(
+            {
+                "result_summary": (
+                    f"MCP resource read from {server.id}."
+                    if str(descriptor.metadata.get("kind") or "") == "resource.read"
+                    else f"MCP tool '{descriptor.tool_name}' executed on {server.id}."
+                ),
+                "structured_result": {
+                    "data": response["data"],
+                    "metadata": response["metadata"],
+                },
+                "artifacts": [],
+                "attachment_delivery": {"status": "none", "confirmed": False},
+                "freshness": {"status": "live", "source": "mcp"},
+                "truncated": False,
+                "requires_followup": False,
+                "next_step_context": {},
+                "diagnostics": {
+                    "origin": "mcp",
+                    "action_id": descriptor.action_id,
+                    "tool_name": descriptor.tool_name,
+                    "server_id": server.id,
+                    "read_only": descriptor.read_only,
+                },
+            }
+        )
         return response
 
 

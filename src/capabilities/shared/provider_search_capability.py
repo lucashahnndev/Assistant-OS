@@ -103,6 +103,13 @@ class ProviderSearchCapabilityBase(CapabilityBase):
                 error_message=f"Unknown action: {action_id}",
                 retryable=False,
                 elapsed=int((perf_counter() - started) * 1000),
+                result_summary=f"Unknown action: {action_id}",
+                diagnostics={
+                    "provider": self.PROVIDER_LABEL,
+                    "action_id": action_id,
+                    "query": params.get("query") or params.get("q") or "",
+                    "parse_status": "unsupported_action",
+                },
             )
 
         query = self._resolve_query(params)
@@ -113,8 +120,23 @@ class ProviderSearchCapabilityBase(CapabilityBase):
                 error_message="Missing required parameter: query",
                 retryable=False,
                 elapsed=int((perf_counter() - started) * 1000),
+                result_summary="Missing required parameter: query",
+                requires_followup=True,
+                next_step_context={"suggestion": "Provide a search query."},
+                diagnostics={
+                    "provider": self.PROVIDER_LABEL,
+                    "parse_status": "missing_query",
+                },
             )
-            payload.update({"query": "", "count": 0, "results": [], "best": None})
+            payload.update(
+                {
+                    "query": "",
+                    "count": 0,
+                    "results": [],
+                    "best": None,
+                    "structured_result": {"query": "", "count": 0, "results": [], "best": None, "providers_tried": []},
+                }
+            )
             return payload
 
         defaults = self.config.get("defaults") if isinstance(self.config.get("defaults"), dict) else {}
@@ -149,6 +171,40 @@ class ProviderSearchCapabilityBase(CapabilityBase):
                 provider=self.PROVIDER_LABEL,
                 elapsed=int((perf_counter() - started) * 1000),
                 warnings=list(response.warnings or []),
+                result_summary=(
+                    f"Found {len(rows)} result(s) for '{query}'."
+                    if rows
+                    else f"No results found for '{query}'."
+                ),
+                structured_result={
+                    "query": query,
+                    "count": len(rows),
+                    "results": rows,
+                    "best": rows[0] if rows else None,
+                    "providers_tried": [provider.name],
+                },
+                artifacts=[],
+                attachment_delivery={"status": "none", "confirmed": False},
+                freshness={
+                    "type": "live",
+                    "status": "fresh" if rows else "empty",
+                    "recency_days": recency_days,
+                },
+                truncated=bool(limit and len(rows) >= limit),
+                requires_followup=not bool(rows),
+                next_step_context=(
+                    {"suggestion": "Broaden the query or change the recency filter."}
+                    if not rows
+                    else {}
+                ),
+                diagnostics={
+                    "provider": self.PROVIDER_LABEL,
+                    "providers_tried": [provider.name],
+                    "query": query,
+                    "limit": limit,
+                    "recency_days": recency_days,
+                    "parse_status": "ok",
+                },
             )
             envelope.update(
                 {
@@ -159,6 +215,8 @@ class ProviderSearchCapabilityBase(CapabilityBase):
                     "providers_tried": [provider.name],
                 }
             )
+            if not rows:
+                envelope["status"] = "empty"
             return envelope
         except Exception as exc:
             payload = error_envelope(
@@ -167,6 +225,28 @@ class ProviderSearchCapabilityBase(CapabilityBase):
                 error_message=str(exc),
                 retryable=True,
                 elapsed=int((perf_counter() - started) * 1000),
+                result_summary=f"Search provider '{provider.name if 'provider' in locals() else self.PROVIDER_LABEL}' failed.",
+                diagnostics={
+                    "provider": self.PROVIDER_LABEL,
+                    "query": query,
+                    "limit": limit,
+                    "recency_days": recency_days,
+                    "parse_status": "provider_exception",
+                },
             )
-            payload.update({"query": query, "count": 0, "results": [], "best": None})
+            payload.update(
+                {
+                    "query": query,
+                    "count": 0,
+                    "results": [],
+                    "best": None,
+                    "structured_result": {
+                        "query": query,
+                        "count": 0,
+                        "results": [],
+                        "best": None,
+                        "providers_tried": [provider.name] if "provider" in locals() else [],
+                    },
+                }
+            )
             return payload

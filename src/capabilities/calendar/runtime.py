@@ -131,6 +131,38 @@ class CalendarCapability:
             data["event_id"] = event.event_id
         return data
 
+    @staticmethod
+    def _envelope(
+        *,
+        status: str,
+        success: bool,
+        reason: str | None,
+        result_summary: str,
+        structured_result: Dict[str, Any],
+        freshness: Dict[str, Any] | None = None,
+        requires_followup: bool = False,
+        next_step_context: Dict[str, Any] | None = None,
+        diagnostics: Dict[str, Any] | None = None,
+        artifacts: List[Dict[str, Any]] | None = None,
+        attachment_delivery: Dict[str, Any] | None = None,
+        truncated: bool = False,
+    ) -> Dict[str, Any]:
+        return {
+            "ok": bool(success),
+            "success": bool(success),
+            "status": status,
+            "reason": reason,
+            "result_summary": result_summary,
+            "structured_result": structured_result,
+            "freshness": freshness or {"source": "unknown", "resolved_at": None, "stale": False, "ttl_seconds": None},
+            "requires_followup": bool(requires_followup),
+            "next_step_context": next_step_context or {},
+            "diagnostics": diagnostics or {},
+            "artifacts": artifacts or [],
+            "attachment_delivery": attachment_delivery or {"status": "none", "confirmed": False},
+            "truncated": bool(truncated),
+        }
+
     def handle_list(self, context: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         user_id = self._get_user_id(context)
         expose_internal_id = self._wants_internal_id(context, kwargs)
@@ -164,18 +196,30 @@ class CalendarCapability:
             logger.info(f"Defaulting calendar list to today: {now.date()}")
 
         events = self.calendar_service.list_events(user_id, start_time=start_float, end_time=end_float)
-        return {
-            "ok": True,
-            "status": "success" if events else "empty",
-            "provider": "internal",
-            "data": {
-                "count": len(events),
-                "events": [
-                    self._event_summary(e, expose_internal_id=expose_internal_id) for e in events
-                ],
-                "note": "Listagem resumida por design. Use calendar.event.get com short_id para detalhes completos."
-            }
-        }
+        found = [
+            self._event_summary(e, expose_internal_id=expose_internal_id) for e in events
+        ]
+        status = "success" if events else "partial"
+        return self._envelope(
+            status=status,
+            success=bool(events),
+            reason=None if events else "NO_EVENTS_FOUND",
+            result_summary=(
+                f"Found {len(found)} event(s)." if events else "No events found for the requested range."
+            ),
+            structured_result={
+                "operation": "search_events",
+                "confirmed": bool(events),
+                "events": found,
+                "event_ids": [str(item.get("event_id") or item.get("short_id") or "") for item in found if isinstance(item, dict)],
+                "missing_fields": [],
+                "api_response": {},
+            },
+            freshness={"source": "live", "resolved_at": datetime.now().isoformat(), "stale": False, "ttl_seconds": None},
+            requires_followup=not bool(events),
+            next_step_context={"suggestion": "Use calendar.event.get with a short_id for details."} if not events else {},
+            diagnostics={"operation": "search_events", "user_id": user_id, "range": {"start": start_float, "end": end_float}},
+        )
 
     def handle_create(self, context: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         user_id = self._get_user_id(context)
@@ -215,46 +259,87 @@ class CalendarCapability:
                 description=description,
                 location=location
             )
-            return {
-                "ok": True,
-                "status": "success",
-                "sync_status": "synced" if sync_ok else "failed_external",
-                "provider": "internal",
-                "data": {
-                    "event": self._event_summary(event, expose_internal_id=expose_internal_id),
-                    "sync_ok": sync_ok
-                }
-            }
+            return self._envelope(
+                status="success" if sync_ok else "partial",
+                success=bool(sync_ok),
+                reason=None if sync_ok else "EXTERNAL_SYNC_FAILED",
+                result_summary="Event created." if sync_ok else "Event created locally, but external sync failed.",
+                structured_result={
+                    "operation": "create_event",
+                    "confirmed": bool(event),
+                    "events": [self._event_summary(event, expose_internal_id=expose_internal_id)],
+                    "event_ids": [str(getattr(event, "event_id", "") or "")],
+                    "missing_fields": [k for k, v in {"title": title, "start_time": start_time, "end_time": end_time}.items() if not v],
+                    "api_response": {"sync_ok": sync_ok},
+                },
+                freshness={"source": "live", "resolved_at": datetime.now().isoformat(), "stale": False, "ttl_seconds": None},
+                requires_followup=not bool(sync_ok),
+                next_step_context={"suggestion": "Confirm external sync."} if not sync_ok else {},
+                diagnostics={"operation": "create_event", "sync_ok": bool(sync_ok)},
+            )
         except Exception as e:
             logger.error(f"Calendar create_event failed: {e}")
-            return {
-                "ok": False,
-                "status": "error",
-                "error_details": str(e)
-            }
+            return self._envelope(
+                status="failed",
+                success=False,
+                reason="CALENDAR_CREATE_FAILED",
+                result_summary=str(e),
+                structured_result={
+                    "operation": "create_event",
+                    "confirmed": False,
+                    "events": [],
+                    "event_ids": [],
+                    "missing_fields": [k for k, v in {"title": title, "start_time": start_time, "end_time": end_time}.items() if not v],
+                    "api_response": {},
+                },
+                freshness={"source": "unknown", "resolved_at": None, "stale": True, "ttl_seconds": None},
+                requires_followup=True,
+                next_step_context={"suggestion": "Provide a valid title, start_time and end_time."},
+                diagnostics={"operation": "create_event", "error": str(e)},
+            )
 
     def handle_get(self, context: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         event_ref = kwargs.get("short_id") or kwargs.get("event_id") or kwargs.get("id") or kwargs.get("event_ref")
         expose_internal_id = self._wants_internal_id(context, kwargs)
         event = self.calendar_service.get_event(event_ref)
         if event:
-            return {
-                "ok": True,
-                "status": "success",
-                "data": {
-                    "event": self._event_details(event, expose_internal_id=expose_internal_id)
-                }
-            }
+            return self._envelope(
+                status="success",
+                success=True,
+                reason=None,
+                result_summary=f"Event {event_ref} found.",
+                structured_result={
+                    "operation": "get_event",
+                    "confirmed": True,
+                    "events": [self._event_details(event, expose_internal_id=expose_internal_id)],
+                    "event_ids": [str(getattr(event, "event_id", "") or "")],
+                    "missing_fields": [],
+                    "api_response": {},
+                },
+                freshness={"source": "live", "resolved_at": datetime.now().isoformat(), "stale": False, "ttl_seconds": None},
+                diagnostics={"operation": "get_event", "event_ref": event_ref},
+            )
         user_id = self._get_user_id(context)
         events = self.calendar_service.list_events(user_id)
-        return {
-            "ok": False,
-            "status": "not_found",
-            "error_details": f"Event {event_ref} not found",
-            "data": {
-                "available_events": [self._event_summary(e, expose_internal_id=expose_internal_id) for e in events[:20]]
-            }
-        }
+        available = [self._event_summary(e, expose_internal_id=expose_internal_id) for e in events[:20]]
+        return self._envelope(
+            status="partial",
+            success=False,
+            reason="EVENT_NOT_FOUND",
+            result_summary=f"Event {event_ref} not found.",
+            structured_result={
+                "operation": "get_event",
+                "confirmed": False,
+                "events": [],
+                "event_ids": [],
+                "missing_fields": ["short_id/event_id"],
+                "api_response": {"available_events": available},
+            },
+            freshness={"source": "live", "resolved_at": datetime.now().isoformat(), "stale": False, "ttl_seconds": None},
+            requires_followup=True,
+            next_step_context={"suggestion": "Use a short_id from the available_events list."},
+            diagnostics={"operation": "get_event", "event_ref": event_ref},
+        )
 
     def handle_delete(self, context: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         event_ref = kwargs.get("short_id") or kwargs.get("event_id") or kwargs.get("id") or kwargs.get("eventId") or kwargs.get("event_ref")
@@ -263,55 +348,86 @@ class CalendarCapability:
 
         if not event_ref:
             events = self.calendar_service.list_events(user_id)
-            return {
-                "ok": False,
-                "status": "error",
-                "provider": "internal",
-                "error_details": "Missing required parameter: short_id/event_id",
-                "data": {
-                    "available_events": [
-                        self._event_summary(e, expose_internal_id=expose_internal_id) for e in events[:20]
-                    ]
-                }
-            }
+            available = [self._event_summary(e, expose_internal_id=expose_internal_id) for e in events[:20]]
+            return self._envelope(
+                status="blocked",
+                success=False,
+                reason="MISSING_REQUIRED_FIELDS",
+                result_summary="Missing required parameter: short_id/event_id",
+                structured_result={
+                    "operation": "delete_event",
+                    "confirmed": False,
+                    "events": [],
+                    "event_ids": [],
+                    "missing_fields": ["short_id", "event_id"],
+                    "api_response": {"available_events": available},
+                },
+                freshness={"source": "live", "resolved_at": datetime.now().isoformat(), "stale": False, "ttl_seconds": None},
+                requires_followup=True,
+                next_step_context={"suggestion": "Provide short_id or event_id."},
+                diagnostics={"operation": "delete_event"},
+            )
 
         target_event = self.calendar_service.resolve_event_ref(event_ref)
         success = self.calendar_service.delete_event(event_ref)
         if not success:
             events = self.calendar_service.list_events(user_id)
-            return {
-                "ok": False,
-                "status": "not_found",
-                "provider": "internal",
-                "error_details": f"Event {event_ref} not found",
-                "data": {
-                    "event_ref": event_ref,
-                    "available_events": [
-                        self._event_summary(e, expose_internal_id=expose_internal_id) for e in events[:20]
-                    ]
-                }
-            }
+            available = [self._event_summary(e, expose_internal_id=expose_internal_id) for e in events[:20]]
+            return self._envelope(
+                status="partial",
+                success=False,
+                reason="EVENT_NOT_FOUND",
+                result_summary=f"Event {event_ref} not found.",
+                structured_result={
+                    "operation": "delete_event",
+                    "confirmed": False,
+                    "events": [],
+                    "event_ids": [],
+                    "missing_fields": [],
+                    "api_response": {"available_events": available, "event_ref": event_ref},
+                },
+                freshness={"source": "live", "resolved_at": datetime.now().isoformat(), "stale": False, "ttl_seconds": None},
+                requires_followup=True,
+                next_step_context={"suggestion": "Use an event_ref from the available_events list."},
+                diagnostics={"operation": "delete_event", "event_ref": event_ref},
+            )
 
-        return {
-            "ok": True,
-            "status": "success",
-            "provider": "internal",
-            "data": {
-                "deleted": self._event_summary(target_event, expose_internal_id=expose_internal_id) if target_event else {"short_id": str(event_ref)}
-            }
-        }
+        deleted = self._event_summary(target_event, expose_internal_id=expose_internal_id) if target_event else {"short_id": str(event_ref)}
+        return self._envelope(
+            status="success",
+            success=True,
+            reason=None,
+            result_summary=f"Deleted event {event_ref}.",
+            structured_result={
+                "operation": "delete_event",
+                "confirmed": True,
+                "events": [],
+                "event_ids": [str(deleted.get("event_id") or deleted.get("short_id") or "")],
+                "missing_fields": [],
+                "api_response": {"deleted": deleted},
+            },
+            freshness={"source": "live", "resolved_at": datetime.now().isoformat(), "stale": False, "ttl_seconds": None},
+            diagnostics={"operation": "delete_event", "event_ref": event_ref},
+        )
     def handle_sync(self, context: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         user_id = self._get_user_id(context)
         success = self.calendar_service.sync_all(user_id)
-        return {
-            "ok": success,
-            "status": "success" if success else "failed",
-            "sync_status": "synced" if success else "failed",
-            "provider": "internal",
-            "data": {
-                "user_id": user_id
-            }
-        }
+        return self._envelope(
+            status="success" if success else "failed",
+            success=bool(success),
+            reason=None if success else "SYNC_FAILED",
+            result_summary="Calendar sync completed." if success else "Calendar sync failed.",
+            structured_result={
+                "operation": "sync",
+                "confirmed": bool(success),
+                "events": [],
+                "event_ids": [],
+                "missing_fields": [],
+                "api_response": {"user_id": user_id},
+            },
+            freshness={"source": "live", "resolved_at": datetime.now().isoformat(), "stale": False, "ttl_seconds": None},
+            diagnostics={"operation": "sync", "user_id": user_id, "sync_ok": bool(success)},
+        )
 
 def create_capability(kernel, config):
     return CalendarCapability(kernel, config)

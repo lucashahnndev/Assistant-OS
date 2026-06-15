@@ -17,6 +17,47 @@ class SystemLogsCapability(CapabilityBase):
     @property
     def actions(self) -> List[str]: return ["list", "read"]
 
+    @staticmethod
+    def _success(summary: str, **extra: Any) -> Dict[str, Any]:
+        payload = {
+            "ok": True,
+            "success": True,
+            "status": "success",
+            "reason": None,
+            "result_summary": str(summary or "").strip() or "System log operation completed.",
+            "structured_result": dict(extra),
+            "artifacts": [],
+            "attachment_delivery": {"status": "none", "confirmed": False},
+            "freshness": {"status": "current", "source": "system_logs"},
+            "truncated": False,
+            "requires_followup": False,
+            "next_step_context": {},
+            "diagnostics": {"capability": "system_logs"},
+        }
+        payload.update(extra)
+        return payload
+
+    @staticmethod
+    def _error(code: str, summary: str, **extra: Any) -> Dict[str, Any]:
+        payload = {
+            "ok": False,
+            "success": False,
+            "status": "error",
+            "error": code,
+            "reason": code,
+            "result_summary": str(summary or "").strip() or "System log operation failed.",
+            "structured_result": dict(extra),
+            "artifacts": [],
+            "attachment_delivery": {"status": "none", "confirmed": False},
+            "freshness": {"status": "current", "source": "system_logs"},
+            "truncated": False,
+            "requires_followup": False,
+            "next_step_context": {},
+            "diagnostics": {"capability": "system_logs", "error": code},
+        }
+        payload.update(extra)
+        return payload
+
     def execute(self, action_id: str, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         action = action_id.split(".")[-1]
 
@@ -30,14 +71,13 @@ class SystemLogsCapability(CapabilityBase):
             lines = ["Categorias de logs disponíveis:"]
             for item in items:
                 lines.append(f"- {item['file']}: {item['description']}")
-            return {
-                "ok": True,
-                "status": "success",
-                "action": "list",
-                "count": len(items),
-                "logs": items,
-                "content": "\n".join(lines),
-            }
+            return self._success(
+                f"Listed {len(items)} log file(s).",
+                action="list",
+                count=len(items),
+                logs=items,
+                content="\n".join(lines),
+            )
 
         elif action == "read":
             filename = params.get("file", "assistant.log")
@@ -53,29 +93,25 @@ class SystemLogsCapability(CapabilityBase):
             log_content = read_recent_logs(n=lines, filename=filename)
             if isinstance(log_content, list):
                 joined = "\n".join(log_content)
-                return {
-                    "ok": True,
-                    "status": "success",
-                    "action": "read",
-                    "file": filename,
-                    "lines_requested": lines,
-                    "lines_returned": len(log_content),
-                    "content": joined,
-                    "error_details": f"Leitura de {filename}: {len(log_content)} linha(s).",
-                }
-            return {
-                "ok": False,
-                "status": "error",
-                "action": "read",
-                "file": filename,
-                "lines_requested": lines,
-                "error": "READ_FAILED",
-                "error_details": f"Erro ao ler log '{filename}': {str(log_content)}",
-            }
+                return self._success(
+                    f"Read {len(log_content)} line(s) from {filename}.",
+                    action="read",
+                    file=filename,
+                    lines_requested=lines,
+                    lines_returned=len(log_content),
+                    content=joined,
+                    error_details=f"Leitura de {filename}: {len(log_content)} linha(s).",
+                )
+            return self._error(
+                "READ_FAILED",
+                f"Erro ao ler log '{filename}': {str(log_content)}",
+                action="read",
+                file=filename,
+                lines_requested=lines,
+            )
 
-        return {
-            "ok": False,
-            "status": "error",
-            "error": "UNKNOWN_ACTION",
-            "error_details": f"Unknown action em system_logs: {action_id}",
-        }
+        return self._error(
+            "UNKNOWN_ACTION",
+            f"Unknown action em system_logs: {action_id}",
+            action=action,
+        )

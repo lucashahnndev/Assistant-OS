@@ -75,7 +75,14 @@ class NotificationCapability(CapabilityBase):
             return self.handle_list_applied_policy_patches(params, context)
         elif action_id == "notifications.rollback_applied_policy_patch" or action_id == "rollback_applied_policy_patch":
             return self.handle_rollback_applied_policy_patch(params, context)
-        return {"ok": False, "error": f"Unknown action: {action_id}"}
+        return self._envelope(
+            status="failed",
+            success=False,
+            result_summary=f"Unknown action: {action_id}",
+            structured_result={"action": action_id, "prepared": [], "sent": [], "confirmed": [], "failed": [action_id]},
+            reason="UNKNOWN_ACTION",
+            diagnostics={"capability": "notifications", "action": action_id},
+        )
 
     def _resolve_orchestrator(self):
         return getattr(self, "orchestrator", None) or getattr(self.kernel, "orchestrator", None)
@@ -92,6 +99,38 @@ class NotificationCapability(CapabilityBase):
             if user_sessions:
                 return str(user_sessions[0].get("user_id") or user_sessions[0].get("session_id") or "default")
         return "default"
+
+    @staticmethod
+    def _envelope(
+        *,
+        status: str,
+        success: bool,
+        result_summary: str,
+        structured_result: Dict[str, Any],
+        reason: str | None = None,
+        attachment_delivery: Dict[str, Any] | None = None,
+        diagnostics: Dict[str, Any] | None = None,
+        freshness: Dict[str, Any] | None = None,
+        requires_followup: bool = False,
+        next_step_context: Dict[str, Any] | None = None,
+        artifacts: List[Dict[str, Any]] | None = None,
+        truncated: bool = False,
+    ) -> Dict[str, Any]:
+        return {
+            "ok": bool(success),
+            "success": bool(success),
+            "status": status,
+            "reason": reason,
+            "result_summary": str(result_summary or "").strip(),
+            "structured_result": structured_result,
+            "attachment_delivery": attachment_delivery or {"requested": [], "resolved": [], "prepared": [], "sent": [], "confirmed": [], "errors": [], "status": "none"},
+            "diagnostics": diagnostics or {},
+            "freshness": freshness or {"source": "unknown", "resolved_at": None, "stale": False, "ttl_seconds": None},
+            "requires_followup": bool(requires_followup),
+            "next_step_context": next_step_context or {},
+            "artifacts": artifacts or [],
+            "truncated": bool(truncated),
+        }
 
     def handle_send(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -120,14 +159,44 @@ class NotificationCapability(CapabilityBase):
                 delivery_mode = "session_only"
 
         if not message:
-            return {"ok": False, "error": "Missing message parameter."}
+            return {
+                "ok": False,
+                "success": False,
+                "status": "error",
+                "error": "MISSING_MESSAGE",
+                "reason": "MISSING_MESSAGE",
+                "result_summary": "Missing message parameter.",
+                "structured_result": {"action": "notifications.send"},
+                "artifacts": [],
+                "attachment_delivery": {"status": "none", "confirmed": False},
+                "freshness": {"status": "current", "source": "notifications"},
+                "truncated": False,
+                "requires_followup": False,
+                "next_step_context": {},
+                "diagnostics": {"capability": "notifications", "parse_status": "missing_message"},
+            }
 
         target_session_id = params.get("target_id") or params.get("target_session_id")
         orchestrator = self._resolve_orchestrator()
         
         if not orchestrator:
             logger.warning("Orchestrator not found in NotificationCapability.")
-            return {"ok": False, "error": "Orchestrator not initialized."}
+            return {
+                "ok": False,
+                "success": False,
+                "status": "error",
+                "error": "ORCHESTRATOR_UNAVAILABLE",
+                "reason": "ORCHESTRATOR_UNAVAILABLE",
+                "result_summary": "Orchestrator not initialized.",
+                "structured_result": {"action": "notifications.send"},
+                "artifacts": [],
+                "attachment_delivery": {"status": "none", "confirmed": False},
+                "freshness": {"status": "current", "source": "notifications"},
+                "truncated": False,
+                "requires_followup": False,
+                "next_step_context": {},
+                "diagnostics": {"capability": "notifications", "parse_status": "orchestrator_unavailable"},
+            }
 
         try:
             # We use notify_user on orchestrator which delegates to Dispatcher
@@ -154,11 +223,59 @@ class NotificationCapability(CapabilityBase):
             success = orchestrator.notification_dispatcher.dispatch(intent)
         except Exception as e:
             logger.error(f"Error in notifications capability: {e}")
-            return {"ok": False, "error": str(e)}
+            return {
+                "ok": False,
+                "success": False,
+                "status": "error",
+                "error": "NOTIFICATION_DISPATCH_FAILED",
+                "reason": "NOTIFICATION_DISPATCH_FAILED",
+                "result_summary": str(e),
+                "structured_result": {"action": "notifications.send"},
+                "artifacts": [],
+                "attachment_delivery": {"status": "none", "confirmed": False},
+                "freshness": {"status": "current", "source": "notifications"},
+                "truncated": False,
+                "requires_followup": False,
+                "next_step_context": {},
+                "diagnostics": {"capability": "notifications", "parse_status": "dispatch_failed"},
+            }
 
         return {
             "ok": success,
-            "status": "sent" if success else "failed",
+            "success": success,
+            "status": "success" if success else "failed",
+            "reason": None if success else "NOTIFICATION_DISPATCH_FAILED",
+            "result_summary": "Notification dispatched to delivery layer." if success else "Failed to dispatch notification.",
+            "structured_result": {
+                "channel": str(delivery_mode),
+                "requested": [message] if message else [],
+                "prepared": [message] if message else [],
+                "sent": [message] if success else [],
+                "confirmed": [message] if success else [],
+                "failed": [] if success else [message],
+                "action": "notifications.send",
+                "target_session_id": target_session_id,
+                "target_user_id": target_user_id,
+                "delivery_mode": delivery_mode,
+                "as_agent_message": as_agent_message,
+                "metadata": {**metadata, **message_context},
+            },
+            "artifacts": [],
+            "attachment_delivery": {
+                "requested": [message] if message else [],
+                "resolved": [target_session_id] if target_session_id else [],
+                "prepared": [message] if message else [],
+                "sent": [message] if success else [],
+                "confirmed": [message] if success else [],
+                "failed": [] if success else [message],
+                "errors": [] if success else ["NOTIFICATION_DISPATCH_FAILED"],
+                "status": "confirmed" if success else "failed",
+            },
+            "freshness": {"status": "current", "source": "notifications"},
+            "truncated": False,
+            "requires_followup": False,
+            "next_step_context": {},
+            "diagnostics": {"capability": "notifications", "dispatch_success": bool(success)},
             "details": "Notification dispatched to delivery layer." if success else "Failed to dispatch notification."
         }
 
@@ -205,12 +322,26 @@ class NotificationCapability(CapabilityBase):
         """
         orchestrator = self._resolve_orchestrator()
         if not orchestrator or not orchestrator.notification_dispatcher:
-            return {"ok": False, "error": "Notification system not initialized."}
+            return self._envelope(
+                status="failed",
+                success=False,
+                result_summary="Notification system not initialized.",
+                structured_result={"action": "list_targets", "targets": []},
+                reason="NOTIFICATION_SYSTEM_UNINITIALIZED",
+                diagnostics={"capability": "notifications", "action": "list_targets"},
+            )
             
         dispatcher = orchestrator.notification_dispatcher
         context_service = getattr(dispatcher.resolver, "context_service", None)
         if not context_service:
-            return {"ok": False, "error": "Context service unavailable."}
+            return self._envelope(
+                status="failed",
+                success=False,
+                result_summary="Context service unavailable.",
+                structured_result={"action": "list_targets", "targets": []},
+                reason="CONTEXT_SERVICE_UNAVAILABLE",
+                diagnostics={"capability": "notifications", "action": "list_targets"},
+            )
         
         user_id = params.get("user_id", "default")
         
@@ -236,20 +367,26 @@ class NotificationCapability(CapabilityBase):
                 "description": f"Push channel: {c['interface']}"
             })
             
-        return {
-            "ok": True,
-            "targets": targets
-        }
+        return self._envelope(
+            status="success" if targets else "partial",
+            success=True,
+            result_summary="Delivery targets listed." if targets else "No delivery targets found.",
+            structured_result={"action": "list_targets", "requested": [], "prepared": [], "sent": [], "confirmed": targets, "failed": [], "targets": targets},
+            reason=None if targets else "NO_TARGETS_FOUND",
+            requires_followup=not bool(targets),
+            next_step_context={"suggestion": "Set a target_session_id or target_user_id."} if not targets else {},
+            diagnostics={"capability": "notifications", "action": "list_targets", "count": len(targets)},
+        )
 
     def handle_set_preference(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         orchestrator = self._resolve_orchestrator()
         if not orchestrator or not getattr(orchestrator, "notification_dispatcher", None):
-            return {"ok": False, "error": "Notification system not initialized."}
+            return self._envelope(status="failed", success=False, result_summary="Notification system not initialized.", structured_result={"action": "set_preference"}, reason="NOTIFICATION_SYSTEM_UNINITIALIZED", diagnostics={"capability": "notifications", "action": "set_preference"})
 
         dispatcher = orchestrator.notification_dispatcher
         pref_store = getattr(dispatcher, "preference_store", None)
         if not pref_store:
-            return {"ok": False, "error": "UserPreferenceStore unavailable."}
+            return self._envelope(status="failed", success=False, result_summary="UserPreferenceStore unavailable.", structured_result={"action": "set_preference"}, reason="PREFERENCE_STORE_UNAVAILABLE", diagnostics={"capability": "notifications", "action": "set_preference"})
 
         target_user_id = self._resolve_target_user_id(params, orchestrator)
         raw_text = str(
@@ -275,24 +412,12 @@ class NotificationCapability(CapabilityBase):
             parsed = PreferenceParser.parse(raw_text)
 
         if not parsed:
-            return {
-                "ok": False,
-                "status": "not_understood",
-                "error": "Could not parse a supported explicit preference command.",
-            }
+            return self._envelope(status="blocked", success=False, result_summary="Could not parse a supported explicit preference command.", structured_result={"action": "set_preference", "parsed": None}, reason="NOT_UNDERSTOOD", requires_followup=True, diagnostics={"capability": "notifications", "action": "set_preference", "parse_status": "not_understood"})
 
         impact = str(parsed.get("impact_level") or "low").strip().lower()
         confirmed = bool(params.get("confirmed", False))
         if impact in {"medium", "high"} and not confirmed:
-            return {
-                "ok": False,
-                "status": "confirmation_required",
-                "data": {
-                    "question": "Confirma aplicar esta preferência de notificação?",
-                    "proposed_preference": parsed,
-                    "impact_level": impact,
-                },
-            }
+            return self._envelope(status="partial", success=False, result_summary="Confirmation required before applying preference.", structured_result={"action": "set_preference", "prepared": [parsed], "confirmed": [], "failed": []}, reason="CONFIRMATION_REQUIRED", requires_followup=True, next_step_context={"question": "Confirma aplicar esta preferência de notificação?", "proposed_preference": parsed, "impact_level": impact}, diagnostics={"capability": "notifications", "action": "set_preference", "impact_level": impact})
 
         record = pref_store.upsert_preference(
             user_id=target_user_id,
@@ -304,26 +429,17 @@ class NotificationCapability(CapabilityBase):
             source=str(parsed.get("source") or "explicit_user_command"),
             impact_level=impact,
         )
-        return {
-            "ok": True,
-            "status": "success",
-            "data": {
-                "preference": record,
-                "preference_version": pref_store.get_user_preference_version(target_user_id),
-                "global_preference_version": pref_store.get_global_preference_version(),
-                "source": "explicit_user_command",
-            },
-        }
+        return self._envelope(status="success", success=True, result_summary="Preference updated.", structured_result={"action": "set_preference", "prepared": [parsed], "confirmed": [record], "failed": [], "preference": record, "preference_version": pref_store.get_user_preference_version(target_user_id), "global_preference_version": pref_store.get_global_preference_version(), "source": "explicit_user_command"}, diagnostics={"capability": "notifications", "action": "set_preference", "confirmed": True})
 
     def handle_list_preferences(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         orchestrator = self._resolve_orchestrator()
         if not orchestrator or not getattr(orchestrator, "notification_dispatcher", None):
-            return {"ok": False, "error": "Notification system not initialized."}
+            return self._envelope(status="failed", success=False, result_summary="Notification system not initialized.", structured_result={"action": "list_preferences", "preferences": []}, reason="NOTIFICATION_SYSTEM_UNINITIALIZED", diagnostics={"capability": "notifications", "action": "list_preferences"})
 
         dispatcher = orchestrator.notification_dispatcher
         pref_store = getattr(dispatcher, "preference_store", None)
         if not pref_store:
-            return {"ok": False, "error": "UserPreferenceStore unavailable."}
+            return self._envelope(status="failed", success=False, result_summary="UserPreferenceStore unavailable.", structured_result={"action": "list_preferences", "preferences": []}, reason="PREFERENCE_STORE_UNAVAILABLE", diagnostics={"capability": "notifications", "action": "list_preferences"})
 
         target_user_id = str(params.get("target_user_id") or self._resolve_target_user_id(params, orchestrator))
         dimension = str(params.get("dimension") or "").strip().lower() or None
@@ -332,27 +448,18 @@ class NotificationCapability(CapabilityBase):
             dimension=dimension,
             active_only=bool(params.get("active_only", True)),
         )
-        return {
-            "ok": True,
-            "status": "success",
-            "data": {
-                "count": len(prefs),
-                "preferences": prefs,
-                "preference_version": pref_store.get_user_preference_version(target_user_id),
-                "global_preference_version": pref_store.get_global_preference_version(),
-            },
-        }
+        return self._envelope(status="success" if prefs else "partial", success=True, result_summary="Preferences listed." if prefs else "No preferences found.", structured_result={"action": "list_preferences", "confirmed": bool(prefs), "prepared": [], "sent": [], "confirmed_items": prefs, "failed": [], "count": len(prefs), "preferences": prefs, "preference_version": pref_store.get_user_preference_version(target_user_id), "global_preference_version": pref_store.get_global_preference_version()}, reason=None if prefs else "NO_PREFERENCES_FOUND", requires_followup=not bool(prefs), diagnostics={"capability": "notifications", "action": "list_preferences"})
 
     def handle_record_feedback(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         orchestrator = self._resolve_orchestrator()
         if not orchestrator or not getattr(orchestrator, "notification_dispatcher", None):
-            return {"ok": False, "error": "Notification system not initialized."}
+            return self._envelope(status="failed", success=False, result_summary="Notification system not initialized.", structured_result={"action": "record_feedback"}, reason="NOTIFICATION_SYSTEM_UNINITIALIZED", diagnostics={"capability": "notifications", "action": "record_feedback"})
         dispatcher = orchestrator.notification_dispatcher
         target_user_id = self._resolve_target_user_id(params, orchestrator)
 
         signal_name = str(params.get("signal_name") or "").strip().lower()
         if not signal_name:
-            return {"ok": False, "error": "Missing signal_name."}
+            return self._envelope(status="blocked", success=False, result_summary="Missing signal_name.", structured_result={"action": "record_feedback"}, reason="MISSING_SIGNAL_NAME", requires_followup=True, diagnostics={"capability": "notifications", "action": "record_feedback"})
 
         signal_type = str(params.get("signal_type") or "explicit").strip().lower()
         value = params.get("value", True)
@@ -371,20 +478,16 @@ class NotificationCapability(CapabilityBase):
             source_domain=source_domain,
             intent_id=intent_id,
         )
-        return {
-            "ok": True,
-            "status": "success",
-            "data": recorded,
-        }
+        return self._envelope(status="success", success=True, result_summary="Feedback recorded.", structured_result={"action": "record_feedback", "prepared": [], "sent": [], "confirmed": [recorded], "failed": [], "recorded": recorded}, diagnostics={"capability": "notifications", "action": "record_feedback"})
 
     def handle_list_signal_assessments(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         orchestrator = self._resolve_orchestrator()
         if not orchestrator or not getattr(orchestrator, "notification_dispatcher", None):
-            return {"ok": False, "error": "Notification system not initialized."}
+            return self._envelope(status="failed", success=False, result_summary="Notification system not initialized.", structured_result={"action": "list_signal_assessments", "assessments": []}, reason="NOTIFICATION_SYSTEM_UNINITIALIZED", diagnostics={"capability": "notifications", "action": "list_signal_assessments"})
         dispatcher = orchestrator.notification_dispatcher
         store = getattr(dispatcher, "store", None)
         if not store:
-            return {"ok": False, "error": "NotificationStore unavailable."}
+            return self._envelope(status="failed", success=False, result_summary="NotificationStore unavailable.", structured_result={"action": "list_signal_assessments", "assessments": []}, reason="STORE_UNAVAILABLE", diagnostics={"capability": "notifications", "action": "list_signal_assessments"})
 
         target_user_id = str(params.get("target_user_id") or self._resolve_target_user_id(params, orchestrator))
         signal_name = str(params.get("signal_name") or "").strip().lower() or None
@@ -394,23 +497,16 @@ class NotificationCapability(CapabilityBase):
             signal_name=signal_name,
             limit=max(1, min(500, limit)),
         )
-        return {
-            "ok": True,
-            "status": "success",
-            "data": {
-                "count": len(assessments),
-                "assessments": assessments,
-            },
-        }
+        return self._envelope(status="success" if assessments else "partial", success=True, result_summary="Signal assessments listed." if assessments else "No signal assessments found.", structured_result={"action": "list_signal_assessments", "prepared": [], "sent": [], "confirmed": assessments, "failed": [], "count": len(assessments), "assessments": assessments}, reason=None if assessments else "NO_ASSESSMENTS_FOUND", requires_followup=not bool(assessments), diagnostics={"capability": "notifications", "action": "list_signal_assessments"})
 
     def handle_list_policy_suggestions(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         orchestrator = self._resolve_orchestrator()
         if not orchestrator or not getattr(orchestrator, "notification_dispatcher", None):
-            return {"ok": False, "error": "Notification system not initialized."}
+            return self._envelope(status="failed", success=False, result_summary="Notification system not initialized.", structured_result={"action": "list_policy_suggestions", "suggestions": []}, reason="NOTIFICATION_SYSTEM_UNINITIALIZED", diagnostics={"capability": "notifications", "action": "list_policy_suggestions"})
         dispatcher = orchestrator.notification_dispatcher
         store = getattr(dispatcher, "store", None)
         if not store:
-            return {"ok": False, "error": "NotificationStore unavailable."}
+            return self._envelope(status="failed", success=False, result_summary="NotificationStore unavailable.", structured_result={"action": "list_policy_suggestions", "suggestions": []}, reason="STORE_UNAVAILABLE", diagnostics={"capability": "notifications", "action": "list_policy_suggestions"})
 
         target_user_id = str(params.get("target_user_id") or self._resolve_target_user_id(params, orchestrator))
         status = str(params.get("status") or "").strip().lower() or None
@@ -420,31 +516,23 @@ class NotificationCapability(CapabilityBase):
             status=status,
             limit=max(1, min(500, limit)),
         )
-        return {
-            "ok": True,
-            "status": "success",
-            "data": {
-                "count": len(suggestions),
-                "suggestions": suggestions,
-                "mode": "observe_only_no_auto_patch",
-            },
-        }
+        return self._envelope(status="success" if suggestions else "partial", success=True, result_summary="Policy suggestions listed." if suggestions else "No policy suggestions found.", structured_result={"action": "list_policy_suggestions", "prepared": [], "sent": [], "confirmed": suggestions, "failed": [], "count": len(suggestions), "suggestions": suggestions, "mode": "observe_only_no_auto_patch"}, reason=None if suggestions else "NO_SUGGESTIONS_FOUND", requires_followup=not bool(suggestions), diagnostics={"capability": "notifications", "action": "list_policy_suggestions"})
 
     def handle_review_policy_suggestion(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         orchestrator = self._resolve_orchestrator()
         if not orchestrator or not getattr(orchestrator, "notification_dispatcher", None):
-            return {"ok": False, "error": "Notification system not initialized."}
+            return self._envelope(status="failed", success=False, result_summary="Notification system not initialized.", structured_result={"action": "review_policy_suggestion"}, reason="NOTIFICATION_SYSTEM_UNINITIALIZED", diagnostics={"capability": "notifications", "action": "review_policy_suggestion"})
         dispatcher = orchestrator.notification_dispatcher
         store = getattr(dispatcher, "store", None)
         if not store:
-            return {"ok": False, "error": "NotificationStore unavailable."}
+            return self._envelope(status="failed", success=False, result_summary="NotificationStore unavailable.", structured_result={"action": "review_policy_suggestion"}, reason="STORE_UNAVAILABLE", diagnostics={"capability": "notifications", "action": "review_policy_suggestion"})
 
         suggestion_id = str(params.get("suggestion_id") or "").strip()
         decision = str(params.get("decision") or "").strip().lower()
         if not suggestion_id:
-            return {"ok": False, "error": "Missing suggestion_id."}
+            return self._envelope(status="blocked", success=False, result_summary="Missing suggestion_id.", structured_result={"action": "review_policy_suggestion"}, reason="MISSING_SUGGESTION_ID", requires_followup=True, diagnostics={"capability": "notifications", "action": "review_policy_suggestion"})
         if decision not in {"approved", "rejected"}:
-            return {"ok": False, "error": "decision must be approved or rejected."}
+            return self._envelope(status="blocked", success=False, result_summary="decision must be approved or rejected.", structured_result={"action": "review_policy_suggestion"}, reason="INVALID_DECISION", requires_followup=True, diagnostics={"capability": "notifications", "action": "review_policy_suggestion"})
 
         reviewer = str(params.get("reviewed_by") or "user")
         reason = str(params.get("reason") or "").strip()
@@ -455,24 +543,17 @@ class NotificationCapability(CapabilityBase):
             reason=reason,
         )
         if not updated:
-            return {"ok": False, "status": "not_found", "error": "Policy suggestion not found."}
-        return {
-            "ok": True,
-            "status": "success",
-            "data": {
-                "suggestion": updated,
-                "note": "Decision recorded. No automatic policy patch is applied in observe-only mode.",
-            },
-        }
+            return self._envelope(status="partial", success=False, result_summary="Policy suggestion not found.", structured_result={"action": "review_policy_suggestion"}, reason="POLICY_SUGGESTION_NOT_FOUND", requires_followup=True, diagnostics={"capability": "notifications", "action": "review_policy_suggestion"})
+        return self._envelope(status="success", success=True, result_summary="Policy suggestion reviewed.", structured_result={"action": "review_policy_suggestion", "prepared": [], "sent": [], "confirmed": [updated], "failed": [], "suggestion": updated, "note": "Decision recorded. No automatic policy patch is applied in observe-only mode."}, diagnostics={"capability": "notifications", "action": "review_policy_suggestion"})
 
     def handle_list_policy_patch_queue(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         orchestrator = self._resolve_orchestrator()
         if not orchestrator or not getattr(orchestrator, "notification_dispatcher", None):
-            return {"ok": False, "error": "Notification system not initialized."}
+            return self._envelope(status="failed", success=False, result_summary="Notification system not initialized.", structured_result={"action": "list_policy_patch_queue"}, reason="NOTIFICATION_SYSTEM_UNINITIALIZED", diagnostics={"capability": "notifications", "action": "list_policy_patch_queue"})
         dispatcher = orchestrator.notification_dispatcher
         store = getattr(dispatcher, "store", None)
         if not store:
-            return {"ok": False, "error": "NotificationStore unavailable."}
+            return self._envelope(status="failed", success=False, result_summary="NotificationStore unavailable.", structured_result={"action": "list_policy_patch_queue"}, reason="STORE_UNAVAILABLE", diagnostics={"capability": "notifications", "action": "list_policy_patch_queue"})
 
         target_user_id = str(params.get("target_user_id") or self._resolve_target_user_id(params, orchestrator))
         status = str(params.get("status") or "").strip().lower() or None
@@ -482,31 +563,23 @@ class NotificationCapability(CapabilityBase):
             status=status,
             limit=max(1, min(500, limit)),
         )
-        return {
-            "ok": True,
-            "status": "success",
-            "data": {
-                "count": len(queue),
-                "patch_queue": queue,
-                "mode": "manual_only",
-            },
-        }
+        return self._envelope(status="success" if queue else "partial", success=True, result_summary="Policy patch queue listed." if queue else "No policy patch candidates found.", structured_result={"action": "list_policy_patch_queue", "prepared": [], "sent": [], "confirmed": queue, "failed": [], "count": len(queue), "patch_queue": queue, "mode": "manual_only"}, reason=None if queue else "NO_PATCH_CANDIDATES_FOUND", requires_followup=not bool(queue), diagnostics={"capability": "notifications", "action": "list_policy_patch_queue"})
 
     def handle_set_policy_patch_status(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         orchestrator = self._resolve_orchestrator()
         if not orchestrator or not getattr(orchestrator, "notification_dispatcher", None):
-            return {"ok": False, "error": "Notification system not initialized."}
+            return self._envelope(status="failed", success=False, result_summary="Notification system not initialized.", structured_result={"action": "set_policy_patch_status"}, reason="NOTIFICATION_SYSTEM_UNINITIALIZED", diagnostics={"capability": "notifications", "action": "set_policy_patch_status"})
         dispatcher = orchestrator.notification_dispatcher
         store = getattr(dispatcher, "store", None)
         if not store:
-            return {"ok": False, "error": "NotificationStore unavailable."}
+            return self._envelope(status="failed", success=False, result_summary="NotificationStore unavailable.", structured_result={"action": "set_policy_patch_status"}, reason="STORE_UNAVAILABLE", diagnostics={"capability": "notifications", "action": "set_policy_patch_status"})
 
         patch_id = str(params.get("patch_id") or "").strip()
         status = str(params.get("status") or "").strip().lower()
         if not patch_id:
-            return {"ok": False, "error": "Missing patch_id."}
+            return self._envelope(status="blocked", success=False, result_summary="Missing patch_id.", structured_result={"action": "set_policy_patch_status"}, reason="MISSING_PATCH_ID", requires_followup=True, diagnostics={"capability": "notifications", "action": "set_policy_patch_status"})
         if status not in {"pending", "approved_for_apply", "rejected", "applied_manual"}:
-            return {"ok": False, "error": "Invalid status."}
+            return self._envelope(status="blocked", success=False, result_summary="Invalid status.", structured_result={"action": "set_policy_patch_status"}, reason="INVALID_STATUS", requires_followup=True, diagnostics={"capability": "notifications", "action": "set_policy_patch_status"})
 
         reason = str(params.get("reason") or "").strip()
         reviewer = str(params.get("reviewed_by") or "user")
@@ -517,24 +590,17 @@ class NotificationCapability(CapabilityBase):
             reason=reason,
         )
         if not updated:
-            return {"ok": False, "status": "not_found", "error": "Patch candidate not found."}
-        return {
-            "ok": True,
-            "status": "success",
-            "data": {
-                "patch_candidate": updated,
-                "note": "Status atualizado. Aplicação de patch continua manual (sem auto-apply).",
-            },
-        }
+            return self._envelope(status="partial", success=False, result_summary="Patch candidate not found.", structured_result={"action": "set_policy_patch_status"}, reason="PATCH_CANDIDATE_NOT_FOUND", requires_followup=True, diagnostics={"capability": "notifications", "action": "set_policy_patch_status"})
+        return self._envelope(status="success", success=True, result_summary="Policy patch status updated.", structured_result={"action": "set_policy_patch_status", "prepared": [], "sent": [], "confirmed": [updated], "failed": [], "patch_candidate": updated, "note": "Status atualizado. Aplicação de patch continua manual (sem auto-apply)."}, diagnostics={"capability": "notifications", "action": "set_policy_patch_status"})
 
     def handle_explain_policy_decision(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         orchestrator = self._resolve_orchestrator()
         if not orchestrator or not getattr(orchestrator, "notification_dispatcher", None):
-            return {"ok": False, "error": "Notification system not initialized."}
+            return self._envelope(status="failed", success=False, result_summary="Notification system not initialized.", structured_result={"action": "explain_policy_decision"}, reason="NOTIFICATION_SYSTEM_UNINITIALIZED", diagnostics={"capability": "notifications", "action": "explain_policy_decision"})
         dispatcher = orchestrator.notification_dispatcher
         store = getattr(dispatcher, "store", None)
         if not store:
-            return {"ok": False, "error": "NotificationStore unavailable."}
+            return self._envelope(status="failed", success=False, result_summary="NotificationStore unavailable.", structured_result={"action": "explain_policy_decision"}, reason="STORE_UNAVAILABLE", diagnostics={"capability": "notifications", "action": "explain_policy_decision"})
 
         target_user_id = str(params.get("target_user_id") or self._resolve_target_user_id(params, orchestrator)).strip()
         decision_id = str(params.get("decision_id") or "").strip()
@@ -579,11 +645,7 @@ class NotificationCapability(CapabilityBase):
                 decision_trace = traces[0]
 
         if not any([decision_trace, signal, assessment, suggestion, patch]):
-            return {
-                "ok": False,
-                "status": "not_found",
-                "error": "No matching decision artifacts found.",
-            }
+            return self._envelope(status="partial", success=False, result_summary="No matching decision artifacts found.", structured_result={"action": "explain_policy_decision"}, reason="NOT_FOUND", requires_followup=True, diagnostics={"capability": "notifications", "action": "explain_policy_decision"})
 
         lines = []
         if suggestion:
@@ -617,40 +679,23 @@ class NotificationCapability(CapabilityBase):
                 lines.append(f"Regras aplicadas: {', '.join(str(x) for x in applied[:6])}.")
 
         explanation = " ".join(lines).strip()
-        return {
-            "ok": True,
-            "status": "success",
-            "data": {
-                "explanation": explanation,
-                "artifacts": {
-                    "decision_trace": decision_trace,
-                    "signal": signal,
-                    "assessment": assessment,
-                    "suggestion": suggestion,
-                    "patch_candidate": patch,
-                },
-            },
-        }
+        return self._envelope(status="success", success=True, result_summary="Policy decision explained.", structured_result={"action": "explain_policy_decision", "prepared": [], "sent": [], "confirmed": [], "failed": [], "explanation": explanation, "artifacts": {"decision_trace": decision_trace, "signal": signal, "assessment": assessment, "suggestion": suggestion, "patch_candidate": patch}}, diagnostics={"capability": "notifications", "action": "explain_policy_decision"})
 
     def handle_apply_policy_patch_candidate(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         orchestrator = self._resolve_orchestrator()
         if not orchestrator or not getattr(orchestrator, "notification_dispatcher", None):
-            return {"ok": False, "error": "Notification system not initialized."}
+            return self._envelope(status="failed", success=False, result_summary="Notification system not initialized.", structured_result={"action": "apply_policy_patch_candidate"}, reason="NOTIFICATION_SYSTEM_UNINITIALIZED", diagnostics={"capability": "notifications", "action": "apply_policy_patch_candidate"})
         dispatcher = orchestrator.notification_dispatcher
         store = getattr(dispatcher, "store", None)
         if not store:
-            return {"ok": False, "error": "NotificationStore unavailable."}
+            return self._envelope(status="failed", success=False, result_summary="NotificationStore unavailable.", structured_result={"action": "apply_policy_patch_candidate"}, reason="STORE_UNAVAILABLE", diagnostics={"capability": "notifications", "action": "apply_policy_patch_candidate"})
 
         patch_id = str(params.get("patch_id") or "").strip()
         confirmed = bool(params.get("confirmed", False))
         if not patch_id:
-            return {"ok": False, "error": "Missing patch_id."}
+            return self._envelope(status="blocked", success=False, result_summary="Missing patch_id.", structured_result={"action": "apply_policy_patch_candidate"}, reason="MISSING_PATCH_ID", requires_followup=True, diagnostics={"capability": "notifications", "action": "apply_policy_patch_candidate"})
         if not confirmed:
-            return {
-                "ok": False,
-                "status": "confirmation_required",
-                "error": "Dual gate: set confirmed=true to apply approved_for_apply patch candidate.",
-            }
+            return self._envelope(status="partial", success=False, result_summary="Dual gate: set confirmed=true to apply approved_for_apply patch candidate.", structured_result={"action": "apply_policy_patch_candidate"}, reason="CONFIRMATION_REQUIRED", requires_followup=True, diagnostics={"capability": "notifications", "action": "apply_policy_patch_candidate"})
 
         reviewer = str(params.get("applied_by") or params.get("reviewed_by") or "user")
         reason = str(params.get("reason") or "").strip()
@@ -667,24 +712,17 @@ class NotificationCapability(CapabilityBase):
             canary_max_failure_rate=max(0.0, min(1.0, canary_max_failure_rate)),
         )
         if not bool(result.get("ok")):
-            return {"ok": False, "status": "failed", "error": str(result.get("error") or "apply_failed")}
-        return {
-            "ok": True,
-            "status": "success",
-            "data": {
-                "applied_patch": result.get("applied_patch"),
-                "mode": "manual_apply_guarded_canary" if canary_enabled else "manual_apply_guarded",
-            },
-        }
+            return self._envelope(status="failed", success=False, result_summary=str(result.get("error") or "apply_failed"), structured_result={"action": "apply_policy_patch_candidate"}, reason="APPLY_FAILED", diagnostics={"capability": "notifications", "action": "apply_policy_patch_candidate"})
+        return self._envelope(status="success", success=True, result_summary="Policy patch applied.", structured_result={"action": "apply_policy_patch_candidate", "prepared": [], "sent": [], "confirmed": [result.get("applied_patch")], "failed": [], "applied_patch": result.get("applied_patch"), "mode": "manual_apply_guarded_canary" if canary_enabled else "manual_apply_guarded"}, diagnostics={"capability": "notifications", "action": "apply_policy_patch_candidate"})
 
     def handle_list_applied_policy_patches(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         orchestrator = self._resolve_orchestrator()
         if not orchestrator or not getattr(orchestrator, "notification_dispatcher", None):
-            return {"ok": False, "error": "Notification system not initialized."}
+            return self._envelope(status="failed", success=False, result_summary="Notification system not initialized.", structured_result={"action": "list_applied_policy_patches"}, reason="NOTIFICATION_SYSTEM_UNINITIALIZED", diagnostics={"capability": "notifications", "action": "list_applied_policy_patches"})
         dispatcher = orchestrator.notification_dispatcher
         store = getattr(dispatcher, "store", None)
         if not store:
-            return {"ok": False, "error": "NotificationStore unavailable."}
+            return self._envelope(status="failed", success=False, result_summary="NotificationStore unavailable.", structured_result={"action": "list_applied_policy_patches"}, reason="STORE_UNAVAILABLE", diagnostics={"capability": "notifications", "action": "list_applied_policy_patches"})
 
         target_user_id = str(params.get("target_user_id") or self._resolve_target_user_id(params, orchestrator))
         status = str(params.get("status") or "").strip().lower() or None
@@ -694,27 +732,20 @@ class NotificationCapability(CapabilityBase):
             status=status,
             limit=max(1, min(500, limit)),
         )
-        return {
-            "ok": True,
-            "status": "success",
-            "data": {
-                "count": len(patches),
-                "applied_patches": patches,
-            },
-        }
+        return self._envelope(status="success" if patches else "partial", success=True, result_summary="Applied policy patches listed." if patches else "No applied policy patches found.", structured_result={"action": "list_applied_policy_patches", "prepared": [], "sent": [], "confirmed": patches, "failed": [], "count": len(patches), "applied_patches": patches}, reason=None if patches else "NO_APPLIED_PATCHES_FOUND", requires_followup=not bool(patches), diagnostics={"capability": "notifications", "action": "list_applied_policy_patches"})
 
     def handle_rollback_applied_policy_patch(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         orchestrator = self._resolve_orchestrator()
         if not orchestrator or not getattr(orchestrator, "notification_dispatcher", None):
-            return {"ok": False, "error": "Notification system not initialized."}
+            return self._envelope(status="failed", success=False, result_summary="Notification system not initialized.", structured_result={"action": "rollback_applied_policy_patch"}, reason="NOTIFICATION_SYSTEM_UNINITIALIZED", diagnostics={"capability": "notifications", "action": "rollback_applied_policy_patch"})
         dispatcher = orchestrator.notification_dispatcher
         store = getattr(dispatcher, "store", None)
         if not store:
-            return {"ok": False, "error": "NotificationStore unavailable."}
+            return self._envelope(status="failed", success=False, result_summary="NotificationStore unavailable.", structured_result={"action": "rollback_applied_policy_patch"}, reason="STORE_UNAVAILABLE", diagnostics={"capability": "notifications", "action": "rollback_applied_policy_patch"})
 
         applied_id = str(params.get("applied_id") or "").strip()
         if not applied_id:
-            return {"ok": False, "error": "Missing applied_id."}
+            return self._envelope(status="blocked", success=False, result_summary="Missing applied_id.", structured_result={"action": "rollback_applied_policy_patch"}, reason="MISSING_APPLIED_ID", requires_followup=True, diagnostics={"capability": "notifications", "action": "rollback_applied_policy_patch"})
         reviewer = str(params.get("reviewed_by") or "user")
         reason = str(params.get("reason") or "").strip()
         result = store.rollback_applied_policy_patch(
@@ -724,12 +755,5 @@ class NotificationCapability(CapabilityBase):
             automatic=False,
         )
         if not bool(result.get("ok")):
-            return {"ok": False, "status": "failed", "error": str(result.get("error") or "rollback_failed")}
-        return {
-            "ok": True,
-            "status": "success",
-            "data": {
-                "applied_patch": result.get("applied_patch"),
-                "mode": "manual_rollback",
-            },
-        }
+            return self._envelope(status="failed", success=False, result_summary=str(result.get("error") or "rollback_failed"), structured_result={"action": "rollback_applied_policy_patch"}, reason="ROLLBACK_FAILED", diagnostics={"capability": "notifications", "action": "rollback_applied_policy_patch"})
+        return self._envelope(status="success", success=True, result_summary="Applied policy patch rolled back.", structured_result={"action": "rollback_applied_policy_patch", "prepared": [], "sent": [], "confirmed": [result.get("applied_patch")], "failed": [], "applied_patch": result.get("applied_patch"), "mode": "manual_rollback"}, diagnostics={"capability": "notifications", "action": "rollback_applied_policy_patch"})

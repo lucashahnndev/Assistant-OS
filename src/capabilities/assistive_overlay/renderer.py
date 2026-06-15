@@ -43,12 +43,38 @@ class OverlayRendererService:
         if not self._backend.is_available():
             return {
                 "ok": False,
+                "success": False,
                 "status": "error",
                 "error": "OVERLAY_BACKEND_UNAVAILABLE",
+                "reason": "OVERLAY_BACKEND_UNAVAILABLE",
+                "result_summary": "Overlay backend is not available on this runtime.",
+                "structured_result": {"backend": self.backend_name},
+                "artifacts": [],
+                "attachment_delivery": {"status": "none", "confirmed": False},
+                "freshness": {"status": "current", "source": "assistive_overlay"},
+                "truncated": False,
+                "requires_followup": False,
+                "next_step_context": {},
+                "diagnostics": {"backend": self.backend_name, "parse_status": "unavailable"},
                 "text": "Overlay backend is not available on this runtime.",
                 "backend": self.backend_name,
             }
-        return {"ok": True, "status": "success", "backend": self.backend_name}
+        return {
+            "ok": True,
+            "success": True,
+            "status": "success",
+            "reason": None,
+            "result_summary": "Overlay backend started.",
+            "structured_result": {"backend": self.backend_name},
+            "artifacts": [],
+            "attachment_delivery": {"status": "none", "confirmed": False},
+            "freshness": {"status": "current", "source": "assistive_overlay"},
+            "truncated": False,
+            "requires_followup": False,
+            "next_step_context": {},
+            "diagnostics": {"backend": self.backend_name},
+            "backend": self.backend_name,
+        }
 
     def stop(self) -> None:
         with self._state_lock:
@@ -77,8 +103,19 @@ class OverlayRendererService:
         if not isinstance(result, dict):
             return {
                 "ok": False,
+                "success": False,
                 "status": "error",
                 "error": "OVERLAY_BACKEND_PROTOCOL_ERROR",
+                "reason": "OVERLAY_BACKEND_PROTOCOL_ERROR",
+                "result_summary": "Overlay backend returned invalid response.",
+                "structured_result": {"command": command, "backend": self.backend_name},
+                "artifacts": [],
+                "attachment_delivery": {"status": "none", "confirmed": False},
+                "freshness": {"status": "current", "source": "assistive_overlay"},
+                "truncated": False,
+                "requires_followup": False,
+                "next_step_context": {},
+                "diagnostics": {"backend": self.backend_name, "parse_status": "protocol_error"},
                 "text": "Overlay backend returned invalid response.",
                 "backend": self.backend_name,
             }
@@ -96,8 +133,19 @@ class OverlayRendererService:
             return result
         return {
             "ok": False,
+            "success": False,
             "status": "error",
             "error": "OVERLAY_BACKEND_PROTOCOL_ERROR",
+            "reason": "OVERLAY_BACKEND_PROTOCOL_ERROR",
+            "result_summary": "Overlay backend returned invalid response.",
+            "structured_result": {"command_id": command_id, "backend": self.backend_name},
+            "artifacts": [],
+            "attachment_delivery": {"status": "none", "confirmed": False},
+            "freshness": {"status": "current", "source": "assistive_overlay"},
+            "truncated": False,
+            "requires_followup": False,
+            "next_step_context": {},
+            "diagnostics": {"backend": self.backend_name, "parse_status": "protocol_error"},
             "text": "Overlay backend returned invalid response.",
             "backend": self.backend_name,
         }
@@ -112,8 +160,19 @@ class OverlayRendererService:
             return result
         return {
             "ok": False,
+            "success": False,
             "status": "error",
             "error": "OVERLAY_BACKEND_PROTOCOL_ERROR",
+            "reason": "OVERLAY_BACKEND_PROTOCOL_ERROR",
+            "result_summary": "Overlay backend returned invalid response.",
+            "structured_result": {"backend": self.backend_name},
+            "artifacts": [],
+            "attachment_delivery": {"status": "none", "confirmed": False},
+            "freshness": {"status": "current", "source": "assistive_overlay"},
+            "truncated": False,
+            "requires_followup": False,
+            "next_step_context": {},
+            "diagnostics": {"backend": self.backend_name, "parse_status": "protocol_error"},
             "text": "Overlay backend returned invalid response.",
             "backend": self.backend_name,
         }

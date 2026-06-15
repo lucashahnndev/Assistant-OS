@@ -32,13 +32,44 @@ class TaskCapability(CapabilityBase):
 
     @staticmethod
     def _ok(error_details: str = "", **extra) -> Dict[str, Any]:
-        payload = {"ok": True, "status": "success", "error_details": error_details}
+        payload = {
+            "ok": True,
+            "success": True,
+            "status": "success",
+            "reason": None,
+            "result_summary": str(error_details or "").strip() or "Task operation completed.",
+            "structured_result": dict(extra),
+            "artifacts": [],
+            "attachment_delivery": {"status": "none", "confirmed": False},
+            "freshness": {"status": "current", "source": "task_management"},
+            "truncated": False,
+            "requires_followup": False,
+            "next_step_context": {},
+            "diagnostics": {"capability": "task"},
+            "error_details": error_details,
+        }
         payload.update(extra)
         return payload
 
     @staticmethod
     def _err(code: str, error_details: str = "", **extra) -> Dict[str, Any]:
-        payload = {"ok": False, "status": "error", "error": code, "error_details": error_details}
+        payload = {
+            "ok": False,
+            "success": False,
+            "status": "error",
+            "error": code,
+            "reason": code,
+            "result_summary": str(error_details or "").strip() or "Task operation failed.",
+            "structured_result": dict(extra),
+            "artifacts": [],
+            "attachment_delivery": {"status": "none", "confirmed": False},
+            "freshness": {"status": "current", "source": "task_management"},
+            "truncated": False,
+            "requires_followup": False,
+            "next_step_context": {},
+            "diagnostics": {"capability": "task", "error": code},
+            "error_details": error_details,
+        }
         payload.update(extra)
         return payload
 
