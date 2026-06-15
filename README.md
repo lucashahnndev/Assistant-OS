@@ -62,10 +62,10 @@ That makes the product feel less like a chat box and more like an assistant work
 ## See it
 
 <p align="center">
-  <img src="images/bg/elegant-wave.webp" alt="Assistant-OS visual accent" width="100%">
+  <img src="images/app-login.png" alt="Atlas login screen" width="100%">
 </p>
 
-The current interface already gives a sense of the product:
+This is what Atlas looks like in the app:
 
 - a focused login entry;
 - a dark, high-contrast visual style;
