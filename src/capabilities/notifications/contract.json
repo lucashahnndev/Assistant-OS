@@ -19,10 +19,10 @@
         {
             "id": "notifications.send",
             "title": "Send Notification",
-            "description": "Sends a formal notification to the user. Use this for reminders, alerts, or important updates.",
+            "description": "Sends a formal notification to the user when a reminder, alert, or important update is relevant.",
             "handler": "handle_send",
             "risk_level": "low",
-            "when_to_use": "Quando o agente precisa criar ou exibir uma notificação ao usuário, ou quando uma tarefa produz um evento relevante que merece aviso.",
+            "when_to_use": "Quando criar ou exibir uma notificação ao usuário pode ser relevante, ou quando uma tarefa produz um evento relevante que mereça aviso.",
             "when_not_to_use": "Quando uma resposta textual normal basta, quando o usuário não pediu aviso, quando a notificação seria ruído ou quando o conteúdo ainda não está confirmado.",
             "required_context": [
                 "message",

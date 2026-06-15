@@ -188,6 +188,13 @@ def list_capabilities(request: Request, user: User = Depends(get_current_user)):
         try:
             contract = load_contract_v1(contract_path)
             schema = _load_config_schema(contract_path)
+            _EXCLUDED_ARTIFACTS = {'implementation_plan.md', 'roadmap.md'}
+            agent_artifacts = []
+            for file in sorted(os.listdir(folder)):
+                if file.endswith('.md') or file.endswith('.txt'):
+                    if file.lower() in _EXCLUDED_ARTIFACTS:
+                        continue
+                    agent_artifacts.append(file)
             errors, missing = _validate_config(
                 capability_cfg,
                 schema,
@@ -207,6 +214,8 @@ def list_capabilities(request: Request, user: User = Depends(get_current_user)):
                     "visibility": contract.capability.visibility,
                     "auth": contract.auth.model_dump(),
                     "actions": [action.id for action in contract.actions],
+                    "actions_meta": [action.model_dump() for action in contract.actions],
+                    "agent_artifacts": sorted(agent_artifacts),
                     "retrieval_profile": contract.retrieval_profile.model_dump() if contract.retrieval_profile else None,
                     "retrieval_runtime": _merged_retrieval_runtime(
                         capability_id=contract.capability.id,
@@ -237,6 +246,8 @@ def list_capabilities(request: Request, user: User = Depends(get_current_user)):
                     "visibility": None,
                     "auth": {"mode": "none", "required": False, "fields": []},
                     "actions": [],
+                    "actions_meta": [],
+                    "agent_artifacts": [],
                     "retrieval_profile": None,
                     "enabled": enabled,
                     "config": _mask_config(capability_cfg, {"fields": []}),
@@ -469,6 +480,34 @@ def get_capability_icon(
 
     return FileResponse(asset_path)
 
+
+
+@router.get("/{capability_id}/artifacts/{filename}")
+def get_capability_artifact(
+    capability_id: str,
+    filename: str,
+    user: User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Apenas administradores podem ler artefatos nativos do agente.")
+
+    folder = os.path.join(CAPABILITIES_DIR, capability_id)
+    if not os.path.exists(folder):
+        raise HTTPException(status_code=404, detail="Capability found")
+
+    # Only allow markdown or text files
+    if not (filename.endswith(".md") or filename.endswith(".txt")):
+        raise HTTPException(status_code=400, detail="Apenas arquivos .md ou .txt permitidos.")
+
+    # Sanitize path to prevent traversal
+    asset_path = os.path.abspath(os.path.join(folder, filename))
+    if not asset_path.startswith(os.path.abspath(folder)):
+         raise HTTPException(status_code=403, detail="Access denied")
+
+    if not os.path.exists(asset_path):
+        raise HTTPException(status_code=404, detail="Artifact file missing")
+
+    return FileResponse(asset_path)
 
 @router.patch("/{capability_id}/config")
 def update_capability_config(

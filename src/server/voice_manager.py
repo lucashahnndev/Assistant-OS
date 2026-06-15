@@ -198,23 +198,24 @@ class VoiceManager:
             if not ctx.is_speaking:
                 ambient_gate = max(350.0, ctx.noise_floor * 1.6)
                 if rms <= ambient_gate:
-                    ctx.noise_floor = ctx.noise_floor * 0.92 + rms * 0.08
+                    ctx.noise_floor = float(ctx.noise_floor * 0.92 + float(rms) * 0.08)
                 else:
                     # Gradual decay if chunk looks like speech burst.
-                    ctx.noise_floor = ctx.noise_floor * 0.98
+                    ctx.noise_floor = float(ctx.noise_floor * 0.98)
                 # Clamp baseline to avoid runaway thresholds.
                 min_floor = 80.0
                 max_floor = float(max(220, int(self.vad_threshold_default * 0.9)))
-                ctx.noise_floor = max(min_floor, min(max_floor, ctx.noise_floor))
+                ctx.noise_floor = float(max(min_floor, min(max_floor, float(ctx.noise_floor))))
 
             # Broadcast normalized intensity (0.0 to 1.0) for the Orb
-            intensity = min(1.0, rms / 8000.0) # Adjusted scale for PCM16
+            intensity = float(min(1.0, float(rms) / 8000.0)) # Adjusted scale for PCM16
+            ctx.noise_floor = float(ctx.noise_floor)
             if intensity > 0.05:
                 self.server_driver.send_voice_event(ctx.session_id, {"type": "orb.intensity", "intensity": intensity})
 
             # Dynamic Threshold: base threshold + adaptive margin.
             margin = 380 if ctx.is_assistant_speaking else 170
-            effective_threshold = max(float(self.vad_threshold_default), ctx.noise_floor + margin)
+            effective_threshold = max(float(self.vad_threshold_default), float(ctx.noise_floor) + margin)
             if self.vad_debug and ctx.total_chunks % self.vad_debug_every_chunks == 0:
                 logger.info(
                     "VAD Threshold | session=%s | effective=%.2f | base=%s | margin=%s",
