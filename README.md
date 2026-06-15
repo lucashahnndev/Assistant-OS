@@ -13,12 +13,11 @@
   <a href="#meet-atlas">Meet Atlas</a> ·
   <a href="#what-it-does">What it does</a> ·
   <a href="#why-it-feels-different">Why it feels different</a> ·
-  <a href="#see-it">See it</a> ·
   <a href="#get-started">Get started</a>
 </p>
 
 <p align="center">
-  <img src="images/bg/elegant-wave.webp" alt="Assistant-OS visual banner" width="100%">
+  <img src="images/app-login.png" alt="Atlas login screen" width="100%">
 </p>
 
 ## Meet Atlas
@@ -58,12 +57,6 @@ That makes the product feel less like a chat box and more like an assistant work
 - inspect conversation history, thoughts, and playback;
 - let Atlas coordinate capabilities like browser, calendar, memory, and system actions;
 - rely on a safer execution model instead of ad hoc prompts.
-
-## See it
-
-<p align="center">
-  <img src="images/app-login.png" alt="Atlas login screen" width="100%">
-</p>
 
 This is what Atlas looks like in the app:
 
