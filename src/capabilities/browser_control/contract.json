@@ -22,8 +22,8 @@
             "description": "Abre o Chrome e executa uma tarefa completa no navegador: navegar, pesquisar, clicar, interagir com p\u00e1ginas. O campo 'goal' pode ficar vazio; nesse caso, o texto original do usu\u00e1rio ser\u00e1 usado como objetivo.",
             "handler": "run",
             "risk_level": "medium",
-            "when_to_use": "Quando o agente precisa interagir de verdade com uma página web, navegar, clicar, preencher ou observar estado visual no navegador para cumprir um objetivo operacional.",
-            "when_not_to_use": "Quando basta explicação textual, quando uma recuperação textual resolve, quando não há objetivo operacional claro ou quando a simples menção a navegador, YouTube ou site não exige ação real no browser.",
+            "when_to_use": "Quando uma interação real com uma página web pode ser relevante para cumprir um objetivo operacional, como navegar, clicar, preencher ou observar estado visual.",
+            "when_not_to_use": "Quando basta explicação textual, quando uma recuperação textual resolve, quando não há objetivo operacional claro ou quando a menção a navegador, YouTube ou site por si só não justifica ação real no browser.",
             "required_context": [
                 "goal",
                 "objective",

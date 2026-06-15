@@ -783,6 +783,233 @@ Example:
         }
 
     @staticmethod
+    def _classify_parse_status(err: Any, result: Any) -> str:
+        text = str(err or "").strip().lower()
+        if not text and result is None:
+            return "provider_empty_output"
+        if "invalid json" in text or ("json" in text and "invalid" in text):
+            return "invalid_json"
+        if "missing action" in text:
+            return "missing_action"
+        if "missing field" in text or "missing fields" in text:
+            return "missing_fields"
+        if "empty" in text and "output" in text:
+            return "provider_empty_output"
+        if not text:
+            return "unknown_error"
+        return "unknown_error"
+
+    def _build_browser_contract_plan(self) -> List[Dict[str, Any]]:
+        plan_rows: List[Dict[str, Any]] = []
+        for idx, step in enumerate(self._plan or []):
+            if idx < self._current_step_idx:
+                status = "done"
+            elif idx == self._current_step_idx:
+                status = "current"
+            else:
+                status = "pending"
+            plan_rows.append(
+                {
+                    "step_id": str(idx + 1),
+                    "text": str(step or ""),
+                    "status": status,
+                }
+            )
+        return plan_rows
+
+    def _build_browser_contract_state(
+        self,
+        *,
+        thought_data: Dict[str, Any],
+        state: Dict[str, Any],
+        parse_status: str = "ok",
+        planner_error: Any = None,
+        fallback_reason: Optional[str] = None,
+        legacy_thought_matching_used: bool = False,
+        allow_legacy_thought_matching: bool = True,
+    ) -> Dict[str, Any]:
+        raw_thought = str(thought_data.get("thought") or thought_data.get("browser_thought") or "").strip()
+        browser_plan = thought_data.get("browser_plan")
+        if not isinstance(browser_plan, list) or not browser_plan:
+            browser_plan = self._build_browser_contract_plan()
+
+        browser_step_input = thought_data.get("browser_step") if isinstance(thought_data.get("browser_step"), dict) else {}
+        completion_input = thought_data.get("completion_signal") if isinstance(thought_data.get("completion_signal"), dict) else {}
+        diagnostic_input = thought_data.get("planner_diagnostic") if isinstance(thought_data.get("planner_diagnostic"), dict) else {}
+        next_action_input = thought_data.get("next_action") if isinstance(thought_data.get("next_action"), dict) else {}
+        next_action_args = next_action_input.get("args") if isinstance(next_action_input.get("args"), dict) else thought_data.get("args") if isinstance(thought_data.get("args"), dict) else {}
+
+        step_status = str(
+            browser_step_input.get("step_status")
+            or thought_data.get("step_status")
+            or completion_input.get("status")
+            or "unknown"
+        ).strip().lower()
+
+        current_step_index = self._current_step_idx
+        if isinstance(browser_step_input.get("current_step_index"), int):
+            current_step_index = max(0, int(browser_step_input.get("current_step_index")))
+
+        completed_step_index = browser_step_input.get("completed_step_index")
+        if completed_step_index is None and isinstance(completion_input.get("completed_step_index"), int):
+            completed_step_index = int(completion_input.get("completed_step_index"))
+
+        next_step_index = browser_step_input.get("next_step_index")
+        if next_step_index is None and isinstance(current_step_index, int):
+            next_step_index = current_step_index + 1
+
+        completion_signal = dict(completion_input)
+        if not completion_signal:
+            completion_signal = {
+                "status": "completed" if step_status == "completed" else (step_status if step_status in {"partial", "blocked", "failed"} else "unknown"),
+                "reason": "",
+                "evidence": [],
+            }
+
+        if completion_signal.get("status") == "completed" and completed_step_index is None:
+            completed_step_index = current_step_index
+
+        evidence = completion_signal.get("evidence")
+        if not isinstance(evidence, list):
+            evidence = []
+        completion_signal["evidence"] = evidence
+        completion_signal.setdefault("reason", "")
+        if completed_step_index is not None:
+            completion_signal["completed_step_index"] = int(completed_step_index)
+
+        if not next_step_index and isinstance(completed_step_index, int):
+            next_step_index = completed_step_index + 1
+
+        structured_progress_present = bool(browser_step_input) or bool(completion_input)
+        legacy_thought_matching_used = bool(
+            legacy_thought_matching_used
+            or (allow_legacy_thought_matching and not structured_progress_present and bool(raw_thought))
+        )
+
+        planner_diagnostic = {
+            "parse_status": str(diagnostic_input.get("parse_status") or parse_status or "unknown_error").strip().lower(),
+            "planner_error": planner_error if planner_error is not None else diagnostic_input.get("planner_error"),
+            "fallback_reason": fallback_reason if fallback_reason is not None else diagnostic_input.get("fallback_reason"),
+            "requires_replan": bool(diagnostic_input.get("requires_replan", False)),
+            "blocked_reason": diagnostic_input.get("blocked_reason"),
+            "legacy_thought_matching_used": bool(
+                diagnostic_input.get("legacy_thought_matching_used", False) or legacy_thought_matching_used
+            ),
+        }
+
+        if planner_diagnostic["legacy_thought_matching_used"] and not planner_diagnostic.get("fallback_reason"):
+            planner_diagnostic["fallback_reason"] = "legacy_thought_matching"
+
+        browser_step = {
+            "current_step_index": int(current_step_index or 0),
+            "completed_step_index": int(completed_step_index) if isinstance(completed_step_index, int) else None,
+            "next_step_index": int(next_step_index) if isinstance(next_step_index, int) else None,
+            "step_status": step_status,
+        }
+
+        return {
+            "source": "browser_control",
+            "agent_role": "subagent",
+            "semantic_authority": "internal_browser_only",
+            "not_user_facing": True,
+            "not_atlas_primary_thought": True,
+            "browser_thought": raw_thought,
+            "browser_plan": browser_plan,
+            "browser_step": browser_step,
+            "completion_signal": completion_signal,
+            "planner_diagnostic": planner_diagnostic,
+            "next_action": {
+                "action": str(next_action_input.get("action") or thought_data.get("action") or "").strip(),
+                "args": copy.deepcopy(next_action_args),
+            },
+            "browser_validation_context": copy.deepcopy(self._last_validation_context or {}),
+            "browser_observation": {
+                "url": str(state.get("url") or ""),
+                "title": str(state.get("title") or ""),
+                "state_hash": self._calculate_state_hash(state),
+            },
+            "thought": raw_thought,
+            "step_status": step_status,
+            "action": str(next_action_input.get("action") or thought_data.get("action") or "").strip(),
+            "args": copy.deepcopy(next_action_args),
+            "legacy_thought_matching_used": bool(legacy_thought_matching_used),
+        }
+
+    def _apply_browser_contract_progress(self, browser_contract: Dict[str, Any]) -> None:
+        if not isinstance(browser_contract, dict):
+            return
+        browser_step = browser_contract.get("browser_step") if isinstance(browser_contract.get("browser_step"), dict) else {}
+        completion_signal = browser_contract.get("completion_signal") if isinstance(browser_contract.get("completion_signal"), dict) else {}
+        planner_diagnostic = browser_contract.get("planner_diagnostic") if isinstance(browser_contract.get("planner_diagnostic"), dict) else {}
+
+        structured_progress_used = bool(browser_step) or bool(completion_signal)
+        legacy_thought_matching_used = bool(planner_diagnostic.get("legacy_thought_matching_used"))
+        step_status = str(browser_step.get("step_status") or completion_signal.get("status") or "").strip().lower()
+
+        current_step_index = browser_step.get("current_step_index")
+        if isinstance(current_step_index, int):
+            self._current_step_idx = max(self._current_step_idx, current_step_index)
+
+        completed_step_index = browser_step.get("completed_step_index")
+        if completion_signal.get("status") == "completed":
+            if not isinstance(completed_step_index, int):
+                completed_step_index = current_step_index if isinstance(current_step_index, int) else self._current_step_idx
+            if isinstance(completed_step_index, int):
+                self._sticky_completed_idx = max(self._sticky_completed_idx, completed_step_index)
+                if self._plan:
+                    next_index = min(completed_step_index + 1, max(0, len(self._plan) - 1))
+                    self._current_step_idx = max(self._current_step_idx, next_index)
+        elif step_status == "completed" and isinstance(completed_step_index, int):
+            self._sticky_completed_idx = max(self._sticky_completed_idx, completed_step_index)
+            if self._plan:
+                next_index = min(completed_step_index + 1, max(0, len(self._plan) - 1))
+                self._current_step_idx = max(self._current_step_idx, next_index)
+        elif structured_progress_used:
+            next_step_index = browser_step.get("next_step_index")
+            if isinstance(next_step_index, int):
+                self._current_step_idx = max(self._current_step_idx, next_step_index)
+
+        if not structured_progress_used and legacy_thought_matching_used:
+            thought_text = str(browser_contract.get("browser_thought") or "").lower()
+            thought_lower = thought_text.lower()
+            status_completed = step_status == "completed"
+            for i in range(self._current_step_idx, len(self._plan)):
+                step_num = i + 1
+                step_patterns = [
+                    f"step {step_num} completed",
+                    f"step {step_num} finished",
+                    f"milestone {step_num} reached",
+                    f"passo {step_num} concluído",
+                    f"etapa {step_num} finalizada",
+                ]
+                if any(p in thought_lower for p in step_patterns) or (i == self._current_step_idx and status_completed):
+                    legacy_thought_matching_used = True
+                    if i > self._current_step_idx:
+                        logger.warning(
+                            f"⏩ Master Plan SKIPPED to Step {step_num} (Legacy thought match: '{thought_lower[:50]}...')"
+                        )
+                        self._current_step_idx = i
+                    if self._current_step_idx < len(self._plan) - 1:
+                        self._current_step_idx += 1
+                        logger.info(f"✅ Master Plan Advanced: Next Focus -> {self._plan[self._current_step_idx]}")
+                    break
+
+        browser_contract["planner_diagnostic"] = {
+            **planner_diagnostic,
+            "legacy_thought_matching_used": bool(legacy_thought_matching_used),
+            "fallback_reason": planner_diagnostic.get("fallback_reason")
+            or ("legacy_thought_matching" if legacy_thought_matching_used else None),
+        }
+        if isinstance(browser_contract.get("browser_step"), dict):
+            browser_contract["browser_step"]["current_step_index"] = int(self._current_step_idx)
+            if self._plan:
+                browser_contract["browser_step"]["next_step_index"] = min(self._current_step_idx + 1, len(self._plan) - 1)
+        if isinstance(browser_contract.get("completion_signal"), dict):
+            if completion_signal.get("status") == "completed":
+                browser_contract["completion_signal"]["completed_step_index"] = browser_contract["browser_step"].get("completed_step_index")
+        browser_contract["legacy_thought_matching_used"] = bool(legacy_thought_matching_used)
+
+    @staticmethod
     def _normalize_query(value: str) -> str:
         return re.sub(r"\s+", " ", str(value or "").strip().lower())
 
@@ -1079,9 +1306,14 @@ Example:
                 try:
                     # REASONING PHASE
                     thought_data = await self._think(goal, state, history)
-                    action = str(thought_data.get("action", "wait"))
-                    args = self._sanitize_action_args(action, thought_data.get("args", {}))
-                    thought = thought_data.get("thought", "Thinking...")
+                    browser_thought = str(thought_data.get("browser_thought") or thought_data.get("thought") or "Thinking...")
+                    browser_step = thought_data.get("browser_step") if isinstance(thought_data.get("browser_step"), dict) else {}
+                    completion_signal = thought_data.get("completion_signal") if isinstance(thought_data.get("completion_signal"), dict) else {}
+                    planner_diagnostic = thought_data.get("planner_diagnostic") if isinstance(thought_data.get("planner_diagnostic"), dict) else {}
+                    next_action = thought_data.get("next_action") if isinstance(thought_data.get("next_action"), dict) else {}
+                    action = str(next_action.get("action") or thought_data.get("action", "wait"))
+                    args = self._sanitize_action_args(action, next_action.get("args") if isinstance(next_action.get("args"), dict) else thought_data.get("args", {}))
+                    thought = browser_thought
 
                     # Repeated Action Detection (based on final thought for this step)
                     if action == self._last_action and args == self._last_args:
@@ -1127,6 +1359,11 @@ Example:
                             "step_id": step_id,
                             "step_num": int(step_num),
                             "thought": str(thought or ""),
+                            "browser_thought": str(browser_thought or ""),
+                            "browser_step": copy.deepcopy(browser_step),
+                            "completion_signal": copy.deepcopy(completion_signal),
+                            "planner_diagnostic": copy.deepcopy(planner_diagnostic),
+                            "next_action": copy.deepcopy(next_action),
                             "action": str(action or ""),
                             "args": copy.deepcopy(args if isinstance(args, dict) else {}),
                             "url": str(state.get("url") or ""),
@@ -1140,6 +1377,11 @@ Example:
                             "step_id": step_id,
                             "step_num": step_num,
                             "thought": thought,
+                            "browser_thought": browser_thought,
+                            "browser_step": copy.deepcopy(browser_step),
+                            "completion_signal": copy.deepcopy(completion_signal),
+                            "planner_diagnostic": copy.deepcopy(planner_diagnostic),
+                            "next_action": copy.deepcopy(next_action),
                             "action": action,
                             "args": args,
                             "parse_failures": self._consecutive_parse_failures,
@@ -1155,6 +1397,11 @@ Example:
                             history.append({
                                 "step": step_num,
                                 "thought": thought,
+                                "browser_thought": browser_thought,
+                                "browser_step": copy.deepcopy(browser_step),
+                                "completion_signal": copy.deepcopy(completion_signal),
+                                "planner_diagnostic": copy.deepcopy(planner_diagnostic),
+                                "next_action": copy.deepcopy(next_action),
                                 "action": "answer",
                                 "args": args,
                                 "status": "error",
@@ -1221,6 +1468,11 @@ Example:
                         history.append({
                             "step": step_num,
                             "thought": thought,
+                            "browser_thought": browser_thought,
+                            "browser_step": copy.deepcopy(browser_step),
+                            "completion_signal": copy.deepcopy(completion_signal),
+                            "planner_diagnostic": copy.deepcopy(planner_diagnostic),
+                            "next_action": copy.deepcopy(next_action),
                             "action": action,
                             "args": args,
                             "status": "error",
@@ -1268,6 +1520,11 @@ Example:
                     history.append({
                         "step": step_num,
                         "thought": thought,
+                        "browser_thought": browser_thought,
+                        "browser_step": copy.deepcopy(browser_step),
+                        "completion_signal": copy.deepcopy(completion_signal),
+                        "planner_diagnostic": copy.deepcopy(planner_diagnostic),
+                        "next_action": copy.deepcopy(next_action),
                         "action": action,
                         "args": args,
                         "status": "success", 
@@ -1687,8 +1944,43 @@ Example:
         
         if err:
             self._consecutive_parse_failures += 1
+            parse_status = self._classify_parse_status(err, result)
             logger.error(
                 f"[Reasoning] LLM Contract/Router Error ({self._consecutive_parse_failures}/{self._max_parse_failures}): {err}"
+            )
+            if self._consecutive_parse_failures >= self._max_parse_failures:
+                logger.error("⚠️ Too many contract failures. Switching to deterministic fallback action.")
+                fallback = self._fallback_action_for_parse(goal, state)
+                browser_contract = self._build_browser_contract_state(
+                    thought_data=fallback,
+                    state=state,
+                    parse_status=parse_status,
+                    planner_error=str(err),
+                    fallback_reason="deterministic_fallback_action",
+                    allow_legacy_thought_matching=False,
+                )
+                self._emit_worker_planner_update(
+                    {
+                        "phase": "parse_failure",
+                        "error": str(err),
+                        "parse_failures": self._consecutive_parse_failures,
+                        "raw_preview": "",
+                        **browser_contract,
+                    }
+                )
+                return browser_contract
+
+            browser_contract = self._build_browser_contract_state(
+                thought_data={
+                    "action": "wait",
+                    "args": {"seconds": 1},
+                    "thought": f"Provider contract violation ({err}). Retrying...",
+                },
+                state=state,
+                parse_status=parse_status,
+                planner_error=str(err),
+                fallback_reason="provider_contract_error",
+                allow_legacy_thought_matching=False,
             )
             self._emit_worker_planner_update(
                 {
@@ -1696,20 +1988,35 @@ Example:
                     "error": str(err),
                     "parse_failures": self._consecutive_parse_failures,
                     "raw_preview": "",
+                    **browser_contract,
                 }
             )
-            if self._consecutive_parse_failures >= self._max_parse_failures:
-                logger.error("⚠️ Too many contract failures. Switching to deterministic fallback action.")
-                return self._fallback_action_for_parse(goal, state)
-            return {
-                "action": "wait",
-                "args": {"seconds": 1},
-                "thought": f"Provider contract violation ({err}). Retrying...",
-            }
+            return browser_contract
 
         if not result:
             logger.error("[Reasoning] Empty LLM response")
-            return {"action": "wait"}
+            browser_contract = self._build_browser_contract_state(
+                thought_data={
+                    "action": "wait",
+                    "args": {"seconds": 1},
+                    "thought": "Empty LLM response. Retrying...",
+                },
+                state=state,
+                parse_status="provider_empty_output",
+                planner_error="empty_response",
+                fallback_reason="provider_empty_output",
+                allow_legacy_thought_matching=False,
+            )
+            self._emit_worker_planner_update(
+                {
+                    "phase": "parse_failure",
+                    "error": "empty_response",
+                    "parse_failures": self._consecutive_parse_failures,
+                    "raw_preview": "",
+                    **browser_contract,
+                }
+            )
+            return browser_contract
 
         try:
             if not isinstance(result, dict):
@@ -1719,57 +2026,62 @@ Example:
             # Reset failure counter on success
             self._consecutive_parse_failures = 0
 
-            # Master Plan Advancement logic
-            status = data.get("step_status", "").lower()
-            thought = data.get("thought", "").lower()
-            
-            # Heuristic Backup: Opportunistic Milestone Skipping
-            # If the agent mentions ANY milestone (current or future) is completed/finished, advance to it.
-            thought_lower = thought.lower()
-            status_completed = status == "completed"
-            
-            # Check all milestones from current to end
-            for i in range(self._current_step_idx, len(self._plan)):
-                step_num = i + 1
-                # More flexible patterns for completion detection
-                step_patterns = [
-                    f"step {step_num} completed", 
-                    f"step {step_num} finished", 
-                    f"milestone {step_num} reached",
-                    f"passo {step_num} concluído",
-                    f"etapa {step_num} finalizada"
-                ]
-                
-                if any(p in thought_lower for p in step_patterns) or (i == self._current_step_idx and status_completed):
-                    if i > self._current_step_idx:
-                        logger.warning(f"⏩ Master Plan SKIPPED to Step {step_num} (Heuristic match in thought: '{thought_lower[:50]}...')")
-                        self._current_step_idx = i
-                    
-                    # Advance to the NEXT step focus if current/future one is reported as done
-                    if self._current_step_idx < len(self._plan) - 1:
-                        self._current_step_idx += 1
-                        logger.info(f"✅ Master Plan Advanced: Next Focus -> {self._plan[self._current_step_idx]}")
-                    break
-            
-            return data
+            browser_contract = self._build_browser_contract_state(
+                thought_data=data,
+                state=state,
+                parse_status="ok",
+            )
+            self._apply_browser_contract_progress(browser_contract)
+            return browser_contract
         except Exception as e: 
             self._consecutive_parse_failures += 1
             logger.error(f"[Reasoning] Parse Failure ({self._consecutive_parse_failures}/{self._max_parse_failures}): {e}")
             logger.debug(f"[Reasoning] Structured problematic output: {result}")
+            parse_status = self._classify_parse_status(e, result)
+            if self._consecutive_parse_failures >= self._max_parse_failures:
+                logger.error("⚠️ Too many parse failures. Switching to deterministic fallback action.")
+                fallback = self._fallback_action_for_parse(goal, state)
+                browser_contract = self._build_browser_contract_state(
+                    thought_data=fallback,
+                    state=state,
+                    parse_status=parse_status,
+                    planner_error=str(e),
+                    fallback_reason="deterministic_fallback_action",
+                    allow_legacy_thought_matching=False,
+                )
+                self._emit_worker_planner_update(
+                    {
+                        "phase": "parse_failure",
+                        "error": str(e),
+                        "parse_failures": self._consecutive_parse_failures,
+                        "raw_preview": str(result)[:400],
+                        **browser_contract,
+                    }
+                )
+                return browser_contract
+
+            browser_contract = self._build_browser_contract_state(
+                thought_data={
+                    "action": "wait",
+                    "args": {"seconds": 1},
+                    "thought": f"Parse error ({e}). Retrying...",
+                },
+                state=state,
+                parse_status=parse_status,
+                planner_error=str(e),
+                fallback_reason="provider_contract_error",
+                allow_legacy_thought_matching=False,
+            )
             self._emit_worker_planner_update(
                 {
                     "phase": "parse_failure",
                     "error": str(e),
                     "parse_failures": self._consecutive_parse_failures,
                     "raw_preview": str(result)[:400],
+                    **browser_contract,
                 }
             )
-            
-            if self._consecutive_parse_failures >= self._max_parse_failures:
-                logger.error("⚠️ Too many parse failures. Switching to deterministic fallback action.")
-                return self._fallback_action_for_parse(goal, state)
-
-            return {"action": "wait", "args": {"seconds": 1}, "thought": f"Parse error ({e}). Retrying..."}
+            return browser_contract
 
     async def _execute_action(self, action: str, args: Dict[str, Any], step_id: str, trace_id: str) -> ToonResponse:
         try:
