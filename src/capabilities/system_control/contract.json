@@ -112,11 +112,11 @@
         {
             "id": "system.control.consult_tools",
             "title": "Consult Tools",
-            "description": "Consulta o bibliotecário de ferramentas e retorna um subconjunto ordenado da descoberta semântica.",
+            "description": "Consulta o bibliotecário de ferramentas e retorna um subconjunto ordenado de candidatos de descoberta, para documentação e comparação pelo agente.",
             "handler": "consult_tools",
             "risk_level": "low",
-            "when_to_use": "Quando o agente precisa entender quais ferramentas existem, comparar opções operacionais ou pedir uma visão semântica de capabilities antes de agir.",
-            "when_not_to_use": "Quando a action já está clara e o schema é suficiente, quando a dúvida é conceitual e pode ser respondida sem tool, ou quando a chamada seria apenas um reflexo por palavra-chave.",
+            "when_to_use": "Quando o agente quer explorar quais ferramentas existem, comparar opções operacionais ou obter contexto de capabilities antes de decidir se age.",
+            "when_not_to_use": "Quando a action já está clara e o schema é suficiente, quando a dúvida é conceitual e pode ser respondida sem tool, ou quando uma chamada seria apenas um reflexo por palavra-chave.",
             "required_context": [
                 "objective",
                 "capability_type_sought",
