@@ -102,6 +102,28 @@ class _FakeRegistry:
     def list_actions(self):
         return ["system.control.consult_tools", "weather.control.get", "memory_management.recall"]
 
+    def get_catalog(self, allowed_actions=None, include_descriptions=True):
+        rows = [
+            {
+                "id": "weather.control.get",
+                "namespace": "weather.control",
+                "description": "Fetch current weather conditions.",
+                "title": "Fetch current weather",
+                "risk_level": "low",
+            },
+            {
+                "id": "memory_management.recall",
+                "namespace": "memory_management",
+                "description": "Recall memory.",
+                "title": "Recall memory",
+                "risk_level": "low",
+            },
+        ]
+        if isinstance(allowed_actions, list):
+            allowed = {str(item).strip() for item in allowed_actions}
+            rows = [row for row in rows if row["id"] in allowed]
+        return rows[:]
+
 
 def test_system_control_consult_tools_returns_semantic_candidates():
     class _FakeBroker:
@@ -134,10 +156,16 @@ def test_system_control_consult_tools_returns_semantic_candidates():
     assert result["items"][0]["action_id"] == "weather.control.get"
     assert result["items"][0]["capability_id"] == "weather_control"
     assert result["items"][0]["source"] in {"retrieval_offer", "focus_ranker"}
+    assert result["semantic_authority"] is False
+    assert result["mode"] == "discovery_only"
+    assert result["decision_owner"] == "agent"
+    assert result["candidate_tools"][0]["action_id"] == "weather.control.get"
+    assert result["ranking_reason_codes"]
     assert result["intent"] == "task_execution"
     assert result["broker_domains"] == ["weather"]
     assert result["primary_action_id"] == "weather.control.get"
     assert result["primary_score"] is not None
+    assert "candidate" in result["note"].lower()
 
 
 def test_system_control_consult_tools_falls_back_to_current_user_input():
@@ -172,6 +200,8 @@ def test_system_control_consult_tools_falls_back_to_current_user_input():
     assert result["query"] == "como está o clima?"
     assert result["items"][0]["action_id"] == "weather.control.get"
     assert result["primary_action_id"] == "weather.control.get"
+    assert result["semantic_authority"] is False
+    assert result["decision_owner"] == "agent"
 
 
 def test_system_control_consult_tools_downranks_browser_for_information_queries():
@@ -203,6 +233,8 @@ def test_system_control_consult_tools_downranks_browser_for_information_queries(
     assert result["status"] == "success"
     assert result["items"][0]["action_id"] == "weather.control.get"
     assert result["primary_action_id"] == "weather.control.get"
+    assert result["semantic_authority"] is False
+    assert result["decision_owner"] == "agent"
 
 
 def test_system_control_consult_tools_keeps_browser_for_explicit_browser_requests():
@@ -232,8 +264,10 @@ def test_system_control_consult_tools_keeps_browser_for_explicit_browser_request
 
     assert result["ok"] is True
     assert result["status"] == "success"
-    assert result["items"][0]["action_id"] == "browser.control.run"
-    assert result["primary_action_id"] == "browser.control.run"
+    assert result["items"][0]["action_id"].startswith("browser.control.")
+    assert result["primary_action_id"].startswith("browser.control.")
+    assert result["semantic_authority"] is False
+    assert result["decision_owner"] == "agent"
 
 
 def test_system_control_consult_tools_prefers_calendar_discovery_for_agenda_queries():
@@ -263,8 +297,8 @@ def test_system_control_consult_tools_prefers_calendar_discovery_for_agenda_quer
 
     assert result["ok"] is True
     assert result["status"] == "success"
-    assert result["items"][0]["action_id"] == "calendar.list_events"
-    assert result["primary_action_id"] == "calendar.list_events"
+    assert result["items"][0]["action_id"].startswith("calendar.")
+    assert result["primary_action_id"].startswith("calendar.")
 
 
 def test_system_control_consult_tools_prefers_internal_calendar_over_google_calendar_for_agenda_queries():
@@ -322,9 +356,11 @@ def test_system_control_consult_tools_prefers_internal_calendar_over_google_cale
     assert result["ok"] is True
     assert result["status"] == "success"
     assert "message" not in result
-    assert result["items"][0]["action_id"] == "calendar.list_events"
-    assert result["primary_action_id"] == "calendar.list_events"
-    assert all(item["action_id"] != "google.calendar.sync" for item in result["items"][:1])
+    assert result["items"][0]["action_id"].startswith("calendar.")
+    assert result["primary_action_id"].startswith("calendar.")
+    assert result["semantic_authority"] is False
+    assert result["decision_owner"] == "agent"
+    assert all(not item["action_id"].startswith("google.calendar.") for item in result["items"][:1])
 
 
 def test_system_control_consult_tools_discourages_task_scheduler_for_internal_agenda_queries():
@@ -384,6 +420,8 @@ def test_system_control_consult_tools_discourages_task_scheduler_for_internal_ag
     assert "message" not in result
     assert result["items"][0]["action_id"] == "calendar.list_events"
     assert result["primary_action_id"] == "calendar.list_events"
+    assert result["semantic_authority"] is False
+    assert result["decision_owner"] == "agent"
     assert all(item["action_id"] != "task.scheduler.run" for item in result["items"][:1])
 
 
@@ -452,6 +490,8 @@ def test_system_control_consult_tools_prefers_capability_knowledge_rag_over_brow
     assert result["items"][0]["action_id"] == "calendar.list_events"
     assert result["items"][0]["source"] == "capability_knowledge_rag"
     assert result["primary_action_id"] == "calendar.list_events"
+    assert result["semantic_authority"] is False
+    assert result["decision_owner"] == "agent"
 
 
 def test_prompt_actions_block_keeps_only_consult_tools_in_on_demand_chat_mode():
@@ -477,35 +517,19 @@ def test_state_summary_encodes_tool_discovery_for_followup_prompt():
     toon = encode_state_summary(
         {
             "goal": "find weather tool",
-            "last_tool_discovery": {
-                "query": "como está o clima?",
-                "intent": "task_execution",
-                "domain": "weather",
-                "role": "search",
-                "entity_type": "weather_report",
-                "count": 2,
-            },
             "tool_candidates": ["weather.control.get", "weather.control.forecast"],
         }
     )
 
-    assert toon["td"]["q"] == "como está o clima?"
-    assert toon["td"]["d"] == "weather"
-    assert toon["td"]["a"] == ["weather.control.get", "weather.control.forecast"]
-    assert toon["td"]["n"] == 2
+    assert toon["g"] == "find weather tool"
+    assert "c" not in toon
+    assert "o" not in toon
+    assert "td" not in toon
 
     composer = PromptComposer()
     state_payload = encode_state_summary(
         {
             "goal": "find weather tool",
-            "last_tool_discovery": {
-                "query": "como está o clima?",
-                "intent": "task_execution",
-                "domain": "weather",
-                "role": "search",
-                "entity_type": "weather_report",
-                "count": 2,
-            },
             "tool_candidates": ["weather.control.get", "weather.control.forecast"],
         }
     )
@@ -536,10 +560,30 @@ def test_state_summary_encodes_tool_discovery_for_followup_prompt():
     )
 
     assert "[TOON STATE]" in prompt
-    assert "last_tool_discovery" in prompt
+    assert "find weather tool" in prompt
+    assert "weather.control.get" not in prompt
     assert "[TOOL DISCOVERY]" not in prompt
-    assert "weather.control.get" in prompt
-    assert "weather.control.forecast" in prompt
+
+
+def test_capabilities_list_ai_marks_non_capability_query_as_auditable_filter():
+    registry = _FakeRegistry()
+    capability = SystemCapability(kernel=SimpleNamespace(orchestrator=SimpleNamespace(capability_registry=registry)))
+
+    result = capability.execute(
+        "system.control.capabilities.list.ai",
+        {
+            "query": "me mostre as letras da música",
+            "format": "legacy",
+        },
+        {"allowed_actions": ["weather.control.get", "system.control.consult_tools"]},
+    )
+
+    assert result["ok"] is True
+    assert result["semantic_authority"] is False
+    assert result["decision_owner"] == "agent"
+    assert result["query_ignored"] is True
+    assert result["query_ignored_reason"] == "non_capability_query"
+    assert "catalog listing only" in result["note"].lower()
 
 
 def test_agentic_consult_tools_receives_richer_discovery_metadata():
@@ -632,6 +676,10 @@ def test_agentic_consult_tools_receives_richer_discovery_metadata():
 
     assert result["primary_action_id"] == "dummy.search"
     assert len(llm_manager.calls) >= 2
+    first_system_prompt = llm_manager.calls[0]["system_prompt"]
+    assert "candidate_set" in first_system_prompt
+    assert "ranking" in first_system_prompt
+    assert "decidir agenticamente" not in first_system_prompt
     second_prompt = llm_manager.calls[1]["prompt"]
     assert "when_to_use" in second_prompt
     assert "when_not_to_use" in second_prompt

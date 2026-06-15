@@ -267,6 +267,9 @@ class CapabilityRegistry:
                     "setup_ready": bool(offer.get("setup_ready", True)),
                     "title": str(offer.get("capability_id") or offer.get("namespace") or "").strip(),
                     "description": str((offer.get("output_contract") or {}).get("summary") or "").strip(),
+                    "semantic_authority": False,
+                    "metadata_role": "documentation",
+                    "decision_owner": "agent",
                 }
             )
         return rows
@@ -406,6 +409,9 @@ class CapabilityRegistry:
             _add_discovery_field("side_effect", dynamic_meta.get("side_effect") or action.side_effect or "none")
             _add_discovery_field("risk_level", dynamic_meta.get("risk_level") or action.risk_level)
             _add_discovery_field("permissions", dict(dynamic_meta.get("permissions") or action.permissions.model_dump()))
+            _add_discovery_field("semantic_authority", False)
+            _add_discovery_field("metadata_role", "documentation")
+            _add_discovery_field("decision_owner", "agent")
             return {
                 "id": action.id,
                 "title": dynamic_meta.get("title") or action.title,
@@ -431,7 +437,15 @@ class CapabilityRegistry:
                 "origin": dynamic_meta.get("origin") or "dynamic",
                 "source_id": dynamic_meta.get("source_id") or "",
                 "aliases": list(dynamic_meta.get("aliases") or []),
-                "discovery": discovery,
+                "semantic_authority": False,
+                "metadata_role": "documentation",
+                "decision_owner": "agent",
+                "discovery": {
+                    **discovery,
+                    "semantic_authority": False,
+                    "metadata_role": "documentation",
+                    "decision_owner": "agent",
+                },
                 "metadata": dynamic_meta,
             }
 
@@ -445,6 +459,9 @@ class CapabilityRegistry:
         _add_discovery_field("side_effect", action.side_effect or "none")
         _add_discovery_field("risk_level", action.risk_level)
         _add_discovery_field("permissions", action.permissions.model_dump())
+        _add_discovery_field("semantic_authority", False)
+        _add_discovery_field("metadata_role", "documentation")
+        _add_discovery_field("decision_owner", "agent")
 
         return {
             "id": action.id,
@@ -468,7 +485,15 @@ class CapabilityRegistry:
             "capability_title": capability_title,
             "capability_description": capability_description,
             "assets": assets,
-            "discovery": discovery,
+            "semantic_authority": False,
+            "metadata_role": "documentation",
+            "decision_owner": "agent",
+            "discovery": {
+                **discovery,
+                "semantic_authority": False,
+                "metadata_role": "documentation",
+                "decision_owner": "agent",
+            },
         }
 
     @staticmethod
@@ -577,6 +602,9 @@ class CapabilityRegistry:
                 "requires_approval": bool((meta.get("permissions") or {}).get("requires_approval", False)),
                 "allow_anyone": bool((meta.get("permissions") or {}).get("allow_anyone", False)),
                 "has_examples": bool(meta.get("examples")),
+                "semantic_authority": False,
+                "metadata_role": "documentation",
+                "decision_owner": "agent",
             }
             if include_descriptions:
                 row["description"] = str(meta.get("description") or "")

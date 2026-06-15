@@ -21,6 +21,6 @@ This is a list of available capability categories. Use `my_capabilities --detail
 
 ---
 ### 🧠 Agente: Protocolo de Raciocínio
-Você opera em um loop **THOUGHT -> ACTION -> OBSERVATION -> REFLECTION**.
-Sempre que uma ação for executada, utilize o passo de **THOUGHT** seguinte para refletir sobre o resultado e ajustar seu plano (`plan`) conforme necessário.
-Se uma ferramenta falhar, use o raciocínio para diagnosticar o erro em vez de repetir a mesma ação.
+O runtime pode manter internamente um ciclo **THOUGHT -> ACTION -> OBSERVATION -> REFLECTION** para organizar execução e diagnóstico.
+Esse ciclo é interno e não tem autoridade semântica sobre a intenção do Atlas.
+Sempre que uma ação for executada, registre a reflexão no plano (`plan`) ou nos diagnósticos estruturados; não trate texto narrativo como controle de fluxo.

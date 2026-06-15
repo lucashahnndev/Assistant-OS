@@ -71,8 +71,14 @@ def test_registry_exposes_discovery_metadata_without_routing_it():
     assert meta["required_context"] == ["query"]
     assert meta["common_failures"] == ["No matching records"]
     assert meta["repair_hints"] == ["Ask for a narrower query if the result is empty."]
+    assert meta["semantic_authority"] is False
+    assert meta["metadata_role"] == "documentation"
+    assert meta["decision_owner"] == "agent"
     assert meta["discovery"]["when_to_use"] == meta["when_to_use"]
     assert meta["discovery"]["examples"] == meta["examples"]
+    assert meta["discovery"]["semantic_authority"] is False
+    assert meta["discovery"]["metadata_role"] == "documentation"
+    assert meta["discovery"]["decision_owner"] == "agent"
 
     catalog = registry.get_catalog(allowed_actions=["dummy.search"], include_descriptions=True)
     assert catalog == [
@@ -85,6 +91,9 @@ def test_registry_exposes_discovery_metadata_without_routing_it():
             "requires_approval": False,
             "allow_anyone": True,
             "has_examples": True,
+            "semantic_authority": False,
+            "metadata_role": "documentation",
+            "decision_owner": "agent",
             "description": "Search in dummy data sources.",
         }
     ]
@@ -128,7 +137,7 @@ def test_registry_exposes_real_contract_discovery_metadata_for_browser_and_overl
 
     browser_meta = registry.get_action_metadata("browser.control.run")
     assert browser_meta["capability_description"].startswith("Controla um navegador real")
-    assert browser_meta["when_to_use"].startswith("Quando o agente precisa interagir de verdade")
+    assert browser_meta["when_to_use"].startswith("Quando uma interação real")
     assert "goal" in browser_meta["required_context"]
     assert "site_or_url_if_known" in browser_meta["required_context"]
     assert browser_meta["common_failures"]
@@ -136,6 +145,9 @@ def test_registry_exposes_real_contract_discovery_metadata_for_browser_and_overl
     assert browser_meta["examples"]
     assert browser_meta["ui_hints"] == {"icon": "browser", "surface": "chrome"}
     assert browser_meta["discovery"]["when_not_to_use"].startswith("Quando basta explicação textual")
+    assert browser_meta["semantic_authority"] is False
+    assert browser_meta["metadata_role"] == "documentation"
+    assert browser_meta["decision_owner"] == "agent"
 
     overlay_meta = registry.get_action_metadata("overlay.assist.highlight_target")
     assert overlay_meta["when_to_use"].startswith("Quando o agente já decidiu ajudar visualmente")
@@ -144,11 +156,31 @@ def test_registry_exposes_real_contract_discovery_metadata_for_browser_and_overl
     assert overlay_meta["repair_hints"]
     assert overlay_meta["examples"]
     assert overlay_meta["ui_hints"] == {"icon": "highlight", "surface": "screen"}
+    assert overlay_meta["semantic_authority"] is False
+    assert overlay_meta["metadata_role"] == "documentation"
+    assert overlay_meta["decision_owner"] == "agent"
+
+    ddg_contract = load_contract_v1(str(ROOT / "src/capabilities/ddg_search/contract.json"))
+    ddg_capability = _ContractCapability(
+        ddg_contract.capability.id,
+        [action.id for action in ddg_contract.actions],
+    )
+    registry.register(ddg_capability, ddg_contract)
+
+    offers = registry.list_discovery_offers(domain="web", role="search", entity_type="article")
+    offer_ids = {row["capability_id"] for row in offers}
+    assert "ddg_search" in offer_ids
+    ddg_offer = next(row for row in offers if row["capability_id"] == "ddg_search")
+    assert ddg_offer["semantic_authority"] is False
+    assert ddg_offer["metadata_role"] == "documentation"
+    assert ddg_offer["decision_owner"] == "agent"
 
     catalog = registry.get_catalog(allowed_actions=["browser.control.run", "overlay.assist.highlight_target"], include_descriptions=True)
     rows_by_id = {row["id"]: row for row in catalog}
     assert rows_by_id["browser.control.run"]["side_effect"] == "idempotent"
     assert rows_by_id["browser.control.run"]["has_examples"] is True
+    assert rows_by_id["browser.control.run"]["semantic_authority"] is False
+    assert rows_by_id["browser.control.run"]["metadata_role"] == "documentation"
     assert rows_by_id["overlay.assist.highlight_target"]["side_effect"] == "none"
     assert rows_by_id["overlay.assist.highlight_target"]["requires_approval"] is False
 
@@ -186,22 +218,28 @@ def test_registry_exposes_real_contract_discovery_metadata_for_system_control_an
 
     system_meta = registry.get_action_metadata("system.control.consult_tools")
     assert system_meta["capability_description"].startswith("Operações de controle do sistema")
-    assert system_meta["when_to_use"].startswith("Quando o agente precisa entender quais ferramentas existem")
+    assert system_meta["when_to_use"].startswith("Quando o agente quer explorar quais ferramentas existem")
     assert "objective" in system_meta["required_context"]
     assert system_meta["common_failures"]
     assert system_meta["repair_hints"]
     assert system_meta["examples"]
     assert system_meta["ui_hints"] == {"icon": "search", "surface": "tool_catalog"}
+    assert system_meta["semantic_authority"] is False
+    assert system_meta["metadata_role"] == "documentation"
+    assert system_meta["decision_owner"] == "agent"
 
     notifications_meta = registry.get_action_metadata("notifications.send")
     assert notifications_meta["capability_description"].startswith("Allows the agent to send formal notifications")
-    assert notifications_meta["when_to_use"].startswith("Quando o agente precisa criar ou exibir uma notificação")
+    assert notifications_meta["when_to_use"].startswith("Quando criar ou exibir uma notificação")
     assert "message" in notifications_meta["required_context"]
     assert notifications_meta["common_failures"]
     assert notifications_meta["repair_hints"]
     assert notifications_meta["examples"]
     assert notifications_meta["side_effect"] == "interruptive"
     assert notifications_meta["ui_hints"] == {"icon": "bell", "surface": "notification_center"}
+    assert notifications_meta["semantic_authority"] is False
+    assert notifications_meta["metadata_role"] == "documentation"
+    assert notifications_meta["decision_owner"] == "agent"
 
     class _FakeBroker:
         def build_bundle(self, **kwargs):

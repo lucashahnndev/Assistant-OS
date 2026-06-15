@@ -185,6 +185,69 @@ class SystemCapability(CapabilityBase):
     def _candidate_namespace(action_id: str) -> str:
         return ".".join(str(action_id or "").split(".")[:-1]) if "." in str(action_id or "") else str(action_id or "")
 
+    @staticmethod
+    def _summarize_discovery_candidates(candidates: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+        summary: List[Dict[str, Any]] = []
+        for idx, item in enumerate(list(candidates or [])[: max(1, int(limit or 1))], start=1):
+            if not isinstance(item, dict):
+                continue
+            summary.append(
+                {
+                    "rank": idx,
+                    "action_id": str(item.get("action_id") or "").strip(),
+                    "capability_id": str(item.get("capability_id") or "").strip(),
+                    "namespace": str(item.get("namespace") or "").strip(),
+                    "title": str(item.get("title") or "").strip(),
+                    "score": float(item.get("score") or 0.0),
+                    "source": str(item.get("source") or "").strip(),
+                    "reason": str(item.get("reason") or "").strip(),
+                    "risk_level": str(item.get("risk_level") or "low").strip(),
+                    "setup_ready": bool(item.get("setup_ready", True)),
+                }
+            )
+        return summary
+
+    @staticmethod
+    def _consult_discovery_audit(
+        *,
+        decision_mode: str,
+        discovery_source: str,
+        candidates: List[Dict[str, Any]],
+        limit: int,
+        query: str,
+        filter_applied: bool = False,
+        filter_reason_code: str = "",
+        discovery_skipped_reason: str = "",
+        query_ignored: bool = False,
+        query_ignored_reason: str = "",
+    ) -> Dict[str, Any]:
+        source_codes = []
+        for item in candidates or []:
+            source = str(item.get("source") or "").strip()
+            reason = str(item.get("reason") or "").strip()
+            if source:
+                source_codes.append(source)
+            if reason:
+                source_codes.append(reason)
+        ranking_reason_codes = sorted({code for code in source_codes if code})
+        return {
+            "semantic_authority": False,
+            "mode": "discovery_only",
+            "decision_owner": "agent",
+            "decision_mode": decision_mode,
+            "discovery_source": discovery_source,
+            "candidate_count": len(candidates or []),
+            "candidate_tools": SystemCapability._summarize_discovery_candidates(candidates, limit),
+            "ranking_reason_codes": ranking_reason_codes,
+            "filter_applied": bool(filter_applied),
+            "filter_reason_code": filter_reason_code or None,
+            "discovery_skipped_reason": discovery_skipped_reason or None,
+            "query_ignored": bool(query_ignored),
+            "query_ignored_reason": query_ignored_reason or None,
+            "note": "These are candidates, not an action decision.",
+            "query": str(query or "").strip(),
+        }
+
     def _build_consult_candidates(
         self,
         *,
@@ -239,8 +302,10 @@ class SystemCapability(CapabilityBase):
         focus_action_ids = {str(row.get("id") or "").strip() for row in focus_rows if isinstance(row, dict) and str(row.get("id") or "").strip()}
 
         candidates_by_action: Dict[str, Dict[str, Any]] = {}
+        next_candidate_order = 0
 
         def _add_candidate(row: Dict[str, Any], score: float, source: str, reason: str, source_rank: int) -> None:
+            nonlocal next_candidate_order
             action_id = str(row.get("action_id") or row.get("id") or "").strip()
             if not action_id:
                 return
@@ -261,7 +326,9 @@ class SystemCapability(CapabilityBase):
                 "reason": reason,
                 "score": round(max(0.0, min(1.0, score)), 4),
                 "_source_rank": source_rank,
+                "_candidate_order": next_candidate_order,
             }
+            next_candidate_order += 1
             current = candidates_by_action.get(action_id)
             if current is None or candidate["score"] > float(current.get("score") or 0.0) or (
                 candidate["score"] == float(current.get("score") or 0.0) and candidate["_source_rank"] < int(current.get("_source_rank") or 99)
@@ -337,11 +404,16 @@ class SystemCapability(CapabilityBase):
                         " ".join(str(x or "") for x in list(offer.get("entity_types") or [])),
                     ]
                 )
-                offer_score = self._score_text(query_tokens, offer_text, query_text, domain_text, intent_text)
+                offer_score = self._score_text(query_tokens, offer_text, domain_text, intent_text)
                 if bool(offer.get("setup_ready", True)):
                     offer_score += 0.05
-                if domain_text and domain_text in offer_text.lower():
-                    offer_score += 0.08
+                if domain_text:
+                    offer_namespace = str(offer.get("namespace") or "").strip().lower()
+                    offer_capability = str(offer.get("capability_id") or "").strip().lower()
+                    if offer_namespace == domain_text or offer_capability == domain_text:
+                        offer_score += 0.12
+                    elif domain_text in offer_namespace or domain_text in offer_capability:
+                        offer_score += 0.04
                 if diagnostics and domain_text and domain_text in " ".join(getattr(diagnostics, "evidence_domains", []) or []).lower():
                     offer_score += 0.06
                 for action_id in actions:
@@ -383,9 +455,19 @@ class SystemCapability(CapabilityBase):
                 "risk_level": str(meta.get("risk_level") or "low").strip(),
                 "setup_ready": True,
             }
-            score = float(focus_row.get("score") or 0.0) + self._score_text(query_tokens, action_id, row["title"], row["summary"])
-            if domain_text and domain_text in " ".join([row["namespace"], row["capability_id"], action_id]).lower():
-                score += 0.05
+            relevance = self._score_text(query_tokens, action_id, row["title"], row["summary"], domain_text, intent_text)
+            if not relevance and not (domain_text and domain_text in " ".join([row["namespace"], row["capability_id"], action_id]).lower()):
+                continue
+            score = float(focus_row.get("score") or 0.0) * max(0.0, relevance)
+            if domain_text:
+                namespace_l = row["namespace"].lower()
+                capability_l = row["capability_id"].lower()
+                if namespace_l == domain_text or capability_l == domain_text:
+                    score += 0.12
+                elif domain_text in namespace_l or domain_text in capability_l:
+                    score += 0.04
+                elif domain_text in " ".join([row["namespace"], row["capability_id"], action_id]).lower():
+                    score += 0.05
             _add_candidate(row, score, "focus_ranker", "focus-ranked fallback", 2)
 
         # Conservative fallback: consult the canonical catalog only if discovery offers did not produce candidates.
@@ -407,13 +489,28 @@ class SystemCapability(CapabilityBase):
                     "risk_level": str(meta.get("risk_level") or "low").strip(),
                     "setup_ready": True,
                 }
-                score = self._score_text(query_tokens, action_id, row["title"], row["summary"], query_text, domain_text, intent_text)
+                score = self._score_text(query_tokens, action_id, row["title"], row["summary"], domain_text, intent_text)
+                if domain_text:
+                    namespace_l = row["namespace"].lower()
+                    capability_l = row["capability_id"].lower()
+                    if namespace_l == domain_text or capability_l == domain_text:
+                        score += 0.12
+                    elif domain_text in namespace_l or domain_text in capability_l:
+                        score += 0.04
                 _add_candidate(row, score, "catalog_fallback", "canonical catalog fallback", 3)
 
         candidates = list(candidates_by_action.values())
-        candidates.sort(key=lambda row: (-float(row.get("score") or 0.0), int(row.get("_source_rank") or 99), str(row.get("action_id") or "")))
+        candidates.sort(
+            key=lambda row: (
+                -float(row.get("score") or 0.0),
+                int(row.get("_source_rank") or 99),
+                int(row.get("_candidate_order") or 999),
+                str(row.get("action_id") or ""),
+            )
+        )
         for item in candidates:
             item.pop("_source_rank", None)
+            item.pop("_candidate_order", None)
         return candidates[: max(1, int(limit or 1))]
 
     @staticmethod
@@ -665,10 +762,10 @@ class SystemCapability(CapabilityBase):
         system_prompt = (
             "Você é o bibliotecário LLM de descoberta de ferramentas.\n"
             "Sua função é ler o pedido condensado do agente principal, examinar o catálogo de tools e o RAG compartilhado, "
-            "e decidir agenticamente quais tools fazem mais sentido.\n"
+            "e produzir candidate_set e ranking de candidatos para o agente principal.\n"
             "Você não executa nenhuma tool.\n"
             "Você pode considerar custo, latência, confiabilidade, adequação, histórico de uso e detalhes semânticos.\n"
-            "Você pode trabalhar em mais de uma rodada interna antes de responder.\n"
+            "Você pode trabalhar em mais de uma rodada interna antes de responder, mas a saída continua sendo apenas descoberta e recomendação, sem decisão final.\n"
             "Retorne somente JSON válido, sem markdown.\n"
             "Contrato da saída:\n"
             "{\n"
@@ -676,7 +773,7 @@ class SystemCapability(CapabilityBase):
             '    {"action_id": "namespace.action", "rank": 1, "why": "curta justificativa", "confidence": 0.0, "notes": "opcional"}\n'
             "  ],\n"
             '  "primary_action_id": "namespace.action",\n'
-            '  "decision_summary": "explicação curta do porquê",\n'
+            '  "decision_summary": "resumo curto da recomendação",\n'
             '  "turns": 1\n'
             "}\n"
         )
@@ -740,7 +837,7 @@ class SystemCapability(CapabilityBase):
         second_prompt = json.dumps(
             {
                 "phase": "refinement",
-                "instruction": "Revise o candidate_set anterior com os detalhes finais e devolva a melhor escolha ordenada.",
+                "instruction": "Revise o candidate_set anterior com os detalhes finais e devolva a ordenação candidata mais consistente.",
                 "query": query,
                 "intent": intent,
                 "domain": domain,
@@ -826,6 +923,10 @@ class SystemCapability(CapabilityBase):
                     status="error",
                     message="Capability registry not available.",
                     error_code="SKILL_REGISTRY_UNAVAILABLE",
+                    semantic_authority=False,
+                    mode="discovery_only",
+                    decision_owner="agent",
+                    note="Discovery data is unavailable; no action was chosen.",
                 )
 
             query = str(params.get("query") or context.get("user_input") or "").strip()
@@ -836,6 +937,7 @@ class SystemCapability(CapabilityBase):
             output_format = str(params.get("format") or "legacy").strip().lower()
             limit = self._to_int(params.get("limit"), default=5, min_value=1, max_value=20)
             decision_mode = self._resolve_discovery_mode()
+            agentic_unavailable = False
             if decision_mode in {"off", "false", "0", "never"}:
                 return self._result(
                     ok=False,
@@ -844,6 +946,10 @@ class SystemCapability(CapabilityBase):
                     error_code="TOOL_DISCOVERY_DISABLED",
                     decision_mode=decision_mode,
                     discovery_source="disabled",
+                    semantic_authority=False,
+                    mode="discovery_only",
+                    decision_owner="agent",
+                    discovery_skipped_reason="policy_disabled",
                     query=query,
                     intent=intent,
                     domain=domain,
@@ -853,6 +959,11 @@ class SystemCapability(CapabilityBase):
 
             agentic_result = {}
             if decision_mode in {"agentic_only", "agentic", "hybrid"}:
+                agentic_unavailable = not (
+                    orch is not None
+                    and hasattr(orch, "llm_manager")
+                    and getattr(orch.llm_manager, "generate_structured_text", None)
+                )
                 agentic_result = self._agentic_consult_tools(
                     query=query,
                     domain=domain,
@@ -887,6 +998,16 @@ class SystemCapability(CapabilityBase):
                     context=context,
                     registry=registry,
                 )
+            elif agentic_unavailable:
+                discovery_source = "deterministic_fallback_unavailable"
+                candidates = self._build_consult_candidates(
+                    query=query,
+                    domain=domain,
+                    intent=intent,
+                    limit=limit,
+                    context=context,
+                    registry=registry,
+                )
             else:
                 return self._result(
                     ok=False,
@@ -895,6 +1016,10 @@ class SystemCapability(CapabilityBase):
                     error_code="TOOL_DISCOVERY_FAILED",
                     decision_mode=decision_mode,
                     discovery_source="agentic_llm",
+                    semantic_authority=False,
+                    mode="discovery_only",
+                    decision_owner="agent",
+                    discovery_skipped_reason="no_candidate_set",
                     query=query,
                     intent=intent,
                     domain=domain,
@@ -903,6 +1028,15 @@ class SystemCapability(CapabilityBase):
                 )
 
             primary = candidates[0] if candidates else {}
+            if discovery_source in {"deterministic_fallback", "deterministic_fallback_unavailable"} and primary.get("source") == "capability_knowledge_rag":
+                discovery_source = "capability_knowledge_rag"
+            discovery_audit = self._consult_discovery_audit(
+                decision_mode=decision_mode,
+                discovery_source=discovery_source,
+                candidates=candidates,
+                limit=limit,
+                query=query,
+            )
             if output_format == "toon":
                 if discovery_source == "agentic_llm":
                     toon_rows = []
@@ -927,6 +1061,7 @@ class SystemCapability(CapabilityBase):
                         role=role,
                         entity_type=entity_type,
                         count=len(candidates),
+                        candidate_tools=discovery_audit["candidate_tools"],
                         candidate_set=candidates,
                         shortlist=candidates,
                         ranking=list(agentic_result.get("ranking") or []),
@@ -937,7 +1072,12 @@ class SystemCapability(CapabilityBase):
                         turns=agentic_result.get("turns", 1),
                         decision_mode=decision_mode,
                         discovery_mode="agentic_only",
+                        mode="discovery_only",
                         discovery_source=discovery_source,
+                        semantic_authority=False,
+                        decision_owner="agent",
+                        ranking_reason_codes=discovery_audit["ranking_reason_codes"],
+                        note=discovery_audit["note"],
                         format="toon",
                         audience="ai",
                         toon=toon,
@@ -963,12 +1103,18 @@ class SystemCapability(CapabilityBase):
                     role=role,
                     entity_type=entity_type,
                     count=len(candidates),
+                    candidate_tools=discovery_audit["candidate_tools"],
                     primary_action_id=str(primary.get("action_id") or ""),
                     primary_score=primary.get("score"),
                     discovery_source=discovery_source,
                     broker_domains=[],
                     decision_mode=decision_mode,
                     discovery_mode="deterministic",
+                    mode="discovery_only",
+                    semantic_authority=False,
+                    decision_owner="agent",
+                    ranking_reason_codes=discovery_audit["ranking_reason_codes"],
+                    note=discovery_audit["note"],
                     format="toon",
                     audience="ai",
                     toon=toon,
@@ -985,6 +1131,7 @@ class SystemCapability(CapabilityBase):
                     role=role,
                     entity_type=entity_type,
                     count=len(candidates),
+                    candidate_tools=discovery_audit["candidate_tools"],
                     candidate_set=candidates,
                     shortlist=candidates,
                     ranking=list(agentic_result.get("ranking") or []),
@@ -995,7 +1142,12 @@ class SystemCapability(CapabilityBase):
                     turns=agentic_result.get("turns", 1),
                     decision_mode=decision_mode,
                     discovery_mode="agentic_only",
+                    mode="discovery_only",
                     discovery_source=discovery_source,
+                    semantic_authority=False,
+                    decision_owner="agent",
+                    ranking_reason_codes=discovery_audit["ranking_reason_codes"],
+                    note=discovery_audit["note"],
                     format="legacy",
                     audience="ai",
                     items=candidates,
@@ -1031,6 +1183,7 @@ class SystemCapability(CapabilityBase):
                 role=role,
                 entity_type=entity_type,
                 count=len(candidates),
+                candidate_tools=discovery_audit["candidate_tools"],
                 items=candidates,
                 primary_action_id=str(primary.get("action_id") or ""),
                 primary_score=primary.get("score"),
@@ -1038,6 +1191,11 @@ class SystemCapability(CapabilityBase):
                 broker_domains=broker_domains,
                 decision_mode=decision_mode,
                 discovery_mode="deterministic",
+                mode="discovery_only",
+                semantic_authority=False,
+                decision_owner="agent",
+                ranking_reason_codes=discovery_audit["ranking_reason_codes"],
+                note=discovery_audit["note"],
                 format="legacy",
                 audience="ai",
             )
@@ -1092,6 +1250,11 @@ class SystemCapability(CapabilityBase):
                     discovery_mode="on_demand",
                     format="legacy",
                     audience=mode,
+                    semantic_authority=False,
+                    decision_owner="agent",
+                    query_ignored=query_ignored,
+                    query_ignored_reason="non_capability_query" if query_ignored else None,
+                    note="Catalog listing only; discovery does not choose the final action.",
                 )
 
             toon = encode_capabilities_list(rows, include_description=include_descriptions)
@@ -1104,7 +1267,11 @@ class SystemCapability(CapabilityBase):
                 discovery_mode="on_demand",
                 format="toon",
                 audience=mode,
+                semantic_authority=False,
+                decision_owner="agent",
                 query_ignored=query_ignored,
+                query_ignored_reason="non_capability_query" if query_ignored else None,
+                note="Catalog listing only; discovery does not choose the final action.",
             )
 
         if local in {"capabilities.describe", "capabilities.describe.ai", "capabilities.describe.ui"}:
