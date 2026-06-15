@@ -179,6 +179,31 @@ def _build_attachment_delivery_summary(delivery: Any) -> str:
     return " | ".join(parts)
 
 
+def _normalize_freshness_payload(raw: Any, *, observed_at: str) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    if isinstance(raw, dict):
+        payload = dict(raw)
+    elif isinstance(raw, str):
+        value = raw.strip()
+        if value:
+            payload = {"source": value}
+
+    source = str(payload.get("source") or payload.get("mode") or payload.get("type") or "unknown").strip() or "unknown"
+    resolved_at = str(payload.get("resolved_at") or payload.get("updated_at") or payload.get("timestamp") or observed_at or "").strip()
+    ttl_value = payload.get("ttl_seconds", payload.get("ttl_s", payload.get("sla_seconds")))
+    try:
+        ttl_seconds = int(ttl_value) if ttl_value is not None and str(ttl_value).strip() != "" else None
+    except Exception:
+        ttl_seconds = None
+    stale = bool(payload.get("stale", payload.get("is_stale", False)))
+    return {
+        "source": source,
+        "resolved_at": resolved_at,
+        "stale": stale,
+        "ttl_seconds": ttl_seconds,
+    }
+
+
 def _clip_json(value: Any, limit: int = 180) -> str:
     try:
         text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -212,6 +237,9 @@ class ActionObservation:
     source_action: str = ""
     source_args: Dict[str, Any] = field(default_factory=dict)
     freshness_note: str = ""
+    freshness: Dict[str, Any] = field(default_factory=dict)
+    raw_result_ref: Dict[str, Any] = field(default_factory=dict)
+    raw_result_redaction: Dict[str, Any] = field(default_factory=dict)
     evidence_items: List[str] = field(default_factory=list)
     evidence_total: int = 0
     evidence_shown: int = 0
@@ -247,6 +275,8 @@ class ActionObservation:
         artifacts: Optional[Dict[str, Any]] = None,
         attachment_delivery: Optional[Dict[str, Any]] = None,
         next_step_context: str = "",
+        raw_result_ref: Optional[Dict[str, Any]] = None,
+        raw_result_redaction: Optional[Dict[str, Any]] = None,
         repair_context: Optional[Dict[str, Any]] = None,
         requires_replan: bool = False,
         capability: str = "",
@@ -289,6 +319,10 @@ class ActionObservation:
         observed_work_id = str(work_id or "").strip()
         source_action = str(action_name or "").strip()
         source_args_payload = dict(source_args or {}) if isinstance(source_args, dict) else {}
+        freshness = _normalize_freshness_payload(
+            structured_result.get("freshness") if isinstance(structured_result, dict) else None,
+            observed_at=observed_at,
+        )
         freshness_note = "fresh_current_turn"
         next_step = str(next_step_context or "").strip()
         if not next_step:
@@ -318,6 +352,17 @@ class ActionObservation:
 
         artifacts_payload = dict(artifacts or {})
         attachment_delivery_payload = dict(attachment_delivery or {}) if isinstance(attachment_delivery, dict) else {}
+        raw_result_ref_payload = dict(raw_result_ref or {})
+        if not raw_result_ref_payload:
+            raw_result_ref_payload = {
+                "kind": "none",
+                "id": "",
+                "available": False,
+                "redacted": bool(raw_result_redaction or {}),
+            }
+        raw_result_redaction_payload = dict(raw_result_redaction or {})
+        if raw_result_redaction_payload and "applied" not in raw_result_redaction_payload:
+            raw_result_redaction_payload["applied"] = bool(raw_result_redaction_payload.get("removed_fields"))
         if not attachment_delivery_payload and artifacts_payload.get("attachments"):
             attachment_delivery_payload = {
                 "requested": [],
@@ -346,6 +391,9 @@ class ActionObservation:
             source_action=source_action,
             source_args=source_args_payload,
             freshness_note=freshness_note,
+            freshness=freshness,
+            raw_result_ref=raw_result_ref_payload,
+            raw_result_redaction=raw_result_redaction_payload,
             evidence_items=list(evidence.get("items") or []),
             evidence_total=int(evidence.get("total_count") or 0),
             evidence_shown=int(evidence.get("shown_count") or 0),
@@ -373,6 +421,9 @@ class ActionObservation:
         prepared = self.attachment_delivery.get("prepared") if isinstance(self.attachment_delivery, dict) else []
         sent = self.attachment_delivery.get("sent") if isinstance(self.attachment_delivery, dict) else []
         errors = self.attachment_delivery.get("errors") if isinstance(self.attachment_delivery, dict) else []
+        confirmed = self.attachment_delivery.get("confirmed") if isinstance(self.attachment_delivery, dict) else False
+        if confirmed is None and isinstance(sent, list):
+            confirmed = bool(sent) and not bool(errors)
         return {
             "last_observation": self.to_prompt_summary(),
             "last_observation_evidence": self.to_evidence_summary(),
@@ -387,7 +438,7 @@ class ActionObservation:
             "last_attachment_delivery_prepared_count": len(prepared) if isinstance(prepared, list) else 0,
             "last_attachment_delivery_sent_count": len(sent) if isinstance(sent, list) else 0,
             "last_attachment_delivery_error_count": len(errors) if isinstance(errors, list) else 0,
-            "last_attachment_delivery_confirmed": bool(self.attachment_delivery.get("sent")) if isinstance(self.attachment_delivery, dict) else False,
+            "last_attachment_delivery_confirmed": bool(confirmed),
             "last_observation_status": self.status,
             "last_observation_reason": self.reason,
             "last_observation_requires_replan": self.requires_replan,
@@ -397,6 +448,12 @@ class ActionObservation:
             "last_observation_source_args": self.source_args,
             "last_observation_observed_at": self.observed_at or self.timestamp,
             "last_observation_freshness": self.freshness_note or "fresh_current_turn",
+            "last_observation_freshness_source": str(self.freshness.get("source") or "").strip() or "unknown",
+            "last_observation_freshness_resolved_at": str(self.freshness.get("resolved_at") or "").strip(),
+            "last_observation_freshness_stale": bool(self.freshness.get("stale", False)),
+            "last_observation_freshness_ttl_seconds": self.freshness.get("ttl_seconds"),
+            "last_raw_result_ref": self.raw_result_ref,
+            "last_raw_result_redaction": self.raw_result_redaction,
         }
 
     def to_evidence_summary(self) -> str:
@@ -448,6 +505,20 @@ class ActionObservation:
             bits.append(f"source_args={_clip_json(self.source_args, 120)}")
         if self.freshness_note:
             bits.append(f"freshness={_clip_text(self.freshness_note, 24)}")
+        if isinstance(self.freshness, dict) and self.freshness:
+            freshness_bits: List[str] = []
+            freshness_source = str(self.freshness.get("source") or "").strip()
+            freshness_resolved = str(self.freshness.get("resolved_at") or "").strip()
+            freshness_ttl = self.freshness.get("ttl_seconds")
+            freshness_stale = bool(self.freshness.get("stale", False))
+            if freshness_source:
+                freshness_bits.append(f"source={freshness_source}")
+            if freshness_resolved:
+                freshness_bits.append(f"resolved_at={_clip_text(freshness_resolved, 40)}")
+            if freshness_ttl is not None:
+                freshness_bits.append(f"ttl_seconds={freshness_ttl}")
+            freshness_bits.append(f"stale={'yes' if freshness_stale else 'no'}")
+            bits.append(f"freshness_detail={' '.join(freshness_bits)}")
         evidence_summary = self.to_evidence_summary()
         if evidence_summary:
             bits.append(f"evidence={_clip_text(evidence_summary, 220)}")
@@ -456,6 +527,36 @@ class ActionObservation:
             bits.append(f"attachment_delivery={_clip_text(attachment_summary, 220)}")
         if self.requires_replan:
             bits.append("replan=yes")
+        if isinstance(self.raw_result_ref, dict) and self.raw_result_ref:
+            ref_kind = str(self.raw_result_ref.get("kind") or "").strip()
+            ref_id = str(self.raw_result_ref.get("id") or "").strip()
+            ref_available = bool(self.raw_result_ref.get("available", False))
+            ref_redacted = bool(self.raw_result_ref.get("redacted", False))
+            ref_truncated = bool(self.raw_result_ref.get("stored_truncated", False))
+            ref_bits = [
+                f"kind={ref_kind or 'none'}",
+                f"available={'yes' if ref_available else 'no'}",
+                f"redacted={'yes' if ref_redacted else 'no'}",
+                f"stored_truncated={'yes' if ref_truncated else 'no'}",
+            ]
+            if ref_id:
+                ref_bits.append(f"id={_clip_text(ref_id, 48)}")
+            ref_reason = str(self.raw_result_ref.get("reason") or "").strip()
+            if ref_reason:
+                ref_bits.append(f"reason={_clip_text(ref_reason, 80)}")
+            bits.append(f"raw_result_ref={' '.join(ref_bits)}")
+        if isinstance(self.raw_result_redaction, dict) and self.raw_result_redaction:
+            removed_fields = [str(item).strip() for item in list(self.raw_result_redaction.get("removed_fields") or []) if str(item).strip()]
+            redaction_bits = [
+                f"applied={'yes' if bool(self.raw_result_redaction.get('applied', False)) else 'no'}",
+                f"preview_sanitized={'yes' if bool(self.raw_result_redaction.get('preview_sanitized', True)) else 'no'}",
+            ]
+            if removed_fields:
+                redaction_bits.append(f"removed_fields={','.join(removed_fields)}")
+            reason = str(self.raw_result_redaction.get("reason") or "").strip()
+            if reason:
+                redaction_bits.append(f"reason={_clip_text(reason, 80)}")
+            bits.append(f"raw_result_redaction={' '.join(redaction_bits)}")
         return " | ".join(bits)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -475,6 +576,9 @@ class ActionObservation:
             "source_action": self.source_action,
             "source_args": self.source_args,
             "freshness_note": self.freshness_note,
+            "freshness": self.freshness,
+            "raw_result_ref": self.raw_result_ref,
+            "raw_result_redaction": self.raw_result_redaction,
             "evidence_items": self.evidence_items,
             "evidence_total": self.evidence_total,
             "evidence_shown": self.evidence_shown,

@@ -3,6 +3,7 @@ import uuid
 import json
 import logging
 import threading
+import hashlib
 import re
 import shlex
 import time
@@ -3973,6 +3974,23 @@ class AgentOrchestrator:
                             f"RESULT OF ACTION {plan.action_id} "
                             f"[status={result_status}; reason={result_reason}]: {truncated_result}"
                         )
+                    raw_capability_metadata = {}
+                    if hasattr(self.capability_registry, "get_action_metadata"):
+                        try:
+                            raw_capability_metadata = self.capability_registry.get_action_metadata(plan.action_id) or {}
+                        except Exception:
+                            raw_capability_metadata = {}
+                    raw_result_ref = self._safe_persist_raw_result_blob(
+                        session=session,
+                        sessions_dir=self.sessions_dir,
+                        session_id=session_id,
+                        work_id=work_id,
+                        turn_id=int(getattr(session, "turn_id", 0) or 0),
+                        action_name=plan.action_id,
+                        capability=str((raw_capability_metadata or {}).get("capability_id") or (raw_capability_metadata or {}).get("capability") or (raw_capability_metadata or {}).get("namespace") or "").strip(),
+                        raw_result=result,
+                    )
+                    raw_result_redaction = self._build_raw_result_redaction(result)
                     action_observation = self._build_action_observation(
                         session=session,
                         work_id=work_id,
@@ -3986,6 +4004,8 @@ class AgentOrchestrator:
                         extracted_sources=extracted_sources,
                         last_generated_attachment_paths=last_generated_attachment_paths,
                         attachment_delivery=attachment_delivery_state,
+                        raw_result_ref=raw_result_ref,
+                        raw_result_redaction=raw_result_redaction,
                     )
                     evidence_summary = action_observation.to_evidence_summary()
                     if evidence_summary:
@@ -5252,6 +5272,452 @@ class AgentOrchestrator:
         return str(result)
 
     @staticmethod
+    def _build_raw_result_redaction(result: Any) -> Dict[str, Any]:
+        removed_fields: List[str] = []
+        if isinstance(result, dict):
+            removed_fields = [key for key in ("text", "message", "reply", "legacy_text") if key in result]
+        applied = bool(removed_fields)
+        return {
+            "applied": applied,
+            "removed_fields": removed_fields,
+            "reason": "prevent_prompt_contamination" if applied else "none",
+            "preview_sanitized": True,
+        }
+
+    @staticmethod
+    def _raw_evidence_default_ttl_seconds() -> int:
+        raw = os.getenv("RAW_EVIDENCE_TTL_SECONDS", "").strip()
+        try:
+            ttl = int(raw) if raw else 7 * 24 * 60 * 60
+        except Exception:
+            ttl = 7 * 24 * 60 * 60
+        return max(60, ttl)
+
+    @staticmethod
+    def _raw_evidence_max_items() -> int:
+        raw = os.getenv("RAW_EVIDENCE_MAX_ITEMS", "").strip()
+        try:
+            limit = int(raw) if raw else 500
+        except Exception:
+            limit = 500
+        return max(1, limit)
+
+    @staticmethod
+    def _raw_evidence_access_policy() -> Dict[str, Any]:
+        return {
+            "scope": "internal_audit",
+            "prompt_visible": False,
+            "user_visible": False,
+        }
+
+    @classmethod
+    def _load_raw_evidence_index(cls, session_root: str) -> Dict[str, Any]:
+        index_path = os.path.join(session_root, "raw_evidence.index.json")
+        if not os.path.exists(index_path):
+            return {"updated_at": time.time(), "items": {}}
+        try:
+            with open(index_path, "r", encoding="utf-8") as fh:
+                loaded = json.load(fh)
+            if isinstance(loaded, dict) and isinstance(loaded.get("items"), dict):
+                return loaded
+        except Exception:
+            pass
+        return {"updated_at": time.time(), "items": {}}
+
+    @classmethod
+    def _write_raw_evidence_index(cls, session_root: str, index_data: Dict[str, Any]) -> None:
+        index_path = os.path.join(session_root, "raw_evidence.index.json")
+        cls._atomic_write_json(index_path, index_data)
+
+    @staticmethod
+    def _iso_utc_now() -> str:
+        return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    @classmethod
+    def _build_raw_result_retention(cls, *, pinned: bool = False, ttl_seconds: Optional[int] = None) -> Dict[str, Any]:
+        ttl = int(ttl_seconds or cls._raw_evidence_default_ttl_seconds())
+        ttl = max(60, ttl)
+        expires_at_dt = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=ttl)
+        return {
+            "policy": "session_debug_default",
+            "ttl_seconds": ttl,
+            "expires_at": expires_at_dt.isoformat(),
+            "expires_at_ts": int(expires_at_dt.timestamp()),
+            "pinned": bool(pinned),
+        }
+
+    @classmethod
+    def _is_raw_evidence_expired(cls, record: Dict[str, Any], *, now_ts: Optional[int] = None) -> bool:
+        if not isinstance(record, dict):
+            return False
+        retention = record.get("retention") if isinstance(record.get("retention"), dict) else {}
+        if bool(retention.get("pinned", False)) or bool(record.get("pinned", False)):
+            return False
+        expires_at_ts = record.get("expires_at_ts")
+        try:
+            expires_at_ts_i = int(expires_at_ts)
+        except Exception:
+            expires_at_ts_i = 0
+        if expires_at_ts_i <= 0 and isinstance(retention, dict):
+            try:
+                expires_at_ts_i = int(retention.get("expires_at_ts") or 0)
+            except Exception:
+                expires_at_ts_i = 0
+        if expires_at_ts_i <= 0:
+            expires_at = str(record.get("expires_at") or retention.get("expires_at") or "").strip()
+            if expires_at:
+                try:
+                    parsed = datetime.datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+                    expires_at_ts_i = int(parsed.timestamp())
+                except Exception:
+                    expires_at_ts_i = 0
+        if expires_at_ts_i <= 0:
+            return False
+        now_value = int(now_ts or time.time())
+        return now_value >= expires_at_ts_i
+
+    @classmethod
+    def gc_raw_evidence_store(cls, *, sessions_dir: str, session_id: str, now_ts: Optional[int] = None) -> Dict[str, Any]:
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            return {"removed": 0, "kept": 0, "expired": 0, "missing": 0, "pinned": 0, "limit_pruned": 0}
+
+        session_root = os.path.join(os.path.abspath(sessions_dir or ""), session_id)
+        blob_root = os.path.join(session_root, "raw_evidence")
+        index_data = cls._load_raw_evidence_index(session_root)
+        items = index_data.setdefault("items", {})
+        now_value = int(now_ts or time.time())
+        removed = kept = expired = missing = pinned = limit_pruned = 0
+
+        # First, drop expired blobs unless pinned.
+        for raw_id in list(items.keys()):
+            record = items.get(raw_id)
+            if not isinstance(record, dict):
+                items.pop(raw_id, None)
+                removed += 1
+                continue
+            blob_path = str(record.get("path") or os.path.join(blob_root, f"{raw_id}.json")).strip()
+            is_pinned = bool((record.get("retention") or {}).get("pinned", record.get("pinned", False)))
+            record["pinned"] = is_pinned
+            if is_pinned:
+                pinned += 1
+            if cls._is_raw_evidence_expired(record, now_ts=now_value):
+                expired += 1
+                if is_pinned:
+                    record["available"] = False
+                    record["expired"] = True
+                    record["expired_at_ts"] = now_value
+                    record["expired_at"] = datetime.datetime.fromtimestamp(now_value, tz=datetime.timezone.utc).isoformat()
+                    record["reason"] = "pinned_expired"
+                    continue
+                if os.path.exists(blob_path):
+                    try:
+                        os.remove(blob_path)
+                    except Exception as exc:
+                        record["available"] = False
+                        record["expired"] = True
+                        record["reason"] = f"gc_remove_failed:{exc}"
+                        continue
+                record["available"] = False
+                record["expired"] = True
+                record["expired_at_ts"] = now_value
+                record["expired_at"] = datetime.datetime.fromtimestamp(now_value, tz=datetime.timezone.utc).isoformat()
+                record["reason"] = "expired"
+                continue
+            if not os.path.exists(blob_path):
+                missing += 1
+                if is_pinned:
+                    record["available"] = False
+                    record["missing"] = True
+                    record["reason"] = "missing_blob_pinned"
+                    continue
+                record["available"] = False
+                record["missing"] = True
+                record["reason"] = "missing_blob"
+                continue
+            record["available"] = True
+            record["expired"] = False
+            record["missing"] = False
+
+        # Then enforce a simple cap on non-pinned entries, oldest first.
+        max_items = cls._raw_evidence_max_items()
+        non_pinned = [
+            (str(item.get("created_at") or ""), raw_id)
+            for raw_id, item in items.items()
+            if not bool((item.get("retention") or {}).get("pinned", item.get("pinned", False)))
+        ]
+        non_pinned.sort(key=lambda pair: pair[0])
+        if len(items) > max_items and non_pinned:
+            overflow = max(0, len(items) - max_items)
+            for _, raw_id in non_pinned[:overflow]:
+                record = items.get(raw_id)
+                if not isinstance(record, dict):
+                    continue
+                blob_path = str(record.get("path") or os.path.join(blob_root, f"{raw_id}.json")).strip()
+                if os.path.exists(blob_path):
+                    try:
+                        os.remove(blob_path)
+                    except Exception as exc:
+                        record["available"] = False
+                        record["reason"] = f"gc_limit_remove_failed:{exc}"
+                        continue
+                items.pop(raw_id, None)
+                limit_pruned += 1
+
+        index_data["updated_at"] = time.time()
+        cls._write_raw_evidence_index(session_root, index_data)
+        return {
+            "removed": removed,
+            "kept": len(items),
+            "expired": expired,
+            "missing": missing,
+            "pinned": pinned,
+            "limit_pruned": limit_pruned,
+        }
+
+    @classmethod
+    def resolve_raw_evidence_ref(
+        cls,
+        *,
+        sessions_dir: str,
+        session_id: str,
+        raw_result_ref: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        ref = dict(raw_result_ref or {})
+        if not ref:
+            return {
+                "kind": "session_raw_result",
+                "id": "",
+                "available": False,
+                "redacted": False,
+                "reason": "missing_ref",
+            }
+        session_root = os.path.join(os.path.abspath(sessions_dir or ""), str(session_id or "").strip())
+        raw_id = str(ref.get("id") or "").strip()
+        if not raw_id:
+            ref["available"] = False
+            ref["reason"] = "missing_ref_id"
+            return ref
+        index_data = cls._load_raw_evidence_index(session_root)
+        record = dict((index_data.get("items") or {}).get(raw_id) or {})
+        blob_path = str(record.get("path") or os.path.join(session_root, "raw_evidence", f"{raw_id}.json")).strip()
+        exists = os.path.exists(blob_path)
+        expired = cls._is_raw_evidence_expired(record, now_ts=int(time.time())) if record else False
+        if not record:
+            ref.update(
+                {
+                    "available": False,
+                    "reason": "missing_index_entry",
+                    "missing": True,
+                }
+            )
+            return ref
+        ref.setdefault("kind", "session_raw_result")
+        ref["available"] = bool(exists and not expired)
+        ref["stored_truncated"] = bool(record.get("stored_truncated", ref.get("stored_truncated", False)))
+        ref["sha256"] = str(record.get("sha256") or ref.get("sha256") or "").strip() or None
+        ref["expires_at"] = record.get("expires_at") or (record.get("retention") or {}).get("expires_at")
+        ref["expires_at_ts"] = record.get("expires_at_ts") or (record.get("retention") or {}).get("expires_at_ts")
+        ref["pinned"] = bool((record.get("retention") or {}).get("pinned", record.get("pinned", False)))
+        ref["retention"] = dict(record.get("retention") or {})
+        ref["access"] = dict(record.get("access") or {})
+        if expired:
+            ref["reason"] = "expired"
+            ref["expired"] = True
+        elif not exists:
+            ref["reason"] = "missing_blob"
+            ref["missing"] = True
+        else:
+            ref["reason"] = str(record.get("reason") or ref.get("reason") or "stored").strip() or "stored"
+            ref["expired"] = False
+            ref["missing"] = False
+        return ref
+
+    @staticmethod
+    def _atomic_write_json(path: str, data: Dict[str, Any]) -> None:
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2, default=str)
+            fh.write("\n")
+        os.replace(tmp_path, path)
+
+    @classmethod
+    def _persist_raw_result_blob(
+        cls,
+        *,
+        sessions_dir: str,
+        session_id: str,
+        work_id: str,
+        turn_id: int,
+        action_name: str,
+        capability: str,
+        raw_result: Any,
+        content_type: str = "",
+        max_chars: int = 262144,
+        pinned: bool = False,
+        ttl_seconds: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            return {
+                "kind": "session_raw_result",
+                "id": "",
+                "available": False,
+                "redacted": False,
+                "reason": "missing_session_id",
+            }
+
+        raw_result_id = f"raw_{uuid.uuid4().hex}"
+        session_root = os.path.join(os.path.abspath(sessions_dir or ""), session_id)
+        blob_root = os.path.join(session_root, "raw_evidence")
+        os.makedirs(blob_root, exist_ok=True)
+
+        created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        retention = cls._build_raw_result_retention(pinned=pinned, ttl_seconds=ttl_seconds)
+        access = cls._raw_evidence_access_policy()
+        if isinstance(raw_result, (dict, list)):
+            raw_text = json.dumps(raw_result, ensure_ascii=False, default=str, separators=(",", ":"))
+            resolved_content_type = content_type or "application/json"
+        else:
+            raw_text = str(raw_result if raw_result is not None else "")
+            resolved_content_type = content_type or "text/plain"
+
+        stored_truncated = len(raw_text) > max_chars
+        stored_text = raw_text[:max_chars] if stored_truncated else raw_text
+        checksum = hashlib.sha256(raw_text.encode("utf-8", errors="replace")).hexdigest() if raw_text else ""
+        blob_path = os.path.join(blob_root, f"{raw_result_id}.json")
+        blob_payload = {
+            "raw_result_id": raw_result_id,
+            "session_id": session_id,
+            "work_id": str(work_id or "").strip(),
+            "turn_id": int(turn_id or 0),
+            "action_name": str(action_name or "").strip(),
+            "capability": str(capability or "").strip(),
+            "created_at": created_at,
+            "content_type": resolved_content_type,
+            "stored_truncated": stored_truncated,
+            "size_chars": len(raw_text),
+            "sha256": checksum,
+            "raw_text": stored_text,
+            "expires_at": retention["expires_at"],
+            "expires_at_ts": retention["expires_at_ts"],
+            "retention": retention,
+            "access": access,
+            "pinned": bool(pinned),
+        }
+        cls._atomic_write_json(blob_path, blob_payload)
+
+        index_path = os.path.join(session_root, "raw_evidence.index.json")
+        index_data = {"updated_at": time.time(), "items": {}}
+        if os.path.exists(index_path):
+            try:
+                with open(index_path, "r", encoding="utf-8") as fh:
+                    loaded = json.load(fh)
+                if isinstance(loaded, dict) and isinstance(loaded.get("items"), dict):
+                    index_data = loaded
+            except Exception:
+                index_data = {"updated_at": time.time(), "items": {}}
+        index_item = {
+            "raw_result_id": raw_result_id,
+            "session_id": session_id,
+            "turn_id": int(turn_id or 0),
+            "work_id": str(work_id or "").strip(),
+            "action_name": str(action_name or "").strip(),
+            "capability": str(capability or "").strip(),
+            "path": blob_path,
+            "content_type": resolved_content_type,
+            "available": True,
+            "redacted": False,
+            "stored_truncated": stored_truncated,
+            "size_chars": len(raw_text),
+            "sha256": checksum,
+            "created_at": created_at,
+            "expires_at": retention["expires_at"],
+            "expires_at_ts": retention["expires_at_ts"],
+            "retention": retention,
+            "access": access,
+            "pinned": bool(pinned),
+        }
+        index_data.setdefault("items", {})[raw_result_id] = index_item
+        index_data["updated_at"] = time.time()
+        cls._atomic_write_json(index_path, index_data)
+        try:
+            cls.gc_raw_evidence_store(sessions_dir=sessions_dir, session_id=session_id)
+        except Exception as gc_error:
+            logger.warning(
+                "Raw evidence GC failed after persist | session_id=%s action=%s reason=%s",
+                session_id,
+                action_name,
+                gc_error,
+            )
+        return {
+            "kind": "session_raw_result",
+            "id": raw_result_id,
+            "available": True,
+            "redacted": False,
+            "stored_truncated": stored_truncated,
+            "sha256": checksum,
+            "expires_at": retention["expires_at"],
+            "expires_at_ts": retention["expires_at_ts"],
+            "retention": retention,
+            "access": access,
+            "pinned": bool(pinned),
+            "reason": "stored",
+        }
+
+    @classmethod
+    def _safe_persist_raw_result_blob(
+        cls,
+        *,
+        session: Optional[Session],
+        sessions_dir: str,
+        session_id: str,
+        work_id: str,
+        turn_id: int,
+        action_name: str,
+        capability: str,
+        raw_result: Any,
+        content_type: str = "",
+        max_chars: int = 262144,
+        pinned: bool = False,
+        ttl_seconds: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        try:
+            return cls._persist_raw_result_blob(
+                sessions_dir=sessions_dir,
+                session_id=session_id,
+                work_id=work_id,
+                turn_id=turn_id,
+                action_name=action_name,
+                capability=capability,
+                raw_result=raw_result,
+                content_type=content_type,
+                max_chars=max_chars,
+                pinned=pinned,
+                ttl_seconds=ttl_seconds,
+            )
+        except Exception as raw_store_error:
+            logger.warning(
+                "Could not persist raw evidence blob | session_id=%s action=%s reason=%s",
+                session_id,
+                action_name,
+                raw_store_error,
+            )
+            if isinstance(getattr(session, "context", None), dict):
+                session.context["last_raw_result_store_error"] = str(raw_store_error)
+            if isinstance(getattr(session, "state_summary", None), dict):
+                session.state_summary["last_raw_result_store_error"] = str(raw_store_error)
+            return {
+                "kind": "session_raw_result",
+                "id": "",
+                "available": False,
+                "redacted": False,
+                "reason": "store_failed",
+            }
+
+    @staticmethod
     def _extract_structured_result(result: Any, raw_result: str) -> Optional[Dict[str, Any]]:
         if isinstance(result, dict):
             return result
@@ -5285,6 +5751,8 @@ class AgentOrchestrator:
         extracted_sources: List[Dict[str, Any]],
         last_generated_attachment_paths: List[str],
         attachment_delivery: Optional[Dict[str, Any]] = None,
+        raw_result_ref: Optional[Dict[str, Any]] = None,
+        raw_result_redaction: Optional[Dict[str, Any]] = None,
         requires_replan: bool = False,
     ) -> ActionObservation:
         capability_metadata = {}
@@ -5334,6 +5802,8 @@ class AgentOrchestrator:
             artifacts=artifacts,
             attachment_delivery=attachment_delivery,
             next_step_context=next_step_context,
+            raw_result_ref=raw_result_ref,
+            raw_result_redaction=raw_result_redaction,
             repair_context=repair_context,
             requires_replan=requires_replan or result_status in {"failure", "partial", "error"},
             work_id=str(work_id or "").strip(),
@@ -5641,6 +6111,32 @@ class AgentOrchestrator:
             
         except Exception as e:
             logger.error(f"Error in LLM Recovery Loop: {e}")
+            details = getattr(e, "details", None)
+            recovery_failure: Dict[str, Any] = {
+                "error_stage": "recovery",
+                "error_type": "recovery_error",
+                "error_reason": str(e),
+                "diagnostic_source": "orchestrator",
+                "semantic_authority": False,
+            }
+            if isinstance(details, dict) and details:
+                recovery_failure.update(
+                    {
+                        "provider_used": details.get("provider_used"),
+                        "provider_parse_status": details.get("provider_parse_status"),
+                        "provider_fallback_reason": details.get("provider_fallback_reason"),
+                        "provider_schema_mode": details.get("provider_schema_mode"),
+                        "provider_contract_mode": details.get("provider_contract_mode"),
+                        "raw_preview": details.get("raw_preview", ""),
+                        "raw_preview_truncated": bool(details.get("raw_preview_truncated")),
+                        "raw_preview_chars": int(details.get("raw_preview_chars") or 0),
+                        "provider_diagnostics": dict(details),
+                    }
+                )
+            if isinstance(getattr(session, "context", None), dict):
+                session.context["last_recovery_failure"] = dict(recovery_failure)
+            if isinstance(getattr(session, "state_summary", None), dict):
+                session.state_summary["last_recovery_failure"] = dict(recovery_failure)
             return self._build_honest_fallback_reply(language=locale, reason_code="recovery_error", detail=str(e))
 
     @staticmethod

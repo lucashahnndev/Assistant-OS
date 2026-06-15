@@ -431,6 +431,7 @@ def build_session_snapshot(session_id: str, base_data_dir: Optional[str] = None,
             "session": session_path,
             "chat": chat_path,
             "events": events_path,
+            "raw_evidence_dir": os.path.join(session_dir, "raw_evidence"),
         },
     }
 
@@ -457,6 +458,7 @@ def build_session_snapshot(session_id: str, base_data_dir: Optional[str] = None,
         "artifacts": "artifacts.index.json",
         "playback": "playback.index.json",
         "wegena": "wegena.index.json",
+        "raw_evidence": "raw_evidence.index.json",
     }
     for index_name, filename in index_files.items():
         path = os.path.join(session_dir, filename)
@@ -498,6 +500,7 @@ class SessionEventIndexWriter:
             "artifacts": os.path.join(self.session_dir, "artifacts.index.json"),
             "playback": os.path.join(self.session_dir, "playback.index.json"),
             "wegena": os.path.join(self.session_dir, "wegena.index.json"),
+            "raw_evidence": os.path.join(self.session_dir, "raw_evidence.index.json"),
         }
         os.makedirs(self.session_dir, exist_ok=True)
 
