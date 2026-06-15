@@ -432,7 +432,7 @@ const Security = () => {
                         return (
                             <div
                                 key={`picker-${action.id}`}
-                                className="glass"
+                                className=""
                                 style={{
                                     display: 'flex',
                                     alignItems: 'center',
@@ -657,13 +657,13 @@ const Security = () => {
     return (
         <div className="animate-in scroll-container security-refine" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             <div style={{ flex: 1, overflowY: 'auto', padding: 0, paddingBottom: '24px' }}>
-                <section style={{ padding: isMobile ? '8px' : '12px', borderRadius: 0, border: 'none', background: 'var(--card-bg)', backdropFilter: 'var(--surface-blur)', WebkitBackdropFilter: 'var(--surface-blur)', boxShadow: 'none' }}>
+                <section style={{ padding: isMobile ? '8px' : '12px', borderRadius: 0, border: 'none', backdropFilter: 'var(--surface-blur)', WebkitBackdropFilter: 'var(--surface-blur)', boxShadow: 'none' }}>
                     <div
                         style={{
                             position: 'sticky',
                             top: 0,
                             zIndex: 5,
-                            background: 'var(--card-bg)',
+                            background: 'transparent',
                             backdropFilter: 'var(--surface-blur)',
                             WebkitBackdropFilter: 'var(--surface-blur)',
                             margin: isMobile ? '-8px -8px 8px -8px' : '-12px -12px 8px -12px',
@@ -741,228 +741,228 @@ const Security = () => {
                         <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px', alignItems: 'stretch' }}>
                             {activeTab === 'channels' && (
                                 <>
-                            <div className="security-card" style={shellCardStyle}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-                                    <div className="flex-center" style={{ width: '28px', height: '28px', borderRadius: '7px', background: 'var(--accent-glow)', color: 'var(--accent-color)' }}>
-                                        <Shield size={15} />
-                                    </div>
-                                    <h3 style={{ fontSize: '0.82rem', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Access Strategy</h3>
-                                </div>
-
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '10px' }}>
-                                        <div>
-                                            <label style={{ display: 'block', fontSize: '9px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase' }}>Private Messages</label>
-                                            <select
-                                                value={currentConf.dm_mode}
-                                                onChange={(e) => handleInterfaceUpdate({ dm_mode: e.target.value })}
-                                                className="input-field"
-                                                style={compactFieldStyle}
-                                            >
-                                                <option value="approved_only">Approved Only</option>
-                                                <option value="auto_approve">Auto Approve</option>
-                                                <option value="anyone">Anyone</option>
-                                            </select>
-                                        </div>
-                                        <div>
-                                            <label style={{ display: 'block', fontSize: '9px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase' }}>Groups / Channels</label>
-                                            <select
-                                                value={currentConf.group_mode}
-                                                onChange={(e) => handleInterfaceUpdate({ group_mode: e.target.value })}
-                                                className="input-field"
-                                                style={compactFieldStyle}
-                                            >
-                                                <option value="approved_only">Approved Only</option>
-                                                <option value="auto_approve">Auto Approve</option>
-                                                <option value="anyone">Anyone</option>
-                                            </select>
-                                        </div>
-                                    </div>
-
-                                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '10px' }}>
-                                        {[
-                                            { label: 'Default User ACL Profile', key: 'default_user_group', prefix: 'dug' },
-                                            { label: 'Auto-Approve User ACL Profile', key: 'auto_approve_user_group', prefix: 'aug' },
-                                            { label: 'Default Chat ACL Profile', key: 'default_chat_group', prefix: 'dcg' },
-                                            { label: 'Auto-Approve Chat ACL Profile', key: 'auto_approve_chat_group', prefix: 'acg' }
-                                        ].map(field => (
-                                            <div key={field.key}>
-                                                <label style={{ display: 'block', fontSize: '9px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase' }}>{field.label}</label>
-                                                <select
-                                                    value={currentConf[field.key] || ''}
-                                                    onChange={(e) => handleInterfaceUpdate({ [field.key]: e.target.value })}
-                                                    className="input-field"
-                                                    style={compactFieldStyle}
-                                                >
-                                                    {groupOptions.map(g => (
-                                                        <option key={`${field.prefix}-${g.value}`} value={g.value}>{g.label}</option>
-                                                    ))}
-                                                </select>
+                                    <div className="security-card" style={shellCardStyle}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                                            <div className="flex-center" style={{ width: '28px', height: '28px', borderRadius: '7px', background: 'var(--accent-glow)', color: 'var(--accent-color)' }}>
+                                                <Shield size={15} />
                                             </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="security-card" style={shellCardStyle}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-                                    <div className="flex-center" style={{ width: '28px', height: '28px', borderRadius: '7px', background: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b' }}>
-                                        <Activity size={15} />
-                                    </div>
-                                    <h3 style={{ fontSize: '0.82rem', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Traffic Control</h3>
-                                </div>
-
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px', borderRadius: '8px', background: 'rgba(0,0,0,0.16)' }}>
-                                        <div>
-                                            <div style={{ fontSize: '11px', fontWeight: '800' }}>Global Rate Limit</div>
-                                            <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Prevent API exhaustion</div>
+                                            <h3 style={{ fontSize: '0.82rem', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Access Strategy</h3>
                                         </div>
-                                        <div
-                                            onClick={() => handleInterfaceUpdate({ rate_limit_enabled: !currentConf.rate_limit_enabled })}
-                                            style={{
-                                                width: '44px',
-                                                height: '24px',
-                                                borderRadius: '12px',
-                                                background: currentConf.rate_limit_enabled ? 'var(--accent-color)' : 'rgba(255,255,255,0.1)',
-                                                position: 'relative',
-                                                cursor: 'pointer',
-                                                transition: 'var(--transition-fast)'
-                                            }}
-                                        >
-                                            <div style={{
-                                                width: '18px',
-                                                height: '18px',
-                                                borderRadius: '50%',
-                                                background: '#fff',
-                                                position: 'absolute',
-                                                top: '3px',
-                                                left: currentConf.rate_limit_enabled ? '23px' : '3px',
-                                                transition: 'var(--transition-fast)',
-                                                boxShadow: 'var(--shadow-sm)'
-                                            }} />
-                                        </div>
-                                    </div>
 
-                                    <div style={{ opacity: currentConf.rate_limit_enabled ? 1 : 0.4, pointerEvents: currentConf.rate_limit_enabled ? 'auto' : 'none', transition: 'opacity 0.2s' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
-                                            <label style={{ fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', textTransform: 'uppercase' }}>MSG / MINUTE (BURST)</label>
-                                            <span style={{ fontSize: '12px', fontWeight: '900', color: 'var(--accent-color)' }}>{currentConf.max_msgs_per_min || 0}</span>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '10px' }}>
+                                                <div>
+                                                    <label style={{ display: 'block', fontSize: '9px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase' }}>Private Messages</label>
+                                                    <select
+                                                        value={currentConf.dm_mode}
+                                                        onChange={(e) => handleInterfaceUpdate({ dm_mode: e.target.value })}
+                                                        className="input-field"
+                                                        style={compactFieldStyle}
+                                                    >
+                                                        <option value="approved_only">Approved Only</option>
+                                                        <option value="auto_approve">Auto Approve</option>
+                                                        <option value="anyone">Anyone</option>
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label style={{ display: 'block', fontSize: '9px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase' }}>Groups / Channels</label>
+                                                    <select
+                                                        value={currentConf.group_mode}
+                                                        onChange={(e) => handleInterfaceUpdate({ group_mode: e.target.value })}
+                                                        className="input-field"
+                                                        style={compactFieldStyle}
+                                                    >
+                                                        <option value="approved_only">Approved Only</option>
+                                                        <option value="auto_approve">Auto Approve</option>
+                                                        <option value="anyone">Anyone</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+
+                                            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '10px' }}>
+                                                {[
+                                                    { label: 'Default User ACL Profile', key: 'default_user_group', prefix: 'dug' },
+                                                    { label: 'Auto-Approve User ACL Profile', key: 'auto_approve_user_group', prefix: 'aug' },
+                                                    { label: 'Default Chat ACL Profile', key: 'default_chat_group', prefix: 'dcg' },
+                                                    { label: 'Auto-Approve Chat ACL Profile', key: 'auto_approve_chat_group', prefix: 'acg' }
+                                                ].map(field => (
+                                                    <div key={field.key}>
+                                                        <label style={{ display: 'block', fontSize: '9px', fontWeight: '800', color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase' }}>{field.label}</label>
+                                                        <select
+                                                            value={currentConf[field.key] || ''}
+                                                            onChange={(e) => handleInterfaceUpdate({ [field.key]: e.target.value })}
+                                                            className="input-field"
+                                                            style={compactFieldStyle}
+                                                        >
+                                                            {groupOptions.map(g => (
+                                                                <option key={`${field.prefix}-${g.value}`} value={g.value}>{g.label}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                ))}
+                                            </div>
                                         </div>
-                                        <input
-                                            type="range"
-                                            min="0"
-                                            max="120"
-                                            step="5"
-                                            value={currentConf.max_msgs_per_min || 0}
-                                            onChange={(e) => handleInterfaceUpdate({ max_msgs_per_min: parseInt(e.target.value) })}
-                                            style={{ width: '100%', accentColor: 'var(--accent-color)' }}
-                                        />
                                     </div>
 
-                                    <div style={{ marginTop: 'auto', padding: '10px', borderRadius: '8px', background: soberBg.danger, border: '1px solid color-mix(in srgb, var(--card-border) 72%, #ef4444 28%)' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-main)', marginBottom: '4px' }}>
-                                            <Zap size={14} />
-                                            <span style={{ fontSize: '11px', fontWeight: '900', textTransform: 'uppercase' }}>Emergency Stop</span>
+                                    <div className="security-card" style={shellCardStyle}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                                            <div className="flex-center" style={{ width: '28px', height: '28px', borderRadius: '7px', background: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b' }}>
+                                                <Activity size={15} />
+                                            </div>
+                                            <h3 style={{ fontSize: '0.82rem', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Traffic Control</h3>
                                         </div>
-                                        <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Instantly disable all communication for this interface.</p>
-                                        <button className="btn-ghost" style={{ width: '100%', marginTop: '12px', fontSize: '11px', fontWeight: '800', background: 'color-mix(in srgb, #ef4444 20%, var(--card-bg) 80%)', color: 'var(--text-main)' }}>
-                                            ACTIVATE LOCKDOWN
-                                        </button>
+
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px', borderRadius: '8px', background: 'rgba(0,0,0,0.16)' }}>
+                                                <div>
+                                                    <div style={{ fontSize: '11px', fontWeight: '800' }}>Global Rate Limit</div>
+                                                    <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Prevent API exhaustion</div>
+                                                </div>
+                                                <div
+                                                    onClick={() => handleInterfaceUpdate({ rate_limit_enabled: !currentConf.rate_limit_enabled })}
+                                                    style={{
+                                                        width: '44px',
+                                                        height: '24px',
+                                                        borderRadius: '12px',
+                                                        background: currentConf.rate_limit_enabled ? 'var(--accent-color)' : 'rgba(255,255,255,0.1)',
+                                                        position: 'relative',
+                                                        cursor: 'pointer',
+                                                        transition: 'var(--transition-fast)'
+                                                    }}
+                                                >
+                                                    <div style={{
+                                                        width: '18px',
+                                                        height: '18px',
+                                                        borderRadius: '50%',
+                                                        background: '#fff',
+                                                        position: 'absolute',
+                                                        top: '3px',
+                                                        left: currentConf.rate_limit_enabled ? '23px' : '3px',
+                                                        transition: 'var(--transition-fast)',
+                                                        boxShadow: 'var(--shadow-sm)'
+                                                    }} />
+                                                </div>
+                                            </div>
+
+                                            <div style={{ opacity: currentConf.rate_limit_enabled ? 1 : 0.4, pointerEvents: currentConf.rate_limit_enabled ? 'auto' : 'none', transition: 'opacity 0.2s' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+                                                    <label style={{ fontSize: '10px', fontWeight: '800', color: 'var(--text-muted)', textTransform: 'uppercase' }}>MSG / MINUTE (BURST)</label>
+                                                    <span style={{ fontSize: '12px', fontWeight: '900', color: 'var(--accent-color)' }}>{currentConf.max_msgs_per_min || 0}</span>
+                                                </div>
+                                                <input
+                                                    type="range"
+                                                    min="0"
+                                                    max="120"
+                                                    step="5"
+                                                    value={currentConf.max_msgs_per_min || 0}
+                                                    onChange={(e) => handleInterfaceUpdate({ max_msgs_per_min: parseInt(e.target.value) })}
+                                                    style={{ width: '100%', accentColor: 'var(--accent-color)' }}
+                                                />
+                                            </div>
+
+                                            <div style={{ marginTop: 'auto', padding: '10px', borderRadius: '8px', background: soberBg.danger, border: '1px solid color-mix(in srgb, var(--card-border) 72%, #ef4444 28%)' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-main)', marginBottom: '4px' }}>
+                                                    <Zap size={14} />
+                                                    <span style={{ fontSize: '11px', fontWeight: '900', textTransform: 'uppercase' }}>Emergency Stop</span>
+                                                </div>
+                                                <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Instantly disable all communication for this interface.</p>
+                                                <button className="btn-ghost" style={{ width: '100%', marginTop: '12px', fontSize: '11px', fontWeight: '800', background: 'color-mix(in srgb, #ef4444 20%, var(--card-bg) 80%)', color: 'var(--text-main)' }}>
+                                                    ACTIVATE LOCKDOWN
+                                                </button>
+                                            </div>
+                                        </div>
                                     </div>
-                                </div>
-                            </div>
                                 </>
                             )}
 
                             {(activeTab === 'audit') && (
-                            <div className="security-card" style={{ padding: '12px', borderRadius: '8px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--card-border)', gridColumn: '1 / -1' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                        <div className="flex-center" style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'rgba(56,189,248,0.1)', color: '#38bdf8' }}>
-                                            <ShieldAlert size={15} />
-                                        </div>
-                                        <div>
-                                            <h3 style={{ fontSize: '0.875rem', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Approval Audit ({(INTERFACE_META[activeInterface]?.label || activeInterface).toUpperCase()})</h3>
-                                            <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Review historical approve/deny decisions for the selected interface.</p>
-                                        </div>
-                                    </div>
-                                </div>
-                                {activeTab === 'audit' && <div style={{ marginTop: '16px', borderTop: '1px solid var(--card-border)', paddingTop: '14px' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', gap: '8px', flexWrap: 'wrap' }}>
-                                        <label style={{ fontSize: '10px', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Approval Audit ({(INTERFACE_META[activeInterface]?.label || activeInterface).toUpperCase()})</label>
-                                        <div style={{ display: 'flex', gap: '6px' }}>
-                                            {['all', 'approve', 'deny'].map(mode => (
-                                                <button
-                                                    key={`audit-${mode}`}
-                                                    onClick={() => setApprovalAuditFilter(mode)}
-                                                    style={{
-                                                        padding: '5px 9px',
-                                                        borderRadius: '8px',
-                                                        border: '1px solid',
-                                                        borderColor: approvalAuditFilter === mode ? 'var(--accent-color)' : 'var(--card-border)',
-                                                        background: approvalAuditFilter === mode ? 'var(--accent-glow)' : 'rgba(255,255,255,0.02)',
-                                                        color: approvalAuditFilter === mode ? 'var(--accent-color)' : 'var(--text-muted)',
-                                                        fontSize: '10px',
-                                                        fontWeight: '800',
-                                                        textTransform: 'uppercase'
-                                                    }}
-                                                >
-                                                    {mode}
-                                                </button>
-                                            ))}
+                                <div className="security-card" style={{ padding: '12px', borderRadius: '8px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--card-border)', gridColumn: '1 / -1' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                            <div className="flex-center" style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'rgba(56,189,248,0.1)', color: '#38bdf8' }}>
+                                                <ShieldAlert size={15} />
+                                            </div>
+                                            <div>
+                                                <h3 style={{ fontSize: '0.875rem', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Approval Audit ({(INTERFACE_META[activeInterface]?.label || activeInterface).toUpperCase()})</h3>
+                                                <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Review historical approve/deny decisions for the selected interface.</p>
+                                            </div>
                                         </div>
                                     </div>
-                                    <div className="custom-scrollbar" style={{ maxHeight: '220px', overflowY: 'auto', border: '1px solid var(--card-border)', borderRadius: '10px' }}>
-                                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                                            <thead>
-                                                <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
-                                                    <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Time</th>
-                                                    <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Decision</th>
-                                                    <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Worker</th>
-                                                    <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Source Session</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {filteredApprovalAudit.map((item, idx) => (
-                                                    <tr key={`approval-row-${idx}`} style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
-                                                        <td style={{ padding: '8px 10px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                                                            {item?.ts ? new Date(item.ts).toLocaleString() : '-'}
-                                                        </td>
-                                                        <td
-                                                            style={{
-                                                                padding: 0,
-                                                                background: item?.command === 'approve'
-                                                                    ? soberBg.success
-                                                                    : item?.command === 'deny'
-                                                                        ? soberBg.danger
-                                                                        : soberBg.warn
-                                                            }}
-                                                        >
-                                                            <div style={{ padding: '8px 10px', fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', color: 'var(--text-main)' }}>
-                                                                {item?.command || '-'}
-                                                            </div>
-                                                        </td>
-                                                        <td style={{ padding: '8px 10px', fontSize: '11px' }}>
-                                                            {item?.work_label || item?.work_key || item?.work_id || '-'}
-                                                        </td>
-                                                        <td style={{ padding: '8px 10px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                                                            {item?.source_session_id || '-'}
-                                                        </td>
-                                                    </tr>
+                                    {activeTab === 'audit' && <div style={{ marginTop: '16px', borderTop: '1px solid var(--card-border)', paddingTop: '14px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', gap: '8px', flexWrap: 'wrap' }}>
+                                            <label style={{ fontSize: '10px', fontWeight: '900', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Approval Audit ({(INTERFACE_META[activeInterface]?.label || activeInterface).toUpperCase()})</label>
+                                            <div style={{ display: 'flex', gap: '6px' }}>
+                                                {['all', 'approve', 'deny'].map(mode => (
+                                                    <button
+                                                        key={`audit-${mode}`}
+                                                        onClick={() => setApprovalAuditFilter(mode)}
+                                                        style={{
+                                                            padding: '5px 9px',
+                                                            borderRadius: '8px',
+                                                            border: '1px solid',
+                                                            borderColor: approvalAuditFilter === mode ? 'var(--accent-color)' : 'var(--card-border)',
+                                                            background: approvalAuditFilter === mode ? 'var(--accent-glow)' : 'rgba(255,255,255,0.02)',
+                                                            color: approvalAuditFilter === mode ? 'var(--accent-color)' : 'var(--text-muted)',
+                                                            fontSize: '10px',
+                                                            fontWeight: '800',
+                                                            textTransform: 'uppercase'
+                                                        }}
+                                                    >
+                                                        {mode}
+                                                    </button>
                                                 ))}
-                                                {filteredApprovalAudit.length === 0 && (
-                                                    <tr>
-                                                        <td colSpan={4} style={{ padding: '10px', fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                                                            No decisions for this interface yet.
-                                                        </td>
+                                            </div>
+                                        </div>
+                                        <div className="custom-scrollbar" style={{ maxHeight: '220px', overflowY: 'auto', border: '1px solid var(--card-border)', borderRadius: '10px' }}>
+                                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                                <thead>
+                                                    <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
+                                                        <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Time</th>
+                                                        <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Decision</th>
+                                                        <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Worker</th>
+                                                        <th style={{ textAlign: 'left', padding: '8px 10px', fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Source Session</th>
                                                     </tr>
-                                                )}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                </div>}
-                            </div>
+                                                </thead>
+                                                <tbody>
+                                                    {filteredApprovalAudit.map((item, idx) => (
+                                                        <tr key={`approval-row-${idx}`} style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+                                                            <td style={{ padding: '8px 10px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                                                                {item?.ts ? new Date(item.ts).toLocaleString() : '-'}
+                                                            </td>
+                                                            <td
+                                                                style={{
+                                                                    padding: 0,
+                                                                    background: item?.command === 'approve'
+                                                                        ? soberBg.success
+                                                                        : item?.command === 'deny'
+                                                                            ? soberBg.danger
+                                                                            : soberBg.warn
+                                                                }}
+                                                            >
+                                                                <div style={{ padding: '8px 10px', fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', color: 'var(--text-main)' }}>
+                                                                    {item?.command || '-'}
+                                                                </div>
+                                                            </td>
+                                                            <td style={{ padding: '8px 10px', fontSize: '11px' }}>
+                                                                {item?.work_label || item?.work_key || item?.work_id || '-'}
+                                                            </td>
+                                                            <td style={{ padding: '8px 10px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                                                                {item?.source_session_id || '-'}
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                    {filteredApprovalAudit.length === 0 && (
+                                                        <tr>
+                                                            <td colSpan={4} style={{ padding: '10px', fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                                                                No decisions for this interface yet.
+                                                            </td>
+                                                        </tr>
+                                                    )}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>}
+                                </div>
                             )}
                         </div>
                     )}
@@ -1319,7 +1319,7 @@ const Security = () => {
                         }}
                         onClick={() => setEditingOverrides(null)}
                     >
-                        <div className="glass animate-pop" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: isMobile ? '100%' : '720px', maxHeight: isMobile ? '90vh' : '85vh', overflowY: 'auto', borderRadius: isMobile ? '20px 20px 0 0' : '24px', position: 'relative', border: '1px solid var(--card-border)' }}>
+                        <div className="animate-pop" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: isMobile ? '100%' : '720px', maxHeight: isMobile ? '90vh' : '85vh', overflowY: 'auto', borderRadius: isMobile ? '20px 20px 0 0' : '24px', position: 'relative', border: '1px solid var(--card-border)', background: 'var(--card-bg)' }}>
                             <div style={{ padding: isMobile ? '16px' : '24px', borderBottom: '1px solid var(--card-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.01)' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
                                     <div className="flex-center" style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'var(--accent-glow)', color: 'var(--accent-color)', flexShrink: 0 }}>
@@ -1353,7 +1353,7 @@ const Security = () => {
                                             const isDenied = editingOverrides.data.overrides.deny_capabilities.includes(action.id);
 
                                             return (
-                                                <div key={action.id} className="glass" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderRadius: '14px', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--card-border)' }}>
+                                                <div key={action.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderRadius: '14px', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--card-border)' }}>
                                                     <div style={{ flex: 1, minWidth: 0 }}>
                                                         <div style={{ fontWeight: '800', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                             {action.id}
@@ -1425,7 +1425,7 @@ const Security = () => {
                     }}
                     onClick={() => { setShowCreateProfileModal(false); setShowAdvancedCreate(false); }}
                 >
-                    <div className="glass animate-pop" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: isMobile ? '100%' : '820px', maxHeight: isMobile ? '92vh' : '90vh', overflowY: 'auto', borderRadius: isMobile ? '16px 16px 0 0' : '16px', border: '1px solid var(--card-border)' }}>
+                    <div className="animate-pop" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: isMobile ? '100%' : '820px', maxHeight: isMobile ? '92vh' : '90vh', overflowY: 'auto', borderRadius: isMobile ? '16px 16px 0 0' : '16px', border: '1px solid var(--card-border)', background: 'var(--card-bg)' }}>
                         <div style={{ padding: isMobile ? '14px' : '16px', borderBottom: '1px solid var(--card-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.01)' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
                                 <div className="flex-center" style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'var(--accent-glow)', color: 'var(--accent-color)', flexShrink: 0 }}>
@@ -1506,7 +1506,7 @@ const Security = () => {
 
                             <details>
                                 <summary style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', borderRadius: '8px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--card-border)', fontSize: '11px', fontWeight: '800', color: 'var(--text-secondary)', listStyle: 'none' }}>
-                                    <span>⚙ Capability Permissions (optional)</span>
+                                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Settings size={14} /> Capability Permissions (optional)</span>
                                     <span style={{ display: 'flex', gap: '8px' }}>
                                         <span style={{ fontSize: '10px', fontWeight: '900', color: 'var(--text-main)', background: soberBg.success, padding: '2px 6px', borderRadius: '999px' }}>+{newGroupAllowCount}</span>
                                         <span style={{ fontSize: '10px', fontWeight: '900', color: 'var(--text-main)', background: soberBg.danger, padding: '2px 6px', borderRadius: '999px' }}>-{newGroupDenyCount}</span>
@@ -1576,7 +1576,7 @@ const Security = () => {
                         }}
                         onClick={() => { setEditingGroup(null); setShowAdvancedEdit(false); }}
                     >
-                        <div className="glass animate-pop" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: isMobile ? '100%' : '800px', maxHeight: isMobile ? '92vh' : '90vh', overflowY: 'auto', borderRadius: isMobile ? '20px 20px 0 0' : '24px', border: '1px solid var(--card-border)' }}>
+                        <div className="animate-pop" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: isMobile ? '100%' : '800px', maxHeight: isMobile ? '92vh' : '90vh', overflowY: 'auto', borderRadius: isMobile ? '20px 20px 0 0' : '24px', border: '1px solid var(--card-border)', background: 'var(--card-bg)' }}>
                             <div style={{ padding: isMobile ? '16px' : '24px', borderBottom: '1px solid var(--card-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.01)' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
                                     <div className="flex-center" style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'var(--accent-glow)', color: 'var(--accent-color)', flexShrink: 0 }}>

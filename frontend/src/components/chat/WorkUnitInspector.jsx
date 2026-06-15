@@ -766,25 +766,24 @@ export const WorkUnitInspector = ({ workId, sessionId, onExpand, inline = false,
             {!hideButton && (
                 <button
                     onClick={toggle}
-                    title="Work Unit Details"
+                    title={isOpen ? "Hide Work Details" : "Show Work Details"}
                     className="btn-ghost"
                     style={{
                         display: 'inline-flex', 
                         alignItems: 'center', 
                         gap: '6px',
-                        padding: '3px 8px',
-                        background: 'rgba(255,255,255,0.04)',
-                        border: '1px solid var(--card-border)',
-                        borderRadius: '6px',
+                        padding: '4px',
+                        background: 'transparent',
+                        border: 'none',
                         cursor: 'pointer',
-                        transition: 'all 0.2s ease',
-                        marginLeft: '4px'
+                        transition: 'opacity 0.2s',
+                        marginLeft: '4px',
+                        opacity: isOpen ? 1 : 0.4
                     }}
+                    onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
+                    onMouseLeave={(e) => { if (!isOpen) e.currentTarget.style.opacity = '0.4'; }}
                 >
-                    <Zap size={10} color={isOpen ? 'var(--accent-color)' : 'var(--text-muted)'} fill={isOpen ? 'var(--accent-color)' : 'none'} />
-                    <span style={{ fontSize: '9px', fontWeight: '800', color: isOpen ? 'var(--accent-color)' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                        {isOpen ? 'HIDE DETAILS' : 'WORK DETAILS'}
-                    </span>
+                    <TerminalIcon size={12} color={isOpen ? 'var(--accent-color)' : 'var(--text-muted)'} />
                 </button>
             )}
 

@@ -98,8 +98,38 @@ export const MessageAttachments = ({ msg, sessionId, onExpand }) => {
     const allAttachments = msg?.attachments || (msg?.file ? [msg.file] : []);
     if (allAttachments.length === 0) return null;
 
-    const visuals = allAttachments.filter(a => a.type === 'image' || a.type === 'video');
-    const docs = allAttachments.filter(a => a.type !== 'image' && a.type !== 'video');
+    const normalizeAttachment = (a) => {
+        if (typeof a === 'string') {
+            const name = a.split('/').pop();
+            const ext = name.split('.').pop()?.toLowerCase();
+            let type = 'file';
+            if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext)) type = 'image';
+            else if (['mp4', 'webm', 'ogg'].includes(ext)) type = 'video';
+            else if (['mp3', 'wav'].includes(ext)) type = 'audio';
+            else if (ext === 'pdf') type = 'pdf';
+            return { path: a, name, type };
+        }
+        let type = a.type;
+        if (!type && a.mime) {
+            if (a.mime.startsWith('image/')) type = 'image';
+            else if (a.mime.startsWith('video/')) type = 'video';
+            else if (a.mime.startsWith('audio/')) type = 'audio';
+            else if (a.mime === 'application/pdf') type = 'pdf';
+        }
+        if (!type && (a.name || a.path || a.file)) {
+            const name = a.name || a.path || a.file || '';
+            const ext = name.split('.').pop()?.toLowerCase();
+            if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext)) type = 'image';
+            else if (['mp4', 'webm', 'ogg'].includes(ext)) type = 'video';
+            else if (['mp3', 'wav'].includes(ext)) type = 'audio';
+            else if (ext === 'pdf') type = 'pdf';
+        }
+        return { ...a, type: type || 'file' };
+    };
+
+    const normalized = allAttachments.map(normalizeAttachment);
+    const visuals = normalized.filter(a => a.type === 'image' || a.type === 'video');
+    const docs = normalized.filter(a => a.type !== 'image' && a.type !== 'video');
 
     return (
         <div style={{ marginBottom: '12px' }}>

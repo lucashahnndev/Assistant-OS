@@ -8,8 +8,8 @@ const CapabilityIcon = ({
     size,
 }) => {
     const [imgError, setImgError] = useState(false);
-    const iconSize = Number(size || (variant === 'display' ? 26 : 12));
-    const shellSize = Number(size || (variant === 'display' ? 40 : 18));
+    const iconSize = Number(size || (variant === 'display' ? 26 : (variant === 'hub' ? 24 : 12)));
+    const shellSize = Number(size || (variant === 'display' ? 40 : (variant === 'hub' ? 40 : 18)));
 
     let iconUrl = null;
     if (assets && !imgError) {
@@ -27,7 +27,8 @@ const CapabilityIcon = ({
 
     return (
         <span
-            style={{
+            className={variant === 'hub' ? 'capability-icon-box' : undefined}
+            style={variant === 'hub' ? {} : {
                 width: `${shellSize}px`,
                 height: `${shellSize}px`,
                 borderRadius: variant === 'display' ? '12px' : '6px',
@@ -55,7 +56,7 @@ const CapabilityIcon = ({
                     onError={() => setImgError(true)}
                 />
             ) : (
-                <Puzzle size={iconSize} color="#a78bfa" />
+                <Puzzle size={iconSize} color={variant === 'hub' ? 'currentColor' : '#a78bfa'} />
             )}
         </span>
     );

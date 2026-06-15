@@ -89,6 +89,13 @@ const DASHBOARD_Z = {
     FULLSCREEN_TERMINAL: 11000,
 };
 
+const isDev = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV;
+const nexusDebug = (...args) => {
+    if (isDev) {
+        console.debug('[Nexus]', ...args);
+    }
+};
+
 const initialState = {
     immersive: true,
     leftExpanded: false,
@@ -204,6 +211,68 @@ const DASHBOARD_DEEZER_TRACK_RE = /(?:deezer\.com\/(?:[a-z]{2}\/)?track\/)(\d+)/
 
 const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
+const normalizeDisplayText = (value, fallback = '') => {
+    if (value === null || value === undefined) return String(fallback || '').trim();
+    if (typeof value === 'string') {
+        const text = value.trim();
+        return text || String(fallback || '').trim();
+    }
+    if (Array.isArray(value)) {
+        const text = value.map((item) => normalizeDisplayText(item, '')).filter(Boolean).join(' ').trim();
+        return text || String(fallback || '').trim();
+    }
+    if (isPlainObject(value)) {
+        const orderedKeys = [
+            'content',
+            'text',
+            'summary',
+            'message',
+            'label',
+            'title',
+            'rawText',
+            'thought',
+            'phrase',
+            'statusMessage',
+            'status_message',
+            'phase',
+            'state',
+        ];
+        for (const key of orderedKeys) {
+            const nested = normalizeDisplayText(value[key], '');
+            if (nested) return nested;
+        }
+        return String(fallback || '').trim();
+    }
+    const text = String(value).trim();
+    if (!text || text === '[object Object]') return String(fallback || '').trim();
+    return text;
+};
+
+const formatAtlasVoiceStatus = (status, { isSending = false, isPlaying = false, hasAssistantText = false, hasUserText = false } = {}) => {
+    const raw = String(status || '').trim().toLowerCase();
+    if (isPlaying || raw === 'speaking') return 'falando';
+    if (raw === 'thinking') return 'pensando';
+    if (raw === 'responding' || isSending) return 'respondendo';
+    if (raw === 'listening') return 'ouvindo';
+    if (raw === 'idle') return hasAssistantText || hasUserText ? 'aguardando' : 'idle';
+    if (raw === 'processing') return 'respondendo';
+    return raw || 'idle';
+};
+
+const hasWebGLSupport = () => {
+    if (typeof document === 'undefined') return false;
+    try {
+        const canvas = document.createElement('canvas');
+        return Boolean(
+            canvas.getContext('webgl2')
+            || canvas.getContext('webgl')
+            || canvas.getContext('experimental-webgl')
+        );
+    } catch (_) {
+        return false;
+    }
+};
+
 const normalizeLiveTimestamp = (value) => {
     if (typeof value === 'number' && Number.isFinite(value)) {
         return value > 10000000000 ? value : value * 1000;
@@ -222,8 +291,8 @@ const normalizeMessageIdentity = (message = {}) => String(
 ).trim();
 
 const mergeStreamContent = (previous = '', incoming = '') => {
-    const prev = String(previous || '');
-    const next = String(incoming || '');
+    const prev = String(previous || '').replace(/\s+/g, ' ').trimEnd();
+    const next = String(incoming || '').replace(/\s+/g, ' ').trimStart();
     if (!next) return prev;
     if (!prev) return next;
     if (next === prev) return prev;
@@ -231,7 +300,29 @@ const mergeStreamContent = (previous = '', incoming = '') => {
     if (prev.startsWith(next)) return prev;
     if (prev.includes(next)) return prev;
     if (next.includes(prev)) return next;
-    return `${prev}${next}`;
+
+    const maxOverlap = Math.min(prev.length, next.length);
+    for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+        if (prev.slice(-overlap) === next.slice(0, overlap)) {
+            return `${prev}${next.slice(overlap)}`;
+        }
+    }
+
+    const prevWords = prev.split(' ');
+    const nextWords = next.split(' ');
+    const maxWordOverlap = Math.min(prevWords.length, nextWords.length);
+    for (let overlap = maxWordOverlap; overlap > 0; overlap -= 1) {
+        const prevTail = prevWords.slice(-overlap).join(' ');
+        const nextHead = nextWords.slice(0, overlap).join(' ');
+        if (prevTail === nextHead) {
+            const remainder = nextWords.slice(overlap).join(' ');
+            return remainder ? `${prev} ${remainder}` : prev;
+        }
+    }
+
+    const prevEndsWithWord = /[\p{L}\p{N}]$/u.test(prev);
+    const nextStartsWithWord = /^[\p{L}\p{N}]/u.test(next);
+    return `${prev}${prevEndsWithWord && nextStartsWithWord ? ' ' : ''}${next}`;
 };
 
 const buildCanonicalMessageFromEvent = (event, fallbackRole = 'assistant') => {
@@ -271,6 +362,83 @@ const extractEventText = (eventData = {}) => {
         return String(rawText.text || rawText.content || rawText.message || rawText.value || '');
     }
     return rawText ? String(rawText) : '';
+};
+
+const getTranscriptTurnKey = (message = {}) => {
+    const turnId = message?.turn_id ?? message?.turnId ?? null;
+    return turnId !== null && turnId !== undefined && turnId !== ''
+        ? String(turnId)
+        : '';
+};
+
+const getLatestTranscriptTurnKey = (messages = []) => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const turnKey = getTranscriptTurnKey(messages[i]);
+        if (turnKey) return turnKey;
+    }
+
+    const lastUserIdx = Array.isArray(messages)
+        ? messages.map((msg) => String(msg?.role || '').toLowerCase()).lastIndexOf('user')
+        : -1;
+    if (lastUserIdx >= 0) {
+        const fallbackKey = getTranscriptTurnKey(messages[lastUserIdx]);
+        if (fallbackKey) return fallbackKey;
+        const fallbackId = messages[lastUserIdx]?.id;
+        if (fallbackId !== null && fallbackId !== undefined && fallbackId !== '') return String(fallbackId);
+    }
+
+    const lastMessage = Array.isArray(messages) && messages.length ? messages[messages.length - 1] : null;
+    const fallbackId = lastMessage?.id;
+    return fallbackId !== null && fallbackId !== undefined && fallbackId !== ''
+        ? String(fallbackId)
+        : '';
+};
+
+const resolveCurrentTranscriptTurn = (messages = [], preferredTurnId = '') => {
+    const cleanMessages = Array.isArray(messages) ? messages : [];
+    const preferredKey = preferredTurnId !== null && preferredTurnId !== undefined && preferredTurnId !== ''
+        ? String(preferredTurnId)
+        : '';
+
+    const collectTurnMessages = (turnKey) => {
+        if (!turnKey) return [];
+        return cleanMessages.filter((message) => getTranscriptTurnKey(message) === turnKey);
+    };
+
+    if (preferredKey) {
+        const preferredMessages = collectTurnMessages(preferredKey);
+        if (preferredMessages.length) {
+            return { turnId: preferredKey, messages: preferredMessages };
+        }
+    }
+
+    const latestKey = getLatestTranscriptTurnKey(cleanMessages);
+    if (latestKey) {
+        const latestMessages = collectTurnMessages(latestKey);
+        if (latestMessages.length) {
+            return { turnId: latestKey, messages: latestMessages };
+        }
+    }
+
+    const lastUserIdx = cleanMessages.map((message) => String(message?.role || '').toLowerCase()).lastIndexOf('user');
+    if (lastUserIdx >= 0) {
+        return {
+            turnId: getTranscriptTurnKey(cleanMessages[lastUserIdx]) || String(cleanMessages[lastUserIdx]?.id || ''),
+            messages: cleanMessages.slice(lastUserIdx),
+        };
+    }
+
+    return {
+        turnId: latestKey || '',
+        messages: cleanMessages.slice(-2),
+    };
+};
+
+const createLocalTranscriptTurnId = () => `nexus-turn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const isSyntheticTranscriptTurnId = (value = '') => {
+    const normalized = String(value || '').trim();
+    return /^((voice|nexus-turn)-)/i.test(normalized);
 };
 
 const reconcileHistoryMessage = (history = [], incomingMessage = {}, { mergeContent = false } = {}) => {
@@ -337,10 +505,12 @@ const normalizeSnapshotHistory = (snapshot = {}) => {
         if (!msg) return false;
         const role = String(msg?.role || '').toLowerCase();
         const type = String(msg?.type || msg?.msg_type || '').toLowerCase();
-        return !['system', 'reasoning', 'thought'].includes(role) && !['reasoning', 'thought'].includes(type);
+        if (['system', 'reasoning', 'thought'].includes(role)) return false;
+        if (['reasoning', 'thought', 'status', 'session', 'worker', 'worker_state', 'system_metrics', 'system_health'].includes(type)) return false;
+        return true;
     }).map((msg) => ({
         ...msg,
-        content: String(msg?.content || msg?.text || msg?.summary || ''),
+        content: normalizeDisplayText(msg?.content || msg?.text || msg?.summary || msg?.message || msg?.label || '', ''),
         id: msg?.id || msg?.message_id || msg?.messageId || `msg-${Date.now()}`,
     }));
 };
@@ -786,19 +956,41 @@ const useMediaStackManager = (preferredStageSignatures = [], sessionId = null) =
 }
 
 // Components
-const HeroTranscriptRenderer = ({ history, isSending, executionStatus }) => {
+const HeroTranscriptRenderer = ({
+    history,
+    isSending,
+    executionStatus,
+    liveUserText = '',
+    liveAssistantText = '',
+    voiceStatus = '',
+    atlasStatus = '',
+    liveTurnId = '',
+    isLiveTranscribing = false,
+    isAwaitingNextTurn = false,
+}) => {
     const [isExpanded, setIsExpanded] = useState(true);
     const scrollRef = useRef(null);
+    const cleanHistory = useMemo(() => history.filter((m) => {
+        const role = String(m?.role || '').toLowerCase();
+        const type = String(m?.type || m?.msg_type || '').toLowerCase();
+        if (['system', 'reasoning', 'thought'].includes(role)) return false;
+        if (['reasoning', 'thought'].includes(type)) return false;
+        return true;
+    }), [history]);
+    const currentTurnSnapshot = useMemo(
+        () => resolveCurrentTranscriptTurn(cleanHistory, liveTurnId),
+        [cleanHistory, liveTurnId]
+    );
+    const currentTurnHistory = currentTurnSnapshot.messages;
+    const currentTurnId = currentTurnSnapshot.turnId || String(liveTurnId || '');
+    const showLiveTurn = Boolean(liveUserText || liveAssistantText || isLiveTranscribing || isAwaitingNextTurn);
+    const historyCount = showLiveTurn ? 0 : currentTurnHistory.length;
     useEffect(() => {
         if (isExpanded && scrollRef.current) scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-    }, [history, isSending, isExpanded]);
-
-    const cleanHistory = history.filter(m => m.role !== 'system' && m.type !== 'reasoning' && m.role !== 'reasoning' && m.role !== 'thought');
-    const lastUserIdx = cleanHistory.map(m => m.role).lastIndexOf('user');
-    const displayHistory = lastUserIdx >= 0 ? cleanHistory.slice(lastUserIdx) : cleanHistory.slice(-2);
+        }, [currentTurnId, currentTurnHistory.length, isSending, isExpanded, liveUserText, liveAssistantText, voiceStatus]);
 
     const renderContent = (content) => {
-        return content
+        return normalizeDisplayText(content, '')
             .replace(/\*\*(.*?)\*\*/g, '<b style="color:var(--text-primary)">$1</b>')
             .replace(/\*(.*?)\*/g, '<i>$1</i>')
             .replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" style="color:var(--accent-color);text-decoration:underline">$1</a>');
@@ -813,7 +1005,7 @@ const HeroTranscriptRenderer = ({ history, isSending, executionStatus }) => {
                     border: '1px solid rgba(255,255,255,0.08)', cursor: 'pointer', transition: 'all 0.2s',
                     background: 'rgba(8, 10, 20, 0.4)', textTransform: 'uppercase'
                 }} onMouseEnter={e => { e.currentTarget.style.color = '#00f2ff'; e.currentTarget.style.borderColor = 'rgba(0,242,255,0.3)'; }} onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}>
-                    <ChevronUp size={14} /> Histórico de Transcrição ({cleanHistory.length})
+                    <ChevronUp size={14} /> Histórico de Transcrição ({historyCount})
                 </button>
             </div>
         );
@@ -830,24 +1022,77 @@ const HeroTranscriptRenderer = ({ history, isSending, executionStatus }) => {
                 }} title="Colapsar Transcrição" onMouseEnter={e => { e.currentTarget.style.color = '#fff'; e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; }} onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}>
                     <ChevronDown size={14} />
                 </button>
-                <div ref={scrollRef} className="custom-scrollbar" style={{
-                    width: '100%', height: 'auto', maxHeight: '35vh', overflowY: 'auto',
-                    padding: '16px 20px', paddingRight: '40px',
-                    display: 'flex', flexDirection: 'column', gap: '8px',
-                    fontFamily: "'Fira Code', monospace", fontSize: '11px', lineHeight: '1.5',
-                    background: 'rgba(8, 10, 20, 0.52)',
-                    backdropFilter: 'blur(12px)',
-                    WebkitBackdropFilter: 'blur(12px)',
-                    borderRadius: '16px',
-                    border: '1px solid rgba(255, 255, 255, 0.08)',
-                    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
-                    opacity: 0.95,
-                    maskImage: 'linear-gradient(to bottom, transparent 0%, black 15%)',
-                    WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 15%)'
-                }}>
-                    {displayHistory.map((msg, i) => {
+                <div
+                    ref={scrollRef}
+                    className="custom-scrollbar"
+                    data-last-turn-id={String(currentTurnId || '')}
+                    style={{
+                        width: '100%',
+                        height: 'auto',
+                        maxHeight: '35vh',
+                        overflowY: 'auto',
+                        padding: '16px 20px',
+                        paddingRight: '40px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '8px',
+                        fontFamily: "'Fira Code', monospace",
+                        fontSize: '11px',
+                        lineHeight: '1.5',
+                        background: 'rgba(8, 10, 20, 0.52)',
+                        backdropFilter: 'blur(12px)',
+                        WebkitBackdropFilter: 'blur(12px)',
+                        borderRadius: '16px',
+                        border: '1px solid rgba(255, 255, 255, 0.08)',
+                        boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
+                        opacity: 0.95,
+                        maskImage: 'linear-gradient(to bottom, transparent 0%, black 15%)',
+                        WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 15%)'
+                    }}>
+                    {showLiveTurn ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '8px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '2px' }}>
+                                <span className="pulse-slow" style={{ color: '#a855f7', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                                    {atlasStatus || (isSending ? 'respondendo' : 'idle')}
+                                </span>
+                            </div>
+                            {liveUserText && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <span style={{ color: 'rgba(255,255,255,0.55)', fontWeight: '900', fontSize: '10px', letterSpacing: '0.05em' }}>USER</span>
+                                        {voiceStatus && <span style={{ fontSize: '8px', opacity: 0.45, textTransform: 'uppercase' }}>{voiceStatus}</span>}
+                                    </div>
+                                    <span style={{
+                                        color: '#ffffff',
+                                        wordBreak: 'break-word',
+                                        textShadow: '0 1px 3px rgba(0,0,0,0.8)',
+                                        paddingLeft: '8px',
+                                        borderLeft: '1px solid rgba(255, 255, 255, 0.1)'
+                                    }}>
+                                        {renderContent(liveUserText)}
+                                    </span>
+                                </div>
+                            )}
+                            {liveAssistantText && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <span style={{ color: 'var(--accent-color, #00f2ff)', fontWeight: '900', fontSize: '10px', letterSpacing: '0.05em' }}>ATLAS</span>
+                                    </div>
+                                    <span style={{
+                                        color: '#ffffff',
+                                        wordBreak: 'break-word',
+                                        textShadow: '0 1px 3px rgba(0,0,0,0.8)',
+                                        paddingLeft: '8px',
+                                        borderLeft: '1px solid rgba(0, 242, 255, 0.2)'
+                                    }}>
+                                        {renderContent(liveAssistantText)}
+                                    </span>
+                                </div>
+                            )}
+                        </div>
+                    ) : currentTurnHistory.map((msg, i) => {
                         const isAtlas = msg.role === 'atlas' || msg.role === 'assistant';
-                        const rawContent = msg.content;
+                        const rawContent = normalizeDisplayText(msg.content, '');
                         const cleanContent = rawContent
                             .replace(/\{[\s\S]*?\}/g, '')
                             .replace(/\[[A-Z_]+(:.*?)?\]/g, '')
@@ -873,7 +1118,7 @@ const HeroTranscriptRenderer = ({ history, isSending, executionStatus }) => {
                         if (!cleanContent || pureLabels || isRichAnnouncement) return null;
 
                         return (
-                            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '6px' }}>
+                            <div key={`${msg.id || i}-${msg.turn_id || msg.turnId || msg.stream_id || msg.streamId || i}`} style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '6px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <span style={{
                                         color: isAtlas ? 'var(--accent-color, #00f2ff)' : 'rgba(255, 255, 255, 0.55)',
@@ -1777,12 +2022,12 @@ const Nexus = () => {
     const [state, dispatch] = useReducer(dashboardReducer, initialState);
     const [preferredStageSignatures, setPreferredStageSignatures] = useState([]);
     const { theme } = useTheme();
+    // Shared websocket/session transport used by text and voice.
+    const { addWebSocketListener, removeWebSocketListener, sendWebSocketMessage, connectionStatus, activeSessionId, setActiveSessionId, workers: activeWorkers } = useGlobalSession();
     const voice = useVoice({
         sessionId: state.textState.sessionId,
         sendMessage: (msg) => {
-            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                wsRef.current.send(JSON.stringify(msg));
-            }
+            return sendWebSocketMessage(msg);
         },
         onError: (err) => notify.error("Microphone error: " + err.message)
     });
@@ -1800,6 +2045,7 @@ const Nexus = () => {
 
     // UI Engine & Wegena Controls
     const [visualEngine, setVisualEngine] = useState('WEGENA_3D');
+    const [webglAvailable] = useState(() => hasWebGLSupport());
     const [wegenaFeedback, setWegenaFeedback] = useState(null);
     const [wegenaConfig, setWegenaConfig] = useState({
         preset: 'aether-minimal',
@@ -1808,8 +2054,66 @@ const Nexus = () => {
         materialType: 'orb-default'
     });
     const [settingsOpen, setSettingsOpen] = useState(false);
+    const [liveTurnState, setLiveTurnState] = useState({
+        turnId: null,
+        userText: '',
+        assistantText: '',
+        thoughtText: '',
+        voiceStatus: '',
+        isThinking: false,
+        isComplete: false
+    });
+    const [liveRenderText, setLiveRenderText] = useState({
+        userText: '',
+        assistantText: ''
+    });
+    const liveRenderTimersRef = useRef({
+        user: null,
+        assistant: null
+    });
+    const liveRenderMetaRef = useRef({
+        userTurnId: null,
+        assistantTurnId: null,
+        userText: '',
+        assistantText: ''
+    });
+    const activeLiveTurnIdRef = useRef(null);
+    const liveTranscriptBufferRef = useRef({
+        userText: '',
+        assistantText: ''
+    });
+    const awaitingLiveTranscriptRef = useRef(false);
 
-    const wsRef = useRef(null);
+    const alignLiveTurnId = useCallback((nextTurnId) => {
+        const normalizedTurnId = nextTurnId !== null && nextTurnId !== undefined && nextTurnId !== ''
+            ? String(nextTurnId)
+            : null;
+        if (!normalizedTurnId) return activeLiveTurnIdRef.current || null;
+
+        const currentTurnId = activeLiveTurnIdRef.current || null;
+        if (currentTurnId === normalizedTurnId) {
+            return normalizedTurnId;
+        }
+
+        if (currentTurnId && !isSyntheticTranscriptTurnId(currentTurnId) && isSyntheticTranscriptTurnId(normalizedTurnId)) {
+            return currentTurnId;
+        }
+
+        activeLiveTurnIdRef.current = normalizedTurnId;
+        setLiveTurnState((prev) => (
+            prev.turnId === normalizedTurnId
+                ? prev
+                : { ...prev, turnId: normalizedTurnId }
+        ));
+        liveRenderMetaRef.current = {
+            userTurnId: normalizedTurnId,
+            assistantTurnId: normalizedTurnId,
+            userText: liveRenderMetaRef.current.userText || '',
+            assistantText: liveRenderMetaRef.current.assistantText || ''
+        };
+        return normalizedTurnId;
+    }, []);
+
     const audioContextRef = useRef(null);
     const ttsAnalyserRef = useRef(null);
     const audioQueueRef = useRef([]);
@@ -1836,18 +2140,229 @@ const Nexus = () => {
         msmRef.current = msm;
     }, [msm]);
 
+    const cancelLiveTypewriter = useCallback((slot) => {
+        const timer = liveRenderTimersRef.current?.[slot];
+        if (timer) {
+            window.cancelAnimationFrame(timer);
+            liveRenderTimersRef.current[slot] = null;
+        }
+    }, []);
+
+    const resetLiveTurnState = useCallback((nextTurnId = null) => {
+        const normalizedTurnId = nextTurnId !== null && nextTurnId !== undefined && nextTurnId !== ''
+            ? String(nextTurnId)
+            : null;
+        cancelLiveTypewriter('user');
+        cancelLiveTypewriter('assistant');
+        activeLiveTurnIdRef.current = normalizedTurnId;
+        liveTranscriptBufferRef.current = {
+            userText: '',
+            assistantText: ''
+        };
+        awaitingLiveTranscriptRef.current = false;
+        liveRenderMetaRef.current = {
+            userTurnId: normalizedTurnId,
+            assistantTurnId: normalizedTurnId,
+            userText: '',
+            assistantText: ''
+        };
+        setLiveRenderText({ userText: '', assistantText: '' });
+        setLiveTurnState({
+            turnId: normalizedTurnId,
+            userText: '',
+            assistantText: '',
+            thoughtText: '',
+            voiceStatus: '',
+            isThinking: false,
+            isComplete: false
+        });
+        streamingMessageRef.current = null;
+    }, [cancelLiveTypewriter]);
+
+    const markAwaitingNextLiveTranscript = useCallback(() => {
+        awaitingLiveTranscriptRef.current = true;
+    }, []);
+
+    const updateLiveTurnState = useCallback((turnId, patch = {}, options = {}) => {
+        const normalizedTurnId = turnId !== null && turnId !== undefined && turnId !== ''
+            ? String(turnId)
+            : null;
+        const shouldReset = options.reset === true
+            || (normalizedTurnId && activeLiveTurnIdRef.current && String(activeLiveTurnIdRef.current) !== normalizedTurnId)
+            || (normalizedTurnId && !activeLiveTurnIdRef.current);
+        if (shouldReset) {
+            activeLiveTurnIdRef.current = normalizedTurnId;
+            setLiveTurnState({
+                turnId: normalizedTurnId,
+                userText: patch.userText !== undefined ? normalizeDisplayText(patch.userText, '') : '',
+                assistantText: patch.assistantText !== undefined ? normalizeDisplayText(patch.assistantText, '') : '',
+                thoughtText: patch.thoughtText !== undefined ? normalizeDisplayText(patch.thoughtText, '') : '',
+                voiceStatus: patch.voiceStatus !== undefined ? String(patch.voiceStatus || '') : '',
+                isThinking: patch.isThinking !== undefined ? !!patch.isThinking : false,
+                isComplete: patch.isComplete !== undefined ? !!patch.isComplete : false
+            });
+            return;
+        }
+
+        setLiveTurnState((prev) => {
+            const nextTurnId = normalizedTurnId ?? prev.turnId;
+            activeLiveTurnIdRef.current = nextTurnId;
+            return {
+                turnId: nextTurnId,
+                userText: patch.userText !== undefined ? normalizeDisplayText(patch.userText, '') : prev.userText,
+                assistantText: patch.assistantText !== undefined ? normalizeDisplayText(patch.assistantText, '') : prev.assistantText,
+                thoughtText: patch.thoughtText !== undefined ? normalizeDisplayText(patch.thoughtText, '') : prev.thoughtText,
+                voiceStatus: patch.voiceStatus !== undefined ? String(patch.voiceStatus || '') : prev.voiceStatus,
+                isThinking: patch.isThinking !== undefined ? !!patch.isThinking : prev.isThinking,
+                isComplete: patch.isComplete !== undefined ? !!patch.isComplete : prev.isComplete
+            };
+        });
+    }, []);
+
+    const animateLiveTypewriter = useCallback((slot, turnId, targetText) => {
+        const normalizedSlot = slot === 'assistant' ? 'assistant' : 'user';
+        const nextTurnId = turnId !== null && turnId !== undefined && turnId !== ''
+            ? String(turnId)
+            : null;
+        const target = normalizeDisplayText(targetText, '');
+        cancelLiveTypewriter(normalizedSlot);
+
+        const currentMeta = liveRenderMetaRef.current[`${normalizedSlot}TurnId`];
+        const currentRendered = liveRenderMetaRef.current[`${normalizedSlot}Text`] || '';
+        const sameTurn = currentMeta && nextTurnId && String(currentMeta) === String(nextTurnId);
+        const shouldContinue = sameTurn && target.startsWith(currentRendered);
+        const startText = shouldContinue ? currentRendered : '';
+        const startIndex = startText.length;
+
+        liveRenderMetaRef.current[`${normalizedSlot}TurnId`] = nextTurnId;
+        liveRenderMetaRef.current[`${normalizedSlot}Text`] = startText;
+        setLiveRenderText((prev) => ({
+            ...prev,
+            [`${normalizedSlot}Text`]: startText,
+        }));
+
+        if (!target || target === startText) {
+            liveRenderMetaRef.current[`${normalizedSlot}Text`] = target;
+            setLiveRenderText((prev) => ({
+                ...prev,
+                [`${normalizedSlot}Text`]: target,
+            }));
+            return;
+        }
+
+        const speed = normalizedSlot === 'assistant' ? 16 : 18;
+        const startAt = performance.now();
+        const tick = () => {
+            const elapsed = performance.now() - startAt;
+            const nextLength = Math.min(target.length, startIndex + Math.floor(elapsed / speed));
+            const nextText = target.slice(0, nextLength);
+            liveRenderMetaRef.current[`${normalizedSlot}Text`] = nextText;
+            setLiveRenderText((prev) => ({
+                ...prev,
+                [`${normalizedSlot}Text`]: nextText,
+            }));
+            if (nextLength < target.length) {
+                liveRenderTimersRef.current[normalizedSlot] = window.requestAnimationFrame(tick);
+            } else {
+                liveRenderTimersRef.current[normalizedSlot] = null;
+            }
+        };
+
+        liveRenderTimersRef.current[normalizedSlot] = window.requestAnimationFrame(tick);
+    }, [cancelLiveTypewriter]);
+
+    useEffect(() => {
+        const nextTurnId = liveTurnState.turnId || null;
+        if (!nextTurnId) {
+            cancelLiveTypewriter('user');
+            cancelLiveTypewriter('assistant');
+            liveRenderMetaRef.current = {
+                userTurnId: null,
+                assistantTurnId: null,
+                userText: '',
+                assistantText: ''
+            };
+            setLiveRenderText({ userText: '', assistantText: '' });
+            return;
+        }
+
+        const userTurnChanged = String(liveRenderMetaRef.current.userTurnId || '') !== String(nextTurnId);
+        const assistantTurnChanged = String(liveRenderMetaRef.current.assistantTurnId || '') !== String(nextTurnId);
+
+        if (userTurnChanged) {
+            cancelLiveTypewriter('user');
+            liveRenderMetaRef.current.userTurnId = nextTurnId;
+            liveRenderMetaRef.current.userText = '';
+            setLiveRenderText((prev) => ({ ...prev, userText: '' }));
+        }
+        if (assistantTurnChanged) {
+            cancelLiveTypewriter('assistant');
+            liveRenderMetaRef.current.assistantTurnId = nextTurnId;
+            liveRenderMetaRef.current.assistantText = '';
+            setLiveRenderText((prev) => ({ ...prev, assistantText: '' }));
+        }
+
+        if (liveTurnState.userText) {
+            animateLiveTypewriter('user', nextTurnId, liveTurnState.userText);
+        } else if (userTurnChanged) {
+            setLiveRenderText((prev) => ({ ...prev, userText: '' }));
+        }
+
+        if (liveTurnState.assistantText) {
+            animateLiveTypewriter('assistant', nextTurnId, liveTurnState.assistantText);
+        } else if (assistantTurnChanged) {
+            setLiveRenderText((prev) => ({ ...prev, assistantText: '' }));
+        }
+
+        return () => {
+            cancelLiveTypewriter('user');
+            cancelLiveTypewriter('assistant');
+        };
+    }, [cancelLiveTypewriter, liveTurnState.turnId, liveTurnState.userText, liveTurnState.assistantText, animateLiveTypewriter]);
+
+    useEffect(() => {
+        if (!webglAvailable && visualEngine === 'WEGENA_3D') {
+            nexusDebug('webgl unavailable, falling back to ATLAS_2D');
+            setVisualEngine('ATLAS_2D');
+        }
+    }, [webglAvailable, visualEngine]);
+
     const autoVoiceTriggered = useRef(false);
+    const handleVoiceToggle = useCallback(async () => {
+        if (state.voiceMode === 'live') {
+            dispatch({ type: 'SET_VOICE_MODE', payload: 'manual' });
+            awaitingLiveTranscriptRef.current = false;
+            voice.stopRecording();
+            return;
+        }
+
+        if (connectionStatus !== 'online') {
+            notify.error('Conecte ao Nexus antes de ativar o microfone.');
+            dispatch({ type: 'SET_VOICE_MODE', payload: 'manual' });
+            return;
+        }
+
+        dispatch({ type: 'SET_VOICE_MODE', payload: 'live' });
+        awaitingLiveTranscriptRef.current = true;
+        const started = await voice.startRecording();
+        nexusDebug('voice start result', { started });
+        if (!started) {
+            awaitingLiveTranscriptRef.current = false;
+            dispatch({ type: 'SET_VOICE_MODE', payload: 'manual' });
+            return;
+        }
+    }, [connectionStatus, dispatch, state.voiceMode, voice]);
+
     useEffect(() => {
         if (location.state?.autoStartVoice && !autoVoiceTriggered.current) {
             autoVoiceTriggered.current = true;
             // Delay slightly to ensure UI is ready
-            setTimeout(() => {
-                if (typeof handleVoiceToggle === 'function') {
-                    handleVoiceToggle();
-                }
+            const timer = setTimeout(() => {
+                void handleVoiceToggle();
             }, 1500);
+            return () => clearTimeout(timer);
         }
-    }, [location.state]);
+    }, [handleVoiceToggle, location.state]);
 
     useEffect(() => {
         const fetchConfig = async () => {
@@ -2234,8 +2749,15 @@ const Nexus = () => {
                 });
             }
 
-            const hasAssistant = snapshotHistory.some((msg) => String(msg?.role || '').toLowerCase() === 'assistant');
-            if (hasAssistant) {
+            const activeTurnId = String(activeLiveTurnIdRef.current || '').trim();
+            const hasAssistantForActiveTurn = snapshotHistory.some((msg) => {
+                const role = String(msg?.role || '').toLowerCase();
+                if (role !== 'assistant') return false;
+                if (!activeTurnId) return false;
+                const msgTurnId = String(msg?.turn_id || msg?.turnId || '').trim();
+                return msgTurnId === activeTurnId;
+            });
+            if (hasAssistantForActiveTurn) {
                 dispatch({ type: 'SET_SENDING', payload: false });
                 dispatch({ type: 'END_EXECUTION' });
                 setIsThinking(false);
@@ -2247,6 +2769,11 @@ const Nexus = () => {
                 window.setTimeout(() => {
                     void reconcileSessionSnapshot(sessionKey, attempt + 1);
                 }, 500);
+            } else {
+                dispatch({ type: 'SET_SENDING', payload: false });
+                dispatch({ type: 'END_EXECUTION' });
+                setIsThinking(false);
+                if (agentThoughtTimeoutRef.current) clearTimeout(agentThoughtTimeoutRef.current);
             }
         } catch (err) {
             if (attempt < 2) {
@@ -2254,6 +2781,10 @@ const Nexus = () => {
                     void reconcileSessionSnapshot(sessionKey, attempt + 1);
                 }, 750);
             } else {
+                dispatch({ type: 'SET_SENDING', payload: false });
+                dispatch({ type: 'END_EXECUTION' });
+                setIsThinking(false);
+                if (agentThoughtTimeoutRef.current) clearTimeout(agentThoughtTimeoutRef.current);
                 console.warn('Nexus snapshot reconcile failed:', err);
             }
         }
@@ -2310,9 +2841,17 @@ const Nexus = () => {
                 }
                 isPlayingRef.current = false;
                 setTtsIntensity(0);
+                const activeTurnId = activeLiveTurnIdRef.current || null;
 
                 if (audioQueueRef.current.length === 0) {
                     dispatch({ type: 'UPDATE_VOICE', payload: { status: 'listening', isActive: true } });
+                    if (activeTurnId) {
+                        updateLiveTurnState(activeTurnId, {
+                            voiceStatus: 'listening',
+                            isThinking: false,
+                        }, { reset: false });
+                    }
+                    markAwaitingNextLiveTranscript();
                 } else {
                     playNextChunk();
                 }
@@ -2439,9 +2978,6 @@ const Nexus = () => {
         return () => clearInterval(t);
     }, []);
 
-    // Extract useGlobalSession properties
-    const { addWebSocketListener, removeWebSocketListener, sendWebSocketMessage, connectionStatus, activeSessionId, setActiveSessionId, workers: activeWorkers } = useGlobalSession();
-
     useEffect(() => {
         const sessionId = state.textState.sessionId;
         if (!sessionId) return;
@@ -2461,6 +2997,10 @@ const Nexus = () => {
                 const liveData = isPlainObject(event.payload) ? event.payload : {};
                 const eventData = { ...rawData, ...liveData };
                 const eventType = event.eventType;
+                const eventTurnId = event.turnId ?? eventData.turn_id ?? eventData.turnId ?? null;
+                const normalizedEventTurnId = eventTurnId !== null && eventTurnId !== undefined && eventTurnId !== ''
+                    ? String(eventTurnId)
+                    : null;
                 if (eventType === 'pong') return;
 
                 // ── Worker state updates ──────────────────────────────────
@@ -2468,7 +3008,7 @@ const Nexus = () => {
                     const workerData = eventData.data && typeof eventData.data === 'object' ? eventData.data : eventData;
                     if (workerData?.status || workerData?.last_thought) {
                         const statusLabel = workerData.status ? `[Worker: ${workerData.status}]` : '[Worker]';
-                        const text = workerData.last_thought || `Processando passo '${workerData.label || 'interno'}'...`;
+                        const text = normalizeDisplayText(workerData.last_thought || workerData.label || workerData.message || 'Processando passo interno...', `Processando passo '${workerData.label || 'interno'}'...`);
                         setAgentThought(`${statusLabel} ${text}`);
                         setIsThinking(true);
                         if (agentThoughtTimeoutRef.current) clearTimeout(agentThoughtTimeoutRef.current);
@@ -2486,8 +3026,24 @@ const Nexus = () => {
 
                 // ── Agent thought stream ──────────────────────────────────
                 if (event.category === 'reasoning') {
-                    const thoughtText = extractEventText(eventData) || String(eventData.thought || '');
+                    const thoughtText = normalizeDisplayText(
+                        extractEventText(eventData) || eventData.thought || eventData.summary || eventData.content || '',
+                        ''
+                    );
                     if (thoughtText) setAgentThought(thoughtText);
+                    const targetTurnId = alignLiveTurnId(normalizedEventTurnId || activeLiveTurnIdRef.current || null);
+                    const isCurrentLiveTurn = !normalizedEventTurnId
+                        || !activeLiveTurnIdRef.current
+                        || String(activeLiveTurnIdRef.current) === normalizedEventTurnId
+                        || isSyntheticTranscriptTurnId(activeLiveTurnIdRef.current);
+                    if (!isCurrentLiveTurn) return;
+                    if (thoughtText) {
+                        updateLiveTurnState(targetTurnId, {
+                            thoughtText,
+                            voiceStatus: 'thinking',
+                            isThinking: true
+                        }, { reset: Boolean(normalizedEventTurnId && activeLiveTurnIdRef.current && String(activeLiveTurnIdRef.current) !== normalizedEventTurnId) });
+                    }
                     setIsThinking(true);
                     if (agentThoughtTimeoutRef.current) clearTimeout(agentThoughtTimeoutRef.current);
                     agentThoughtTimeoutRef.current = setTimeout(() => setIsThinking(false), 6000);
@@ -2497,13 +3053,19 @@ const Nexus = () => {
                 if (event.category === 'stream' && event.canUpdateMessage) {
                     const incomingContent = extractEventText(eventData);
                     const currentStream = streamingMessageRef.current || {};
+                    const targetTurnId = alignLiveTurnId(normalizedEventTurnId || currentStream.turn_id || currentStream.turnId || activeLiveTurnIdRef.current || null);
+                    const isCurrentLiveTurn = !normalizedEventTurnId
+                        || !activeLiveTurnIdRef.current
+                        || String(activeLiveTurnIdRef.current) === normalizedEventTurnId
+                        || isSyntheticTranscriptTurnId(activeLiveTurnIdRef.current);
+                    if (!isCurrentLiveTurn) return;
                     const nextMessage = {
                         ...buildCanonicalMessageFromEvent(event, 'assistant'),
                         id: event.messageId || currentStream.id || event.streamId || currentStream.stream_id || currentStream.streamId || event.turnId || `msg-${Date.now()}`,
                         role: 'assistant',
                         content: mergeStreamContent(currentStream.content || '', incomingContent),
                         timestamp: normalizeLiveTimestamp(event.timestamp || eventData.timestamp),
-                        turn_id: event.turnId ?? currentStream.turn_id ?? eventData.turn_id ?? null,
+                        turn_id: event.turnId ?? currentStream.turn_id ?? eventData.turn_id ?? targetTurnId ?? null,
                         reply_to_message_id: event.replyToMessageId ?? currentStream.reply_to_message_id ?? eventData.reply_to_message_id ?? null,
                         stream_id: event.streamId ?? currentStream.stream_id ?? currentStream.streamId ?? eventData.stream_id ?? null,
                         work_id: event.workId ?? currentStream.work_id ?? eventData.work_id ?? null,
@@ -2515,6 +3077,12 @@ const Nexus = () => {
                         _mergeContent: true,
                     };
                     streamingMessageRef.current = nextMessage;
+                    updateLiveTurnState(targetTurnId, {
+                        assistantText: nextMessage.content,
+                        voiceStatus: 'responding',
+                        isThinking: true,
+                        isComplete: false
+                    }, { reset: false });
                     dispatch({ type: 'ADD_MESSAGE', payload: nextMessage });
                     return;
                 }
@@ -2549,6 +3117,12 @@ const Nexus = () => {
                         attachments: Array.isArray(eventData.attachments) ? eventData.attachments : [],
                         contentSegments: Array.isArray(eventData.contentSegments) ? eventData.contentSegments : [],
                     };
+                    const targetTurnId = alignLiveTurnId(normalizedEventTurnId || activeStreamMessage.turn_id || activeStreamMessage.turnId || activeLiveTurnIdRef.current || null);
+                    const isCurrentLiveTurn = !normalizedEventTurnId
+                        || !activeLiveTurnIdRef.current
+                        || String(activeLiveTurnIdRef.current) === normalizedEventTurnId
+                        || isSyntheticTranscriptTurnId(activeLiveTurnIdRef.current);
+                    if (!isCurrentLiveTurn) return;
 
                     if (event.target === 'stream' && !String(finalMessage.content || '').trim()) {
                         streamingMessageRef.current = null;
@@ -2563,11 +3137,18 @@ const Nexus = () => {
                         dispatch({ type: 'SET_SENDING', payload: false });
                         setIsThinking(false);
                         if (agentThoughtTimeoutRef.current) clearTimeout(agentThoughtTimeoutRef.current);
+                        updateLiveTurnState(targetTurnId, {
+                            assistantText: finalMessage.content,
+                            voiceStatus: 'responding',
+                            isThinking: false,
+                            isComplete: true
+                        }, { reset: false });
 
                         dispatch({ type: 'ADD_MESSAGE', payload: finalMessage });
                         if (eventType === 'assistant_response') {
                             routeStructuredArtifacts(finalMessage, sessionId);
                         }
+                        markAwaitingNextLiveTranscript();
                     }
                     return;
                 }
@@ -2591,7 +3172,7 @@ const Nexus = () => {
                     const isExecuting = !isTerminal && (['running', 'thinking', 'executing', 'tool_use', 'responding'].includes(phase) || !!eventData.work_id);
 
                     if (isExecuting) {
-                        const msg = eventData.message || eventData.statusMessage || eventData.status || '';
+                        const msg = normalizeDisplayText(eventData.message || eventData.statusMessage || eventData.status || '', '');
                         if (msg) setAgentThought(`[Sistema]: ${msg}`);
                         else if (phase) setAgentThought(`[Sistema]: Engajando protocolo '${phase}'...`);
 
@@ -2657,6 +3238,25 @@ const Nexus = () => {
                         dispatch({ type: 'END_EXECUTION' });
                     }
 
+                    const statusTurnId = normalizedEventTurnId || activeLiveTurnIdRef.current || null;
+                    if (statusTurnId) {
+                        const voicePhase = phase === 'thinking'
+                            ? 'thinking'
+                            : phase === 'responding'
+                                ? 'responding'
+                                : phase === 'tool_use' || phase === 'executing' || phase === 'running'
+                                    ? 'thinking'
+                                    : phase === 'idle'
+                                        ? 'idle'
+                                        : phase;
+                        if (voicePhase) {
+                            updateLiveTurnState(statusTurnId, {
+                                voiceStatus: voicePhase,
+                                isThinking: ['thinking', 'responding', 'executing', 'running', 'tool_use'].includes(voicePhase)
+                            }, { reset: false });
+                        }
+                    }
+
                     if (statusWorkId && !isTerminal) {
                         startTerminalTracking(statusWorkId);
                     } else if (statusWorkId && isTerminal) {
@@ -2679,22 +3279,53 @@ const Nexus = () => {
                         if (String(msg?.role || '').toLowerCase() === 'system') return;
                         const canonicalMessage = buildCanonicalMessageFromEvent(event, String(msg?.role || (eventType === 'user_message.created' ? 'user' : 'assistant') || 'assistant').toLowerCase() || 'assistant');
                         const activeStreamMessage = streamingMessageRef.current || {};
+                        const targetTurnId = alignLiveTurnId(normalizedEventTurnId || canonicalMessage.turn_id || canonicalMessage.turnId || activeStreamMessage.turn_id || activeStreamMessage.turnId || activeLiveTurnIdRef.current || null);
                         if (String(canonicalMessage.role || '').toLowerCase() === 'assistant') {
+                            const isCurrentLiveTurn = !normalizedEventTurnId
+                                || !activeLiveTurnIdRef.current
+                                || String(activeLiveTurnIdRef.current) === normalizedEventTurnId
+                                || isSyntheticTranscriptTurnId(activeLiveTurnIdRef.current);
+                            if (!isCurrentLiveTurn) return;
                             canonicalMessage.id = event.messageId || canonicalMessage.id || activeStreamMessage.id || event.streamId || activeStreamMessage.stream_id || event.turnId || `msg-${Date.now()}`;
-                            canonicalMessage.content = mergeStreamContent(activeStreamMessage?.content || '', canonicalMessage.content || '');
-                            canonicalMessage.turn_id = canonicalMessage.turn_id ?? activeStreamMessage.turn_id ?? eventData.turn_id ?? null;
+                            canonicalMessage.content = normalizeDisplayText(canonicalMessage.content || activeStreamMessage?.content || '', '');
+                            canonicalMessage.turn_id = canonicalMessage.turn_id ?? activeStreamMessage.turn_id ?? eventData.turn_id ?? targetTurnId ?? null;
                             canonicalMessage.reply_to_message_id = canonicalMessage.reply_to_message_id ?? activeStreamMessage.reply_to_message_id ?? eventData.reply_to_message_id ?? null;
                             canonicalMessage.stream_id = canonicalMessage.stream_id || activeStreamMessage.stream_id || activeStreamMessage.streamId || eventData.stream_id || null;
                             canonicalMessage.work_id = canonicalMessage.work_id || activeStreamMessage.work_id || eventData.work_id || null;
                             canonicalMessage.statusPhase = 'complete';
                             canonicalMessage.isComplete = true;
                             canonicalMessage.animateTyping = true;
-                            streamingMessageRef.current = canonicalMessage;
+                            if (targetTurnId && (!activeLiveTurnIdRef.current || String(activeLiveTurnIdRef.current) === String(targetTurnId))) {
+                                streamingMessageRef.current = canonicalMessage;
+                                updateLiveTurnState(targetTurnId, {
+                                    assistantText: canonicalMessage.content,
+                                    voiceStatus: liveTurnState.voiceStatus || state.voiceState.status || '',
+                                    isThinking: false,
+                                    isComplete: true
+                                }, { reset: false });
+                            }
                             dispatch({ type: 'SET_SENDING', payload: false });
                             setIsThinking(false);
                         }
 
                         if (!String(canonicalMessage.content || '').trim()) return;
+                        if (String(canonicalMessage.role || '').toLowerCase() === 'user') {
+                            const userTurnId = targetTurnId;
+                            if (userTurnId) {
+                                if (!activeLiveTurnIdRef.current || String(activeLiveTurnIdRef.current) !== String(userTurnId)) {
+                                    alignLiveTurnId(userTurnId);
+                                    resetLiveTurnState(userTurnId);
+                                }
+                                updateLiveTurnState(userTurnId, {
+                                    userText: canonicalMessage.content,
+                                    assistantText: '',
+                                    thoughtText: '',
+                                    voiceStatus: 'listening',
+                                    isThinking: true,
+                                    isComplete: false
+                                }, { reset: false });
+                            }
+                        }
                         dispatch({ type: 'ADD_MESSAGE', payload: canonicalMessage });
                         if (String(canonicalMessage.role || '').toLowerCase() === 'assistant') {
                             routeStructuredArtifacts(canonicalMessage, sessionId);
@@ -2749,12 +3380,62 @@ const Nexus = () => {
                         dispatch({ type: 'UPDATE_VOICE', payload: { phrase: '' } });
                     }
                     dispatch({ type: 'UPDATE_VOICE', payload: { status: data.state, isActive: data.state !== 'idle' } });
-                } else if (data.type === 'asr.partial' || data.type === 'asr.final') {
-                    dispatch({ type: 'UPDATE_VOICE', payload: { phrase: data.text } });
+                    const voiceTurnId = alignLiveTurnId(normalizedEventTurnId || activeLiveTurnIdRef.current || null);
+                    if (voiceTurnId) {
+                        updateLiveTurnState(voiceTurnId, {
+                            voiceStatus: String(data.state || 'idle').toLowerCase(),
+                            isThinking: data.state === 'thinking'
+                        }, { reset: false });
+                    }
+                } else if (data.type === 'asr.partial' || data.type === 'asr.final' || data.type === 'transcript.partial' || data.type === 'transcript.final') {
+                    const transcriptText = String(extractEventText(eventData) || '');
+                    const incomingTurnId = event.turnId ?? eventData.turn_id ?? eventData.turnId ?? null;
+                    const normalizedTranscriptTurnId = incomingTurnId !== null && incomingTurnId !== undefined && incomingTurnId !== ''
+                        ? String(incomingTurnId)
+                        : null;
+                    const currentTranscriptTurnId = activeLiveTurnIdRef.current || null;
+                    const nextTurnId = normalizedTranscriptTurnId
+                        || (awaitingLiveTranscriptRef.current ? `voice-${Date.now()}` : currentTranscriptTurnId)
+                        || `voice-${Date.now()}`;
+                    const isNewTranscriptTurn = !!transcriptText && (
+                        awaitingLiveTranscriptRef.current
+                        || !currentTranscriptTurnId
+                        || (normalizedTranscriptTurnId && String(currentTranscriptTurnId) !== String(normalizedTranscriptTurnId))
+                    );
+
+                    if (isNewTranscriptTurn) {
+                        resetLiveTurnState(nextTurnId);
+                    }
+
+                    if (transcriptText) {
+                        const liveTurnId = alignLiveTurnId(nextTurnId);
+                        const currentUserText = liveTranscriptBufferRef.current.userText || '';
+                        const nextUserText = !isNewTranscriptTurn && currentTranscriptTurnId && String(currentTranscriptTurnId) === String(liveTurnId)
+                            ? mergeStreamContent(currentUserText, transcriptText)
+                            : transcriptText.trimStart();
+                        liveTranscriptBufferRef.current.userText = nextUserText;
+                        updateLiveTurnState(liveTurnId, {
+                            userText: nextUserText,
+                            assistantText: '',
+                            thoughtText: '',
+                            voiceStatus: data.type === 'asr.final' || data.type === 'transcript.final' ? 'thinking' : 'listening',
+                            isThinking: true,
+                            isComplete: false
+                        }, { reset: false });
+                        awaitingLiveTranscriptRef.current = false;
+                    }
+                    dispatch({ type: 'UPDATE_VOICE', payload: { phrase: data.type === 'asr.partial' || data.type === 'transcript.partial' ? transcriptText : '', status: data.type === 'asr.final' || data.type === 'transcript.final' ? 'thinking' : 'listening', isActive: true } });
                 } else if (data.type === 'orb.intensity') {
                     dispatch({ type: 'UPDATE_VOICE', payload: { intensity: data.intensity } });
                 } else if (data.type === 'tts.chunk') {
                     dispatch({ type: 'UPDATE_VOICE', payload: { status: 'speaking', isActive: true } });
+                    const ttsTurnId = alignLiveTurnId(normalizedEventTurnId || activeLiveTurnIdRef.current || null);
+                    if (ttsTurnId) {
+                        updateLiveTurnState(ttsTurnId, {
+                            voiceStatus: 'speaking',
+                            isThinking: false,
+                        }, { reset: false });
+                    }
                     audioQueueRef.current.push(data.b64);
                     playNextChunk();
                 } else if (data.type === 'control.cancel') {
@@ -2765,6 +3446,14 @@ const Nexus = () => {
                     }
                     isPlayingRef.current = false;
                     setTtsIntensity(0);
+                    const cancelTurnId = alignLiveTurnId(normalizedEventTurnId || activeLiveTurnIdRef.current || null);
+                    if (cancelTurnId) {
+                        updateLiveTurnState(cancelTurnId, {
+                            voiceStatus: 'listening',
+                            isThinking: false,
+                        }, { reset: false });
+                    }
+                    markAwaitingNextLiveTranscript();
                 } else if (eventType === 'media' || eventType === 'playback' || eventType === 'terminal_update' || eventType?.startsWith('playback.')) {
                     const mediaData = eventData;
                     if (eventType === 'media') {
@@ -2876,6 +3565,7 @@ const Nexus = () => {
         if (!input || state.textState.isSending) return;
 
         let activeId = state.textState.sessionId;
+        nexusDebug('text submit start', { sessionId: activeId || 'new', length: input.length });
 
         if (!activeId) {
             try {
@@ -2894,39 +3584,58 @@ const Nexus = () => {
         dispatch({ type: 'SET_SENDING', payload: true });
         dispatch({ type: 'SET_TEXT', payload: { input: '' } });
         streamingMessageRef.current = null;
+        const turnId = createLocalTranscriptTurnId();
+        resetLiveTurnState(turnId);
+        setLiveTurnState((prev) => ({
+            ...prev,
+            turnId,
+            userText: input,
+            assistantText: '',
+            thoughtText: '',
+            voiceStatus: '',
+            isThinking: true,
+            isComplete: false
+        }));
         dispatch({
             type: 'ADD_MESSAGE',
             payload: {
                 id: `msg-optimistic-${Date.now()}`,
                 role: 'user',
                 content: input,
-                timestamp: Date.now() / 1000
+                timestamp: Date.now() / 1000,
+                turn_id: turnId,
+                stream_id: turnId,
             }
         });
 
         const payload = {
             type: 'msg',
             content: input,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            turn_id: turnId,
+            stream_id: turnId
         };
 
         const sentViaWebSocket = sendWebSocketMessage(payload);
+        nexusDebug('text submit transport', { sessionId: activeId, sentViaWebSocket });
         if (!sentViaWebSocket) {
             try {
-                await api.post(`/sessions/${activeId}/message`, { message: input });
+                await api.post(`/sessions/${activeId}/message`, { message: input, turn_id: turnId, stream_id: turnId });
             } catch (err) {
+                nexusDebug('text submit fallback failed', { sessionId: activeId, error: String(err?.message || err || 'unknown') });
                 notify.error("Transmission failed");
             } finally {
                 window.setTimeout(() => {
+                    nexusDebug('text reconcile snapshot scheduled', { sessionId: activeId, source: 'fallback' });
                     void reconcileSessionSnapshot(activeId);
                 }, 450);
             }
         } else {
             window.setTimeout(() => {
+                nexusDebug('text reconcile snapshot scheduled', { sessionId: activeId, source: 'ws' });
                 void reconcileSessionSnapshot(activeId);
             }, 700);
         }
-        dispatch({ type: 'SET_SENDING', payload: false });
     };
 
     const handleReload = async () => {
@@ -2934,6 +3643,7 @@ const Nexus = () => {
         dispatch({ type: 'SET_HISTORY', payload: [] });
         dispatch({ type: 'SET_CONNECTED', payload: false });
         streamingMessageRef.current = null;
+        resetLiveTurnState(null);
         notify.loading("Provisioning new session...", { id: 'live-reload' });
 
         try {
@@ -2977,10 +3687,10 @@ const Nexus = () => {
                     const res = await fetch(data.scriptUrl);
                     if (res.ok) {
                         const scriptText = await res.text();
-                        setVisualEngine('WEGENA_3D');
+                        setVisualEngine(webglAvailable ? 'WEGENA_3D' : 'ATLAS_2D');
                         setWegScript(scriptText);
                         setSceneStreamActive(true);
-                        notify.success("Cena ativada no Orb!");
+                        notify.success(webglAvailable ? "Cena ativada no Orb!" : "Cena carregada no modo 2D.");
                     } else {
                         notify.error("Falha ao carregar a cena.");
                     }
@@ -3081,6 +3791,11 @@ const Nexus = () => {
                             sceneStreamActive={sceneStreamActive}
                             defaultPresetId={wegenaConfig.preset}
                             overrideConfig={wegenaConfig}
+                            onInitFailure={() => {
+                                nexusDebug('Wegena init failed, switching to ATLAS_2D');
+                                setVisualEngine('ATLAS_2D');
+                                notify.error('Wegena indisponível neste ambiente. Usando orbe 2D.');
+                            }}
                         />
                     ) : (
                         <AtlasOrbCanvas
@@ -3274,6 +3989,27 @@ const Nexus = () => {
                                 history={state.textState.history}
                                 isSending={state.textState.isSending}
                                 executionStatus={state.executionState.status}
+                                liveUserText={liveRenderText.userText || liveTurnState.userText || ''}
+                                liveAssistantText={liveRenderText.assistantText || liveTurnState.assistantText || ''}
+                                voiceStatus={liveTurnState.voiceStatus || state.voiceState.status || ''}
+                                atlasStatus={formatAtlasVoiceStatus(
+                                    liveTurnState.voiceStatus || state.voiceState.status || '',
+                                    {
+                                        isSending: state.textState.isSending,
+                                        isPlaying: isPlayingRef.current || audioQueueRef.current.length > 0,
+                                        hasAssistantText: Boolean(liveRenderText.assistantText || liveTurnState.assistantText),
+                                        hasUserText: Boolean(liveRenderText.userText || liveTurnState.userText),
+                                    }
+                                )}
+                                liveTurnId={liveTurnState.turnId || activeLiveTurnIdRef.current || ''}
+                                isLiveTranscribing={Boolean(
+                                    liveRenderText.userText
+                                    || liveRenderText.assistantText
+                                    || liveTurnState.userText
+                                    || liveTurnState.assistantText
+                                    || liveTurnState.thoughtText
+                                )}
+                                isAwaitingNextTurn={awaitingLiveTranscriptRef.current}
                             />
                         </div>}
 
@@ -3300,30 +4036,19 @@ const Nexus = () => {
 
                                 <button
                                     type="button"
-                                    onClick={async () => {
-                                        const newMode = state.voiceMode === 'live' ? 'manual' : 'live';
-                                        dispatch({ type: 'SET_VOICE_MODE', payload: newMode });
-                                        if (newMode === 'live') {
-                                            const started = await voice.startRecording();
-                                            if (!started) {
-                                                dispatch({ type: 'SET_VOICE_MODE', payload: 'manual' });
-                                            }
-                                        } else {
-                                            voice.stopRecording();
-                                        }
-                                    }}
+                                    onClick={handleVoiceToggle}
                                     className="flex-center glass"
-                                    disabled={state.voiceMode === 'keyword'}
+                                    disabled={state.voiceMode === 'keyword' || (connectionStatus !== 'online' && state.voiceMode !== 'live')}
                                     style={{
                                         width: isMobile ? '38px' : '42px', height: isMobile ? '38px' : '42px', borderRadius: isMobile ? '12px' : '14px',
                                         background: state.voiceMode === 'live' ? 'var(--accent-color)' : 'rgba(255, 255, 255, 0.08)',
                                         border: '1px solid rgba(255, 255, 255, 0.16)',
                                         color: state.voiceMode === 'live' ? '#000' : '#ffffff',
-                                        cursor: state.voiceMode === 'keyword' ? 'not-allowed' : 'pointer',
-                                        transition: 'all 0.2s', opacity: state.voiceMode === 'keyword' ? 0.3 : 1,
+                                        cursor: state.voiceMode === 'keyword' || (connectionStatus !== 'online' && state.voiceMode !== 'live') ? 'not-allowed' : 'pointer',
+                                        transition: 'all 0.2s', opacity: state.voiceMode === 'keyword' || (connectionStatus !== 'online' && state.voiceMode !== 'live') ? 0.3 : 1,
                                         boxShadow: '0 4px 12px rgba(0,0,0,0.3)'
                                     }}
-                                    title="Live Voice Mode"
+                                    title={connectionStatus === 'online' ? 'Live Voice Mode' : 'Live Voice Mode indisponível sem conexão'}
                                 >
                                     <Radio size={18} />
                                 </button>
@@ -3340,10 +4065,7 @@ const Nexus = () => {
                                 {state.voiceMode === 'live' ? (
                                     <div
                                         className="glass pulse-slow"
-                                        onClick={() => {
-                                            dispatch({ type: 'SET_VOICE_MODE', payload: 'manual' });
-                                            voice.stopRecording();
-                                        }}
+                                        onClick={handleVoiceToggle}
                                         style={{
                                             width: isMobile ? '46px' : '54px', height: isMobile ? '46px' : '54px', borderRadius: '50%',
                                             display: 'flex', alignItems: 'center', justifyContent: 'center',

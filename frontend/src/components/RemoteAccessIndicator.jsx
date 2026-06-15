@@ -61,9 +61,10 @@ const RemoteAccessIndicator = () => {
             </button>
 
             {isOpen && (
-                <div className="glass-card animate-fade-in" style={{
+                <div className="glass animate-fade-in" style={{
                     position: 'absolute', top: '120%', right: '0', minWidth: '280px', padding: '16px',
-                    borderRadius: 'var(--radius-md)', zIndex: 3000, boxShadow: 'var(--shadow-lg)'
+                    borderRadius: 'var(--radius-md)', zIndex: 3000, boxShadow: 'var(--shadow-lg)',
+                    background: 'var(--card-bg)'
                 }}>
                     <h4 style={{ fontSize: '13px', fontWeight: '800', marginBottom: '12px', borderBottom: '1px solid var(--card-border)', paddingBottom: '8px' }}>
                         Túneis Ativos

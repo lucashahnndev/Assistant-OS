@@ -16,7 +16,7 @@ const normalizeSessionItem = (item) => {
 };
 
 const DiagnosticsSection = ({ section }) => (
-    <section className="glass" style={{ padding: '20px', borderRadius: '14px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+    <section style={{ padding: '20px', borderRadius: 'var(--radius-md)', display: 'flex', flexDirection: 'column', gap: '14px', border: '1px solid var(--card-border)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
             <h3 style={{ fontSize: '15px', fontWeight: '800', letterSpacing: '0.01em' }}>{section.title}</h3>
             {section.chips?.length > 0 && (
@@ -193,12 +193,12 @@ const CognitionDiagnostics = () => {
 
             <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '0 var(--space-6) 100px' }}>
                 {loading ? (
-                    <div className="glass" style={{ padding: '60px', borderRadius: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px' }}>
+                    <div style={{ padding: '60px', borderRadius: 'var(--radius-md)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px', border: '1px solid var(--card-border)' }}>
                         <RefreshCw size={24} className="animate-spin" color="var(--accent-color)" />
                         <span style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>Loading cognitive diagnostics...</span>
                     </div>
                 ) : !viewModel.hasData ? (
-                    <div className="glass" style={{ padding: '48px', borderRadius: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', textAlign: 'center' }}>
+                    <div style={{ padding: '48px', borderRadius: 'var(--radius-md)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', textAlign: 'center', border: '1px solid var(--card-border)' }}>
                         <Brain size={28} color="var(--accent-color)" />
                         <strong style={{ fontSize: '18px' }}>No Cognitive Telemetry Yet</strong>
                         <p style={{ color: 'var(--text-secondary)', maxWidth: '56ch' }}>
@@ -208,7 +208,7 @@ const CognitionDiagnostics = () => {
                 ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px' }}>
-                            <div className="glass" style={{ padding: '18px', borderRadius: '14px' }}>
+                            <div style={{ padding: '18px', borderRadius: 'var(--radius-md)', border: '1px solid var(--card-border)' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
                                     <Activity size={16} color="var(--accent-color)" />
                                     <strong>Session</strong>
@@ -219,7 +219,7 @@ const CognitionDiagnostics = () => {
                                     <span>{`Focus task: ${payload?.current_cognitive_state?.focus?.primary_task_id || 'None'}`}</span>
                                 </div>
                             </div>
-                            <div className="glass" style={{ padding: '18px', borderRadius: '14px' }}>
+                            <div style={{ padding: '18px', borderRadius: 'var(--radius-md)', border: '1px solid var(--card-border)' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
                                     <Brain size={16} color="var(--accent-color)" />
                                     <strong>Projection</strong>
@@ -233,7 +233,7 @@ const CognitionDiagnostics = () => {
                         </div>
 
                         {error && (
-                            <div className="glass" style={{ padding: '14px 16px', borderRadius: '12px', borderColor: 'rgba(239,68,68,0.35)', color: '#fca5a5' }}>
+                            <div style={{ padding: '14px 16px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(239,68,68,0.35)', color: '#fca5a5' }}>
                                 {error}
                             </div>
                         )}

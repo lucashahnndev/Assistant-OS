@@ -2,7 +2,7 @@ import React, { useEffect, useRef, forwardRef, useImperativeHandle } from 'react
 
 const DEFAULT_PRESET_ID = 'ai-orb-classic';
 
-const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = 'dark', wegScript = '', sceneStreamActive = false, defaultPresetId = DEFAULT_PRESET_ID, overrideConfig = null, onSceneLoaded }, ref) => {
+const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = 'dark', wegScript = '', sceneStreamActive = false, defaultPresetId = DEFAULT_PRESET_ID, overrideConfig = null, onSceneLoaded, onInitFailure }, ref) => {
     const containerRef = useRef(null);
     const engineRef = useRef(null);
     const controlsRef = useRef(null);
@@ -223,6 +223,9 @@ const WegenaParticleCanvas = forwardRef(({ state, voice, ttsIntensity, theme = '
             }
         } catch (err) {
             console.error('Failed to initialize WegenaEngine host:', err);
+            if (typeof onInitFailure === 'function') {
+                onInitFailure(err);
+            }
         }
 
         return () => {

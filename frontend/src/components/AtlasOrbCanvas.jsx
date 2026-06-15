@@ -545,6 +545,9 @@ const AtlasOrbCanvas = forwardRef((props, ref) => {
     const busRef = useRef(null);
     const reqRef = useRef(null);
     const lastTimeRef = useRef(0);
+    const voice = props.voice || {};
+    const voiceStatus = String(props?.state?.voiceState?.status || '').toLowerCase();
+    const voiceIntensity = clamp01(Number(voice?.intensity || props?.state?.voiceState?.intensity || 0));
 
     // Initialize logic
     useEffect(() => {
@@ -617,6 +620,25 @@ const AtlasOrbCanvas = forwardRef((props, ref) => {
             cancelAnimationFrame(reqRef.current);
         };
     }, []);
+
+    useEffect(() => {
+        const orbCtrl = orbRef.current;
+        if (!orbCtrl) return;
+
+        const derivedState = voiceStatus === 'speaking'
+            ? 'speaking'
+            : (voiceStatus === 'thinking'
+                ? 'thinking'
+                : (voice?.isRecording || voiceStatus === 'waiting' || voiceIntensity > 0.02 ? 'listening' : 'idle'));
+
+        orbCtrl.setState(derivedState, props.theme);
+        if (voiceIntensity > 0.02) {
+            orbCtrl.setVibration(voiceIntensity);
+            orbCtrl.setBreathScore(Math.max(orbCtrl.targetBreathScore || 0.20, 0.20 + voiceIntensity * 0.45));
+        } else if (!voice?.isRecording && voiceStatus === 'idle') {
+            orbCtrl.setVibration(0);
+        }
+    }, [voice?.isRecording, voiceIntensity, voiceStatus, props.theme]);
 
     // Expose APIs
     useImperativeHandle(ref, () => ({

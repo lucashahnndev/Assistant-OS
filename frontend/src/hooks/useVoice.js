@@ -20,6 +20,12 @@ const MIC_CONSTRAINTS = {
 
 const getVadAssetBasePath = () => `${window.location.origin}/node_modules/@ricky0123/vad-web/dist/`;
 const getOrtWasmBasePath = () => `${window.location.origin}/node_modules/onnxruntime-web/dist/`;
+const isDev = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV;
+const voiceDebug = (...args) => {
+    if (isDev) {
+        console.debug('[Nexus voice]', ...args);
+    }
+};
 
 /**
  * useVoice Hook
@@ -113,13 +119,16 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
         }
     }, []);
 
-    const startLivePipeline = useCallback(async () => {
-        const stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
-        liveStreamRef.current = stream;
+    const startLivePipeline = useCallback(async (stream) => {
+        const liveStream = stream || await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+        liveStreamRef.current = liveStream;
+        voiceDebug('startLivePipeline', {
+            tracks: liveStream.getTracks().map((track) => ({ kind: track.kind, enabled: track.enabled, readyState: track.readyState })),
+        });
 
         const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
         liveAudioContextRef.current = audioContext;
-        const source = audioContext.createMediaStreamSource(stream);
+        const source = audioContext.createMediaStreamSource(liveStream);
         liveSourceRef.current = source;
 
         const processor = audioContext.createScriptProcessor(4096, 1, 1);
@@ -137,6 +146,9 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
     const startLegacyRecording = useCallback(async () => {
         const stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
         audioStreamRef.current = stream;
+        voiceDebug('startLegacyRecording', {
+            tracks: stream.getTracks().map((track) => ({ kind: track.kind, enabled: track.enabled, readyState: track.readyState })),
+        });
 
         const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
         const source = audioContext.createMediaStreamSource(stream);
@@ -168,19 +180,15 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
             setIntensity(sum / binCount / 255);
         }, 50);
 
-        sendMessage({
-            type: 'session.start',
-            sessionId,
-            client: 'web',
-            caps: { supportsBinaryAudio: false, supportsBargeIn: true }
-        });
-
-        sendMessage({
+        const audioStartSent = sendMessage({
             type: 'input.audio.start',
             format: 'pcm16',
             sampleRate: 16000,
             channels: 1
         });
+        if (audioStartSent === false) {
+            throw new Error('Voice websocket is not connected.');
+        }
         segmentOpenRef.current = true;
 
         processor.onaudioprocess = (e) => {
@@ -191,6 +199,7 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
 
     const startRecording = useCallback(async () => {
         if (!sendMessage) return false;
+        voiceDebug('startRecording requested', { sessionId, isRecording });
 
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             const error = new Error("Microphone access is not supported or blocked (likely due to insecure HTTP context). Use localhost or HTTPS.");
@@ -199,13 +208,33 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
             return false;
         }
 
+        let sharedStream = null;
         try {
+            if (!sessionId) {
+                const error = new Error('Voice recording requires an active session.');
+                console.error(error);
+                if (onError) onError(error);
+                return false;
+            }
+
             // Signal session start
-            sendMessage({
+            const sessionStarted = sendMessage({
                 type: 'session.start',
                 sessionId,
                 client: 'web',
                 caps: { supportsBinaryAudio: false, supportsBargeIn: true }
+            });
+            if (sessionStarted === false) {
+                const error = new Error('Voice websocket is not connected.');
+                console.error(error);
+                if (onError) onError(error);
+                return false;
+            }
+            voiceDebug('session.start sent', { sessionId });
+
+            sharedStream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+            voiceDebug('shared mic stream acquired', {
+                tracks: sharedStream.getTracks().map((track) => ({ kind: track.kind, enabled: track.enabled, readyState: track.readyState })),
             });
 
             // Frontend VAD path (preferred)
@@ -215,7 +244,7 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
                     ...VAD_NOISE_PROFILE,
                     baseAssetPath: getVadAssetBasePath(),
                     onnxWASMBasePath: getOrtWasmBasePath(),
-                    getStream: () => navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS),
+                    getStream: async () => sharedStream,
                     onFrameProcessed: (_, frame) => {
                         if (!frame || !frame.length) return;
                         let sumSq = 0;
@@ -229,38 +258,50 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
                     onSpeechStart: () => {
                         if (segmentOpenRef.current) return;
                         speechStartedAtRef.current = Date.now();
+                        voiceDebug('speech start', { sessionId });
                         sendMessage({
                             type: 'input.audio.start',
                             format: 'pcm16',
                             sampleRate: 16000,
                             channels: 1
                         });
+                        voiceDebug('input.audio.start sent', { sessionId });
                         segmentOpenRef.current = true;
                     },
                     onSpeechEnd: () => {
                         if (!segmentOpenRef.current) return;
                         const speechMs = Date.now() - (speechStartedAtRef.current || Date.now());
+                        voiceDebug('speech end', { sessionId, speechMs });
                         speechStartedAtRef.current = 0;
                         sendMessage({ type: 'input.audio.end' });
+                        voiceDebug('input.audio.end sent', { sessionId, speechMs });
                         segmentOpenRef.current = false;
                         if (speechMs >= VAD_NOISE_PROFILE.minSpeechMs && onTranscriptionResult) onTranscriptionResult();
                     },
                     onVADMisfire: () => {
+                        voiceDebug('vad misfire', { sessionId });
                         speechStartedAtRef.current = 0;
                         if (segmentOpenRef.current) {
                             sendMessage({ type: 'input.audio.end' });
+                            voiceDebug('input.audio.end sent after misfire', { sessionId });
                             segmentOpenRef.current = false;
                         }
                     }
                 });
                 vadRef.current = vad;
-                await startLivePipeline();
+                await startLivePipeline(sharedStream);
                 await vad.start();
                 vadReadyRef.current = true;
+                voiceDebug('vad started', { sessionId });
             } catch (vadError) {
                 console.warn('VAD init failed; falling back to legacy audio pipeline:', vadError);
+                voiceDebug('vad init failed, switching to legacy pipeline', { sessionId, reason: String(vadError?.message || vadError || 'unknown') });
                 emitVoiceState('vad_failed', { reason: 'vad_init_failed' });
                 vadReadyRef.current = false;
+                stopLivePipeline();
+                try {
+                    sharedStream.getTracks().forEach((track) => track.stop());
+                } catch (_) { /* noop */ }
                 await startLegacyRecording();
             }
 
@@ -268,11 +309,15 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
             return true;
         } catch (error) {
             console.error('Error accessing microphone:', error);
+            voiceDebug('microphone error', { sessionId, error: String(error?.message || error || 'unknown') });
             emitVoiceState('vad_failed', { reason: 'mic_error' });
             vadRef.current = null;
             vadReadyRef.current = false;
             stopLivePipeline();
             stopLegacyPipeline();
+            try {
+                sharedStream.getTracks().forEach((track) => track.stop());
+            } catch (_) { /* noop */ }
             segmentOpenRef.current = false;
             setIntensity(0);
             setIsRecording(false);
@@ -282,6 +327,7 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
     }, [emitVoiceState, sessionId, sendMessage, onError, onTranscriptionResult, startLegacyRecording, startLivePipeline, stopLegacyPipeline, stopLivePipeline]);
 
     const stopRecording = useCallback(() => {
+        voiceDebug('stopRecording requested', { sessionId, isRecording, vadReady: vadReadyRef.current });
         const vad = vadRef.current;
         vadRef.current = null;
         const canDestroyVad = !!(
@@ -298,6 +344,7 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
         if (canDestroyVad) {
             try {
                 if (typeof vad.destroy === 'function') {
+                    voiceDebug('destroying VAD', { sessionId });
                     const maybeDestroy = vad.destroy();
                     if (maybeDestroy && typeof maybeDestroy.then === 'function') {
                         void maybeDestroy.catch(() => {});
@@ -305,6 +352,7 @@ export function useVoice({ sessionId, sendMessage, onTranscriptionResult, onErro
                 }
             } catch (_) { /* noop */ }
         } else {
+            voiceDebug('safe stop without VAD teardown', { sessionId });
             vadReadyRef.current = false;
             vadRef.current = null;
             stopLivePipeline();

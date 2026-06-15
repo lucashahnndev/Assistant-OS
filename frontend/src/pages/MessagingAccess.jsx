@@ -1133,7 +1133,7 @@ const MessagingAccess = () => {
                                 {/* Action Picker - Collapsible */}
                                 <details style={{ marginBottom: '12px' }}>
                                     <summary style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderRadius: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--card-border)', fontSize: '11px', fontWeight: '800', color: 'var(--text-secondary)', listStyle: 'none' }}>
-                                        <span>⚙ Capability Permissions (optional)</span>
+                                        <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Settings size={14} /> Capability Permissions (optional)</span>
                                         <span style={{ display: 'flex', gap: '8px' }}>
                                             <span style={{ fontSize: '10px', fontWeight: '900', color: '#4ade80' }}>+{newGroupAllowCount}</span>
                                             <span style={{ fontSize: '10px', fontWeight: '900', color: '#f87171' }}>-{newGroupDenyCount}</span>

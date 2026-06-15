@@ -56,6 +56,7 @@ export const ChatInputArea = ({
     inputRef,
     attachButtonRef,
     attachMenuRef,
+    handleFileUpload,
 }) => {
     return (
         <div style={{
@@ -125,6 +126,13 @@ export const ChatInputArea = ({
                             } else if (!e.shiftKey) {
                                 e.preventDefault();
                                 handleSend(e);
+                            }
+                        }
+                    }}
+                    onPaste={(e) => {
+                        if (e.clipboardData && e.clipboardData.files && e.clipboardData.files.length > 0) {
+                            if (handleFileUpload) {
+                                handleFileUpload({ target: { files: e.clipboardData.files } });
                             }
                         }
                     }}

@@ -11,14 +11,13 @@ const ThemeToggle = () => {
     ];
 
     return (
-        <div className="glass theme-hub" style={{
+        <div style={{
             display: 'flex',
-            gap: '4px',
-            padding: '4px',
-            borderRadius: '100px',
+            gap: '2px',
+            padding: '2px',
+            borderRadius: 'var(--radius-md)',
             background: 'var(--card-bg)',
             border: '1px solid var(--card-border)',
-            backdropFilter: 'blur(12px)',
         }}>
             {themes.map((t) => {
                 const Icon = t.icon;
@@ -28,17 +27,15 @@ const ThemeToggle = () => {
                         key={t.id}
                         onClick={() => setTheme(t.id)}
                         title={t.label}
+                        className={isActive ? "btn-primary" : "btn-ghost"}
                         style={{
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
-                            width: '32px',
-                            height: '32px',
-                            borderRadius: '50%',
-                            background: isActive ? 'var(--accent-color)' : 'transparent',
-                            color: isActive ? '#fff' : 'var(--text-muted)',
-                            transition: 'var(--transition)',
-                            border: 'none',
+                            width: '28px',
+                            height: '28px',
+                            padding: '4px',
+                            borderRadius: 'var(--radius-sm)',
                         }}
                     >
                         <Icon size={16} />

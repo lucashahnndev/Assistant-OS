@@ -31,6 +31,7 @@ import { ChatInputArea } from '../components/chat/ChatInputArea';
 import { MessageList } from '../components/chat/MessageItem';
 import { FilePreviewIcon } from '../components/chat/MessageAttachments';
 import { formatDate } from '../utils/chatHistoryTransform';
+import { mergeStreamContent } from '../utils/streamMerge';
 import normalizeSessionEvent from '../utils/normalizeSessionEvent';
 import { TypewriterMarkdown } from '../components/chat/TypewriterMarkdown';
 
@@ -156,6 +157,43 @@ const mergeLiveMessage = (existingMessages = [], incomingMessage = {}) => {
         next[existingIndex] = {
             ...next[existingIndex],
             ...incomingMessage,
+        };
+        return next;
+    }
+
+    const incomingStreamId = String(incomingMessage.stream_id || incomingMessage.streamId || '').trim();
+    const incomingTurnId = incomingMessage.turn_id ?? incomingMessage.turnId ?? null;
+    const incomingReplyTo = String(incomingMessage.reply_to_message_id || incomingMessage.replyToMessageId || '').trim();
+    const incomingWorkId = String(incomingMessage.work_id || incomingMessage.workId || '').trim();
+    const incomingRole = String(incomingMessage.role || '').toLowerCase();
+
+    const reconcileIndex = next.findIndex((message) => {
+        if (!message || typeof message !== 'object') return false;
+        const messageStreamId = String(message.stream_id || message.streamId || '').trim();
+        const messageTurnId = message.turn_id ?? message.turnId ?? null;
+        const messageReplyTo = String(message.reply_to_message_id || message.replyToMessageId || '').trim();
+        const messageWorkId = String(message.work_id || message.workId || '').trim();
+        const messageRole = String(message.role || '').toLowerCase();
+
+        if (incomingStreamId && messageStreamId && incomingStreamId === messageStreamId) return true;
+        if (incomingTurnId !== null && incomingTurnId !== undefined && String(messageTurnId ?? '') === String(incomingTurnId)) {
+            if (!incomingRole || !messageRole || incomingRole === messageRole || incomingRole === 'assistant') return true;
+        }
+        if (incomingReplyTo && messageReplyTo && incomingReplyTo === messageReplyTo) return true;
+        if (incomingWorkId && messageWorkId && incomingWorkId === messageWorkId && incomingRole === 'assistant') return true;
+        return false;
+    });
+
+    if (reconcileIndex !== -1) {
+        const current = next[reconcileIndex];
+        const mergedContent = incomingRole === 'assistant'
+            ? mergeStreamContent(current?.content || '', incomingMessage.content || '')
+            : (incomingMessage.content !== undefined ? incomingMessage.content : current?.content);
+        next[reconcileIndex] = {
+            ...current,
+            ...incomingMessage,
+            content: mergedContent,
+            isSending: false,
         };
         return next;
     }
@@ -411,11 +449,22 @@ const Chat = () => {
                     if (safeThought) setThought(safeThought);
 
                     const trimmedThought = typeof safeThought === 'string' ? safeThought.trim() : String(safeThought).trim();
+                    const currentStreamMessage = streamingMessageDraftRef.current || streamingMessageRef.current || {};
 
                     if (trimmedThought) {
                         pendingReasoningRef.current.push({
                             text: trimmedThought,
-                            ts: normalizeLiveTimestamp(raw.timestamp)
+                            ts: normalizeLiveTimestamp(raw.timestamp),
+                            phase: eventData.phase || eventData.kind || eventData.msg_type || eventType || 'thinking',
+                            summary: eventData.summary || eventData.message || eventData.status || '',
+                            capability: eventData.capability || eventData.capability_name || eventData.capability_id || eventData.tool || eventData.tool_name || null,
+                            source: eventData.source || eventData.channel || 'reasoning',
+                            workId: eventData.work_id || currentStreamMessage?.work_id || null,
+                            streamId: event.streamId || currentStreamMessage?.streamId || currentStreamMessage?.stream_id || null,
+                            turnId: event.turnId ?? currentStreamMessage?.turn_id ?? null,
+                            messageId: event.messageId || currentStreamMessage?.id || null,
+                            visibility: eventData.visibility || eventData.scope || 'private',
+                            kind: eventData.kind || eventData.type || eventType || 'reasoning',
                         });
                     }
 
@@ -452,7 +501,8 @@ const Chat = () => {
 
                     setStreamingMessage(prev => {
                         const currentContent = prev ? prev.content : (streamingMessageDraftRef.current?.content || '');
-                        const nextContent = currentContent + (eventData.chunk || eventData.content || '');
+                        const incomingContent = eventData.chunk || eventData.content || eventData.full_text || '';
+                        const nextContent = mergeStreamContent(currentContent, incomingContent);
                         const nextStreamingMessage = {
                             role: 'assistant',
                             content: nextContent,
@@ -477,6 +527,11 @@ const Chat = () => {
 
                     const finalMessage = buildCanonicalMessageFromEvent(event, String(eventData.role || (event.eventType === 'user_message.created' ? 'user' : 'assistant') || 'assistant').toLowerCase() || 'assistant');
                     if (String(finalMessage.role || '').toLowerCase() === 'assistant') {
+                        const activeStreamMessage = streamingMessageDraftRef.current || streamingMessageRef.current;
+                        finalMessage.work_id = finalMessage.work_id || activeStreamMessage?.work_id || null;
+                        finalMessage.turn_id = finalMessage.turn_id ?? activeStreamMessage?.turn_id ?? null;
+                        finalMessage.stream_id = finalMessage.stream_id || activeStreamMessage?.streamId || null;
+                        finalMessage.content = mergeStreamContent(activeStreamMessage?.content || '', finalMessage.content || '');
                         streamingMessageDraftRef.current = finalMessage;
                         setStreamingMessage(null);
                         if (thoughtTimeoutRef.current) clearTimeout(thoughtTimeoutRef.current);
@@ -520,9 +575,13 @@ const Chat = () => {
                         if (!event.canCompleteTarget) return;
                     }
 
-                    const finalContent = eventData.content || eventData.message || eventData.full_text || activeStreamMessage?.content || '';
+                    const finalContent = mergeStreamContent(
+                        activeStreamMessage?.content || '',
+                        eventData.content || eventData.message || eventData.full_text || '',
+                    );
                     const finalReasoning = [...(pendingReasoningRef.current || [])];
-                    const finalWorkId = event.workId || activeStreamMessage?.work_id;
+                    const finalWorkId = event.workId || activeStreamMessage?.work_id || null;
+                    const finalTurnId = event.turnId ?? activeStreamMessage?.turn_id ?? null;
                     const finalModelInfo = eventData.model_info || eventData.provenance || activeStreamMessage?.model_info;
 
                     if (event.target === 'stream' && !String(finalContent || '').trim()) {
@@ -532,7 +591,7 @@ const Chat = () => {
                     }
 
                     const finalMsg = {
-                        id: event.messageId || eventData.message_id || activeStreamMessage?.id || `msg-${Date.now()}`,
+                        id: event.messageId || eventData.message_id || activeStreamMessage?.id || event.streamId || eventData.stream_id || `msg-${Date.now()}`,
                         role: String(eventData.role || 'assistant').toLowerCase() || 'assistant',
                         content: finalContent,
                         timestamp: normalizeLiveTimestamp(event.timestamp || eventData.timestamp),
@@ -544,7 +603,7 @@ const Chat = () => {
                         animateTyping: true,
                         attachments: eventData.attachments || [],
                         contentSegments: eventData.contentSegments || [],
-                        turn_id: event.turnId ?? eventData.turn_id ?? null,
+                        turn_id: finalTurnId ?? event.turnId ?? eventData.turn_id ?? null,
                         reply_to_message_id: event.replyToMessageId ?? eventData.reply_to_message_id ?? null,
                         stream_id: event.streamId ?? eventData.stream_id ?? null,
                     };
@@ -1245,6 +1304,16 @@ const Chat = () => {
         }
     }, [selectedId, hasMoreHistory, isFetchingHistory, historyOffset, messages.length]);
 
+    useEffect(() => {
+        if (!scrollRef.current) return;
+        const container = scrollRef.current;
+        // Auto scroll if we are near the bottom or if we are actively sending
+        const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
+        if (isNearBottom || isSending) {
+            container.scrollTop = container.scrollHeight;
+        }
+    }, [messages, streamingMessage, isSending]);
+
     const handleScroll = (e) => {
         const target = e.target;
         const isNearTop = target.scrollTop <= 60;
@@ -1310,6 +1379,7 @@ const Chat = () => {
         if ((!input.trim() && pendingFiles.length === 0)) return;
 
         let activeId = selectedId;
+        const isCreatingSessionNow = !activeId;
 
         if (!activeId) {
             try {
@@ -1332,6 +1402,13 @@ const Chat = () => {
 
         const text = input.trim();
         setInput('');
+        
+        setTimeout(() => {
+            if (inputRef.current) {
+                inputRef.current.style.height = 'auto';
+                inputRef.current.focus();
+            }
+        }, 10);
 
         if (text === '/mock' || text === '/demo') {
             const demoMsgs = [
@@ -1472,9 +1549,11 @@ def monitor_system():
             }
         };
 
-        if (connectionStatus === 'online' && activeId) {
-            sendWebSocketMessage(payload);
-        } else {
+        if (!isCreatingSessionNow && connectionStatus === 'online' && activeId && sendWebSocketMessage(payload)) {
+            return;
+        }
+
+        if (activeId) {
             try {
                 await api.post(`/sessions/${activeId}/message`, {
                     message: userMsgContent,
@@ -1547,8 +1626,7 @@ def monitor_system():
             if (isText) {
                 setIsTextDocument(true);
                 const formatText = (text) => {
-                    if (ext === 'md' || ext === 'mdx') return text;
-                    return `\`\`\`${ext || 'txt'}\n${text}\n\`\`\``;
+                    return text;
                 };
 
                 if (previewFile.file && !previewFile.previewUrl) {
@@ -1580,15 +1658,7 @@ def monitor_system():
         const handleCopy = (e) => {
             e.stopPropagation();
             if (mdContent) {
-                // If we wrapped it, we unwrap it for the copy button, but TypewriterMarkdown already has a copy button for code blocks anyway.
-                // It's safer to copy exactly what is being rendered, or we can just copy raw. 
-                // Let's copy raw content without the markdown backticks if it's not MD.
-                let rawCopy = mdContent;
-                if (fileExt !== 'md' && fileExt !== 'mdx' && mdContent.startsWith('```')) {
-                    const lines = mdContent.split('\n');
-                    rawCopy = lines.slice(1, -1).join('\n');
-                }
-                navigator.clipboard.writeText(rawCopy);
+                navigator.clipboard.writeText(mdContent);
                 setCopied(true);
                 setTimeout(() => setCopied(false), 2000);
             }
@@ -1887,6 +1957,7 @@ def monitor_system():
                                         playbackRuns={playbackRuns}
                                         sessionSnapshot={sessionSnapshot}
                                         sessionIndices={sessionIndices}
+                                        onSuggestionClick={setInput}
                                     />
 
                                     {showScrollButton && (
@@ -1929,6 +2000,7 @@ def monitor_system():
                                     inputRef={inputRef}
                                     attachButtonRef={attachButtonRef}
                                     attachMenuRef={attachMenuRef}
+                                    handleFileUpload={handleFileUpload}
                                 />
                             </div>
                         )}

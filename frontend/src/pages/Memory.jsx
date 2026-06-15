@@ -20,7 +20,7 @@ import {
 import PageHeader from '../components/PageHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 
-const MEMORY_PREVIEW_MAX_CHARS = 260;
+const MEMORY_PREVIEW_MAX_CHARS = 120;
 
 const truncateText = (value, max = MEMORY_PREVIEW_MAX_CHARS) => {
     const text = String(value || '').trim();
@@ -222,7 +222,7 @@ const Memory = () => {
                         const contentPreview = truncateText(item.content, MEMORY_PREVIEW_MAX_CHARS);
                         const chipLabel = item.metadata?.category || item.metadata?.action || 'Memory';
                         return (
-                        <div key={item.id} className="glass-card" style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px', borderRadius: '10px' }}>
+                        <div key={item.id} style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px', borderRadius: 'var(--radius-md)', border: '1px solid var(--card-border)' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                 <span
                                     className="badge badge-accent"
@@ -249,7 +249,6 @@ const Memory = () => {
                                 </div>
                             </div>
                             <p
-                                title={item.content}
                                 style={{
                                     fontSize: '13px',
                                     color: 'var(--text-main)',
@@ -257,10 +256,12 @@ const Memory = () => {
                                     flex: 1,
                                     overflowWrap: 'anywhere',
                                     display: '-webkit-box',
-                                    WebkitLineClamp: 6,
+                                    WebkitLineClamp: 3,
                                     WebkitBoxOrient: 'vertical',
                                     overflow: 'hidden',
+                                    cursor: 'pointer',
                                 }}
+                                onClick={() => setEditingItem(item)}
                             >
                                 {contentPreview}
                             </p>
@@ -269,7 +270,11 @@ const Memory = () => {
                                     <Clock size={12} /> {item.metadata?.timestamp ? new Date(item.metadata.timestamp * 1000).toLocaleString() : 'Recent'}
                                 </span>
                                 {tab === 'episodic' && item.metadata?.status && (
-                                    <span style={{ color: item.metadata.status === 'success' ? 'var(--success)' : 'var(--error)' }}>
+                                    <span style={{ 
+                                        color: item.metadata.status === 'success' ? 'color-mix(in srgb, var(--success) 40%, var(--text-muted))' : 'color-mix(in srgb, var(--error) 40%, var(--text-muted))',
+                                        fontSize: '9px',
+                                        letterSpacing: '0.05em'
+                                    }}>
                                         {item.metadata.status.toUpperCase()}
                                     </span>
                                 )}
@@ -284,9 +289,9 @@ const Memory = () => {
                 {/* Modals */}
                 {editingItem && (
                     <div className="modal-overlay" onClick={() => setEditingItem(null)}>
-                        <div className="glass animate-fade-in" style={{ width: 'min(92%, 560px)', minHeight: '420px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div className="animate-fade-in" style={{ width: 'min(92%, 560px)', minHeight: '420px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.1rem' }}><Edit3 size={18} /> Edit Memory</h3>
+                                <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.1rem' }}><Database size={18} /> Memory Details</h3>
                                 <button onClick={() => setEditingItem(null)} className="btn-ghost" style={{ padding: '6px' }}><X size={18} /></button>
                             </div>
                             <textarea
@@ -306,7 +311,7 @@ const Memory = () => {
 
                 {showAddModal && (
                     <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
-                        <div className="glass animate-fade-in" style={{ width: 'min(90%, 500px)', padding: '32px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                        <div className="animate-fade-in" style={{ width: 'min(90%, 500px)', padding: '32px', display: 'flex', flexDirection: 'column', gap: '20px', background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '10px' }}><PlusCircle size={20} /> Add New Fact</h3>
                                 <button onClick={() => setShowAddModal(false)} className="btn-ghost" style={{ padding: '8px' }}><X size={20} /></button>

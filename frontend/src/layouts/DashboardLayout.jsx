@@ -154,6 +154,8 @@ const DashboardLayout = () => {
                     padding: '0 1.25rem',
                     borderRadius: '0',
                     borderBottom: '1px solid var(--card-border)',
+                    backdropFilter: 'blur(12px)',
+                    WebkitBackdropFilter: 'blur(12px)',
                     zIndex: 1000,
                     flexShrink: 0
                 }}>
@@ -318,15 +320,15 @@ const DashboardLayout = () => {
 
                     {/* Footer Controls */}
                     <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-                        <div className="glass" style={{
+                        <div className="" style={{
                             padding: (isCollapsed && !isBelowDesktop) ? '0.5rem' : '0.625rem 0.75rem',
-                            background: 'rgba(255, 255, 255, 0.02)',
+                            background: 'transparent',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: (isCollapsed && !isBelowDesktop) ? 'center' : 'flex-start',
                             gap: '0.75rem',
                             borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--card-border)',
+                            border: 'none',
                             boxShadow: 'none'
                         }}>
                             <div className="flex-center" style={{
@@ -374,7 +376,7 @@ const DashboardLayout = () => {
                         padding: '0',
                         display: 'flex',
                         flexDirection: 'column',
-                        background: isChat ? 'transparent' : 'var(--card-bg)',
+                        background: 'transparent',
                         border: 'none'
                     }}>
                         <Outlet />

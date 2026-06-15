@@ -19,8 +19,8 @@ test('raw reasoning text is sanitized into a label and summary', () => {
 
     assert.equal(entry.phase, 'response_drafting');
     assert.equal(entry.label, 'Montando resposta final');
-    assert.equal(entry.summary, 'Montando resposta final');
-    assert.equal(entry.displaySummary, 'Estou preparando uma resposta curta e educada ao usuário.');
+    assert.equal(entry.summary, 'The user greeted me. I will respond politely and keep it short.');
+    assert.equal(entry.displaySummary, 'The user greeted me. I will respond politely and keep it short.');
     assert.equal(entry.rawText, 'The user greeted me. I will respond politely and keep it short.');
 });
 
@@ -131,6 +131,34 @@ test('thought render rows expose title and sanitized summary separately', () => 
 
     assert.equal(rows.length, 1);
     assert.equal(rows[0].displayTitle, 'Montando resposta final');
-    assert.equal(rows[0].displaySummary, 'O usuário apenas me cumprimentou, então vou responder de forma breve e solícita.');
+    assert.equal(rows[0].displaySummary, 'The user has initiated contact with a greeting. I will acknowledge the greeting and confirm my readiness to assist as A.T.L.A.S.');
     assert.equal(rows[0].isLatest, true);
+});
+
+test('summary-like labels do not suppress richer thought content', () => {
+    const entry = normalizeThoughtTimelineItem({
+        phase: 'memory_lookup',
+        summary: 'Consultando memória',
+        content: 'I need to recover a prior context detail before answering the user.',
+    }, {
+        source: 'history',
+        turnId: 'turn-memory',
+    });
+
+    assert.equal(entry.displayTitle, 'Consultando memória');
+    assert.equal(entry.displaySummary, 'I need to recover a prior context detail before answering the user.');
+});
+
+test('memory/context language beats greeting fallback for richer thoughts', () => {
+    const entry = normalizeThoughtTimelineItem({
+        phase: 'memory_lookup',
+        summary: 'Consultando memória',
+        content: "The user is repeating 'oi 2', which likely refers to a specific task or context labeled 'oi 2' in the system instructions. I will acknowledge the request and confirm readiness to proceed with the objective associated with 'oi 2'.",
+    }, {
+        source: 'history',
+        turnId: 'turn-oi-2',
+    });
+
+    assert.equal(entry.displayTitle, 'Consultando memória');
+    assert.equal(entry.displaySummary, "The user is repeating 'oi 2', which likely refers to a specific task or context labeled 'oi 2' in the system instructions. I will acknowledge the request and confirm readiness to proceed with the o…");
 });

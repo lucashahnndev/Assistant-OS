@@ -174,21 +174,116 @@ const formatLoadAvg = (value) => {
     return nums.slice(0, 3).map((v) => v.toFixed(2)).join(' / ');
 };
 
+const CustomSun = ({ size }) => (
+    <svg width={size} height={size} viewBox="0 0 100 100" style={{ overflow: 'visible' }}>
+        <defs>
+            <radialGradient id="sunGrad" cx="30%" cy="30%" r="70%">
+                <stop offset="0%" stopColor="#FFE066"/>
+                <stop offset="100%" stopColor="#F59E0B"/>
+            </radialGradient>
+        </defs>
+        <path fill="url(#sunGrad)" d="M50,12 C57,12 60,18 64,22 C68,26 76,26 80,31 C84,36 82,43 84,50 C86,57 93,61 90,67 C87,73 79,72 74,77 C69,82 68,91 61,91 C54,91 50,84 43,84 C36,84 31,91 24,88 C17,85 17,77 12,71 C7,65 11,57 9,50 C7,43 2,36 7,29 C12,22 19,25 25,20 C31,15 32,12 40,11 C43,11 47,12 50,12 Z" />
+    </svg>
+);
+
+const CustomCloud = ({ size }) => (
+    <svg width={size} height={size} viewBox="0 0 100 100" style={{ overflow: 'visible' }}>
+        <defs>
+            <linearGradient id="cloudGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#ffffff"/>
+                <stop offset="100%" stopColor="#d4d4d8"/>
+            </linearGradient>
+            <filter id="cloudShadow">
+                <feDropShadow dx="0" dy="2" stdDeviation="3" floodOpacity="0.3"/>
+            </filter>
+        </defs>
+        <path filter="url(#cloudShadow)" fill="url(#cloudGrad)" d="M30,75 C15,75 10,60 15,50 C18,44 24,40 30,40 C32,30 40,20 55,20 C68,20 75,30 78,40 C85,40 95,45 95,60 C95,75 80,75 75,75 Z" />
+    </svg>
+);
+
+const CustomPartlyCloudy = ({ size }) => (
+    <svg width={size} height={size} viewBox="0 0 100 100" style={{ overflow: 'visible' }}>
+        <defs>
+            <radialGradient id="pcSunGrad" cx="30%" cy="30%" r="70%">
+                <stop offset="0%" stopColor="#FFE066"/>
+                <stop offset="100%" stopColor="#F59E0B"/>
+            </radialGradient>
+            <linearGradient id="pcCloudGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#ffffff"/>
+                <stop offset="100%" stopColor="#e4e4e7"/>
+            </linearGradient>
+            <filter id="pcShadow">
+                <feDropShadow dx="0" dy="3" stdDeviation="3" floodOpacity="0.4"/>
+            </filter>
+        </defs>
+        <g transform="translate(15, 0) scale(0.7)">
+            <path fill="url(#pcSunGrad)" d="M50,12 C57,12 60,18 64,22 C68,26 76,26 80,31 C84,36 82,43 84,50 C86,57 93,61 90,67 C87,73 79,72 74,77 C69,82 68,91 61,91 C54,91 50,84 43,84 C36,84 31,91 24,88 C17,85 17,77 12,71 C7,65 11,57 9,50 C7,43 2,36 7,29 C12,22 19,25 25,20 C31,15 32,12 40,11 C43,11 47,12 50,12 Z" />
+        </g>
+        <g transform="translate(-10, 15) scale(0.9)">
+            <path filter="url(#pcShadow)" fill="url(#pcCloudGrad)" d="M30,75 C15,75 10,60 15,50 C18,44 24,40 30,40 C32,30 40,20 55,20 C68,20 75,30 78,40 C85,40 95,45 95,60 C95,75 80,75 75,75 Z" />
+        </g>
+    </svg>
+);
+
+const CustomRain = ({ size }) => (
+    <svg width={size} height={size} viewBox="0 0 100 100" style={{ overflow: 'visible' }}>
+        <defs>
+            <linearGradient id="rainCloudGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#94a3b8"/>
+                <stop offset="100%" stopColor="#64748b"/>
+            </linearGradient>
+            <linearGradient id="dropGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#60a5fa"/>
+                <stop offset="100%" stopColor="#3b82f6"/>
+            </linearGradient>
+            <filter id="rainShadow">
+                <feDropShadow dx="0" dy="2" stdDeviation="2" floodOpacity="0.4"/>
+            </filter>
+        </defs>
+        <path filter="url(#rainShadow)" fill="url(#rainCloudGrad)" d="M30,65 C15,65 10,50 15,40 C18,34 24,30 30,30 C32,20 40,10 55,10 C68,10 75,20 78,30 C85,30 95,35 95,50 C95,65 80,65 75,65 Z" />
+        <g fill="url(#dropGrad)">
+            <path d="M 35,70 Q 38,75 35,85 Q 32,75 35,70 Z" />
+            <path d="M 55,75 Q 58,80 55,90 Q 52,80 55,75 Z" />
+            <path d="M 75,70 Q 78,75 75,85 Q 72,75 75,70 Z" />
+        </g>
+    </svg>
+);
+
+const CustomStorm = ({ size }) => (
+    <svg width={size} height={size} viewBox="0 0 100 100" style={{ overflow: 'visible' }}>
+        <defs>
+            <linearGradient id="stormCloudGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#64748b"/>
+                <stop offset="100%" stopColor="#475569"/>
+            </linearGradient>
+            <linearGradient id="boltGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#fde047"/>
+                <stop offset="100%" stopColor="#eab308"/>
+            </linearGradient>
+            <filter id="stormShadow">
+                <feDropShadow dx="0" dy="2" stdDeviation="3" floodOpacity="0.5"/>
+            </filter>
+        </defs>
+        <path filter="url(#stormShadow)" fill="url(#stormCloudGrad)" d="M30,65 C15,65 10,50 15,40 C18,34 24,30 30,30 C32,20 40,10 55,10 C68,10 75,20 78,30 C85,30 95,35 95,50 C95,65 80,65 75,65 Z" />
+        <polygon fill="url(#boltGrad)" points="60,55 40,75 50,75 45,95 70,65 55,65" />
+    </svg>
+);
+
 const weatherIconForDescription = (description) => {
     const text = String(description || '').toLowerCase();
     if (text.includes('trovo') || text.includes('storm') || text.includes('thunder')) {
-        return { icon: CloudLightning, color: '#a5b4fc' };
+        return { icon: CustomStorm, color: '#a5b4fc' };
     }
-    if (text.includes('garoa') || text.includes('drizzle')) {
-        return { icon: CloudDrizzle, color: '#93c5fd' };
+    if (text.includes('garoa') || text.includes('drizzle') || text.includes('chuva') || text.includes('rain')) {
+        return { icon: CustomRain, color: '#7dd3fc' };
     }
-    if (text.includes('chuva') || text.includes('rain')) {
-        return { icon: CloudRain, color: '#7dd3fc' };
+    if (text.includes('parcial') || text.includes('partly') || text.includes('alguma') || text.includes('poucas') || text.includes('sol com')) {
+        return { icon: CustomPartlyCloudy, color: '#e4e4e7' };
     }
-    if (text.includes('nublado') || text.includes('cloud')) {
-        return { icon: Cloud, color: '#cbd5e1' };
+    if (text.includes('nublado') || text.includes('cloud') || text.includes('encoberto')) {
+        return { icon: CustomCloud, color: '#cbd5e1' };
     }
-    return { icon: Sun, color: '#fcd34d' };
+    return { icon: CustomSun, color: '#fcd34d' };
 };
 
 const buildLinePath = (values, width, height, padX, padY) => {
@@ -204,10 +299,13 @@ const buildLinePath = (values, width, height, padX, padY) => {
         return { x, y };
     });
     return points.reduce((acc, p, idx, arr) => {
-        if (idx === 0) return `M${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
+        if (idx === 0) return `M ${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
         const prev = arr[idx - 1];
-        const cx = ((prev.x + p.x) / 2).toFixed(2);
-        return `${acc} Q ${cx} ${prev.y.toFixed(2)}, ${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
+        const cp1x = prev.x + (p.x - prev.x) / 2;
+        const cp1y = prev.y;
+        const cp2x = prev.x + (p.x - prev.x) / 2;
+        const cp2y = p.y;
+        return `${acc} C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)}, ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}, ${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
     }, '');
 };
 
@@ -380,7 +478,7 @@ export const WeatherAssistCard = memo(({ data, isStage = false }) => {
 
     const chartSeries = useMemo(() => {
         if (!selectedDay) return [];
-        const labels = ['06h', '09h', '12h', '15h', '18h', '21h', '00h', '03h'];
+        const labels = ['00h', '02h', '04h', '06h', '08h', '10h', '12h', '14h', '16h', '18h', '20h', '22h', '24h'];
         const baseMax = normalizeNumeric(selectedDay.tempMax);
         const baseMin = normalizeNumeric(selectedDay.tempMin);
         const tempMax = baseMax ?? currentTemp ?? 26;
@@ -448,64 +546,55 @@ export const WeatherAssistCard = memo(({ data, isStage = false }) => {
     }, [metricTab, selectedDayIndex]);
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <div
                 style={{
                     border: isStage ? '1px solid rgba(var(--accent-rgb), 0.2)' : '1px solid var(--card-border)',
-                    borderRadius: '12px',
-                    padding: isStage ? '20px' : '10px',
-                    background: isStage
-                        ? 'radial-gradient(circle at 0% 0%, rgba(var(--accent-rgb), 0.1), transparent 60%)'
-                        : 'radial-gradient(circle at 0% 0%, rgba(125,211,252,0.14), transparent 45%), linear-gradient(120deg, rgba(14,116,144,0.2), rgba(59,130,246,0.09))',
-                    boxShadow: isStage ? 'none' : 'inset 0 1px 0 rgba(255,255,255,0.05)',
+                    borderRadius: '8px',
+                    padding: isStage ? '16px' : '8px',
+                    background: isStage ? 'transparent' : 'rgba(255,255,255,0.02)',
+                    boxShadow: isStage ? 'none' : 'inset 0 1px 0 rgba(255,255,255,0.02)',
                     backdropFilter: isStage ? 'blur(10px)' : 'none',
                 }}
             >
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <div
                             style={{
-                                width: '46px',
-                                height: '46px',
+                                width: '36px',
+                                height: '36px',
                                 borderRadius: '50%',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
-                                background: 'linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.04))',
-                                border: '1px solid rgba(255,255,255,0.12)',
+                                background: 'transparent',
+                                border: '1px solid rgba(255,255,255,0.05)',
                             }}
                         >
-                            <SelectedDayIcon size={22} color={selectedDayIconMeta.color} />
+                            <SelectedDayIcon size={22} color={selectedDayIconMeta.color} fill={selectedDayIconMeta.color} />
                         </div>
                         <div>
-                            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.01em' }}>{location}</div>
-                            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{String(selectedDay?.description || current?.description || '--')}</div>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>{location}</div>
+                            <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{String(selectedDay?.description || current?.description || '--')}</div>
                         </div>
                     </div>
-                    <button
-                        type="button"
-                        onClick={() => setShowDetails((prev) => !prev)}
-                        style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-primary)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '4px 10px', background: 'rgba(255,255,255,0.03)', cursor: 'pointer' }}
-                    >
-                        {showDetails ? 'Hide details' : 'Show details'}
-                    </button>
                 </div>
 
                 <div
                     style={{
-                        marginTop: '8px',
+                        marginTop: '6px',
                         border: '1px solid var(--card-border)',
-                        borderRadius: '11px',
-                        padding: '10px',
+                        borderRadius: '7px',
+                        padding: '7px',
                         background: 'linear-gradient(180deg, rgba(2,6,23,0.36), rgba(15,23,42,0.16))',
                     }}
                 >
                     <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
-                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-                            <span style={{ fontSize: '42px', lineHeight: 1, fontWeight: 300, color: 'var(--text-primary)', letterSpacing: '-0.03em' }}>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+                            <span style={{ fontSize: '28px', lineHeight: 1, fontWeight: 300, color: 'var(--text-primary)', letterSpacing: '-0.03em' }}>
                                 {fmtTemp(selectedDay?.tempMax ?? currentTemp).replace('°C', '')}
                             </span>
-                            <span style={{ fontSize: '16px', color: 'var(--text-muted)', paddingBottom: '6px' }}>°C</span>
+                            <span style={{ fontSize: '12px', color: 'var(--text-muted)', paddingBottom: '4px' }}>°C</span>
                         </div>
                         <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
                             <span style={{ fontSize: '10px', color: 'var(--text-primary)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '2px 7px', background: 'rgba(255,255,255,0.03)' }}>
@@ -619,67 +708,73 @@ export const WeatherAssistCard = memo(({ data, isStage = false }) => {
                     )}
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px', marginTop: '10px' }}>
-                    <div style={{ border: '1px solid var(--card-border)', borderRadius: '10px', padding: '8px', background: 'rgba(255,255,255,0.03)' }}>
-                        <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}><Thermometer size={10} style={{ marginRight: '4px', verticalAlign: 'text-top' }} />Temp</div>
-                        <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>{fmtTemp(currentTemp)}</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '5px', marginTop: '6px' }}>
+                    <div style={{ border: '1px solid var(--card-border)', borderRadius: '6px', padding: '5px 6px', background: 'rgba(255,255,255,0.03)' }}>
+                        <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}><Thermometer size={9} style={{ marginRight: '3px', verticalAlign: 'text-top' }} />Temp</div>
+                        <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-primary)' }}>{fmtTemp(currentTemp)}</div>
                     </div>
-                    <div style={{ border: '1px solid var(--card-border)', borderRadius: '10px', padding: '8px', background: 'rgba(255,255,255,0.03)' }}>
-                        <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}><Droplets size={10} style={{ marginRight: '4px', verticalAlign: 'text-top' }} />Humidity</div>
-                        <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>{fmtPct(currentHumidity)}</div>
+                    <div style={{ border: '1px solid var(--card-border)', borderRadius: '6px', padding: '5px 6px', background: 'rgba(255,255,255,0.03)' }}>
+                        <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}><Droplets size={9} style={{ marginRight: '3px', verticalAlign: 'text-top' }} />Humidity</div>
+                        <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-primary)' }}>{fmtPct(currentHumidity)}</div>
                     </div>
-                    <div style={{ border: '1px solid var(--card-border)', borderRadius: '10px', padding: '8px', background: 'rgba(255,255,255,0.03)' }}>
-                        <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}><Wind size={10} style={{ marginRight: '4px', verticalAlign: 'text-top' }} />Wind</div>
-                        <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>{fmtWind(currentWind)}</div>
+                    <div style={{ border: '1px solid var(--card-border)', borderRadius: '6px', padding: '5px 6px', background: 'rgba(255,255,255,0.03)' }}>
+                        <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}><Wind size={9} style={{ marginRight: '3px', verticalAlign: 'text-top' }} />Wind</div>
+                        <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-primary)' }}>{fmtWind(currentWind)}</div>
                     </div>
                 </div>
 
-                {showDetails && forecast.length > 0 && (
-                    <div style={{ marginTop: '10px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(96px, 1fr))', gap: '8px' }}>
-                        {days.slice(0, 7).map((day, idx) => {
-                            const info = weatherIconForDescription(day?.description || current?.description);
-                            const DayIcon = info.icon;
-                            const isActive = idx === selectedDayIndex;
-                            return (
-                                <div
-                                    key={`${day?.date || 'day'}-${idx}-${day?.label || ''}`}
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={() => setSelectedDayIndex(idx)}
-                                    onKeyDown={(event) => {
-                                        if (event.key === 'Enter' || event.key === ' ') {
-                                            event.preventDefault();
-                                            setSelectedDayIndex(idx);
-                                        }
-                                    }}
-                                    style={{
-                                        border: '1px solid var(--card-border)',
-                                        borderRadius: '10px',
-                                        padding: '8px',
-                                        cursor: 'pointer',
-                                        background: isActive ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.02)',
-                                        boxShadow: isActive ? 'inset 0 1px 0 rgba(255,255,255,0.09)' : 'none',
-                                    }}
-                                >
-                                    <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{day?.label || shortDayLabel(day?.date)}</div>
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                        <DayIcon size={14} color={info.color} />
-                                        <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{fmtPct(day?.pop ?? 0)}</span>
-                                    </div>
-                                    <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '4px' }}>{fmtTemp(day?.tempMax)}</div>
-                                    <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{fmtTemp(day?.tempMin)}</div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                )}
             </div>
-        </div>
+        {showDetails && forecast.length > 0 && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(66px, 1fr))', gap: '4px' }}>
+                {days.slice(0, 14).map((day, idx) => {
+                    const info = weatherIconForDescription(day?.description || current?.description);
+                    const DayIcon = info.icon;
+                    const isActive = idx === selectedDayIndex;
+                    return (
+                        <div
+                            key={`${day?.date || 'day'}-${idx}-${day?.label || ''}`}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setSelectedDayIndex(idx)}
+                            onKeyDown={(event) => {
+                                if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault();
+                                    setSelectedDayIndex(idx);
+                                }
+                            }}
+                            style={{
+                                border: '1px solid var(--card-border)',
+                                borderRadius: '6px',
+                                padding: '8px 6px',
+                                cursor: 'pointer',
+                                background: isActive ? 'rgba(255,255,255,0.05)' : 'transparent',
+                            }}
+                        >
+                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{day?.label || shortDayLabel(day?.date)}</div>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                <DayIcon size={20} color={info.color} fill={info.color} />
+                                <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{fmtPct(day?.pop ?? 0)}</span>
+                            </div>
+                            <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)', marginTop: '5px' }}>{fmtTemp(day?.tempMax)}</div>
+                            <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{fmtTemp(day?.tempMin)}</div>
+                        </div>
+                    );
+                })}
+            </div>
+        )}
+        <button
+            type="button"
+            onClick={() => setShowDetails((prev) => !prev)}
+            style={{ width: '100%', fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '6px', padding: '4px 8px', background: 'transparent', cursor: 'pointer', textAlign: 'center', letterSpacing: '0.05em', marginTop: showDetails ? '2px' : '0' }}
+        >
+            {showDetails ? '▲ less details' : '▼ more details'}
+        </button>
+    </div>
     );
 });
 
 export const SystemHealthAssistCard = memo(({ data, isStage = false }) => {
-    const [showDetails, setShowDetails] = useState(true);
+    const [showDetails, setShowDetails] = useState(false);
     const cpu = normalizeNumeric(data?.cpu_usage_percent) ?? 0;
     const mem = normalizeNumeric(data?.memory_percent) ?? 0;
     const disk = normalizeNumeric(data?.disk_percent) ?? 0;
@@ -700,24 +795,24 @@ export const SystemHealthAssistCard = memo(({ data, isStage = false }) => {
     const top = Array.isArray(data?.top_processes) ? data.top_processes : [];
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '100%' }}>
             <div style={{
                 border: isStage ? '1px solid rgba(var(--accent-rgb), 0.2)' : '1px solid var(--card-border)',
-                borderRadius: '12px',
-                padding: isStage ? '20px' : '10px',
+                borderRadius: '8px',
+                padding: isStage ? '16px' : '8px',
                 background: isStage
                     ? 'radial-gradient(circle at 100% 0%, rgba(var(--accent-rgb), 0.1), transparent 60%)'
                     : 'radial-gradient(circle at 100% 0%, rgba(16,185,129,0.14), transparent 40%), linear-gradient(120deg, rgba(15,23,42,0.35), rgba(16,185,129,0.09) 42%, rgba(59,130,246,0.07))',
                 boxShadow: isStage ? 'none' : 'inset 0 1px 0 rgba(255,255,255,0.04)',
                 backdropFilter: isStage ? 'blur(10px)' : 'none'
             }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', marginBottom: '10px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: '7px', alignItems: 'center' }}>
                         <div
                             style={{
-                                width: '34px',
-                                height: '34px',
-                                borderRadius: '10px',
+                                width: '26px',
+                                height: '26px',
+                                borderRadius: '7px',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
@@ -725,47 +820,40 @@ export const SystemHealthAssistCard = memo(({ data, isStage = false }) => {
                                 background: 'linear-gradient(160deg, rgba(16,185,129,0.22), rgba(59,130,246,0.1))',
                             }}
                         >
-                            <Server size={16} color="var(--text-primary)" />
+                            <Server size={12} color="var(--text-primary)" />
                         </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                            <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>System Health</span>
-                            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Host status overview</span>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>System Health</span>
+                            <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Host status overview</span>
                         </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: '10px', color: healthStateColor, border: `1px solid ${healthStateColor}55`, borderRadius: '999px', padding: '2px 7px', background: `${healthStateColor}12`, fontWeight: 700 }}>{healthState}</span>
-                        <span style={{ fontSize: '10px', color: 'var(--text-primary)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '2px 7px', background: 'rgba(255,255,255,0.03)' }}>
-                            <Clock3 size={10} style={{ marginRight: '4px', verticalAlign: 'text-top' }} />
+                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '9px', color: healthStateColor, border: `1px solid ${healthStateColor}55`, borderRadius: '5px', padding: '1px 5px', background: `${healthStateColor}12`, fontWeight: 700 }}>{healthState}</span>
+                        <span style={{ fontSize: '9px', color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '5px', padding: '1px 5px', background: 'rgba(255,255,255,0.03)' }}>
+                            <Clock3 size={9} style={{ marginRight: '3px', verticalAlign: 'text-top' }} />
                             {String(data?.uptime || '--')}
                         </span>
-                        <span style={{ fontSize: '10px', color: 'var(--text-primary)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '2px 7px', background: 'rgba(255,255,255,0.03)' }}>
-                            <Activity size={10} style={{ marginRight: '4px', verticalAlign: 'text-top' }} />
+                        <span style={{ fontSize: '9px', color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '5px', padding: '1px 5px', background: 'rgba(255,255,255,0.03)' }}>
+                            <Activity size={9} style={{ marginRight: '3px', verticalAlign: 'text-top' }} />
                             Load {loadAvg}
                         </span>
                         {temperature !== null && (
-                            <span style={{ fontSize: '10px', color: '#facc15', border: '1px solid rgba(250,204,21,0.35)', borderRadius: '999px', padding: '2px 7px', background: 'rgba(250,204,21,0.08)' }}>{temperature.toFixed(1)}°C</span>
+                            <span style={{ fontSize: '9px', color: '#facc15', border: '1px solid rgba(250,204,21,0.35)', borderRadius: '5px', padding: '1px 5px', background: 'rgba(250,204,21,0.08)' }}>{temperature.toFixed(1)}°C</span>
                         )}
-                        <button
-                            type="button"
-                            onClick={() => setShowDetails((prev) => !prev)}
-                            style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-primary)', border: '1px solid var(--card-border)', borderRadius: '999px', padding: '4px 10px', background: 'rgba(255,255,255,0.03)', cursor: 'pointer' }}
-                        >
-                            {showDetails ? 'Hide details' : 'Show details'}
-                        </button>
                     </div>
                 </div>
 
-                <div style={{ display: 'grid', gap: '8px', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', marginBottom: showDetails ? '10px' : '0' }}>
+                <div style={{ display: 'grid', gap: '5px', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
                     {rows.map((row) => {
                         const Icon = row.icon;
                         return (
-                            <div key={`summary-${row.label}`} style={{ border: '1px solid var(--card-border)', borderRadius: '10px', padding: '8px 9px', background: 'rgba(255,255,255,0.04)' }}>
-                                <div style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                    <Icon size={10} />
+                            <div key={`summary-${row.label}`} style={{ border: '1px solid var(--card-border)', borderRadius: '6px', padding: '5px 6px', background: 'rgba(255,255,255,0.04)' }}>
+                                <div style={{ fontSize: '8px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                    <Icon size={9} />
                                     {row.label}
                                 </div>
-                                <div style={{ fontSize: '16px', fontWeight: 800, color: pctColor(row.value), marginTop: '2px' }}>{row.value.toFixed(0)}%</div>
-                                <div style={{ marginTop: '6px', height: '6px', borderRadius: '999px', background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+                                <div style={{ fontSize: '13px', fontWeight: 800, color: pctColor(row.value), marginTop: '1px' }}>{row.value.toFixed(0)}%</div>
+                                <div style={{ marginTop: '4px', height: '3px', borderRadius: '3px', background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
                                     <div style={{ height: '100%', width: `${Math.max(0, Math.min(100, row.value))}%`, background: pctGradient(row.value), transition: 'width 180ms ease' }} />
                                 </div>
                             </div>
@@ -837,6 +925,13 @@ export const SystemHealthAssistCard = memo(({ data, isStage = false }) => {
                     ))}
                 </div>
             )}
+            <button
+                type="button"
+                onClick={() => setShowDetails((prev) => !prev)}
+                style={{ width: '100%', fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', border: '1px solid var(--card-border)', borderRadius: '6px', padding: '3px 8px', background: 'transparent', cursor: 'pointer', textAlign: 'center', letterSpacing: '0.05em' }}
+            >
+                {showDetails ? '▲ less details' : '▼ more details'}
+            </button>
         </div>
     );
 });

@@ -140,19 +140,6 @@ export const TypewriterMarkdown = ({ text, isStreaming, isComplete, isUser, anim
             >
                 {displayedText}
             </ReactMarkdown>
-            {(!isUser && (isStreaming || displayedText.length < text.length)) && (
-                <span style={{
-                    display: 'inline-block',
-                    width: '6px',
-                    height: '15px',
-                    background: 'var(--accent-color)',
-                    marginLeft: '4px',
-                    verticalAlign: 'middle',
-                    borderRadius: '1px',
-                    boxShadow: '0 0 8px var(--accent-color)',
-                    animation: 'pulse 0.8s infinite'
-                }} />
-            )}
         </div>
     );
 };

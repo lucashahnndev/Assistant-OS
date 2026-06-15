@@ -19,25 +19,6 @@ export const THOUGHT_PHASE_LABELS = {
     error_recovery: 'Tentando recuperar execução',
 };
 
-const THOUGHT_PHASE_SUMMARIES = {
-    thinking: 'Vou avaliar a próxima etapa.',
-    planning: 'Vou organizar os próximos passos.',
-    capability_search: 'Vou localizar a capacidade mais adequada.',
-    memory_lookup: 'Vou recuperar contexto relevante.',
-    file_reading: 'Vou ler o arquivo necessário.',
-    image_analysis: 'Vou analisar a imagem.',
-    external_search: 'Vou pesquisar na web.',
-    browser_navigation: 'Vou controlar o navegador.',
-    site_access: 'Vou acessar o site.',
-    tool_execution: 'Vou executar a ferramenta.',
-    worker_spawn: 'Vou iniciar um worker.',
-    worker_running: 'O worker está em execução.',
-    result_processing: 'Vou processar o resultado.',
-    response_drafting: 'Vou redigir a resposta final.',
-    finalizing: 'Vou finalizar a resposta.',
-    error_recovery: 'Vou tentar recuperar a execução.',
-};
-
 const THOUGHT_PHASE_HINTS = [
     [/memory|memória|context/i, 'memory_lookup'],
     [/file|arquivo|document|doc/i, 'file_reading'],
@@ -84,89 +65,25 @@ export const sanitizeThoughtText = (value, fallback = '') => {
     return text.length > 200 ? `${text.slice(0, 197)}…` : text;
 };
 
-const getPhaseSummary = (phase) => THOUGHT_PHASE_SUMMARIES[phase] || THOUGHT_PHASE_SUMMARIES.thinking;
-
-const resolveVisibleThoughtSummary = (entry = {}, label = '') => {
-    const explicitSummary = normalizeText(
-        entry.summary
-        || entry.description
-        || entry.message
-        || entry.caption
-        || ''
-    );
-
-    if (explicitSummary) {
-        if (isLikelyRawNarration(explicitSummary) || (/[.!?]/.test(explicitSummary) && explicitSummary.length > 60)) {
-            return normalizeText(label);
-        }
-        return sanitizeThoughtText(explicitSummary, label);
-    }
-
-    return normalizeText(label);
-};
-
-const summarizeNarrationText = (text, phase = 'thinking') => {
-    const normalized = normalizeText(text);
-    if (!normalized) return getPhaseSummary(phase);
-
-    const lower = normalized.toLowerCase();
-    if (/(greeting|cumpriment|sauda|hello|hi|salut|olá|oi)/i.test(lower)) {
-        return 'O usuário apenas me cumprimentou, então vou responder de forma breve e solícita.';
-    }
-    if (/(image|imagem|vision|screenshot|screen)/i.test(lower)) {
-        return 'Preciso identificar os elementos principais da imagem antes de responder.';
-    }
-    if (/(memory|memória|context|previous|anterior)/i.test(lower)) {
-        return 'Preciso resgatar uma informação relacionada ao contexto anterior.';
-    }
-    if (/(weather|clima|forecast)/i.test(lower)) {
-        return 'Vou consultar os dados atuais para responder com precisão.';
-    }
-    if (/(browser|site|youtube|page|naveg|web)/i.test(lower)) {
-        return 'Vou verificar a página e coletar os dados necessários.';
-    }
-    if (/(file|arquivo|document|doc)/i.test(lower)) {
-        return 'Vou ler o arquivo necessário para responder.';
-    }
-    if (/(tool|action|result|ferramenta)/i.test(lower)) {
-        return 'Vou executar a ferramenta e transformar o resultado em uma resposta útil.';
-    }
-    if (phase === 'response_drafting') {
-        return 'Estou preparando uma resposta curta e educada ao usuário.';
-    }
-    if (phase === 'finalizing') {
-        return 'Estou finalizando a resposta.';
-    }
-    if (phase === 'planning') {
-        return 'Estou organizando os próximos passos.';
-    }
-    return getPhaseSummary(phase);
-};
-
 const resolveThoughtDisplaySummary = (entry = {}, label = '', phase = 'thinking') => {
-    const explicitSummary = normalizeText(
-        entry.summary
-        || entry.description
-        || entry.message
-        || entry.caption
-        || entry.content
-        || entry.text
-        || ''
-    );
-
-    if (explicitSummary) {
-        if (isLikelyRawNarration(explicitSummary) || (/[.!?]/.test(explicitSummary) && explicitSummary.length > 60)) {
-            return summarizeNarrationText(explicitSummary, phase);
-        }
-        return sanitizeThoughtText(explicitSummary, label);
-    }
-
     const rawText = normalizeText(entry.rawText || entry.content || entry.text || '');
     if (rawText) {
-        return summarizeNarrationText(rawText, phase);
+        return sanitizeThoughtText(rawText, label);
     }
 
-    return getPhaseSummary(phase);
+    const explicitSummary = normalizeText(
+        entry.summary
+        || entry.description
+        || entry.message
+        || entry.caption
+        || ''
+    );
+
+    if (explicitSummary) {
+        return sanitizeThoughtText(explicitSummary, label);
+    }
+
+    return normalizeText(label || THOUGHT_PHASE_LABELS[phase] || 'Pensando na próxima etapa');
 };
 
 export const normalizeThoughtPhase = (entry = {}) => {
@@ -237,7 +154,7 @@ export const normalizeThoughtTimelineItem = (entry, fallback = {}) => {
         if (!text) return null;
         const phase = normalizeThoughtPhase({ ...fallback, content: text });
         const label = getThoughtDisplayLabel({ ...fallback, phase, summary: text, content: text });
-        const summary = resolveVisibleThoughtSummary(fallback, label);
+        const summary = sanitizeThoughtText(text, label);
         return {
             id: fallback.id || `${fallback.key || 'thought'}-${text.slice(0, 24)}`,
             title: label,
@@ -246,7 +163,7 @@ export const normalizeThoughtTimelineItem = (entry, fallback = {}) => {
             rawText: text,
             label,
             summary,
-            displaySummary: resolveThoughtDisplaySummary({ ...fallback, summary: text, content: text }, label, phase),
+            displaySummary: resolveThoughtDisplaySummary({ ...fallback, summary: text, content: text, rawText: text }, label, phase),
             phase,
             ts: fallback.ts || null,
             turnId: fallback.turnId ?? null,
@@ -282,8 +199,8 @@ export const normalizeThoughtTimelineItem = (entry, fallback = {}) => {
     ).trim();
     const phase = normalizeThoughtPhase(entry);
     const label = getThoughtDisplayLabel({ ...entry, phase, summary: entry.summary || entry.content || entry.text });
-    const summary = resolveVisibleThoughtSummary(entry, label);
-    const displaySummary = resolveThoughtDisplaySummary(entry, label, phase);
+    const summary = sanitizeThoughtText(rawText || entry.summary || entry.content || entry.text || '', label);
+    const displaySummary = resolveThoughtDisplaySummary({ ...entry, rawText: rawText || entry.rawText || '' }, label, phase);
     if (!summary && !rawText) return null;
 
     const turnId = entry.turn_id ?? entry.turnId ?? fallback.turnId ?? null;

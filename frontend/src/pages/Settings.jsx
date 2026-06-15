@@ -38,7 +38,10 @@ import {
     FolderOpen,
     Cloud,
     SlidersHorizontal,
-    Image as ImageIcon
+    Image as ImageIcon,
+    Sparkles,
+    X,
+    XCircle
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -714,7 +717,7 @@ const Settings = () => {
         }));
     };
 
-    const isMcpServerCollapsed = (server, index) => Boolean(mcpCollapsedServers[getMcpServerKey(server, index)]);
+    const isMcpServerCollapsed = (server, index) => mcpCollapsedServers[getMcpServerKey(server, index)] !== false;
 
     const updateMcpValue = (path, value) => {
         const next = { ...(config || {}) };
@@ -783,20 +786,40 @@ const Settings = () => {
         </div>
     );
 
-    const tabs = [
-        { id: 'general', label: 'Identity', icon: UserIcon },
-        { id: 'interfaces', label: 'Interfaces', icon: Monitor },
-        { id: 'media', label: 'Media', icon: Play },
-        { id: 'network', label: 'Network', icon: Globe },
-        { id: 'external_accounts', label: 'External Accounts', icon: Link2 },
-        { id: 'llm', label: 'Intelligence', icon: Cpu },
-        { id: 'stt', label: 'Voice', icon: Mic },
-        { id: 'capabilities', label: 'Capabilities', icon: Puzzle },
-        { id: 'mcp', label: 'MCP', icon: Server },
-        { id: 'weather', label: 'Environment', icon: CloudSun },
-        { id: 'security', label: 'Secrets', icon: Shield },
-        { id: 'debug', label: 'Debug/Logs', icon: Terminal },
-        { id: 'advanced', label: 'JSON Editor', icon: FileJson },
+    const tabGroups = [
+        {
+            title: "General",
+            tabs: [
+                { id: 'general', label: 'Identity', icon: UserIcon },
+                { id: 'interfaces', label: 'Interfaces', icon: Monitor },
+                { id: 'media', label: 'Media', icon: Play },
+            ]
+        },
+        {
+            title: "Agent Skills",
+            tabs: [
+                { id: 'llm', label: 'Intelligence', icon: Cpu },
+                { id: 'stt', label: 'Voice', icon: Mic },
+                { id: 'capabilities', label: 'Capabilities', icon: Puzzle },
+                { id: 'external_accounts', label: 'External Accounts', icon: Link2 },
+            ]
+        },
+        {
+            title: "Infrastructure",
+            tabs: [
+                { id: 'network', label: 'Network', icon: Globe },
+                { id: 'mcp', label: 'MCP', icon: Server },
+                { id: 'weather', label: 'Environment', icon: CloudSun },
+                { id: 'security', label: 'Secrets', icon: Shield },
+            ]
+        },
+        {
+            title: "Advanced",
+            tabs: [
+                { id: 'debug', label: 'Debug/Logs', icon: Terminal },
+                { id: 'advanced', label: 'JSON Editor', icon: FileJson },
+            ]
+        }
     ];
 
     const handleScrollSync = (e) => {
@@ -813,7 +836,6 @@ const Settings = () => {
     const renderHeader = () => (
         <PageHeader
             title="Configuration"
-            subtitle={(isMobile || isTablet) ? "" : "Fine-tune the neural parameters and system interfaces."}
         >
             <div style={{ display: 'flex', gap: '8px', width: (isMobile || isTablet) ? '100%' : 'auto', justifyContent: (isMobile || isTablet) ? 'space-between' : 'flex-end', flexWrap: 'wrap' }}>
                 <button onClick={fetchConfig} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', flex: (isMobile || isTablet) ? 1 : 'none' }}>
@@ -845,15 +867,15 @@ const Settings = () => {
                     style={{
                         display: 'flex',
                         alignItems: 'center',
-                        gap: 'var(--space-2)',
-                        padding: 'var(--space-2) var(--space-4)',
+                        gap: '6px',
+                        padding: '6px 12px',
                         borderRadius: 'var(--radius-sm)',
-                        fontWeight: '800',
+                        fontWeight: '700',
                         fontSize: '0.75rem',
                         flex: (isMobile || isTablet) ? 2 : 'none'
                     }}
                 >
-                    <Save size={18} /> {saving ? '...' : ((isMobile || isTablet) ? 'SAVE' : 'SAVE CHANGES')}
+                    <Save size={14} /> {saving ? '...' : 'SAVE'}
                 </button>
             </div>
         </PageHeader>
@@ -894,7 +916,7 @@ const Settings = () => {
 
     const renderGeneral = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+            <section style={{ padding: '16px 0 32px', borderBottom: '1px solid var(--card-border)' }}>
 
                 <h3 className="section-title">
                     <UserIcon size={20} /> Persona Settings
@@ -910,19 +932,17 @@ const Settings = () => {
                             placeholder="e.g. Assistant, Jarvis..."
                         />
                     </div>
-                    <div className="form-group" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div className="form-group" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                             <label style={{ margin: 0 }}>Voice Boot Greeting</label>
                             <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Generate intelligent TTS greeting at login.</span>
                         </div>
-                        <label className="toggle-switch">
                             <input
                                 type="checkbox"
+                                className="toggle-switch"
                                 checked={config.frontend?.voice_greeting || false}
                                 onChange={(e) => updateNestedValue('frontend.voice_greeting', e.target.checked)}
                             />
-                            <span className="slider"></span>
-                        </label>
                     </div>
                     <div className="form-group">
                         <label>System Personality (Neural Bias)</label>
@@ -941,7 +961,7 @@ const Settings = () => {
                                 style={{ padding: '6px 12px', fontSize: '0.85rem' }}
                             >
                                 {isCompressing ? <Loader className="spin" size={14} /> : <Zap size={14} />}
-                                <span>{isCompressing ? 'Compressing...' : '✨ Auto-Compress (Save Tokens)'}</span>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>{isCompressing ? 'Compressing...' : <span style={{ display: 'contents' }}><Sparkles size={14} /> Auto-Compress (Save Tokens)</span>}</span>
                             </button>
                         </div>
                     </div>
@@ -970,12 +990,12 @@ const Settings = () => {
                 </div>
             </section>
 
-            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+            <section style={{ padding: '16px 0 32px', borderBottom: '1px solid var(--card-border)' }}>
                 <h3 className="section-title">
                     <ImageIcon size={20} /> Branding & PWA
                 </h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                    <div style={{ background: 'rgba(255,255,255,0.02)', padding: '20px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', gap: '20px' }}>
+                    <div style={{ padding: '20px', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', gap: '20px' }}>
                         <div style={{ width: '80px', height: '80px', borderRadius: '16px', background: 'var(--bg-color)', border: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
                             <img src={`/api/static/logo-192x192.png?t=${Date.now()}`} alt="Current Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                         </div>
@@ -998,7 +1018,7 @@ const Settings = () => {
 
     const renderNetwork = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+            <section style={{ padding: '16px 0 32px', borderBottom: '1px solid var(--card-border)' }}>
                 <h3 className="section-title">
                     <Globe size={20} /> Connectivity
                 </h3>
@@ -1008,7 +1028,7 @@ const Settings = () => {
                             <span className="toggle-label">Public Mode (Expose LAN)</span>
                             <span className="toggle-desc">Allow devices on your network to access this dashboard.</span>
                         </div>
-                        <input type="checkbox" className="luxury-checkbox"
+                        <input type="checkbox" className="toggle-switch"
                             checked={config.frontend?.public_mode}
                             onChange={(e) => updateNestedValue('frontend.public_mode', e.target.checked)}
                         />
@@ -1044,7 +1064,7 @@ const Settings = () => {
                 </div>
             </section>
 
-            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+            <section style={{ padding: '16px 0 32px', borderBottom: '1px solid var(--card-border)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                     <h3 className="section-title" style={{ margin: 0 }}>
                         <Cloud size={20} /> Remote Access
@@ -1069,7 +1089,7 @@ const Settings = () => {
                             
                             if (enabledTunnels.length === 0) {
                                 return (
-                                    <div style={{ background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                    <div style={{ padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '13px' }}>
                                             <CheckCircle size={16} color="var(--accent-color)" /> 
                                             Enable a Remote Access plugin in the Capabilities Hub to manage it here.
@@ -1087,7 +1107,7 @@ const Settings = () => {
                                 const isLoading = tunnelLoadingState[tunnel.id] || false;
 
                                 return (
-                                    <div key={tunnel.id} style={{ background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                    <div key={tunnel.id} style={{ padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                 <Puzzle size={16} color="var(--accent-color)" />
@@ -1100,7 +1120,7 @@ const Settings = () => {
                                                 {isLoading ? (
                                                     <Loader className="spin" size={20} color="var(--accent-color)" />
                                                 ) : (
-                                                    <input type="checkbox" className="luxury-checkbox"
+                                                    <input type="checkbox" className="toggle-switch"
                                                         checked={isRunning}
                                                         onChange={() => handleToggleTunnel(tunnel.id, isRunning)}
                                                     />
@@ -1161,7 +1181,7 @@ const Settings = () => {
                                                 <div style={{ fontSize: '13px', fontWeight: '500' }}>Auto-Start on Boot</div>
                                                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Automatically start this tunnel when the system loads.</div>
                                             </div>
-                                            <input type="checkbox" className="luxury-checkbox"
+                                            <input type="checkbox" className="toggle-switch"
                                                 checked={tunnelConfig.autostart || false}
                                                 onChange={(e) => handleToggleAutostart(tunnel.id, e.target.checked)}
                                             />
@@ -1178,7 +1198,7 @@ const Settings = () => {
 
     const renderMedia = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+            <section style={{ padding: '16px 0 32px', borderBottom: '1px solid var(--card-border)' }}>
                 <h3 className="section-title">
                     <Play size={20} /> Media & Content
                 </h3>
@@ -1188,7 +1208,7 @@ const Settings = () => {
                             <span className="toggle-label">Playback Enabled</span>
                             <span className="toggle-desc">Global toggle for all media playback features.</span>
                         </div>
-                        <input type="checkbox" className="luxury-checkbox"
+                        <input type="checkbox" className="toggle-switch"
                             checked={config.playback?.enabled ?? true}
                             onChange={(e) => updateNestedValue('playback.enabled', e.target.checked)}
                         />
@@ -1211,26 +1231,26 @@ const Settings = () => {
                         </div>
                     </div>
 
-                    <div style={{ background: 'rgba(255,255,255,0.02)', padding: '20px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div style={{ padding: '20px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
                         <h4 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '16px', color: 'var(--accent-color)' }}>Persistence Strategy</h4>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             <div className="flex-between">
                                 <span style={{ fontSize: '13px' }}>General Persistence</span>
-                                <input type="checkbox" className="luxury-checkbox"
+                                <input type="checkbox" className="toggle-switch"
                                     checked={config.playback?.persist ?? true}
                                     onChange={(e) => updateNestedValue('playback.persist', e.target.checked)}
                                 />
                             </div>
                             <div className="flex-between">
                                 <span style={{ fontSize: '13px' }}>Persist on Success</span>
-                                <input type="checkbox" className="luxury-checkbox"
+                                <input type="checkbox" className="toggle-switch"
                                     checked={config.playback?.persist_on_success ?? true}
                                     onChange={(e) => updateNestedValue('playback.persist_on_success', e.target.checked)}
                                 />
                             </div>
                             <div className="flex-between">
                                 <span style={{ fontSize: '13px' }}>Persist on Error</span>
-                                <input type="checkbox" className="luxury-checkbox"
+                                <input type="checkbox" className="toggle-switch"
                                     checked={config.playback?.persist_on_error ?? true}
                                     onChange={(e) => updateNestedValue('playback.persist_on_error', e.target.checked)}
                                 />
@@ -1288,7 +1308,7 @@ const Settings = () => {
                         className="btn-ghost"
                         style={{ fontSize: '11px', padding: '2px 8px', color: 'var(--accent-color)' }}
                     >
-                        {creating ? 'Cancel' : '+ Create New Key'}
+                        {creating ? <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><X size={12} /> Cancel</span> : '+ Create New Key'}
                     </button>
                 </div>
 
@@ -1336,18 +1356,18 @@ const Settings = () => {
 
     const renderInterfaces = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+            <section style={{ padding: '16px 0 32px', borderBottom: '1px solid var(--card-border)' }}>
                 <h3 className="section-title">
                     <Monitor size={20} /> Messaging Bridges
                 </h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-                    <div style={{ background: 'rgba(255,255,255,0.02)', padding: '24px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div style={{ padding: '24px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
                             <div>
                                 <h4 style={{ fontSize: '18px', fontWeight: '700' }}>Telegram</h4>
                                 <p style={{ fontSize: '13px', color: '#64748b' }}>Connect your agent to a Telegram Bot.</p>
                             </div>
-                            <input type="checkbox" className="luxury-checkbox"
+                            <input type="checkbox" className="toggle-switch"
                                 checked={config.interfaces?.telegram?.enabled}
                                 onChange={(e) => updateNestedValue('interfaces.telegram.enabled', e.target.checked)}
                             />
@@ -1365,10 +1385,10 @@ const Settings = () => {
 
     const renderCapabilities = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
+            <section style={{ padding: '16px 0 32px', textAlign: 'center', borderBottom: '1px solid var(--card-border)' }}>
                 <Puzzle size={48} style={{ margin: '0 auto 20px', color: 'var(--accent-color)' }} />
                 <h3 style={{ fontSize: '24px', fontWeight: '800', marginBottom: '16px' }}>Cognitive Capabilities</h3>
-                <p style={{ color: '#94a3b8', marginBottom: '32px' }}>
+                <p style={{ color: 'var(--text-secondary)', marginBottom: '32px' }}>
                     Capability management has been moved to the dedicated Capabilities Hub for an improved experience.
                 </p>
                 <div style={{ display: 'flex', justifyContent: 'center' }}>
@@ -1378,7 +1398,7 @@ const Settings = () => {
                 </div>
             </section>
 
-            <section className="glass-card" style={{ padding: '18px 20px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(59,130,246,0.2)' }}>
+            <section style={{ padding: '18px 0 32px', borderBottom: '1px solid var(--card-border)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' }}>
                     <div>
                         <h3 style={{ margin: 0, fontSize: '15px', fontWeight: '800', display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -1423,7 +1443,7 @@ const Settings = () => {
 
         return (
             <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+                <section style={{ padding: '16px 0 32px', borderBottom: '1px solid var(--card-border)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '18px' }}>
                         <div>
                             <h3 className="section-title" style={{ marginBottom: '4px' }}>
@@ -1445,19 +1465,19 @@ const Settings = () => {
                     </div>
 
                     <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : 'repeat(4, minmax(0, 1fr))', gap: '12px', marginBottom: '20px' }}>
-                        <div className="glass" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
+                        <div style={{ padding: '14px', border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', background: 'transparent' }}>
                             <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>MCP Enabled</div>
                             <div style={{ fontSize: '22px', fontWeight: '800', marginTop: '6px' }}>{mcp.enabled ? 'Yes' : 'No'}</div>
                         </div>
-                        <div className="glass" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
+                        <div style={{ padding: '14px', border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', background: 'transparent' }}>
                             <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Servers</div>
                             <div style={{ fontSize: '22px', fontWeight: '800', marginTop: '6px' }}>{servers.length}</div>
                         </div>
-                        <div className="glass" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
+                        <div style={{ padding: '14px', border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', background: 'transparent' }}>
                             <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Active</div>
                             <div style={{ fontSize: '22px', fontWeight: '800', marginTop: '6px' }}>{enabledServers}</div>
                         </div>
-                        <div className="glass" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
+                        <div style={{ padding: '14px', border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', background: 'transparent' }}>
                             <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Resources</div>
                             <div style={{ fontSize: '22px', fontWeight: '800', marginTop: '6px' }}>{resourceCount}</div>
                         </div>
@@ -1470,7 +1490,7 @@ const Settings = () => {
                         </div>
                         <input
                             type="checkbox"
-                            className="luxury-checkbox"
+                            className="toggle-switch"
                             checked={Boolean(mcp.enabled)}
                             onChange={(e) => updateMcpValue('mcp.enabled', e.target.checked)}
                         />
@@ -1499,8 +1519,8 @@ const Settings = () => {
                                             <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{server.id || `server_${index + 1}`} - {statusLabel}</div>
                                         </div>
                                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                            <button onClick={() => setMcpServerCollapsed(server, index, !collapsed)} className="btn-ghost" style={{ fontSize: '12px', padding: '6px 10px' }}>
-                                                {collapsed ? <><ChevronDown size={14} /> Expand</> : <><ChevronUp size={14} /> Collapse</>}
+                                            <button onClick={() => setMcpServerCollapsed(server, index, !collapsed)} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '6px 12px' }}>
+                                                {collapsed ? <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><ChevronDown size={14} /> Expand</span> : <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><ChevronUp size={14} /> Collapse</span>}
                                             </button>
                                             <button onClick={() => saveMcpServerAndCollapse(server, index)} className="btn-primary" style={{ fontSize: '12px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                                                 <Save size={14} /> Save & Collapse
@@ -1516,19 +1536,19 @@ const Settings = () => {
 
                                     {collapsed ? (
                                         <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : 'repeat(4, minmax(0, 1fr))', gap: '10px' }}>
-                                            <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
+                                            <div style={{ padding: '12px', border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', background: 'transparent' }}>
                                                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Transport</div>
                                                 <div style={{ fontSize: '13px', fontWeight: '700', marginTop: '4px' }}>{transport.kind || 'http'}</div>
                                             </div>
-                                            <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
+                                            <div style={{ padding: '12px', border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', background: 'transparent' }}>
                                                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Endpoint</div>
                                                 <div style={{ fontSize: '13px', fontWeight: '700', marginTop: '4px', wordBreak: 'break-word' }}>{transport.endpoint || transport.command || 'Not set'}</div>
                                             </div>
-                                            <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
+                                            <div style={{ padding: '12px', border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', background: 'transparent' }}>
                                                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Discovery</div>
                                                 <div style={{ fontSize: '13px', fontWeight: '700', marginTop: '4px' }}>{policy.allow_tool_discovery ? 'On' : 'Off'}</div>
                                             </div>
-                                            <div className="glass" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
+                                            <div style={{ padding: '12px', border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', background: 'transparent' }}>
                                                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Resources</div>
                                                 <div style={{ fontSize: '13px', fontWeight: '700', marginTop: '4px' }}>{policy.allow_resources ? 'On' : 'Off'}</div>
                                             </div>
@@ -1579,14 +1599,14 @@ const Settings = () => {
                                                     <span className="toggle-label">Allow Tool Discovery</span>
                                                     <span className="toggle-desc">Register tools from this server as dynamic Atlas capabilities.</span>
                                                 </div>
-                                                <input type="checkbox" className="luxury-checkbox" checked={Boolean(policy.allow_tool_discovery)} onChange={(e) => updateMcpServer(index, (current) => ({ ...current, policy: { ...current.policy, allow_tool_discovery: e.target.checked } }))} />
+                                                <input type="checkbox" className="toggle-switch" checked={Boolean(policy.allow_tool_discovery)} onChange={(e) => updateMcpServer(index, (current) => ({ ...current, policy: { ...current.policy, allow_tool_discovery: e.target.checked } }))} />
                                             </div>
                                             <div className="toggle-item luxury" style={{ gridColumn: (isMobile || isTablet) ? 'auto' : '1 / -1' }}>
                                                 <div className="toggle-info">
                                                     <span className="toggle-label">Allow Resources</span>
                                                     <span className="toggle-desc">Expose resources so Atlas can read vault content as evidence.</span>
                                                 </div>
-                                                <input type="checkbox" className="luxury-checkbox" checked={Boolean(policy.allow_resources)} onChange={(e) => updateMcpServer(index, (current) => ({ ...current, policy: { ...current.policy, allow_resources: e.target.checked } }))} />
+                                                <input type="checkbox" className="toggle-switch" checked={Boolean(policy.allow_resources)} onChange={(e) => updateMcpServer(index, (current) => ({ ...current, policy: { ...current.policy, allow_resources: e.target.checked } }))} />
                                             </div>
                                             <div className="form-group">
                                                 <label>Tool Allowlist</label>
@@ -1604,7 +1624,7 @@ const Settings = () => {
                     </div>
                 </section>
 
-                <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+                <section style={{ padding: '16px 0 32px', borderBottom: '1px solid var(--card-border)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
                         <div>
                             <h3 style={{ fontSize: '18px', fontWeight: '800', margin: 0 }}>Live MCP Resources</h3>
@@ -1621,7 +1641,7 @@ const Settings = () => {
                             </div>
                         )}
                         {(mcpStatus.resources || []).slice(0, 24).map((resource) => (
-                            <div key={`${resource.server_id || 'server'}_${resource.uri}`} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
+                            <div key={`${resource.server_id || 'server'}_${resource.uri}`} style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
                                     <div>
                                         <strong style={{ fontSize: '13px' }}>{resource.title || resource.uri}</strong>
@@ -1644,7 +1664,7 @@ const Settings = () => {
 
     const renderDebug = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '20px', height: '100%', minHeight: '600px', paddingBottom: '40px' }}>
-            <div className="glass" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 24px', borderRadius: 'var(--radius-md)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 0', borderBottom: '1px solid var(--card-border)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <select
                         className="input-field"
@@ -1822,7 +1842,7 @@ const Settings = () => {
 
         return (
             <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+                <section style={{ padding: '16px 0 32px', borderBottom: '1px solid var(--card-border)' }}>
                     <h3 className="section-title">
                         <CloudSun size={20} /> Environmental Data
                     </h3>
@@ -1939,7 +1959,7 @@ const Settings = () => {
 
     const renderSecurity = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+            <section style={{ padding: '16px 0 32px', borderBottom: '1px solid var(--card-border)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '24px', flexWrap: 'wrap' }}>
                     <div>
                         <h3 className="section-title" style={{ marginBottom: '6px' }}>
@@ -1958,7 +1978,7 @@ const Settings = () => {
                 <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : '1.1fr 1.4fr', gap: '20px' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                         <div className="form-group" style={{ background: 'rgba(255,255,255,0.03)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
-                            <label style={{ fontSize: '12px', color: '#94a3b8' }}>{editingVaultKey ? 'Edit Secret' : 'Create Secret'}</label>
+                            <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{editingVaultKey ? 'Edit Secret' : 'Create Secret'}</label>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px' }}>
                                 <input
                                     type="text"
@@ -1978,7 +1998,7 @@ const Settings = () => {
                                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                                     <button onClick={saveVaultSecret} className="btn-primary">{editingVaultKey ? 'Update Secret' : 'Create Secret'}</button>
                                     {(editingVaultKey || vaultDraft.key || vaultDraft.value) && (
-                                        <button onClick={resetVaultEditor} className="btn-ghost">Cancel</button>
+                                        <button onClick={resetVaultEditor} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '6px 12px' }}><X size={14} /> Cancel</button>
                                     )}
                                 </div>
                             </div>
@@ -1991,7 +2011,7 @@ const Settings = () => {
                                     <AlertCircle size={16} color="#fbbf24" />
                                     <strong>Import Audit</strong>
                                 </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px', fontSize: '12px', color: '#94a3b8' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px', fontSize: '12px', color: 'var(--text-secondary)' }}>
                                     <div>Missing: {envAudit?.summary?.missing ?? envAudit?.summary?.imported ?? 0}</div>
                                     <div>Divergent: {envAudit?.summary?.divergent ?? envAudit?.summary?.updated ?? 0}</div>
                                     <div>Matched: {envAudit?.summary?.matched ?? 0}</div>
@@ -2003,7 +2023,7 @@ const Settings = () => {
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                         {(vaultEntries || []).length === 0 ? (
-                            <div style={{ padding: '24px', border: '1px dashed rgba(148, 163, 184, 0.2)', borderRadius: 'var(--radius-md)', color: '#94a3b8' }}>No secrets stored in the vault.</div>
+                            <div style={{ padding: '24px', border: '1px dashed rgba(148, 163, 184, 0.2)', borderRadius: 'var(--radius-md)', color: 'var(--text-secondary)' }}>No secrets stored in the vault.</div>
                         ) : (
                             (vaultEntries || []).map((entry) => (
                                 <div key={entry.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '14px 16px', borderRadius: 'var(--radius-md)', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(148, 163, 184, 0.15)' }}>
@@ -2012,7 +2032,7 @@ const Settings = () => {
                                             <CheckCircle size={14} color={entry.has_value ? '#34d399' : '#f59e0b'} />
                                             <span style={{ wordBreak: 'break-all' }}>{entry.key}</span>
                                         </div>
-                                        <div style={{ marginTop: '6px', fontSize: '12px', color: '#94a3b8' }}>
+                                        <div style={{ marginTop: '6px', fontSize: '12px', color: 'var(--text-secondary)' }}>
                                             Updated: {entry.updated_at || 'n/a'}
                                         </div>
                                     </div>
@@ -2146,7 +2166,7 @@ const Settings = () => {
                             className="btn-ghost"
                             style={{ fontSize: '11px', padding: '2px 8px', color: 'var(--accent-color)' }}
                         >
-                            {creating ? 'Cancel' : '+ Create New Key'}
+                            {creating ? <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><X size={12} /> Cancel</span> : '+ Create New Key'}
                         </button>
                     </div>
 
@@ -2269,7 +2289,7 @@ const Settings = () => {
 
         return (
             <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+                <section style={{ padding: '16px 0 32px', borderBottom: '1px solid var(--card-border)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                         <h3 className="section-title" style={{ marginBottom: 0 }}>
                             <Link2 size={20} /> External Accounts
@@ -2299,7 +2319,7 @@ const Settings = () => {
                         </div>
                         <input
                             type="checkbox"
-                            className="luxury-checkbox"
+                            className="toggle-switch"
                             checked={config.external_accounts?.enabled ?? true}
                             onChange={(e) => updateNestedValue('external_accounts.enabled', e.target.checked)}
                         />
@@ -2307,7 +2327,7 @@ const Settings = () => {
 
                     {externalTab === 'accounts' && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 'var(--radius-md)', padding: '14px' }}>
+                            <div style={{ borderRadius: 'var(--radius-md)', padding: '14px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                                     <strong style={{ fontSize: '13px' }}>Connect New Account</strong>
                                     <button
@@ -2371,7 +2391,7 @@ const Settings = () => {
                             {accounts.length > 0 && (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                                     {accounts.map((account, idx) => (
-                                        <div key={account?.id || `acc_${idx}`} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 'var(--radius-md)', padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <div key={account?.id || `acc_${idx}`} style={{ borderRadius: 'var(--radius-md)', padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                                 {account?.profile?.picture && (
                                                     <img
@@ -2413,7 +2433,7 @@ const Settings = () => {
 
                     {externalTab === 'providers' && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 'var(--radius-md)', padding: '14px', marginBottom: '4px' }}>
+                            <div style={{ borderRadius: 'var(--radius-md)', padding: '14px', marginBottom: '4px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                                     <strong style={{ fontSize: '13px' }}>Provider Plugins</strong>
                                     <button onClick={fetchExternalProviders} className="btn-ghost" style={{ fontSize: '11px', padding: '4px 8px' }}>
@@ -2427,7 +2447,7 @@ const Settings = () => {
                                 {!externalCatalogLoading && visibleExternalCatalog.length > 0 && (
                                     <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
                                         {visibleExternalCatalog.map((plugin) => (
-                                            <div key={plugin.key} style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 'var(--radius-md)', padding: '10px' }}>
+                                            <div key={plugin.key} style={{ borderRadius: 'var(--radius-md)', padding: '10px' }}>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
                                                     <div>
                                                         <strong style={{ fontSize: '12px' }}>{plugin.display_name || plugin.key}</strong>
@@ -2456,7 +2476,7 @@ const Settings = () => {
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                                 {entries.map(([providerKey, provider]) => (
-                                    <div key={providerKey} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
+                                    <div key={providerKey} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
                                         <div style={{ minWidth: 0 }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                 <span style={{ width: '8px', height: '8px', borderRadius: '999px', background: provider?.enabled ? '#22c55e' : '#ef4444', display: 'inline-block' }} />
@@ -2470,7 +2490,7 @@ const Settings = () => {
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '12px' }}>
                                             <input
                                                 type="checkbox"
-                                                className="luxury-checkbox"
+                                                className="toggle-switch"
                                                 checked={provider?.enabled ?? false}
                                                 onChange={(e) => updateNestedValue(`external_accounts.providers.${providerKey}.enabled`, e.target.checked)}
                                             />
@@ -2495,7 +2515,7 @@ const Settings = () => {
                                 ))}
 
                                 {editingProviderKey && providers?.[editingProviderKey] && (
-                                    <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 'var(--radius-md)', padding: '16px' }}>
+                                    <div style={{ borderRadius: 'var(--radius-md)', padding: '16px' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                                             <strong style={{ textTransform: 'capitalize' }}>
                                                 Edit Provider: {editingProviderKey.replace(/_/g, ' ')}
@@ -2503,9 +2523,9 @@ const Settings = () => {
                                             <button
                                                 onClick={() => setEditingProviderKey('')}
                                                 className="btn-ghost"
-                                                style={{ fontSize: '11px', padding: '4px 8px' }}
+                                                style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '6px 12px' }}
                                             >
-                                                <ChevronDown size={12} style={{ marginRight: '6px' }} /> Collapse
+                                                <ChevronUp size={14} /> Collapse
                                             </button>
                                         </div>
                                         <div style={{ display: 'grid', gridTemplateColumns: (isMobile || isTablet) ? '1fr' : '1fr 1fr', gap: '12px' }}>
@@ -2553,7 +2573,7 @@ const Settings = () => {
 
     const renderLLM = () => (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+            <section style={{ padding: '16px 0 32px', borderBottom: '1px solid var(--card-border)' }}>
                 <h3 className="section-title">
                     <Cpu size={20} /> Chat & Reasoning (Cortex)
                 </h3>
@@ -2567,7 +2587,7 @@ const Settings = () => {
                 />
             </section>
 
-            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+            <section style={{ padding: '16px 0 32px', borderBottom: '1px solid var(--card-border)' }}>
                 <h3 className="section-title">
                     <Monitor size={20} /> Vision & Perception
                 </h3>
@@ -2584,7 +2604,7 @@ const Settings = () => {
     return (
         <div className="animate-fade-in flex-1" style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', height: '100%', gap: 0, maxHeight: '100%', overflow: 'hidden' }}>
             {/* Sidebar Navigation */}
-            <aside className="glass custom-scrollbar" style={{
+            <aside className="custom-scrollbar" style={{
                 width: isMobile ? '100%' : (isTabsCollapsed ? '60px' : '260px'),
                 height: isMobile ? 'auto' : '100%',
                 display: 'flex',
@@ -2592,27 +2612,27 @@ const Settings = () => {
                 overflowX: isMobile ? 'auto' : 'hidden',
                 overflowY: isMobile ? 'hidden' : 'auto',
                 transition: 'var(--transition)',
-                borderRadius: 'var(--radius-md)',
                 flexShrink: 0,
-                padding: isMobile ? '4px' : '0'
+                padding: isMobile ? '4px' : '0',
+                borderRight: isMobile ? 'none' : '1px solid rgba(255,255,255,0.06)'
             }}>
                 {!isMobile && (
-                    <div className="glass" style={{
-                        margin: '12px 12px 12px 12px',
-                        padding: isTabsCollapsed ? '8px 0' : '8px 14px',
-                        borderRadius: 'var(--radius-md)',
+                    <div style={{
+                        padding: (isTabsCollapsed && !isMobile) ? '4px 0' : '4px 16px',
+                        minHeight: '52px',
                         display: 'flex',
-                        flexDirection: isTabsCollapsed ? 'column' : 'row',
+                        flexDirection: (isTabsCollapsed && !isMobile) ? 'column' : 'row',
                         alignItems: 'center',
                         justifyContent: 'space-between',
                         gap: '8px',
-                        background: 'rgba(255,255,255,0.03)'
+                        borderBottom: '1px solid var(--card-border)',
+                        background: 'transparent'
                     }}>
-                        {!isTabsCollapsed && <h3 style={{ fontSize: '14px', fontWeight: 'bold' }}>Categories</h3>}
+                        {!isTabsCollapsed && <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: 0 }}>Categories</h3>}
                         <button
                             onClick={() => setIsTabsCollapsed(!isTabsCollapsed)}
                             className="btn-ghost"
-                            style={{ padding: '4px' }}
+                            style={{ padding: '4px', opacity: 0.6 }}
                             title={isTabsCollapsed ? "Expand" : "Collapse"}
                         >
                             {isTabsCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
@@ -2622,47 +2642,62 @@ const Settings = () => {
 
                 <div className={isMobile ? "flex items-center gap-1" : "custom-scrollbar"} style={{
                     flex: 1,
-                    padding: isMobile ? '4px' : '12px',
+                    padding: isMobile ? '4px' : '8px',
                     overflowX: isMobile ? 'auto' : 'hidden',
                     overflowY: isMobile ? 'hidden' : 'auto',
                     display: 'flex',
                     flexDirection: isMobile ? 'row' : 'column',
-                    gap: '4px'
+                    gap: isMobile ? '4px' : '16px'
                 }}>
-                    {tabs.map(tab => (
-                        <button
-                            key={tab.id}
-                            onClick={() => setActiveTab(tab.id)}
-                            className={`nav-item ${activeTab === tab.id ? 'active' : ''}`}
-                            style={{
-                                justifyContent: (isTabsCollapsed && !isMobile) ? 'center' : 'flex-start',
-                                padding: (isTabsCollapsed && !isMobile) ? '12px' : '10px 16px',
-                                minHeight: isMobile ? '36px' : '44px',
-                                borderRadius: 'var(--radius-md)',
-                                width: isMobile ? 'auto' : '100%',
-                                whiteSpace: 'nowrap'
-                            }}
-                            title={tab.label}
-                        >
-                            <tab.icon size={18} style={{ flexShrink: 0 }} />
-                            {(!isTabsCollapsed || isMobile) && <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: isMobile ? '12px' : '14px' }}>{tab.label}</span>}
-                        </button>
+                    {tabGroups.map((group, groupIdx) => (
+                        <div key={groupIdx} style={{ display: 'flex', flexDirection: isMobile ? 'row' : 'column', gap: '4px' }}>
+                            {(!isMobile && !isTabsCollapsed) && (
+                                <div style={{ 
+                                    padding: '8px 12px 4px 12px', 
+                                    fontSize: '11px', 
+                                    textTransform: 'uppercase', 
+                                    letterSpacing: '0.05em', 
+                                    color: 'var(--text-muted)', 
+                                    fontWeight: '600' 
+                                }}>
+                                    {group.title}
+                                </div>
+                            )}
+                            {group.tabs.map(tab => (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setActiveTab(tab.id)}
+                                    className={`nav-item ${activeTab === tab.id ? 'active' : ''}`}
+                                    style={{
+                                        justifyContent: (isTabsCollapsed && !isMobile) ? 'center' : 'flex-start',
+                                        padding: (isTabsCollapsed && !isMobile) ? '12px' : '10px 16px',
+                                        minHeight: isMobile ? '36px' : '40px',
+                                        borderRadius: 'var(--radius-md)',
+                                        width: isMobile ? 'auto' : '100%',
+                                        whiteSpace: 'nowrap'
+                                    }}
+                                    title={tab.label}
+                                >
+                                    <tab.icon size={18} style={{ flexShrink: 0 }} />
+                                    {(!isTabsCollapsed || isMobile) && <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: isMobile ? '12px' : '14px' }}>{tab.label}</span>}
+                                </button>
+                            ))}
+                        </div>
                     ))}
                 </div>
             </aside>
 
             {/* Main Content Area */}
-            <main className="glass" style={{
+            <main style={{
                 flex: 1,
                 display: 'flex',
                 flexDirection: 'column',
                 position: 'relative',
-                overflow: 'hidden',
-                borderRadius: 'var(--radius-md)'
+                overflow: 'hidden'
             }}>
                 {renderHeader()}
 
-                <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '16px' : (isTablet ? '24px' : '32px') }} className="custom-scrollbar">
+                <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '12px 16px 64px 16px' : (isTablet ? '16px 24px 64px 24px' : '16px 32px 64px 32px') }} className="custom-scrollbar">
                     {activeTab === 'general' && renderGeneral()}
                     {activeTab === 'interfaces' && renderInterfaces()}
                     {activeTab === 'media' && renderMedia()}
@@ -2673,7 +2708,7 @@ const Settings = () => {
                     {activeTab === 'mcp' && renderMcp()}
                     {activeTab === 'stt' && (
                         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+                            <section style={{ padding: '16px 0 32px', borderBottom: '1px solid var(--card-border)' }}>
                                 <h3 className="section-title"><Mic size={20} /> Speech Recognition (STT)</h3>
                                 <ModelPoolManager
                                     modality="stt"
@@ -2682,7 +2717,7 @@ const Settings = () => {
                                 />
                             </section>
 
-                            <section className="glass-card" style={{ padding: '24px', borderRadius: 'var(--radius-md)' }}>
+                            <section style={{ padding: '16px 0 32px', borderBottom: '1px solid var(--card-border)' }}>
                                 <h3 className="section-title"><Play size={20} /> Speech Synthesis (TTS)</h3>
                                 <ModelPoolManager
                                     modality="tts"
@@ -2697,7 +2732,7 @@ const Settings = () => {
                     {activeTab === 'debug' && renderDebug()}
                     {activeTab === 'advanced' && (
                         <div className="animate-fade-in" style={{ height: '100%', minHeight: '600px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                            <div className="glass" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 24px', borderRadius: 'var(--radius-md)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 0', borderBottom: '1px solid var(--card-border)' }}>
                                 <h3 className="section-title" style={{ marginBottom: 0 }}>
                                     <FileJson size={20} /> Master Schema
                                 </h3>
@@ -2728,13 +2763,13 @@ const Settings = () => {
                                 </div>
                             </div>
 
-                            <div className="glass" style={{
+                            <div style={{
                                 flex: 1,
                                 display: 'flex',
                                 borderRadius: 'var(--radius-md)',
                                 overflow: 'hidden',
-                                border: '1px solid rgba(255,255,255,0.05)',
-                                background: '#050505'
+                                border: '1px solid var(--card-border)',
+                                background: 'transparent'
                             }}>
                                 <div
                                     ref={lineNumbersRef}
@@ -2792,6 +2827,11 @@ const Settings = () => {
             </main>
 
             <style>{`
+                .glass-card-premium {
+                    background: rgba(255, 255, 255, 0.015);
+                    border: 1px solid rgba(255, 255, 255, 0.03);
+                    box-shadow: none;
+                }
                 .section-title {
                     display: flex;
                     align-items: center;
@@ -2815,17 +2855,19 @@ const Settings = () => {
                 .input-field {
                     width: 100%;
                     padding: 12px 16px;
-                    background: rgba(0, 0, 0, 0.25);
-                    border: 1px solid rgba(255, 255, 255, 0.06);
-                    border-radius: 6px;
+                    background: rgba(0, 0, 0, 0.15);
+                    border: 1px solid rgba(255, 255, 255, 0.04);
+                    border-radius: 8px;
                     color: var(--text-main);
                     font-size: 14px;
                     transition: all 0.2s ease;
+                    box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
                 }
                 .input-field:focus {
                     outline: none;
-                    border-color: rgba(0, 242, 255, 0.3);
-                    box-shadow: 0 0 15px rgba(0, 242, 255, 0.05), inset 0 0 0 1px rgba(0, 242, 255, 0.1);
+                    background: rgba(0,0,0,0.25);
+                    border-color: rgba(255, 255, 255, 0.1);
+                    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05), inset 0 2px 4px rgba(0,0,0,0.2);
                 }
                 .nav-item {
                     display: flex;
@@ -2854,7 +2896,7 @@ const Settings = () => {
                     color: #fff;
                 }
                 .nav-item.active {
-                    background: rgba(59, 130, 246, 0.1);
+                    background: color-mix(in srgb, var(--accent-color) 12%, transparent);
                     color: var(--accent-color);
                     font-weight: 700;
                 }

@@ -2,7 +2,8 @@ import { notify } from '../../utils/notify.jsx';
 import React, { useState, useEffect, useMemo, memo } from 'react';
 import {
     Brain, RefreshCw, Square, CloudSun, HeartPulse, BarChart3,
-    BookOpen, Globe, Video, Music, FileText, ChevronUp, ChevronDown, Bot
+    BookOpen, Globe, Video, Music, FileText, ChevronUp, ChevronDown, Bot,
+    Search, Image as ImageIcon, Terminal, Compass, Copy, Check
 } from 'lucide-react';
 
 import { api } from '../../hooks/api';
@@ -19,6 +20,7 @@ import { MessageAttachments } from './MessageAttachments';
 import { formatTime, formatDate, normalizeReasoningTimeline, groupHistoryWithReasoning } from '../../utils/chatHistoryTransform';
 import { buildThoughtTimelineBlocks, normalizeThoughtTimelineItem, formatDurationMs } from './ThoughtTimeline.utils';
 import { ThoughtTimeline } from './ThoughtTimeline';
+import { MessageFeedback } from './MessageFeedback';
 
 export const SegmentDivider = () => (
     <div style={{
@@ -120,25 +122,25 @@ export const WorkControlButton = memo(({ workId, sessionId, isStreaming, statusP
             title={isTerminal ? 'Restart worker' : 'Stop worker'}
             disabled={busy}
             style={{
-                padding: '4px 8px',
-                borderRadius: '8px',
+                padding: '4px',
+                borderRadius: '6px',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '6px',
-                minHeight: '24px',
-                opacity: busy ? 0.7 : 1,
-                border: isTerminal ? '1px solid var(--card-border)' : '1px solid rgba(239,68,68,0.35)',
-                color: isTerminal ? 'var(--text-muted)' : '#ef4444'
+                gap: '4px',
+                opacity: busy ? 0.4 : 0.6,
+                background: 'transparent',
+                border: 'none',
+                color: isTerminal ? 'var(--text-muted)' : '#ef4444',
+                transition: 'opacity 0.2s',
             }}
+            onMouseEnter={(e) => { if (!busy) e.currentTarget.style.opacity = '1'; }}
+            onMouseLeave={(e) => { if (!busy) e.currentTarget.style.opacity = '0.6'; }}
         >
             {isTerminal ? (
                 <RefreshCw size={12} style={busy ? { animation: 'spin 1s linear infinite' } : undefined} />
             ) : (
                 <Square size={12} fill="currentColor" />
             )}
-            <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                {isTerminal ? 'Reload' : 'Stop'}
-            </span>
         </button>
     );
 });
@@ -328,7 +330,16 @@ export const ChatCollapsibleAssistCard = memo(({
     const HeaderIcon = headerMeta.Icon;
 
     return (
-        <div style={{ marginBottom: '16px', border: '1px solid var(--card-border)', borderRadius: '10px', overflow: 'hidden', background: 'var(--card-bg)' }}>
+        <div style={{
+            width: isOpen ? '100%' : 'auto',
+            flex: isOpen ? '1 1 100%' : '0 1 auto',
+            minWidth: isOpen ? '100%' : '140px',
+            border: '1px solid var(--card-border)',
+            borderRadius: '10px',
+            overflow: 'hidden',
+            background: 'var(--card-bg)',
+            transition: 'all 0.2s ease',
+        }}>
             <button
                 type="button"
                 onClick={() => setIsOpen((prev) => !prev)}
@@ -337,26 +348,26 @@ export const ChatCollapsibleAssistCard = memo(({
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    gap: '8px',
+                    gap: '12px',
                     border: 'none',
                     borderBottom: isOpen ? '1px solid var(--card-border)' : 'none',
                     background: 'transparent',
-                    padding: '10px 12px',
+                    padding: '8px 12px',
                     cursor: 'pointer',
                 }}
             >
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '10px', fontWeight: 900, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                    {!isOpen && <HeaderIcon size={12} color={headerMeta.color} />}
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '10px', fontWeight: 900, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}>
+                    <HeaderIcon size={12} color={headerMeta.color} />
                     <span>{title}</span>
                 </span>
-                {isOpen ? <ChevronUp size={14} className="text-muted" /> : <ChevronDown size={14} className="text-muted" />}
+                {isOpen ? <ChevronUp size={12} className="text-muted" /> : <ChevronDown size={12} className="text-muted" />}
             </button>
             {isOpen && <div style={{ padding: '10px 12px' }}>{children}</div>}
         </div>
     );
 });
 
-export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agentName, latestPlaybackEvent, thoughtBlock = null }) => {
+export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand, agentName, latestPlaybackEvent, thoughtBlock = null, sessionIndices = null }) => {
     const [isWorkDetailsOpen, setIsWorkDetailsOpen] = useState(false);
     const [isThoughtOpen, setIsThoughtOpen] = useState(false);
     const [isCopied, setIsCopied] = useState(false);
@@ -434,13 +445,14 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
     const phaseColor = getPhaseColor(statusPhaseNormalized);
     const isTerminalPhase = ['complete', 'completed', 'succeeded', 'success', 'done', 'failed', 'error', 'aborted', 'cancelled', 'canceled'].includes(statusPhaseNormalized);
     const isActivelyStreaming = isStreaming && !isTerminalPhase;
+    const isThoughtBlockLive = isActivelyStreaming;
     const reasoningBlock = useMemo(() => ({
         key: `message-${msg?.id || msg?.message_id || msg?.messageId || 'reasoning'}`,
         title: 'Pensamento',
         entries: displayReasoningTimeline,
-        isLive: isActivelyStreaming,
+        isLive: isThoughtBlockLive,
         defaultOpen: false,
-    }), [displayReasoningTimeline, isActivelyStreaming, msg?.id, msg?.message_id, msg?.messageId]);
+    }), [displayReasoningTimeline, isThoughtBlockLive, msg?.id, msg?.message_id, msg?.messageId]);
     const latestReasoningEntry = displayReasoningTimeline[displayReasoningTimeline.length - 1] || null;
     const reasoningDurationText = formatDurationMs(
         latestReasoningEntry?.thinkingDurationMs
@@ -563,24 +575,17 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
 
                         {!isUser && msg.model_info && (
                             <div style={{
-                                fontSize: '9px',
-                                fontWeight: '800',
-                                color: 'var(--accent-color)',
-                                background: 'rgba(59, 130, 246, 0.12)',
-                                padding: '2px 8px',
-                                borderRadius: '100px',
+                                fontSize: '8px',
+                                fontWeight: '700',
+                                color: 'var(--text-muted)',
                                 textTransform: 'uppercase',
-                                letterSpacing: '0.08em',
-                                border: '1px solid rgba(59, 130, 246, 0.25)',
-                                backdropFilter: 'blur(4px)',
-                                boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                                letterSpacing: '0.05em',
                                 flexShrink: 0,
-                                marginLeft: '8px',
+                                marginLeft: '6px',
+                                opacity: 0.5,
                                 display: 'flex',
                                 alignItems: 'center',
-                                gap: '4px'
                             }}>
-                                <span style={{ opacity: 0.7 }}>PROVENANCE:</span>
                                 {msg.model_info}
                             </div>
                         )}
@@ -724,6 +729,7 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
                     />
                 )}
 
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px', width: '100%' }}>
                 {!isUser && shouldTryWegenaCard && (
                     <ChatCollapsibleAssistCard
                         sessionId={sessionId}
@@ -913,6 +919,41 @@ export const MessageItem = memo(({ msg, sessionId, isStreaming = false, onExpand
                 )}
 
             </div>
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
+                <button
+                    onClick={handleCopy}
+                    style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: isCopied ? 'var(--accent-color)' : 'var(--text-muted)',
+                        fontSize: '11px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        cursor: 'pointer',
+                        padding: '4px 8px',
+                        opacity: 0.5,
+                        transition: 'all 0.2s',
+                        borderRadius: '4px',
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.opacity = 1; e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.opacity = 0.5; e.currentTarget.style.background = 'transparent'; }}
+                    title="Copy message"
+                >
+                    {isCopied ? <Check size={12} /> : <Copy size={12} />}
+                    {isCopied ? 'Copied' : 'Copy'}
+                </button>
+                {!isUser && (
+                    <MessageFeedback
+                        sessionId={sessionId}
+                        message={msg}
+                        sessionIndices={sessionIndices}
+                        isStreaming={isStreaming}
+                        className="message-feedback-inline"
+                    />
+                )}
+            </div>
         </div>
     );
 });
@@ -997,6 +1038,7 @@ export const MessageList = memo(({ messages, sessionId, streamingMessage, onExpa
                 agentName={agentName}
                 latestPlaybackEvent={latestPlaybackEvent}
                 thoughtBlock={thoughtBlock}
+                sessionIndices={sessionIndices}
             />);
         });
 
@@ -1006,15 +1048,55 @@ export const MessageList = memo(({ messages, sessionId, streamingMessage, onExpa
     return (
         <div ref={scrollRef} onScroll={onScroll} className="custom-scrollbar h-full chat-container-bg" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
             {combinedMessages.length === 0 ? (
-                <div style={{ margin: 'auto', textAlign: 'center', opacity: 0.8, maxWidth: '400px' }}>
-                    <div style={{ width: '64px', height: '64px', background: 'var(--accent-glow)', borderRadius: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 24px', color: 'var(--accent-color)' }}>
-                        <Bot size={32} />
+                <div style={{ margin: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', maxWidth: '520px', width: '100%', padding: '20px' }} className="animate-fade-in">
+                    <div style={{ width: '48px', height: '48px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--card-border)', borderRadius: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px', color: 'var(--text-main)' }}>
+                        <Bot size={24} opacity={0.8} />
                     </div>
-                    <div style={{ padding: '32px', borderRadius: '24px', background: 'var(--card-bg)', border: '1px solid var(--card-border)', boxShadow: '0 10px 30px rgba(0,0,0,0.1)' }}>
-                        <h2 style={{ fontSize: '24px', fontWeight: '900', marginBottom: '12px', color: 'var(--text-main)' }}>Cognitive Operating System</h2>
-                        <p style={{ color: 'var(--text-muted)', fontSize: '15px', lineHeight: '1.6' }}>
-                            Ready to process. Identified as <strong>{agentName}</strong>. What is your directive?
-                        </p>
+                    
+                    <h2 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '8px', color: 'var(--text-main)', letterSpacing: '-0.02em' }}>
+                        A.T.L.A.S is standing by
+                    </h2>
+                    <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginBottom: '32px', textAlign: 'center' }}>
+                        {sessionId ? "Choose a directive, upload context, or type anything below." : "Choose an existing session or begin a new directive."}
+                    </p>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', width: '100%', marginBottom: '32px' }}>
+                        {[
+                            { icon: HeartPulse, text: "Run system check" },
+                            { icon: Search, text: "Search and summarize" },
+                            { icon: ImageIcon, text: "Analyze screenshot" },
+                            { icon: Globe, text: "Inspect a website" }
+                        ].map((item, i) => (
+                            <button
+                                key={i}
+                                onClick={() => onSuggestionClick && onSuggestionClick(item.text)}
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '12px',
+                                    padding: '16px',
+                                    background: 'rgba(255,255,255,0.02)',
+                                    border: '1px solid var(--card-border)',
+                                    borderRadius: '12px',
+                                    color: 'var(--text-main)',
+                                    fontSize: '13px',
+                                    textAlign: 'left',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s ease'
+                                }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.02)'; e.currentTarget.style.borderColor = 'var(--card-border)'; }}
+                            >
+                                <item.icon size={16} color="var(--text-muted)" style={{ flexShrink: 0 }} />
+                                <span style={{ opacity: 0.9, lineHeight: '1.4' }}>{item.text}</span>
+                            </button>
+                        ))}
+                    </div>
+
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', opacity: 0.5, letterSpacing: '0.05em', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'var(--accent-color)' }}></span>
+                        Available: Browser · Vision · Memory · System · Search
+                        {/* TODO: Fetch active capabilities dynamically from API/context */}
                     </div>
                 </div>
             ) : (

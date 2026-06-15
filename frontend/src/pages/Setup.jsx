@@ -76,22 +76,22 @@ const Setup = () => {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                     <div className="input-group">
                         <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px', textTransform: 'uppercase', fontWeight: 'bold' }}>Username</label>
-                        <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} required className="glass" style={{ width: '100%', padding: '12px', background: 'rgba(255,255,255,0.05)', color: '#fff' }} />
+                        <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} required className="input-field" />
                     </div>
 
                     <div className="input-group">
                         <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px', textTransform: 'uppercase', fontWeight: 'bold' }}>Display Name</label>
-                        <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required className="glass" style={{ width: '100%', padding: '12px', background: 'rgba(255,255,255,0.05)', color: '#fff' }} />
+                        <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required className="input-field" />
                     </div>
 
                     <div style={{ display: 'flex', gap: '16px' }}>
                         <div style={{ flex: 1 }}>
                             <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px', textTransform: 'uppercase', fontWeight: 'bold' }}>Password</label>
-                            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required className="glass" style={{ width: '100%', padding: '12px', background: 'rgba(255,255,255,0.05)', color: '#fff' }} />
+                            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required className="input-field" />
                         </div>
                         <div style={{ flex: 1 }}>
                             <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px', textTransform: 'uppercase', fontWeight: 'bold' }}>Confirm</label>
-                            <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required className="glass" style={{ width: '100%', padding: '12px', background: 'rgba(255,255,255,0.05)', color: '#fff' }} />
+                            <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required className="input-field" />
                         </div>
                     </div>
                 </div>
