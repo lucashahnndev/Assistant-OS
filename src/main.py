@@ -1251,7 +1251,8 @@ class Kernel:
                         "thinking",
                         {
                             "code": "media_busy",
-                            "message": prompt,
+                            "label": self.orchestrator._build_status_label("media_busy", language=self.orchestrator._session_locale(session)),
+                            "detail": prompt,
                             "blocked_work_ids": blocked_work_ids,
                             "model_info": plan.model_used if plan and hasattr(plan, "model_used") else None,
                         },
@@ -1273,7 +1274,8 @@ class Kernel:
                         "error",
                         {
                             "code": "admission_reject",
-                            "message": busy_msg,
+                            "label": self.orchestrator._build_status_label("session_busy", language=self.orchestrator._session_locale(session)),
+                            "detail": busy_msg,
                             "blocked_work_ids": blocked_work_ids,
                         },
                     )

@@ -2622,7 +2622,7 @@ class AgentOrchestrator:
                                 'error',
                                 {
                                     'code': 'no_plan',
-                                    'message': final_response,
+                                    'label': self._build_status_label('no_plan', language=locale),
                                     'action': last_action_id or "",
                                 }
                             )
@@ -3075,7 +3075,8 @@ class AgentOrchestrator:
                                     'executing',
                                     {
                                         'code': 'loop_break_success',
-                                        'message': loop_success_msg,
+                                        'label': self._build_status_label('loop_break_success', language=self._session_locale(session)),
+                                        'detail': loop_success_msg,
                                         'action': plan.action_id
                                     }
                                 )
@@ -3093,7 +3094,8 @@ class AgentOrchestrator:
                                     'error',
                                     {
                                         'code': 'loop_break',
-                                        'message': loop_break_msg,
+                                        'label': self._build_status_label('loop_break', language=self._session_locale(session)),
+                                        'detail': loop_break_msg,
                                         'action': plan.action_id
                                     }
                                 )
@@ -3415,7 +3417,7 @@ class AgentOrchestrator:
                                             'error',
                                             {
                                                 'code': 'approval_target_missing',
-                                                'message': final_response,
+                                                'label': self._build_status_label('approval_target_missing', language=self._session_locale(session)),
                                                 'action': plan.action_id,
                                             },
                                         )
@@ -6495,6 +6497,24 @@ class AgentOrchestrator:
             return f"{base} Recorded reason: {reason}."
 
         return base
+
+    @staticmethod
+    def _build_status_label(code: str, language: str = "en") -> str:
+        is_pt = str(language or "").lower().startswith("pt")
+        normalized = str(code or "").strip().lower()
+        labels = {
+            "no_plan": "Recuperação necessária" if is_pt else "Recovery needed",
+            "loop_break": "Loop detectado" if is_pt else "Loop detected",
+            "loop_break_success": "Último resultado consolidado" if is_pt else "Consolidating latest valid result",
+            "approval_target_missing": "Destino de aprovação ausente" if is_pt else "Approval target missing",
+            "replan": "Replanejando" if is_pt else "Replanning",
+            "session_busy": "Sessão ocupada" if is_pt else "Session busy",
+            "media_busy": "Mídia ocupada" if is_pt else "Media busy",
+            "system_error": "Erro de sistema" if is_pt else "System error",
+        }
+        if normalized in labels:
+            return labels[normalized]
+        return normalized.replace("_", " ").strip().title() if normalized else ("Recuperação" if is_pt else "Recovery")
 
     @classmethod
     def _normalize_context_reset_reply(cls, response_text: str, language: str = "en") -> str:

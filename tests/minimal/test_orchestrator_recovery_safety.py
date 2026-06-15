@@ -135,6 +135,19 @@ def test_sanitize_user_facing_response_turns_empty_into_honest_failure():
     assert audit["sanitized_text"] == reply
 
 
+def test_status_label_is_short_and_does_not_reuse_fallback_text():
+    label = AgentOrchestrator._build_status_label("no_plan", language="pt-BR")
+    fallback = AgentOrchestrator._build_honest_fallback_reply(
+        language="pt-BR",
+        reason_code="recovery_empty",
+    )
+
+    assert label
+    assert "LLMManager" not in label
+    assert label != fallback
+    assert "falh" not in label.lower()
+
+
 def test_generate_recovery_reply_records_diagnostic_when_text_recovery_fails():
     orchestrator = object.__new__(AgentOrchestrator)
     orchestrator.llm_manager = _FakeLLMManager()
